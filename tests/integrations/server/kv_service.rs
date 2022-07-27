@@ -34,7 +34,6 @@ use raftstore::{
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
 use test_raftstore::*;
-use test_util::init_log_for_test;
 use tikv::{
     config::QuotaConfig,
     coprocessor::REQ_TYPE_DAG,

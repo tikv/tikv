@@ -315,6 +315,7 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
+    use tracker::TrackerToken;
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
@@ -360,6 +361,7 @@ mod tests {
         DiagnosticContext {
             key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
+            tracker_token: TrackerToken::default(),
         }
     }
 
