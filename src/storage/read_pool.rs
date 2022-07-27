@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Distinct thread pools to handle read commands having different priority levels.
+//! Distinct thread pools to handle read commands having different priority
+//! levels.
 
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +27,8 @@ impl<R: FlowStatsReporter> PoolTicker for FuturePoolTicker<R> {
     }
 }
 
-/// Build respective thread pools to handle read commands of different priority levels.
+/// Build respective thread pools to handle read commands of different priority
+/// levels.
 pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     config: &StorageReadPoolConfig,
     reporter: R,

@@ -106,8 +106,9 @@ pub mod tests {
     }
 
     impl MockBackend {
-        // Callers are responsible for enabling tracking on the MockBackend by calling this function
-        // This names the backend instance, allowiing later fine-grained recall
+        // Callers are responsible for enabling tracking on the MockBackend by calling
+        // this function This names the backend instance, allowiing later
+        // fine-grained recall
         pub fn track(&mut self, name: String) {
             let track = make_track(&name);
             self.track = track.clone();

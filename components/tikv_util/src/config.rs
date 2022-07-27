@@ -539,7 +539,8 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     ret
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
@@ -591,7 +592,8 @@ fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<Pa
     try_canonicalize_normalized_path(&normalize_path(path))
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
@@ -714,7 +716,8 @@ mod check_kernel {
         Ok(())
     }
 
-    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    /// `check_kernel_params` checks kernel parameters, following are checked so
+    /// far:
     ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
@@ -1034,7 +1037,8 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
     Ok(file_count)
 }
 
-// check dir is empty of file with certain extension, empty string for any extension.
+// check dir is empty of file with certain extension, empty string for any
+// extension.
 pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
     let op = "data-dir.empty.check";
     let dir = Path::new(data_path);
@@ -1052,7 +1056,8 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
-/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+/// More details about **Host** and **Port** can be found in WHATWG URL
+/// Standard.
 ///
 /// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
 pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
@@ -1239,8 +1244,8 @@ impl TomlLine {
 }
 
 /// TomlWriter use to update the config file and only cover the most commom toml
-/// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
+/// format that used by tikv config file, toml format like: quoted keys,
+/// multi-line value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
@@ -1407,9 +1412,10 @@ macro_rules! numeric_enum_serializing_mod {
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - A marker file contains the path of source directory. The source
-///      directory contains a complete copy of Raft data. Target directory may exist.
-///   3. Completed - Only target directory contains Raft data. Marker file may exist.
+///   2. Migrating - A marker file contains the path of source directory. The
+/// source      directory contains a complete copy of Raft data. Target
+/// directory may exist.   3. Completed - Only target directory contains Raft
+/// data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
     in_progress_marker: PathBuf,
@@ -1454,8 +1460,9 @@ impl RaftDataStateMachine {
         Ok(())
     }
 
-    /// Returns whether a migration is needed. When it's needed, enters the `Migrating`
-    /// state. Otherwise prepares the target directory for opening.
+    /// Returns whether a migration is needed. When it's needed, enters the
+    /// `Migrating` state. Otherwise prepares the target directory for
+    /// opening.
     pub fn before_open_target(&mut self) -> bool {
         // Clean up trash directory if there is any.
         for p in [&self.source, &self.target] {
@@ -1478,8 +1485,8 @@ impl RaftDataStateMachine {
                         Self::must_remove(&self.source);
                         return false;
                     }
-                    // It's actually in Completed state, just in the reverse direction.
-                    // Equivalent to Init state.
+                    // It's actually in Completed state, just in the reverse
+                    // direction. Equivalent to Init state.
                 } else {
                     assert!(real_source == self.source);
                     Self::must_remove(&self.target);
@@ -1503,8 +1510,8 @@ impl RaftDataStateMachine {
         Self::must_remove(&self.in_progress_marker);
     }
 
-    // `after_dump_data` involves two atomic operations, insert a check point between
-    // them to test crash safety.
+    // `after_dump_data` involves two atomic operations, insert a check point
+    // between them to test crash safety.
     #[cfg(test)]
     fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
         assert!(Self::data_exists(&self.source));
@@ -1525,8 +1532,8 @@ impl RaftDataStateMachine {
         Self::sync_dir(&self.root);
     }
 
-    // Assumes there is a marker file. Returns None when the content of marker file is
-    // incomplete.
+    // Assumes there is a marker file. Returns None when the content of marker file
+    // is incomplete.
     fn read_marker(&self) -> Option<PathBuf> {
         let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
         if marker.ends_with("//") {

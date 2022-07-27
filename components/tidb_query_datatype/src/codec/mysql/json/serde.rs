@@ -58,7 +58,8 @@ impl MySQLFormatter {
 }
 
 impl<'a> ToString for JsonRef<'a> {
-    /// This function is a simple combination and rewrite of serde_json's `to_writer_pretty`
+    /// This function is a simple combination and rewrite of serde_json's
+    /// `to_writer_pretty`
     fn to_string(&self) -> String {
         let mut writer = Vec::with_capacity(128);
         let mut ser = JsonSerializer::with_formatter(&mut writer, MySQLFormatter::new());

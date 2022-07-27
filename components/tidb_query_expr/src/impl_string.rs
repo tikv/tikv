@@ -16,10 +16,12 @@ const SPACE: u8 = 0o40u8;
 const MAX_BLOB_WIDTH: i32 = 16_777_216; // FIXME: Should be isize
 
 // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
+// mysql base64 doc: A newline is added after each 76 characters of encoded
+// output
 const BASE64_LINE_WRAP_LENGTH: usize = 76;
 
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4
+// characters.
 const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
 const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
 const BASE64_LINE_WRAP: u8 = b'\n';
@@ -379,12 +381,12 @@ pub fn rpad_utf8(
     }
 }
 
-// when target_len is 0, return Some(0), means the pad function should return empty string
-// currently there are three conditions it return None, which means pad function should return Null
-//   1. target_len is negative
+// when target_len is 0, return Some(0), means the pad function should return
+// empty string currently there are three conditions it return None, which means
+// pad function should return Null   1. target_len is negative
 //   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
-//   3. target_len is greater than length of input string, *and* pad string is empty
-// otherwise return Some(target_len)
+//   3. target_len is greater than length of input string, *and* pad string is
+// empty otherwise return Some(target_len)
 #[inline]
 fn validate_target_len_for_pad(
     len_unsigned: bool,

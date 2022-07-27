@@ -44,8 +44,8 @@ fn is_range_empty(
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
 //
-// FIXME: ER typaram should just be impl KvEngine, but RaftEngine doesn't support
-// the `is_range_empty` query yet.
+// FIXME: ER typaram should just be impl KvEngine, but RaftEngine doesn't
+// support the `is_range_empty` query yet.
 pub fn bootstrap_store<ER>(
     engines: &Engines<impl KvEngine, ER>,
     cluster_id: u64,

@@ -362,8 +362,8 @@ fn test_reject_proposal_during_leader_transfer() {
 
     cluster.must_put(b"k", b"v");
     cluster.transfer_leader(r, new_peer(2, 2));
-    // The leader can't change to transferring state immediately due to pre-transfer-leader
-    // feature, so wait for a while.
+    // The leader can't change to transferring state immediately due to
+    // pre-transfer-leader feature, so wait for a while.
     sleep_ms(100);
     assert_ne!(cluster.leader_of_region(r).unwrap(), new_peer(2, 2));
 
@@ -441,7 +441,8 @@ fn test_not_invoke_committed_cb_when_fail_to_commit() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k", b"v");
 
-    // Partiton the leader and followers to let the leader fails to commit the proposal.
+    // Partiton the leader and followers to let the leader fails to commit the
+    // proposal.
     cluster.partition(vec![1], vec![2, 3]);
     let write_req = make_write_req(&mut cluster, b"k1");
     let (cb, cb_receivers) = make_cb(&write_req);
@@ -462,8 +463,8 @@ fn test_not_invoke_committed_cb_when_fail_to_commit() {
         * cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     std::thread::sleep(2 * election_timeout);
 
-    // Make sure a new leader is elected and will discard the previous proposal when partition is
-    // recovered.
+    // Make sure a new leader is elected and will discard the previous proposal when
+    // partition is recovered.
     cluster.must_put(b"k2", b"v");
     cluster.clear_send_filters();
 

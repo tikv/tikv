@@ -21,7 +21,8 @@ use crate::{
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
-// TODO: refactor to utilize generic type `KvFormat` and eliminate matching `api_version`.
+// TODO: refactor to utilize generic type `KvFormat` and eliminate matching
+// `api_version`.
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S, ApiV1>),
     V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>, ApiV1Ttl>),
@@ -180,11 +181,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         })
     }
 
-    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
-    /// `None`, it means unbounded.
+    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys.
+    /// If `end_key` is `None`, it means unbounded.
     ///
-    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
-    /// keys will be returned.
+    /// If `key_only` is true, the value corresponding to the key will not be
+    /// read. Only scanned keys will be returned.
     pub async fn forward_raw_scan(
         &'a self,
         cf: CfName,
@@ -231,11 +232,13 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         Ok(pairs)
     }
 
-    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
-    /// `start_key` is `None`, it means it's unbounded.
+    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at
+    /// most `limit` keys. If `start_key` is `None`, it means it's
+    /// unbounded.
     ///
     /// If `key_only` is true, the value
-    /// corresponding to the key will not be read out. Only scanned keys will be returned.
+    /// corresponding to the key will not be read out. Only scanned keys will be
+    /// returned.
     pub async fn reverse_raw_scan(
         &'a self,
         cf: CfName,

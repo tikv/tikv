@@ -627,8 +627,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         let begin_instant = Instant::now();
 
-        // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
-        // MAX_KEY as end here.
+        // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as
+        // start, or MAX_KEY as end here.
         assert!(!req.get_start_key().is_empty());
         assert!(!req.get_end_key().is_empty());
 
@@ -1414,8 +1414,9 @@ async fn future_handle_empty(
 ) -> ServerResult<BatchCommandsEmptyResponse> {
     let mut res = BatchCommandsEmptyResponse::default();
     res.set_test_id(req.get_test_id());
-    // `BatchCommandsWaker` processes futures in notify. If delay_time is too small, notify
-    // can be called immediately, so the future is polled recursively and lead to deadlock.
+    // `BatchCommandsWaker` processes futures in notify. If delay_time is too small,
+    // notify can be called immediately, so the future is polled recursively and
+    // lead to deadlock.
     if req.get_delay_time() >= 10 {
         let _ = tikv_util::timer::GLOBAL_TIMER_HANDLE
             .delay(
@@ -1735,10 +1736,11 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
     let pairs_len = req.get_pairs().len();
     // The TTL for each key in seconds.
     //
-    // In some TiKV of old versions, only one TTL can be provided and the TTL will be applied to all
-    // keys in the request. For compatibility reasons, if the length of `ttls` is exactly one,
-    // then the TTL will be applied to all keys. Otherwise, the length mismatch between `ttls`
-    // and `pairs` will return an error.
+    // In some TiKV of old versions, only one TTL can be provided and the TTL will
+    // be applied to all keys in the request. For compatibility reasons, if the
+    // length of `ttls` is exactly one, then the TTL will be applied to all
+    // keys. Otherwise, the length mismatch between `ttls` and `pairs` will
+    // return an error.
     let ttls = if req.get_ttls().is_empty() {
         vec![0; pairs_len]
     } else if req.get_ttls().len() == 1 {

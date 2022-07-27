@@ -98,8 +98,8 @@ impl Iterable for RocksSstReader {
 // FIXME: See comment on RocksSstReader for why this contains Rc
 pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
-// TODO(5kbpers): Temporarily force to add `Send` here, add a method for creating
-// DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
+// TODO(5kbpers): Temporarily force to add `Send` here, add a method for
+// creating DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
 unsafe impl Send for RocksSstIterator {}
 
 impl Iterator for RocksSstIterator {

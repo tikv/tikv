@@ -45,8 +45,8 @@ impl CdcObserver {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
-        // use 0 as the priority of the cmd observer. CDC should have a higher priority than
-        // the `resolved-ts`'s cmd observer
+        // use 0 as the priority of the cmd observer. CDC should have a higher priority
+        // than the `resolved-ts`'s cmd observer
         coprocessor_host
             .registry
             .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
@@ -96,7 +96,8 @@ impl CdcObserver {
 impl Coprocessor for CdcObserver {}
 
 impl<E: KvEngine> CmdObserver<E> for CdcObserver {
-    // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches` is not empty
+    // `CdcObserver::on_flush_applied_cmd_batch` should only invoke if `cmd_batches`
+    // is not empty
     fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,
@@ -119,8 +120,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         // Create a snapshot here for preventing the old value was GC-ed.
-        // TODO: only need it after enabling old value, may add a flag to indicate whether to get
-        // it.
+        // TODO: only need it after enabling old value, may add a flag to indicate
+        // whether to get it.
         let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
         let get_old_value = move |key,
                                   query_ts,

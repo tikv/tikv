@@ -337,8 +337,9 @@ fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T
 
     // now only peer 1 and peer 2 can step to leader.
 
-    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    // hack: first MsgAppend will append log, second MsgAppend will set commit
+    // index, So only allowing first MsgAppend to make peer 2 have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
@@ -509,10 +510,10 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     // guarantee peer 1 is leader
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and the leader will
-    // send MsgAppend with committed information to peer 2 after network recovered, and peer 2
-    // will apply the entry regardless of we add an filter, so we put k0/v0 to make sure the
-    // network is reachable.
+    // if peer 2 is unreachable, leader will not send MsgAppend to peer 2, and the
+    // leader will send MsgAppend with committed information to peer 2 after
+    // network recovered, and peer 2 will apply the entry regardless of we add
+    // an filter, so we put k0/v0 to make sure the network is reachable.
     let (k0, v0) = (b"k0", b"v0");
     cluster.must_put(k0, v0);
 
@@ -520,8 +521,9 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
         must_get_equal(&cluster.get_engine(i), k0, v0);
     }
 
-    // hack: first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make peer 2 have uncommitted entries.
+    // hack: first MsgAppend will append log, second MsgAppend will set commit
+    // index, So only allowing first MsgAppend to make peer 2 have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 2)
             .msg_type(MessageType::MsgAppend)
@@ -553,12 +555,13 @@ fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_transfer_leader(1, util::new_peer(2, 2));
 
-    // leader's term not equal applied index's term, if we read local, we may get old value
-    // in this situation we need use raft read
+    // leader's term not equal applied index's term, if we read local, we may get
+    // old value in this situation we need use raft read
     must_get_none(&cluster.get_engine(2), k);
 
-    // internal read will use raft read no matter read_quorum is false or true, cause applied
-    // index's term not equal leader's term, and will failed with timeout
+    // internal read will use raft read no matter read_quorum is false or true,
+    // cause applied index's term not equal leader's term, and will failed with
+    // timeout
     let req = get_with_timeout(cluster, k, false, Duration::from_secs(10)).unwrap();
     assert!(
         req.get_header().get_error().has_stale_command(),
@@ -704,8 +707,8 @@ fn test_node_dropped_proposal() {
     );
     put_req.mut_header().set_peer(new_peer(1, 1));
     // peer (3, 3) won't become leader and transfer leader request will be canceled
-    // after about an election timeout. Before it's canceled, all proposal will be dropped
-    // silently.
+    // after about an election timeout. Before it's canceled, all proposal will be
+    // dropped silently.
     cluster.transfer_leader(1, new_peer(3, 3));
 
     let (tx, rx) = mpsc::channel();
@@ -854,7 +857,8 @@ fn test_leader_drop_with_pessimistic_lock() {
     cluster.must_put(b"k1", b"v1");
     assert_ne!(cluster.leader_of_region(1).unwrap().id, 1);
 
-    // When peer 1 becomes leader again, the pessimistic locks should be cleared before.
+    // When peer 1 becomes leader again, the pessimistic locks should be cleared
+    // before.
     cluster.clear_send_filters();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     assert!(txn_ext.pessimistic_locks.read().is_empty());

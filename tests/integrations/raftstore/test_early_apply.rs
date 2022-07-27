@@ -160,7 +160,8 @@ fn test_follower_commit_early_apply() {
     test_early_apply(DataLost::FollowerCommit)
 }
 
-/// Tests whether the cluster can recover from all nodes lost their commit index.
+/// Tests whether the cluster can recover from all nodes lost their commit
+/// index.
 #[test]
 fn test_all_node_crash() {
     test_early_apply(DataLost::AllLost)

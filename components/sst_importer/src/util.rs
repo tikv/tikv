@@ -9,8 +9,8 @@ use file_system::File;
 use super::Result;
 
 /// Prepares the SST file for ingestion.
-/// The purpose is to make the ingestion retryable when using the `move_files` option.
-/// Things we need to consider here:
+/// The purpose is to make the ingestion retryable when using the `move_files`
+/// option. Things we need to consider here:
 /// 1. We need to access the original file on retry, so we should make a clone
 ///    before ingestion.
 /// 2. `RocksDB` will modified the global seqno of the ingested file, so we need
@@ -32,8 +32,9 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     if Path::new(clone).exists() {
         file_system::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
     }
-    // always try to remove the file from key manager because the clean up in rocksdb is not atomic,
-    // thus the file may be deleted but key in key manager is not.
+    // always try to remove the file from key manager because the clean up in
+    // rocksdb is not atomic, thus the file may be deleted but key in key
+    // manager is not.
     if let Some(key_manager) = encryption_key_manager {
         key_manager.delete_file(clone)?;
     }
@@ -160,8 +161,8 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, cf_name, &kvs);
         assert!(!sst_clone.exists());
-        // Since we are not using key_manager in db, simulate the db deleting the file from
-        // key_manager.
+        // Since we are not using key_manager in db, simulate the db deleting the file
+        // from key_manager.
         if let Some(manager) = key_manager {
             manager.delete_file(sst_clone.to_str().unwrap()).unwrap();
         }

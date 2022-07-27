@@ -226,16 +226,16 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
 
 /// Get the `start_key` of current region in encoded form.
 pub fn enc_start_key(region: &Region) -> Vec<u8> {
-    // only initialized region's start_key can be encoded, otherwise there must be bugs
-    // somewhere.
+    // only initialized region's start_key can be encoded, otherwise there must be
+    // bugs somewhere.
     assert!(!region.get_peers().is_empty());
     data_key(region.get_start_key())
 }
 
 /// Get the `end_key` of current region in encoded form.
 pub fn enc_end_key(region: &Region) -> Vec<u8> {
-    // only initialized region's end_key can be encoded, otherwise there must be bugs
-    // somewhere.
+    // only initialized region's end_key can be encoded, otherwise there must be
+    // bugs somewhere.
     assert!(!region.get_peers().is_empty());
     data_end_key(region.get_end_key())
 }
@@ -439,7 +439,8 @@ mod tests {
         assert_eq!(buffer, data_key(b"cde"));
 
         let mut region = Region::default();
-        // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
+        // uninitialised region should not be passed in `enc_start_key` and
+        // `enc_end_key`.
         assert!(::panic_hook::recover_safe(|| enc_start_key(&region)).is_err());
         assert!(::panic_hook::recover_safe(|| enc_end_key(&region)).is_err());
 

@@ -20,15 +20,16 @@ use crate::storage::{
     },
 };
 
-/// Read from an MVCC snapshot, i.e., a logical view of the database at a specific timestamp (the
-/// start_ts).
+/// Read from an MVCC snapshot, i.e., a logical view of the database at a
+/// specific timestamp (the start_ts).
 ///
 /// This represents the view of the database from a single transaction.
 ///
-/// Confusingly, there are two meanings of the word 'snapshot' here. In the name of the struct,
-/// 'snapshot' means an mvcc snapshot. In the type parameter bound (of `S`), 'snapshot' means a view
-/// of the underlying storage engine at a given point in time. This latter snapshot will include
-/// values for keys at multiple timestamps.
+/// Confusingly, there are two meanings of the word 'snapshot' here. In the name
+/// of the struct, 'snapshot' means an mvcc snapshot. In the type parameter
+/// bound (of `S`), 'snapshot' means a view of the underlying storage engine at
+/// a given point in time. This latter snapshot will include values for keys at
+/// multiple timestamps.
 pub struct SnapshotReader<S: EngineSnapshot> {
     pub reader: MvccReader<S>,
     pub start_ts: TimeStamp,
@@ -123,9 +124,9 @@ pub struct MvccReader<S: EngineSnapshot> {
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
 
-    /// None means following operations are performed on a single user key, i.e.,
-    /// different versions of the same key. It can use prefix seek to speed up reads
-    /// from the write-cf.
+    /// None means following operations are performed on a single user key,
+    /// i.e., different versions of the same key. It can use prefix seek to
+    /// speed up reads from the write-cf.
     scan_mode: Option<ScanMode>,
     // Records the current key for prefix seek. Will Reset the write cursor when switching to
     // another key.
@@ -267,29 +268,31 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// Return:
-    ///   (commit_ts, write_record) of the write record for `key` committed before or equal to`ts`
-    /// Post Condition:
-    ///   leave the write_cursor at the first record which key is less or equal to the `ts` encoded
-    /// version of `key`
+    ///   (commit_ts, write_record) of the write record for `key` committed
+    /// before or equal to`ts` Post Condition:
+    ///   leave the write_cursor at the first record which key is less or equal
+    /// to the `ts` encoded version of `key`
     pub fn seek_write(&mut self, key: &Key, ts: TimeStamp) -> Result<Option<(TimeStamp, Write)>> {
         // Get the cursor for write record
         //
-        // When it switches to another key in prefix seek mode, creates a new cursor for it
-        // because the current position of the cursor is seldom around `key`.
+        // When it switches to another key in prefix seek mode, creates a new cursor for
+        // it because the current position of the cursor is seldom around `key`.
         if self.scan_mode.is_none() && self.current_key.as_ref().map_or(true, |k| k != key) {
             self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
-        // find a `ts` encoded key which is less than the `ts` encoded version of the `key`
+        // find a `ts` encoded key which is less than the `ts` encoded version of the
+        // `key`
         let found = cursor.near_seek(&key.clone().append_ts(ts), &mut self.statistics.write)?;
         if !found {
             return Ok(None);
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
-        // check whether the found written_key's "real key" part equals the `key` we want to find
+        // check whether the found written_key's "real key" part equals the `key` we
+        // want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
@@ -298,17 +301,20 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(Some((commit_ts, write)))
     }
 
-    /// Gets the value of the specified key's latest version before specified `ts`.
+    /// Gets the value of the specified key's latest version before specified
+    /// `ts`.
     ///
-    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
-    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
-    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
-    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater
+    /// than specified `gc_fence_limit`. Pass `None` to `gc_fence_limit` to
+    /// skip the check. The caller must guarantee that there's no other
+    /// `PUT` or `DELETE` versions whose `commit_ts` is between the found
+    /// version and the provided `gc_fence_limit` (`gc_fence_limit` is
     /// inclusive).
     ///
-    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
-    /// correct. Generally, it should be the read_ts of the current transaction, which might be
-    /// different from the `ts` passed to this function.
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure
+    /// the result is correct. Generally, it should be the read_ts of the
+    /// current transaction, which might be different from the `ts` passed
+    /// to this function.
     ///
     /// Note that this function does not check for locks on `key`.
     fn get(
@@ -323,15 +329,17 @@ impl<S: EngineSnapshot> MvccReader<S> {
         })
     }
 
-    /// Gets the write record of the specified key's latest version before specified `ts`.
-    /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater than specified
-    /// `gc_fence_limit`. Pass `None` to `gc_fence_limit` to skip the check.
-    /// The caller must guarantee that there's no other `PUT` or `DELETE` versions whose `commit_ts`
-    /// is between the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
-    /// inclusive).
-    /// For transactional reads, the `gc_fence_limit` must be provided to ensure the result is
-    /// correct. Generally, it should be the read_ts of the current transaction, which might be
-    /// different from the `ts` passed to this function.
+    /// Gets the write record of the specified key's latest version before
+    /// specified `ts`. It tries to ensure the write record's `gc_fence`'s
+    /// ts, if any, greater than specified `gc_fence_limit`. Pass `None` to
+    /// `gc_fence_limit` to skip the check. The caller must guarantee that
+    /// there's no other `PUT` or `DELETE` versions whose `commit_ts`
+    /// is between the found version and the provided `gc_fence_limit`
+    /// (`gc_fence_limit` is inclusive).
+    /// For transactional reads, the `gc_fence_limit` must be provided to ensure
+    /// the result is correct. Generally, it should be the read_ts of the
+    /// current transaction, which might be different from the `ts` passed
+    /// to this function.
     pub fn get_write(
         &mut self,
         key: &Key,
@@ -343,8 +351,9 @@ impl<S: EngineSnapshot> MvccReader<S> {
             .map(|(w, _)| w))
     }
 
-    /// Gets the write record of the specified key's latest version before specified `ts`, and
-    /// additionally the write record's `commit_ts`, if any.
+    /// Gets the write record of the specified key's latest version before
+    /// specified `ts`, and additionally the write record's `commit_ts`, if
+    /// any.
     ///
     /// See also [`MvccReader::get_write`].
     pub fn get_write_with_commit_ts(
@@ -377,8 +386,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     fn get_txn_commit_record(&mut self, key: &Key, start_ts: TimeStamp) -> Result<TxnCommitRecord> {
-        // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a txn with
-        // a greater `start_ts` in pessimistic transaction.
+        // It's possible a txn with a small `start_ts` has a greater `commit_ts` than a
+        // txn with a greater `start_ts` in pessimistic transaction.
         // I.e., txn_1.commit_ts > txn_2.commit_ts > txn_2.start_ts > txn_1.start_ts.
         //
         // Scan all the versions from `TimeStamp::max()` to `start_ts`.
@@ -464,11 +473,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(None)
     }
 
-    /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
-    /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
+    /// Scan locks that satisfies `filter(lock)` returns true, from the given
+    /// start key `start`. At most `limit` locks will be returned. If
+    /// `limit` is set to `0`, it means unlimited.
     ///
-    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
-    /// remaining locks that can be scanned.
+    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether
+    /// there MAY be remaining locks that can be scanned.
     pub fn scan_locks<F>(
         &mut self,
         start: Option<&Key>,
@@ -507,7 +517,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed_keys += locks.len();
-        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
+        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more
+        // locks.
         Ok((locks, false))
     }
 
@@ -1074,10 +1085,10 @@ pub mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false);
 
-        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
-        // is 50.
-        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT,
-        // 5_5 Rollback].
+        // Let's assume `50_45 PUT` means a commit version with start ts is 45 and
+        // commit ts is 50.
+        // Commit versions: [50_45 PUT, 45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback,
+        // 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
         let overlapped_write = reader
             .get_txn_commit_record(&key, 55.into())
@@ -1085,8 +1096,8 @@ pub mod tests {
             .unwrap_none();
         assert!(overlapped_write.is_none());
 
-        // When no such record is found but a record of another txn has a write record with
-        // its commit_ts equals to current start_ts, it
+        // When no such record is found but a record of another txn has a write record
+        // with its commit_ts equals to current start_ts, it
         let overlapped_write = reader
             .get_txn_commit_record(&key, 50.into())
             .unwrap()
@@ -1241,9 +1252,10 @@ pub mod tests {
         engine.prewrite(m, k, 23);
         engine.commit(k, 23, 25);
 
-        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
-        // is 2.
-        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
+        // ts is 2.
+        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3
+        // Rollback].
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false);
 
@@ -1390,10 +1402,10 @@ pub mod tests {
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
         let mut reader = MvccReader::new(snap, None, false);
 
-        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
-        // is 2.
-        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
-        //                   5_5 Rollback, 2_1 PUT].
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
+        // ts is 2.
+        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE,
+        // 7_6 LOCK,                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
         assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());
@@ -1954,7 +1966,8 @@ pub mod tests {
             }
         }
 
-        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is None.
+        // Must return Oldvalue::None when prev_write_loaded is true and prev_write is
+        // None.
         let engine = TestEngineBuilder::new().build().unwrap();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);

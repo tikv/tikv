@@ -63,9 +63,10 @@ pub struct ResolvedRegions {
 
 impl ResolvedRegions {
     /// compose the calculated global checkpoint and region checkpoints.
-    /// note: maybe we can compute the global checkpoint internal and getting the interface clear.
-    ///       however we must take the `min_ts` or we cannot provide valid global checkpoint if
-    /// there       isn't any region checkpoint.
+    /// note: maybe we can compute the global checkpoint internal and getting
+    /// the interface clear.       however we must take the `min_ts` or we
+    /// cannot provide valid global checkpoint if there       isn't any
+    /// region checkpoint.
     pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
         Self {
             items: checkpoints,
@@ -128,8 +129,8 @@ where
         handle: ObserveHandle,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
-        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep retrying
-        // here?
+        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep
+        // retrying here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
@@ -223,10 +224,11 @@ fn scan_executor_loop(
 }
 
 /// spawn the executors in the scan pool.
-/// we make workers thread instead of spawn scan task directly into the pool because the
-/// [`InitialDataLoader`] isn't `Sync` hence we must use it very carefully or rustc (along with
-/// tokio) would complain that we made a `!Send` future. so we have moved the data loader to the
-/// synchronous context so its reference won't be shared between threads any more.
+/// we make workers thread instead of spawn scan task directly into the pool
+/// because the [`InitialDataLoader`] isn't `Sync` hence we must use it very
+/// carefully or rustc (along with tokio) would complain that we made a `!Send`
+/// future. so we have moved the data loader to the synchronous context so its
+/// reference won't be shared between threads any more.
 fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> ScanPoolHandle {
     let (tx, rx) = crossbeam::channel::bounded(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
@@ -282,8 +284,9 @@ const MESSAGE_BUFFER_SIZE: usize = 4096;
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
-/// we should only modify the `SubscriptionTracer` itself (i.e. insert records, remove records) at
-/// here. So the order subscription / desubscription won't be broken.
+/// we should only modify the `SubscriptionTracer` itself (i.e. insert records,
+/// remove records) at here. So the order subscription / desubscription won't be
+/// broken.
 pub struct RegionSubscriptionManager<S, R, PDC> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
@@ -339,7 +342,8 @@ where
     ///
     /// # returns
     ///
-    /// a two-tuple, the first is the handle to the manager, the second is the operator loop future.
+    /// a two-tuple, the first is the handle to the manager, the second is the
+    /// operator loop future.
     pub fn start<E, RT>(
         initial_loader: InitialDataLoader<E, R, RT>,
         observer: BackupStreamObserver,
@@ -624,8 +628,9 @@ where
     fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
-        // In that condition, if we blocking for some resources(for example, the `MemoryQuota`)
-        // at the block threads, we may meet some ghosty deadlock.
+        // In that condition, if we blocking for some resources(for example, the
+        // `MemoryQuota`) at the block threads, we may meet some ghosty
+        // deadlock.
         let s = self.scan_pool_handle.request(cmd);
         if let Err(err) = s {
             let region_id = err.0.region.get_id();

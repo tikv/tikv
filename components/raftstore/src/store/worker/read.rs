@@ -514,10 +514,11 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
-    // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
-    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will
-    // be violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra
+    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
+    // lifetime of the returned `&ReadDelegate` will bind to `self`, and make it
+    // impossible to use `&mut self` while the `&ReadDelegate` is alive, a
+    // better choice is use `Rc` but `LocalReader: Send` will be violated, which
+    // is required by `LocalReadRouter: Send`, use `Arc` will introduce extra
     // cost but make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
         let rd = match self.delegates.get(&region_id) {
@@ -706,11 +707,13 @@ where
         }
     }
 
-    /// If read requests are received at the same RPC request, we can create one snapshot for all
-    /// of them and check whether the time when the snapshot was created is in lease. We use
-    /// ThreadReadId to figure out whether this RaftCommand comes from the same RPC request with
-    /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
-    /// by thread_id and a thread_local incremental sequence.
+    /// If read requests are received at the same RPC request, we can create one
+    /// snapshot for all of them and check whether the time when the
+    /// snapshot was created is in lease. We use ThreadReadId to figure out
+    /// whether this RaftCommand comes from the same RPC request with
+    /// the last RaftCommand which left a snapshot cached in LocalReader.
+    /// ThreadReadId is composed by thread_id and a thread_local incremental
+    /// sequence.
     #[inline]
     pub fn read(
         &mut self,

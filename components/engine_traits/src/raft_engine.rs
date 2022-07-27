@@ -103,8 +103,8 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
-    /// Like `cut_logs` but the range could be very large. Return the deleted count.
-    /// Generally, `from` can be passed in `0`.
+    /// Like `cut_logs` but the range could be very large. Return the deleted
+    /// count. Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
 
     fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {

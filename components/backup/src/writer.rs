@@ -27,8 +27,8 @@ use crate::{backup_file_name, metrics::*, utils::KeyValueCodec, Error, Result};
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.
 /// For removing the 'static lifetime bound in the async function,
-/// which doesn't compile due to 'captures lifetime that does not appear in bounds' :(.
-/// see https://github.com/rust-lang/rust/issues/63033
+/// which doesn't compile due to 'captures lifetime that does not appear in
+/// bounds' :(. see https://github.com/rust-lang/rust/issues/63033
 /// FIXME: remove this.
 pub struct CfNameWrap(pub &'static str);
 
@@ -99,8 +99,8 @@ impl Writer {
         Ok(())
     }
 
-    // FIXME: we cannot get sst_info in [save_and_build_file], which may cause the !Send type
-    // [RocksEnternalSstFileInfo] sent between threads.
+    // FIXME: we cannot get sst_info in [save_and_build_file], which may cause the
+    // !Send type [RocksEnternalSstFileInfo] sent between threads.
     fn finish_read(writer: RocksSstWriter) -> Result<(u64, impl Read)> {
         let (sst_info, sst_reader) = writer.finish_read()?;
         Ok((sst_info.file_size(), sst_reader))

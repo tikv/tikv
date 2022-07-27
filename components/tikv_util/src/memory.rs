@@ -33,7 +33,8 @@ impl HeapSize for Region {
         let mut size = self.start_key.capacity() + self.end_key.capacity();
         size += mem::size_of::<RegionEpoch>();
         size += self.peers.capacity() * mem::size_of::<Peer>();
-        // There is still a `bytes` in `EncryptionMeta`. Ignore it becaure it could be shared.
+        // There is still a `bytes` in `EncryptionMeta`. Ignore it becaure it could be
+        // shared.
         size += mem::size_of::<EncryptionMeta>();
         size
     }

@@ -19,16 +19,18 @@ use crate::storage::{
 
 /// Implementation of the [`RawStorage`] trait.
 ///
-/// It wraps TiKV's [`Storage`] into an API that is exposed to coprocessor plugins.
-/// The `RawStorageImpl` should be constructed for every invocation of a [`CoprocessorPlugin`] as
-/// it wraps a [`Context`] that is unique for every request.
+/// It wraps TiKV's [`Storage`] into an API that is exposed to coprocessor
+/// plugins. The `RawStorageImpl` should be constructed for every invocation of
+/// a [`CoprocessorPlugin`] as it wraps a [`Context`] that is unique for every
+/// request.
 pub struct RawStorageImpl<'a, E: Engine, L: LockManager, F: KvFormat> {
     context: Context,
     storage: &'a Storage<E, L, F>,
 }
 
 impl<'a, E: Engine, L: LockManager, F: KvFormat> RawStorageImpl<'a, E, L, F> {
-    /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and [`Storage`].
+    /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and
+    /// [`Storage`].
     pub fn new(context: Context, storage: &'a Storage<E, L, F>) -> Self {
         RawStorageImpl { context, storage }
     }

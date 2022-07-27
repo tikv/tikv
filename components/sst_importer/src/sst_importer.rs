@@ -432,7 +432,8 @@ impl SstImporter {
             }
             if check_key_in_range(&key, 0, start_key, end_key).is_err() {
                 // key not in range, we can simply skip this key here.
-                // the client make sure the correct region will download and apply the same file.
+                // the client make sure the correct region will download and apply the same
+                // file.
                 INPORTER_APPLY_COUNT
                     .with_label_values(&["key_not_in_region"])
                     .inc();
@@ -574,7 +575,8 @@ impl SstImporter {
                 return Ok(None);
             }
 
-            // range contained the entire SST, no need to iterate, just moving the file is ok
+            // range contained the entire SST, no need to iterate, just moving the file is
+            // ok
             let mut range = Range::default();
             range.set_start(start_key);
             range.set_end(last_key.to_vec());

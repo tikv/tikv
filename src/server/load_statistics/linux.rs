@@ -23,11 +23,12 @@ pub struct ThreadLoadStatistics {
 }
 
 impl ThreadLoadStatistics {
-    /// Create a thread load statistics for all threads with `prefix`. `ThreadLoad` is stored into
-    /// `thread_loads` for each thread. At most `slots` old records will be kept, to make the curve
-    /// more smooth.
+    /// Create a thread load statistics for all threads with `prefix`.
+    /// `ThreadLoad` is stored into `thread_loads` for each thread. At most
+    /// `slots` old records will be kept, to make the curve more smooth.
     ///
-    /// Note: call this after the target threads are initialized, otherwise it can't catch them.
+    /// Note: call this after the target threads are initialized, otherwise it
+    /// can't catch them.
     pub fn new(slots: usize, prefix: &str, thread_loads: Arc<ThreadLoadPool>) -> Self {
         let pid = thread::process_id();
         let mut tids = vec![];
@@ -56,17 +57,19 @@ impl ThreadLoadStatistics {
         }
     }
 
-    /// For every threads with the name prefix given in `ThreadLoadStatistics::new`,
-    /// gather cpu usage from `/proc/<pid>/task/<tid>` and store it in `thread_load`
+    /// For every threads with the name prefix given in
+    /// `ThreadLoadStatistics::new`, gather cpu usage from
+    /// `/proc/<pid>/task/<tid>` and store it in `thread_load`
     /// passed in `ThreadLoadStatistics::new`.
     ///
-    /// Some old usages and instants (at most `slots`) will be kept internal to make
-    /// the usage curve more smooth.
+    /// Some old usages and instants (at most `slots`) will be kept internal to
+    /// make the usage curve more smooth.
     pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos].clear();
         for tid in &self.tids {
-            // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
+            // TODO: if monitored threads exited and restarted then, we should update
+            // `self.tids`.
             if let Ok(stat) = thread::full_thread_stat(self.pid, *tid) {
                 let total = thread::linux::cpu_total(&stat);
                 self.cpu_usages[self.cur_pos].insert(*tid, total);

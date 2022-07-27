@@ -373,7 +373,8 @@ pub enum Cmd {
         /// Skip write RocksDB
         read_only: bool,
     },
-    /// Unsafely recover when the store can not start normally, this recover may lose data
+    /// Unsafely recover when the store can not start normally, this recover may
+    /// lose data
     UnsafeRecover {
         #[structopt(subcommand)]
         cmd: UnsafeRecoverCmd,
@@ -404,7 +405,8 @@ pub enum Cmd {
             default_value = crate::executor::METRICS_PROMETHEUS,
             possible_values = &["prometheus", "jemalloc", "rocksdb_raft", "rocksdb_kv"],
         )]
-        /// Set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not
+        /// Set the metrics tag, one of
+        /// prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not
         /// specified, print prometheus
         tag: Vec<String>,
     },
@@ -434,7 +436,8 @@ pub enum Cmd {
         /// Output meta file path
         file: String,
     },
-    /// Compact the whole cluster in a specified range in one or more column families
+    /// Compact the whole cluster in a specified range in one or more column
+    /// families
     CompactCluster {
         #[structopt(
             short = "d",
@@ -452,8 +455,8 @@ pub enum Cmd {
             default_value = CF_DEFAULT,
             possible_values = &["default", "lock", "write"],
         )]
-        /// Column family names, for kv db, combine from default/lock/write; for raft db, can only
-        /// be default
+        /// Column family names, for kv db, combine from default/lock/write; for
+        /// raft db, can only be default
         cf: Vec<String>,
 
         #[structopt(
@@ -533,12 +536,14 @@ pub enum Cmd {
         #[structopt(subcommand)]
         cmd: EncryptionMetaCmd,
     },
-    /// Delete encryption keys that are no longer associated with physical files.
+    /// Delete encryption keys that are no longer associated with physical
+    /// files.
     CleanupEncryptionMeta {},
     /// Print bad ssts related infos
     BadSsts {
         #[structopt(long)]
-        /// specify manifest, if not set, it will look up manifest file in db path
+        /// specify manifest, if not set, it will look up manifest file in db
+        /// path
         manifest: Option<String>,
 
         #[structopt(long, value_delimiter = ",")]
@@ -608,7 +613,8 @@ pub enum RaftCmd {
 pub enum FailCmd {
     /// Inject failures
     Inject {
-        /// Inject fail point and actions pairs. E.g. tikv-ctl fail inject a=off b=panic
+        /// Inject fail point and actions pairs. E.g. tikv-ctl fail inject a=off
+        /// b=panic
         args: Vec<String>,
 
         #[structopt(short = "f")]

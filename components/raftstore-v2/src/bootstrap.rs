@@ -33,8 +33,8 @@ pub struct Bootstrap<'a, ER: RaftEngine> {
     logger: Logger,
 }
 
-// Although all methods won't change internal state, but they still receive `&mut self` as it's
-// not thread safe to bootstrap concurrently.
+// Although all methods won't change internal state, but they still receive
+// `&mut self` as it's not thread safe to bootstrap concurrently.
 impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
     pub fn new(
         engine: &'a ER,
@@ -142,12 +142,12 @@ impl<'a, ER: RaftEngine> Bootstrap<'a, ER> {
 
     fn check_or_prepare_bootstrap_first_region(&mut self, store_id: u64) -> Result<Option<Region>> {
         if let Some(first_region) = self.engine.get_prepare_bootstrap_region()? {
-            // Bootstrap is aborted last time, resume. It may succeed or fail last time, no matter
-            // what, at least we need a way to clean up.
+            // Bootstrap is aborted last time, resume. It may succeed or fail last time, no
+            // matter what, at least we need a way to clean up.
             Ok(Some(first_region))
         } else if self.check_first_region_bootstrapped()? {
-            // If other node has bootstrap the cluster, skip to avoid useless ID allocating and
-            // disk writes.
+            // If other node has bootstrap the cluster, skip to avoid useless ID allocating
+            // and disk writes.
             Ok(None)
         } else {
             // We are probably the first one triggering bootstrap.

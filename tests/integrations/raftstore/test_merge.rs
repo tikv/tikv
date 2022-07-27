@@ -207,7 +207,8 @@ fn test_node_merge_prerequisites_check() {
     cluster.must_transfer_leader(right.get_id(), right_on_store1);
 
     // first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make source peer have uncommitted entries.
+    // So only allowing first MsgAppend to make source peer have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .direction(Direction::Recv)
@@ -336,7 +337,8 @@ fn test_node_merge_slow_split_left() {
     test_node_merge_slow_split(false);
 }
 
-// Test if a merge handled properly when there is a unfinished slow split before merge.
+// Test if a merge handled properly when there is a unfinished slow split before
+// merge.
 fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
@@ -638,8 +640,8 @@ fn test_merge_approximate_size_and_keys() {
         keys
     );
 
-    // after merge and then transfer leader, if not update new leader's approximate size, it maybe
-    // be stale.
+    // after merge and then transfer leader, if not update new leader's approximate
+    // size, it maybe be stale.
     cluster.must_transfer_leader(region.get_id(), region.get_peers()[0].clone());
     // make sure split check is invoked
     thread::sleep(Duration::from_millis(100));
@@ -735,7 +737,8 @@ fn test_node_merge_update_region() {
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v3");
 }
 
-/// Test if merge is working properly when merge entries is empty but commit index is not updated.
+/// Test if merge is working properly when merge entries is empty but commit
+/// index is not updated.
 #[test]
 fn test_node_merge_catch_up_logs_empty_entries() {
     let mut cluster = new_node_cluster(0, 3);
@@ -758,22 +761,23 @@ fn test_node_merge_catch_up_logs_empty_entries() {
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // first MsgAppend will append log, second MsgAppend will set commit index,
-    // So only allowing first MsgAppend to make source peer have uncommitted entries.
+    // So only allowing first MsgAppend to make source peer have uncommitted
+    // entries.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .direction(Direction::Recv)
             .msg_type(MessageType::MsgAppend)
             .allow(1),
     ));
-    // make the source peer have no way to know the uncommitted entries can be applied from
-    // heartbeat.
+    // make the source peer have no way to know the uncommitted entries can be
+    // applied from heartbeat.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(left.get_id(), 3)
             .msg_type(MessageType::MsgHeartbeat)
             .direction(Direction::Recv),
     ));
-    // make the source peer have no way to know the uncommitted entries can be applied from target
-    // region.
+    // make the source peer have no way to know the uncommitted entries can be
+    // applied from target region.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(right.get_id(), 3)
             .msg_type(MessageType::MsgAppend)
@@ -828,8 +832,8 @@ fn test_merge_with_slow_promote() {
 /// on this store before isolated.
 /// A (-∞, k2), B [k2, +∞) on store 1,2,4
 /// store 4 is isolated
-/// B merge to A (target peer A is not created on store 4. It‘s just exist logically)
-/// A split => C (-∞, k3), A [k3, +∞)
+/// B merge to A (target peer A is not created on store 4. It‘s just exist
+/// logically) A split => C (-∞, k3), A [k3, +∞)
 /// Then network recovery
 #[test]
 fn test_merge_isolated_store_with_no_target_peer() {
@@ -888,7 +892,8 @@ fn test_merge_isolated_store_with_no_target_peer() {
     must_get_equal(&cluster.get_engine(4), b"k345", b"v345");
 }
 
-/// Test whether a isolated peer can recover when two other regions merge to its region
+/// Test whether a isolated peer can recover when two other regions merge to its
+/// region
 #[test]
 fn test_merge_cascade_merge_isolated() {
     let mut cluster = new_node_cluster(0, 3);
@@ -938,8 +943,8 @@ fn test_merge_cascade_merge_isolated() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-// Test if a learner can be destroyed properly when it's isolated and removed by conf change
-// before its region merge to another region
+// Test if a learner can be destroyed properly when it's isolated and removed by
+// conf change before its region merge to another region
 #[test]
 fn test_merge_isolated_not_in_merge_learner() {
     let mut cluster = new_node_cluster(0, 3);
@@ -973,7 +978,8 @@ fn test_merge_isolated_not_in_merge_learner() {
     pd_client.must_remove_peer(right.get_id(), right_on_store1);
 
     pd_client.must_merge(left.get_id(), right.get_id());
-    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to other peers
+    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to
+    // other peers
     pd_client.must_add_peer(right.get_id(), new_learner_peer(2, 5));
 
     cluster.must_put(b"k123", b"v123");
@@ -983,8 +989,8 @@ fn test_merge_isolated_not_in_merge_learner() {
     must_get_equal(&cluster.get_engine(2), b"k123", b"v123");
 }
 
-// Test if a learner can be destroyed properly when it's isolated and removed by conf change
-// before another region merge to its region
+// Test if a learner can be destroyed properly when it's isolated and removed by
+// conf change before another region merge to its region
 #[test]
 fn test_merge_isolated_stale_learner() {
     let mut cluster = new_node_cluster(0, 3);
@@ -1021,7 +1027,8 @@ fn test_merge_isolated_stale_learner() {
 
     let new_left = pd_client.get_region(b"k1").unwrap();
     assert_ne!(left.get_id(), new_left.get_id());
-    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to other peers
+    // Add a new learner on store 2 to trigger peer 2 send check-stale-peer msg to
+    // other peers
     pd_client.must_add_peer(new_left.get_id(), new_learner_peer(2, 5));
     cluster.must_put(b"k123", b"v123");
 
@@ -1070,15 +1077,16 @@ fn test_merge_isolated_not_in_merge_learner_2() {
     pd_client.must_merge(left.get_id(), right.get_id());
 
     cluster.run_node(2).unwrap();
-    // When the abnormal leader missing duration has passed, the check-stale-peer msg will be sent
-    // to peer 1001. After that, a new peer list will be returned (2, 2) (3, 3).
-    // Then peer 2 sends the check-stale-peer msg to peer 3 and it will get a tombstone response.
-    // Finally peer 2 will be destroyed.
+    // When the abnormal leader missing duration has passed, the check-stale-peer
+    // msg will be sent to peer 1001. After that, a new peer list will be
+    // returned (2, 2) (3, 3). Then peer 2 sends the check-stale-peer msg to
+    // peer 3 and it will get a tombstone response. Finally peer 2 will be
+    // destroyed.
     must_get_none(&cluster.get_engine(2), b"k1");
 }
 
-/// Test if a peer can be removed if its target peer has been removed and doesn't apply the
-/// CommitMerge log.
+/// Test if a peer can be removed if its target peer has been removed and
+/// doesn't apply the CommitMerge log.
 #[test]
 fn test_merge_remove_target_peer_isolated() {
     let mut cluster = new_node_cluster(0, 4);
@@ -1115,7 +1123,8 @@ fn test_merge_remove_target_peer_isolated() {
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     // Make region r2's epoch > r2 peer on store 3.
-    // r2 peer on store 3 will be removed whose epoch is staler than the epoch when r1 merge to r2.
+    // r2 peer on store 3 will be removed whose epoch is staler than the epoch when
+    // r1 merge to r2.
     pd_client.must_add_peer(r2.get_id(), new_peer(4, 4));
     pd_client.must_remove_peer(r2.get_id(), new_peer(4, 4));
 
@@ -1197,8 +1206,8 @@ fn test_sync_max_ts_after_region_merge() {
     assert!(new_max_ts > max_ts);
 }
 
-/// If a follower is demoted by a snapshot, its meta will be changed. The case is to ensure
-/// asserts in code can tolerate the change.
+/// If a follower is demoted by a snapshot, its meta will be changed. The case
+/// is to ensure asserts in code can tolerate the change.
 #[test]
 fn test_merge_snapshot_demote() {
     let mut cluster = new_node_cluster(0, 4);
@@ -1273,8 +1282,8 @@ fn test_propose_in_memory_pessimistic_locks() {
     let left = cluster.get_region(b"k1");
     let right = cluster.get_region(b"k3");
 
-    // Transfer the leader of the right region to store 2. The leaders of source and target
-    // regions don't need to be on the same store.
+    // Transfer the leader of the right region to store 2. The leaders of source and
+    // target regions don't need to be on the same store.
     cluster.must_transfer_leader(right.id, new_peer(2, 2));
 
     // Insert lock l1 into the left region
@@ -1316,8 +1325,8 @@ fn test_propose_in_memory_pessimistic_locks() {
     // Merge left region into the right region
     pd_client.must_merge(left.id, right.id);
 
-    // After the left region is merged into the right region, its pessimistic locks should be
-    // proposed and applied to the storage.
+    // After the left region is merged into the right region, its pessimistic locks
+    // should be proposed and applied to the storage.
     let snapshot = cluster.must_get_snapshot_of_region(right.id);
     let value = snapshot
         .get_cf(CF_LOCK, &Key::from_raw(b"k1"))
@@ -1340,7 +1349,8 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     configure_for_merge(&mut cluster);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
-    // Set raft_entry_max_size to 64 KiB. We will try to make the gap larger than the limit later.
+    // Set raft_entry_max_size to 64 KiB. We will try to make the gap larger than
+    // the limit later.
     cluster.cfg.raft_store.raft_entry_max_size = ReadableSize::kb(64);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -1373,8 +1383,8 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
     cluster.merge_region(left.id, right.id, Callback::None);
     thread::sleep(Duration::from_millis(150));
 
-    // The gap is too large, so the previous merge should fail. And this new put request
-    // should be allowed.
+    // The gap is too large, so the previous merge should fail. And this new put
+    // request should be allowed.
     let res = cluster.async_put(b"k1", b"new_val").unwrap();
 
     cluster.clear_send_filters();
@@ -1448,8 +1458,8 @@ fn test_merge_pessimistic_locks_repeated_merge() {
     assert_eq!(value, lock.into_lock().to_bytes());
 }
 
-/// Check if merge is cleaned up if the merge target is destroyed several times before it's ever
-/// scheduled.
+/// Check if merge is cleaned up if the merge target is destroyed several times
+/// before it's ever scheduled.
 #[test]
 fn test_node_merge_long_isolated() {
     let mut cluster = new_node_cluster(0, 3);
@@ -1484,7 +1494,8 @@ fn test_node_merge_long_isolated() {
     let right = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&right, b"k2");
     cluster.must_put(b"k4", b"v4");
-    // Ensure the node is removed, so it will not catch up any logs but just destroy itself.
+    // Ensure the node is removed, so it will not catch up any logs but just destroy
+    // itself.
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
     must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
 
@@ -1533,16 +1544,18 @@ fn test_stale_message_after_merge() {
     pd_client.must_add_peer(left.get_id(), new_peer(3, 1004));
     pd_client.must_merge(left.get_id(), right.get_id());
 
-    // Such stale message can be sent due to network error, consider the following example:
-    // 1. Store 1 and Store 3 can't reach each other, so peer 1003 start election and send
-    // `RequestVote`    message to peer 1001, and fail due to network error, but this message is
-    // keep backoff-retry to send out 2. Peer 1002 become the new leader and remove peer 1003
-    // and add peer 1004 on store 3, then the region is    merged into other region, the merge
-    // can success because peer 1002 can reach both peer 1001 and peer 1004 3. Network recover,
-    // so peer 1003's `RequestVote` message is sent to peer 1001 after it is merged
+    // Such stale message can be sent due to network error, consider the following
+    // example: 1. Store 1 and Store 3 can't reach each other, so peer 1003
+    // start election and send `RequestVote`    message to peer 1001, and fail
+    // due to network error, but this message is keep backoff-retry to send out
+    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004
+    // on store 3, then the region is    merged into other region, the merge can
+    // success because peer 1002 can reach both peer 1001 and peer 1004 3. Network
+    // recover, so peer 1003's `RequestVote` message is sent to peer 1001 after
+    // it is merged
     //
-    // the backoff-retry of a stale message is hard to simulated in test, so here just send this
-    // stale message directly
+    // the backoff-retry of a stale message is hard to simulated in test, so here
+    // just send this stale message directly
     let mut raft_msg = RaftMessage::default();
     raft_msg.set_region_id(left.get_id());
     raft_msg.set_from_peer(find_peer(&left, 3).unwrap().to_owned());
@@ -1554,7 +1567,8 @@ fn test_stale_message_after_merge() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-/// Check whether merge should be prevented if follower may not have enough logs.
+/// Check whether merge should be prevented if follower may not have enough
+/// logs.
 #[test]
 fn test_prepare_merge_with_reset_matched() {
     let mut cluster = new_server_cluster(0, 3);
@@ -1594,15 +1608,16 @@ fn test_prepare_merge_with_reset_matched() {
     cluster.must_transfer_leader(left.get_id(), left_on_store1);
     let res = cluster.try_merge(left.get_id(), right.get_id());
     // Now leader still knows peer(2, 2) has committed i0 - 1, so the min_match will
-    // become i0 - 1. But i0 - 1 is not a safe index as peer(3, 3) starts from i0 + 1.
+    // become i0 - 1. But i0 - 1 is not a safe index as peer(3, 3) starts from i0 +
+    // 1.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     // Now leader should replicate more logs and figure out a safe index.
     pd_client.must_merge(left.get_id(), right.get_id());
 }
 
-/// Check if prepare merge min index is chosen correctly even if all match indexes are
-/// correct.
+/// Check if prepare merge min index is chosen correctly even if all match
+/// indexes are correct.
 #[test]
 fn test_prepare_merge_with_5_nodes_snapshot() {
     let mut cluster = new_server_cluster(0, 5);
@@ -1642,8 +1657,8 @@ fn test_prepare_merge_with_5_nodes_snapshot() {
     cluster.add_send_filter(IsolationFilterFactory::new(4));
     must_get_equal(&cluster.get_engine(5), b"k13", b"v13");
     let res = cluster.try_merge(left.get_id(), right.get_id());
-    // min_matched from peer 4 is beyond the first index of peer 5, it should not be chosen
-    // for prepare merge.
+    // min_matched from peer 4 is beyond the first index of peer 5, it should not be
+    // chosen for prepare merge.
     assert!(res.get_header().has_error(), "{:?}", res);
     cluster.clear_send_filters();
     // Now leader should replicate more logs and figure out a safe index.

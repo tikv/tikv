@@ -424,8 +424,8 @@ impl BlobStorage for GCSStorage {
             ..Default::default()
         };
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into memory
-        // in order to retry.
+        // FIXME: Switch to upload() API so we don't need to read the entire data into
+        // memory in order to retry.
         let mut data = Vec::with_capacity(content_length as usize);
         reader.read_to_end(&mut data).await?;
         retry(|| async {

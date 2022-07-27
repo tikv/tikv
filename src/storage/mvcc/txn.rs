@@ -28,8 +28,9 @@ impl GcInfo {
     }
 }
 
-/// `ReleasedLock` contains the information of the lock released by `commit`, `rollback` and so on.
-/// It's used by `LockManager` to wake up transactions waiting for locks.
+/// `ReleasedLock` contains the information of the lock released by `commit`,
+/// `rollback` and so on. It's used by `LockManager` to wake up transactions
+/// waiting for locks.
 #[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
     /// The hash value of the lock.
@@ -141,14 +142,16 @@ impl MvccTxn {
         self.modifies.push(write);
     }
 
-    /// Add the timestamp of the current rollback operation to another transaction's lock if
-    /// necessary.
+    /// Add the timestamp of the current rollback operation to another
+    /// transaction's lock if necessary.
     ///
-    /// When putting rollback record on a key that's locked by another transaction, the second
-    /// transaction may overwrite the current rollback record when it's committed. Sometimes it may
-    /// break consistency. To solve the problem, add the timestamp of the current rollback to the
-    /// lock. So when the lock is committed, it can check if it will overwrite a rollback record
-    /// by checking the information in the lock.
+    /// When putting rollback record on a key that's locked by another
+    /// transaction, the second transaction may overwrite the current
+    /// rollback record when it's committed. Sometimes it may
+    /// break consistency. To solve the problem, add the timestamp of the
+    /// current rollback to the lock. So when the lock is committed, it can
+    /// check if it will overwrite a rollback record by checking the
+    /// information in the lock.
     pub(crate) fn mark_rollback_on_mismatching_lock(
         &mut self,
         key: &Key,
@@ -158,18 +161,20 @@ impl MvccTxn {
         assert_ne!(lock.ts, self.start_ts);
 
         if !is_protected {
-            // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
+            // A non-protected rollback record is ok to be overwritten, so do nothing in
+            // this case.
             return;
         }
 
         if self.start_ts < lock.min_commit_ts {
-            // The rollback will surely not be overwritten by committing the lock. Do nothing.
+            // The rollback will surely not be overwritten by committing the lock. Do
+            // nothing.
             return;
         }
 
         if !lock.use_async_commit {
-            // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
-            // async commit transaction.
+            // Currently only async commit may use calculated commit_ts. Do nothing if it's
+            // not a async commit transaction.
             return;
         }
 
@@ -951,8 +956,8 @@ pub(crate) mod tests {
 
         let (k, v) = (b"k", b"v");
 
-        // Pessimistic prewrite keeps the larger TTL of the prewrite request and the original
-        // pessimisitic lock.
+        // Pessimistic prewrite keeps the larger TTL of the prewrite request and the
+        // original pessimisitic lock.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 10, 10, 100);
         must_pessimistic_locked(&engine, k, 10, 10);
         must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 10, 10, true, 110);
@@ -960,8 +965,8 @@ pub(crate) mod tests {
 
         must_rollback(&engine, k, 10, false);
 
-        // TTL not changed if the pessimistic lock's TTL is larger than that provided in the
-        // prewrite request.
+        // TTL not changed if the pessimistic lock's TTL is larger than that provided in
+        // the prewrite request.
         must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 20, 20, 100);
         must_pessimistic_locked(&engine, k, 20, 20);
         must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 20, 20, true, 90);
@@ -1115,8 +1120,8 @@ pub(crate) mod tests {
         must_pessimistic_prewrite_put(&engine, k3, v3, k1, 10, 20, true);
         // Write a non-pessimistic lock with for_update_ts 20.
         must_pessimistic_prewrite_put(&engine, k2, v2, k1, 10, 20, false);
-        // Roll back the primary key due to timeout, but the non-pessimistic lock is not rolled
-        // back.
+        // Roll back the primary key due to timeout, but the non-pessimistic lock is not
+        // rolled back.
         must_rollback(&engine, k1, 10, false);
 
         // Txn-15 acquires pessimistic locks on k1.
@@ -1188,8 +1193,8 @@ pub(crate) mod tests {
 
     #[test]
     fn test_async_prewrite_primary() {
-        // copy must_prewrite_put_impl, check that the key is written with the correct secondaries
-        // and the right timestamp
+        // copy must_prewrite_put_impl, check that the key is written with the correct
+        // secondaries and the right timestamp
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
@@ -1240,7 +1245,8 @@ pub(crate) mod tests {
         // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
-        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        // A duplicate prewrite request should return the min_commit_ts in the primary
+        // key
         assert_eq!(do_prewrite(), 43.into());
     }
 
@@ -1297,7 +1303,8 @@ pub(crate) mod tests {
         // max_ts in the concurrency manager is 42, so the min_commit_ts is 43.
         assert_eq!(lock.min_commit_ts, TimeStamp::new(43));
 
-        // A duplicate prewrite request should return the min_commit_ts in the primary key
+        // A duplicate prewrite request should return the min_commit_ts in the primary
+        // key
         assert_eq!(do_pessimistic_prewrite(), 43.into());
     }
 
@@ -1346,8 +1353,8 @@ pub(crate) mod tests {
         must_unlocked(&engine, k);
         must_written(&engine, k, 10, 20, WriteType::Put);
 
-        // Optimistic transaction allows the start_ts equals to another transaction's commit_ts
-        // on the same key.
+        // Optimistic transaction allows the start_ts equals to another transaction's
+        // commit_ts on the same key.
         must_prewrite_put(&engine, k, v, k, 20);
         must_locked(&engine, k, 20);
         must_commit(&engine, k, 20, 30);
@@ -1419,15 +1426,16 @@ pub(crate) mod tests {
         assert!(w.has_overlapped_rollback);
         assert!(w.gc_fence.is_none());
 
-        // Do not commit with overlapped_rollback if the rollback ts doesn't equal to commit_ts.
+        // Do not commit with overlapped_rollback if the rollback ts doesn't equal to
+        // commit_ts.
         must_prewrite_put_async_commit(&engine, k, v, k, &Some(vec![]), 40, 0);
         must_cleanup(&engine, k, 44, 0);
         must_commit(&engine, k, 40, 45);
         let w = must_written(&engine, k, 40, 45, WriteType::Put);
         assert!(!w.has_overlapped_rollback);
 
-        // Do not put rollback mark to the lock if the lock is not async commit or if lock.ts is
-        // before start_ts or min_commit_ts.
+        // Do not put rollback mark to the lock if the lock is not async commit or if
+        // lock.ts is before start_ts or min_commit_ts.
         must_prewrite_put(&engine, k, v, k, 50);
         must_cleanup(&engine, k, 55, 0);
         let l = must_locked(&engine, k, 50);

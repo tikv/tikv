@@ -63,8 +63,8 @@ enum PendingLock {
 }
 
 // Records information related to observed region.
-// observe_id is used for avoiding ABA problems in incremental scan task, advance resolved ts task,
-// and command observing.
+// observe_id is used for avoiding ABA problems in incremental scan task,
+// advance resolved ts task, and command observing.
 struct ObserveRegion {
     meta: Region,
     handle: ObserveHandle,
@@ -424,17 +424,17 @@ where
                 return;
             }
             // TODO: may not need to re-register region for some cases:
-            // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from the
-            //   `Resolver`'s lock heap
+            // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from
+            //   the `Resolver`'s lock heap
             // - `PrepareMerge` and `RollbackMerge`, the key range is unchanged
             self.deregister_region(region_id);
             self.register_region(incoming_region);
         }
     }
 
-    // This function is corresponding to RegionDestroyed event that can be only scheduled by
-    // observer. To prevent destroying region for wrong peer, it should check the region epoch
-    // at first.
+    // This function is corresponding to RegionDestroyed event that can be only
+    // scheduled by observer. To prevent destroying region for wrong peer, it
+    // should check the region epoch at first.
     fn region_destroyed(&mut self, region: Region) {
         if let Some(observe_region) = self.regions.get(&region.id) {
             if util::compare_region_epoch(
@@ -506,7 +506,8 @@ where
         self.sinker.sink_resolved_ts(regions, ts);
     }
 
-    // Tracking or untracking locks with incoming commands that corresponding observe id is valid.
+    // Tracking or untracking locks with incoming commands that corresponding
+    // observe id is valid.
     #[allow(clippy::drop_ref)]
     fn handle_change_log(
         &mut self,
@@ -571,7 +572,8 @@ where
     }
 
     fn register_advance_event(&self, cfg_version: usize) {
-        // Ignore advance event that registered with previous `advance_ts_interval` config
+        // Ignore advance event that registered with previous `advance_ts_interval`
+        // config
         if self.cfg_version != cfg_version {
             return;
         }

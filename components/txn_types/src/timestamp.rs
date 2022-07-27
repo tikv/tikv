@@ -122,10 +122,11 @@ const TS_SET_USE_VEC_LIMIT: usize = 8;
 pub enum TsSet {
     /// When the set is empty, avoid the useless cloning of Arc.
     Empty,
-    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
-    /// converting a `Vec` into a `HashSet`.
+    /// `Vec` is suitable when the set is small or the set is barely used, and
+    /// it doesn't worth converting a `Vec` into a `HashSet`.
     Vec(Arc<[TimeStamp]>),
-    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
+    /// `Set` is suitable when there are many timestamps **and** it will be
+    /// queried multiple times.
     Set(Arc<HashSet<TimeStamp>>),
 }
 
@@ -137,14 +138,15 @@ impl Default for TsSet {
 }
 
 impl TsSet {
-    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
-    /// collection type according to the size.
+    /// Create a `TsSet` from the given vec of timestamps. It will select the
+    /// proper internal collection type according to the size.
     #[inline]
     pub fn new(ts: Vec<TimeStamp>) -> Self {
         if ts.is_empty() {
             TsSet::Empty
         } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
-            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
+            // If there are too few elements in `ts`, use Vec directly instead of making a
+            // Set.
             TsSet::Vec(ts.into())
         } else {
             TsSet::Set(Arc::new(ts.into_iter().collect()))
@@ -161,10 +163,11 @@ impl TsSet {
         Self::vec(unsafe { tikv_util::memory::vec_transmute(ts) })
     }
 
-    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
-    /// internal collection type. When it's sure that the set will be queried at most once, use this
-    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
-    /// to `HashSet` is O(N).
+    /// Create a `TsSet` from the given vec of timestamps, but it will be forced
+    /// to use `Vec` as the internal collection type. When it's sure that
+    /// the set will be queried at most once, use this is better than
+    /// `TsSet::new`, since both the querying on `Vec` and the conversion from
+    /// `Vec` to `HashSet` is O(N).
     #[inline]
     pub fn vec(ts: Vec<TimeStamp>) -> Self {
         if ts.is_empty() {

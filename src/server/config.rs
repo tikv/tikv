@@ -164,9 +164,10 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
-    /// increasing. For server layer some messages will be rejected or droped, if they utilize
-    /// memory more than `reject_messages_on_memory_ratio` * total.
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// limit memory increasing. For server layer some messages will be
+    /// rejected or droped, if they utilize memory more than
+    /// `reject_messages_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable message rejecting.
     // By default it's 0.2. So for different memory capacity, messages are rejected when:
@@ -384,8 +385,8 @@ impl Config {
         }
 
         if self.heavy_load_threshold > 100 {
-            // The configuration has been changed to describe CPU usage of a single thread instead
-            // of all threads. So migrate from the old style.
+            // The configuration has been changed to describe CPU usage of a single thread
+            // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
         }
 

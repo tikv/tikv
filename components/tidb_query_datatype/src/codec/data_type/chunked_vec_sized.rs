@@ -9,10 +9,11 @@ use crate::impl_chunked_vec_common;
 /// in that structure itself. This includes `Int`, `Real`, `Decimal`,
 /// `DateTime` and `Duration` in copr framework.
 ///
-/// Inside `ChunkedVecSized`, `bitmap` indicates if an element at given index is null,
-/// and `data` stores actual data. If the element at given index is null (or `None`),
-/// the corresponding `bitmap` bit is false, and `data` stores zero value for
-/// that element. Otherwise, `data` stores actual data, and `bitmap` bit is true.
+/// Inside `ChunkedVecSized`, `bitmap` indicates if an element at given index is
+/// null, and `data` stores actual data. If the element at given index is null
+/// (or `None`), the corresponding `bitmap` bit is false, and `data` stores zero
+/// value for that element. Otherwise, `data` stores actual data, and `bitmap`
+/// bit is true.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
     data: Vec<T>,

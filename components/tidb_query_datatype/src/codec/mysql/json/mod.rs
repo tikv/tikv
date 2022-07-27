@@ -431,8 +431,8 @@ impl ConvertTo<Json> for i64 {
 impl ConvertTo<Json> for f64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return
-        // `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let mut value = vec![0; F64_SIZE];
         NumberCodec::encode_f64_le(&mut value, *self);
         Ok(Json {
@@ -445,8 +445,8 @@ impl ConvertTo<Json> for f64 {
 impl ConvertTo<Json> for Real {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return
-        // `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let mut value = vec![0; F64_SIZE];
         NumberCodec::encode_f64_le(&mut value, self.into_inner());
         Ok(Json {
@@ -459,8 +459,8 @@ impl ConvertTo<Json> for Real {
 impl ConvertTo<Json> for Decimal {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
-        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return
-        // `DOUBLE` now.
+        // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we
+        // return `DOUBLE` now.
         let val: f64 = self.convert(ctx)?;
         val.convert(ctx)
     }
@@ -591,7 +591,8 @@ mod tests {
             ("{}", ERR_TRUNCATE_WRONG_VALUE),
             ("[]", ERR_TRUNCATE_WRONG_VALUE),
         ];
-        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as
+        // true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();

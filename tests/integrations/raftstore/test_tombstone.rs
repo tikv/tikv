@@ -267,9 +267,9 @@ fn test_server_stale_meta() {
 
 /// Tests a tombstone peer won't trigger wrong gc message.
 ///
-/// An uninitialized peer's peer list is empty. If a message from a healthy peer passes
-/// all the other checks accidentally, it may trigger a tombstone message which will
-/// make the healthy peer destroy all its data.
+/// An uninitialized peer's peer list is empty. If a message from a healthy peer
+/// passes all the other checks accidentally, it may trigger a tombstone message
+/// which will make the healthy peer destroy all its data.
 #[test]
 fn test_safe_tombstone_gc() {
     let mut cluster = new_node_cluster(0, 5);

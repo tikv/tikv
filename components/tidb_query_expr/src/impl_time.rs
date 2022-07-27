@@ -179,8 +179,8 @@ pub fn week_of_year(ctx: &mut EvalContext, t: Option<&DateTime>) -> Result<Optio
 // year_week_with_mode implements `YEARWEEK` in MySQL.
 // See also: https://dev.mysql.com/doc/refman/5.7/en/date-and-time-functions.html#function_yearweek
 //
-// e.g.: SELECT YEARWEEK('1987-01-01');  -- -> 198652, here the first 4 digits represents year, and
-// the last 2 digits represents week.
+// e.g.: SELECT YEARWEEK('1987-01-01');  -- -> 198652, here the first 4 digits
+// represents year, and the last 2 digits represents week.
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn year_week_with_mode(ctx: &mut EvalContext, t: &DateTime, mode: &Int) -> Result<Option<Int>> {
@@ -1076,16 +1076,18 @@ mod tests {
             assert_eq!(output, expect, "{:?} {:?}", date, format);
         }
 
-        //                // TODO: pass this test after refactoring the issue #3953 is fixed.
-        //                {
+        //                // TODO: pass this test after refactoring the issue #3953 is
+        // fixed.                {
         //                    let format: Option<Bytes> =  Some("abc%b %M %m %c %D %d %e
-        // %j".as_bytes().to_vec());                    let time: Option<DateTime> = Some(
-        // DateTime::parse_utc_datetime("0000-00-00 00:00:00", 6).unwrap());
+        // %j".as_bytes().to_vec());                    let time: Option<DateTime> =
+        // Some( DateTime::parse_utc_datetime("0000-00-00 00:00:00",
+        // 6).unwrap());
         //
         //                    let mut cfg = EvalConfig::new();
         //                    cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
-        //                    let ctx = EvalContext::new(Arc::new(cfg));
+        //                        .set_sql_mode(SqlMode::NO_ZERO_DATE |
+        // SqlMode::STRICT_ALL_TABLES);                    let ctx =
+        // EvalContext::new(Arc::new(cfg));
         //
         //                    let output = RpnFnScalarEvaluator::new()
         //                        .context(ctx)

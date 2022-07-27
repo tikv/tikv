@@ -337,7 +337,8 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     /// Set regions to tombstone by manual, and apply other status(such as
-    /// peers, version, and key range) from `region` which comes from PD normally.
+    /// peers, version, and key range) from `region` which comes from PD
+    /// normally.
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_ident()?.get_store_id();
         let db = &self.engines.kv;
@@ -683,8 +684,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         for region_id in region_ids {
             let region_state = self.region_info(region_id)?;
 
-            // It's safe to unwrap region_local_state here, because get_all_regions_in_store()
-            // guarantees that the region state exists in kvdb.
+            // It's safe to unwrap region_local_state here, because
+            // get_all_regions_in_store() guarantees that the region state
+            // exists in kvdb.
             if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
                 continue;
             }
@@ -1970,7 +1972,8 @@ mod tests {
             // last index < commit index
             mock_raft_state(&mut wb1, 10, 100, 110);
 
-            // commit index < last index < apply index, or commit index < apply index < last index.
+            // commit index < last index < apply index, or commit index < apply index < last
+            // index.
             mock_raft_state(&mut wb1, 11, 100, 90);
             mock_apply_state(&mut wb2, 11, 110);
             mock_raft_state(&mut wb1, 12, 100, 90);

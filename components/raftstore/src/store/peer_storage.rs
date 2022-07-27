@@ -175,8 +175,8 @@ impl EntryCache {
                 }
             })
             .count();
-        // Cache either is empty or contains latest log. Hence we don't need to fetch log
-        // from rocksdb anymore.
+        // Cache either is empty or contains latest log. Hence we don't need to fetch
+        // log from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
         let (first, second) = tikv_util::slices_in_range(&self.cache, start_idx, end_idx);
         ents.extend_from_slice(first);
@@ -228,10 +228,10 @@ impl EntryCache {
             self.cache.push_back(e.to_owned());
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
-        // In the past, the entry cache will be truncated if its size exceeds a certain number.
-        // However, after introducing async write io, the entry must stay in cache if it's not
-        // persisted to raft db because the raft-rs may need to read entries.(e.g. leader sends
-        // MsgAppend to followers)
+        // In the past, the entry cache will be truncated if its size exceeds a certain
+        // number. However, after introducing async write io, the entry must
+        // stay in cache if it's not persisted to raft db because the raft-rs
+        // may need to read entries.(e.g. leader sends MsgAppend to followers)
 
         mem_size_change
     }
@@ -254,9 +254,10 @@ impl EntryCache {
 
         let mut mem_size_change = 0;
 
-        // Clean cached entries which have been already sent to apply threads. For example,
-        // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
-        // is called, only [20, 30) will still be kept in cache.
+        // Clean cached entries which have been already sent to apply threads. For
+        // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply
+        // threads and `compact_to(15)` is called, only [20, 30) will still be
+        // kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             if cached_entries.range.start >= idx {
@@ -283,7 +284,8 @@ impl EntryCache {
         }
 
         let cache_last_idx = self.cache.back().unwrap().get_index();
-        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if necessary.
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if
+        // necessary.
         let compact_to = (cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize;
         for e in self.cache.drain(..compact_to) {
             mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
@@ -464,12 +466,13 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-    // if we recv append log when applying snapshot, last_index in raft_local_state will
-    // larger than snapshot_index. since raft_local_state is written to raft engine, and
-    // raft write_batch is written after kv write_batch, raft_local_state may wrong if
-    // restart happen between the two write. so we copy raft_local_state to kv engine
-    // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
-    // after restart, we need check last_index.
+    // if we recv append log when applying snapshot, last_index in raft_local_state
+    // will larger than snapshot_index. since raft_local_state is written to
+    // raft engine, and raft write_batch is written after kv write_batch,
+    // raft_local_state may wrong if restart happen between the two write. so we
+    // copy raft_local_state to kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.last_index = snapshot_index. after restart, we need
+    // check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
@@ -620,8 +623,9 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
             state_str()
         ));
     }
-    // Since the entries must be persisted before applying, the term of raft state should also
-    // be persisted. So it should be greater than the commit term of apply state.
+    // Since the entries must be persisted before applying, the term of raft state
+    // should also be persisted. So it should be greater than the commit term of
+    // apply state.
     if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
         return Err(box_err!(
             "term of raft state < commit term of apply state, {}",
@@ -964,8 +968,8 @@ where
                 "max_size" => max_size,
                 "res_max_size" => res.max_size,
             );
-            // low index or max size is changed, the result is not fit for the current range, so
-            // refetch again.
+            // low index or max size is changed, the result is not fit for the current
+            // range, so refetch again.
             self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
             res.tried_cnt + 1
         } else {
@@ -974,8 +978,8 @@ where
 
         // the first/second try: get [low, high) asynchronously
         // the third try:
-        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high)
-        //    synchronously
+        //  - if term and low are matched: use result of [low, persisted) and get
+        //    [persisted, high) synchronously
         //  - else: get [low, high) synchronously
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
@@ -1252,8 +1256,8 @@ where
         true
     }
 
-    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
-    /// snapshot.
+    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
+    /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
@@ -1357,7 +1361,8 @@ where
         self.gen_snap_task.get_mut().take()
     }
 
-    // Append the given entries to the raft log using previous last index or self.last_index.
+    // Append the given entries to the raft log using previous last index or
+    // self.last_index.
     pub fn append(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
         if entries.is_empty() {
             return;
@@ -1460,13 +1465,14 @@ where
             let first_index = self.first_index();
             // It's possible that logs between `last_compacted_idx` and `first_index` are
             // being deleted in raftlog_gc worker. But it's OK as:
-            // 1. If the peer accepts a new snapshot, it must start with an index larger than
-            //    this `first_index`;
-            // 2. If the peer accepts new entries after this snapshot or new snapshot, it must
-            //    start with the new applied index, which is larger than `first_index`.
-            // So new logs won't be deleted by on going raftlog_gc task accidentally.
-            // It's possible that there will be some logs between `last_compacted_idx` and
-            // `first_index` are not deleted. So a cleanup task for the range should be triggered
+            // 1. If the peer accepts a new snapshot, it must start with an index larger
+            // than    this `first_index`;
+            // 2. If the peer accepts new entries after this snapshot or new snapshot, it
+            // must    start with the new applied index, which is larger than
+            // `first_index`. So new logs won't be deleted by on going
+            // raftlog_gc task accidentally. It's possible that there will be
+            // some logs between `last_compacted_idx` and `first_index` are not
+            // deleted. So a cleanup task for the range should be triggered
             // after applying the snapshot.
             self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
@@ -1494,11 +1500,11 @@ where
         // Although there is an interval that other metadata are updated while `region`
         // is not after handing snapshot from ready, at the time of writing, it's no
         // problem for now.
-        // The reason why the update of `region` is delayed is that we expect `region` stays
-        // consistent with the one in `StoreMeta::regions` which should be updated after
-        // persisting due to atomic snapshot and peer create process. So if we can fix
-        // these issues in future(maybe not?), the `region` and `StoreMeta::regions`
-        // can updated here immediately.
+        // The reason why the update of `region` is delayed is that we expect `region`
+        // stays consistent with the one in `StoreMeta::regions` which should be
+        // updated after persisting due to atomic snapshot and peer create
+        // process. So if we can fix these issues in future(maybe not?), the
+        // `region` and `StoreMeta::regions` can updated here immediately.
 
         info!(
             "apply snapshot with state ok";
@@ -1619,7 +1625,8 @@ where
         res
     }
 
-    /// Cancel applying snapshot, return true if the job can be considered not be run again.
+    /// Cancel applying snapshot, return true if the job can be considered not
+    /// be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_canceled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
@@ -1800,14 +1807,15 @@ where
             }
         }
 
-        // Note that the correctness depends on the fact that these source regions MUST NOT
-        // serve read request otherwise a corrupt data may be returned.
+        // Note that the correctness depends on the fact that these source regions MUST
+        // NOT serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
-        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes the local reader not serve read request.
-        // 2. No read request can be responsed in peer fsm during merging.
-        // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are also used to prevent reading **corrupt** data.
+        // 1. After `PrepareMerge` log is committed, the source region leader's lease
+        // will be    suspected immediately which makes the local reader not
+        // serve read request. 2. No read request can be responsed in peer fsm
+        // during merging. These conditions are used to prevent reading
+        // **stale** data in the past. At present, they are also used to prevent
+        // reading **corrupt** data.
         for r in &res.destroy_regions {
             if let Err(e) = self.clear_extra_data(r, &res.region) {
                 error!(?e;
@@ -1819,8 +1827,8 @@ where
 
         self.schedule_applying_snapshot();
 
-        // The `region` is updated after persisting in order to stay consistent with the one
-        // in `StoreMeta::regions` (will be updated soon).
+        // The `region` is updated after persisting in order to stay consistent with the
+        // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
         self.set_region(res.region.clone());
     }
@@ -1951,7 +1959,8 @@ where
     Ok(snapshot)
 }
 
-// When we bootstrap the region we must call this to initialize region local state first.
+// When we bootstrap the region we must call this to initialize region local
+// state first.
 pub fn write_initial_raft_state<W: RaftLogBatch>(raft_wb: &mut W, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState {
         last_index: RAFT_INIT_LOG_INDEX,
@@ -2022,7 +2031,8 @@ impl CachedEntries {
         }
     }
 
-    /// Take cached entries and dangle size for them. `dangle` means not in entry cache.
+    /// Take cached entries and dangle size for them. `dangle` means not in
+    /// entry cache.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
@@ -2336,7 +2346,8 @@ mod tests {
     where
         EK: KvEngine,
     {
-        /// Sends a significant message. We should guarantee that the message can't be dropped.
+        /// Sends a significant message. We should guarantee that the message
+        /// can't be dropped.
         fn significant_send(
             &self,
             _: u64,

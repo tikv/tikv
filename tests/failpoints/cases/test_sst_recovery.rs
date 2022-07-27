@@ -16,7 +16,8 @@ const CHECK_DURATION: Duration = Duration::from_millis(50);
 fn test_sst_recovery_basic() {
     let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
-    // Test that only sst recovery can delete the sst file, remove peer don't delete it.
+    // Test that only sst recovery can delete the sst file, remove peer don't delete
+    // it.
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
     let store_meta = cluster.store_metas.get(&1).unwrap().clone();

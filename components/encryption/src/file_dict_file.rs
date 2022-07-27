@@ -120,7 +120,8 @@ impl FileDictionaryFile {
         self.base.join(&self.name)
     }
 
-    /// Rewrite the log file to reduce file size and reduce the time of next recovery.
+    /// Rewrite the log file to reduce file size and reduce the time of next
+    /// recovery.
     fn rewrite(&mut self) -> Result<()> {
         let file_dict_bytes = self.file_dict.write_to_bytes()?;
         if self.enable_log {

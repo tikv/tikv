@@ -47,7 +47,8 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
         self.peer.logger()
     }
 
-    /// Fetches messages to `peer_msg_buf`. It will stop when the buffer is full.
+    /// Fetches messages to `peer_msg_buf`. It will stop when the buffer is
+    /// full.
     ///
     /// Returns how many messages are fetched.
     pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg<EK>>) -> usize {

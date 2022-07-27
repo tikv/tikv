@@ -41,13 +41,15 @@ use crate::{
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
-// The default version that can enable compaction filter for GC. This is necessary because after
-// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
-// of GC are distributed to other replicas by Raft.
+// The default version that can enable compaction filter for GC. This is
+// necessary because after compaction filter is enabled, it's impossible to
+// fallback to ealier version which modifications of GC are distributed to other
+// replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
-// Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when constructing `WriteCompactionFilterFactory`.
+// Global context to create a compaction filter for write CF. It's necessary as
+// these fields are not available when constructing
+// `WriteCompactionFilterFactory`.
 pub struct GcContext {
     pub(crate) db: RocksEngine,
     pub(crate) store_id: u64,
@@ -338,8 +340,8 @@ impl WriteCompactionFilter {
         }
     }
 
-    // `log_on_error` indicates whether to print an error log on scheduling failures.
-    // It's only enabled for `GcTask::OrphanVersions`.
+    // `log_on_error` indicates whether to print an error log on scheduling
+    // failures. It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
@@ -563,8 +565,8 @@ thread_local! {
 }
 
 impl Drop for WriteCompactionFilter {
-    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
-    // becomes installed into the DB instance.
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction
+    // result becomes installed into the DB instance.
     fn drop(&mut self) {
         if self.mvcc_deletion_overlaps.take() == Some(0) {
             self.handle_bottommost_delete();
@@ -665,8 +667,9 @@ fn check_need_gc(
             return (true, false);
         }
 
-        // When comparing `num_versions` with `num_puts`, trait internal levels specially
-        // because MVCC-deletion marks can't be handled at those levels.
+        // When comparing `num_versions` with `num_puts`, trait internal levels
+        // specially because MVCC-deletion marks can't be handled at those
+        // levels.
         let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
         if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
             return (true, false);
@@ -970,7 +973,8 @@ pub mod tests {
         must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
 
-        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        // No GC task should be emit because the mvcc-deletion mark covers some older
+        // versions.
         gc_and_check(false, b"zkey");
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey");
@@ -992,14 +996,15 @@ pub mod tests {
         must_prewrite_put(&engine, b"zkey2", &value, b"zkey2", 220);
         must_commit(&engine, b"zkey2", 220, 230);
 
-        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        // No GC task should be emit because the mvcc-deletion mark covers some older
+        // versions.
         gc_and_check(false, b"zkey1");
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey1");
     }
 
-    // Test if there are not enought garbage in SST files involved by a compaction, no compaction
-    // filter will be created.
+    // Test if there are not enought garbage in SST files involved by a compaction,
+    // no compaction filter will be created.
     #[test]
     fn test_mvcc_properties() {
         let mut cfg = DbConfig::default();
@@ -1028,7 +1033,8 @@ pub mod tests {
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(100).gc(&raw_engine);
 
-        // Can perform GC at the bottommost level even if the threshold can't be reached.
+        // Can perform GC at the bottommost level even if the threshold can't be
+        // reached.
         gc_runner.ratio_threshold = Some(10.0);
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(140).gc(&raw_engine);
@@ -1059,12 +1065,12 @@ pub mod tests {
         }
     }
 
-    // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction filters,
-    // deletion marks can only be handled in the bottommost level. Otherwise dirty
-    // versions could be exposed incorrectly.
+    // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction
+    // filters, deletion marks can only be handled in the bottommost level.
+    // Otherwise dirty versions could be exposed incorrectly.
     //
-    // This case tests that deletion marks won't be handled at internal levels, and at
-    // the bottommost levels, dirty versions still can't be exposed.
+    // This case tests that deletion marks won't be handled at internal levels, and
+    // at the bottommost levels, dirty versions still can't be exposed.
     #[test]
     fn test_remove_and_skip_until() {
         let mut cfg = DbConfig::default();

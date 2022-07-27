@@ -11,9 +11,9 @@ use syn::{
     *,
 };
 
-/// This crate provides a macro that can be used to append a match expression with multiple
-/// arms, where the tokens in the first arm, as a template, can be subsitituted and the template
-/// arm will be expanded into multiple arms.
+/// This crate provides a macro that can be used to append a match expression
+/// with multiple arms, where the tokens in the first arm, as a template, can be
+/// subsitituted and the template arm will be expanded into multiple arms.
 ///
 /// For example, the following code
 ///

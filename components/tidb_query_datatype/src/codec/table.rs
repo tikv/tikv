@@ -100,8 +100,8 @@ pub fn check_index_key(key: &[u8]) -> Result<()> {
     check_key_type(key, INDEX_PREFIX_SEP)
 }
 
-/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
-/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should
+/// be `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
 #[inline]
 fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
     let mut buf = key;
@@ -184,7 +184,8 @@ pub fn encode_common_handle_for_test(table_id: i64, handle: &[u8]) -> Vec<u8> {
     key
 }
 
-/// `encode_column_key` encodes the table id, row handle and column id into a byte array.
+/// `encode_column_key` encodes the table id, row handle and column id into a
+/// byte array.
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
@@ -391,7 +392,8 @@ impl RowColsDict {
         self.cols.insert(cid, RowColMeta::new(offset, length));
     }
 
-    /// Gets binary of cols, keeps the original order, and returns one slice and cols' end offsets.
+    /// Gets binary of cols, keeps the original order, and returns one slice and
+    /// cols' end offsets.
     pub fn get_column_values_and_end_offsets(&self) -> (&[u8], Vec<usize>) {
         let mut start = self.value.len();
         let mut length = 0;

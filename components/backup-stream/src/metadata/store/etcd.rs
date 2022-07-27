@@ -61,14 +61,14 @@ impl From<EventType> for KvEventType {
 
 impl From<etcd_client::KeyValue> for KeyValue {
     fn from(kv: etcd_client::KeyValue) -> Self {
-        // TODO: we can move out the vector in the KeyValue struct here. (instead of copying.)
-        // But that isn't possible for now because:
+        // TODO: we can move out the vector in the KeyValue struct here. (instead of
+        // copying.) But that isn't possible for now because:
         // - The raw KV pair(defined by the protocol buffer of etcd) is private.
-        // - That did could be exported by `pub-fields` feature of the client. However that feature
-        //   isn't published in theirs Cargo.toml (Is that a mistake?).
-        // - Indeed, we can use `mem::transmute` here because `etcd_client::KeyValue` has
-        //   `#[repr(transparent)]`. But before here become a known bottle neck, I'm not sure
-        //   whether it's worthwhile for involving unsafe code.
+        // - That did could be exported by `pub-fields` feature of the client. However
+        //   that feature isn't published in theirs Cargo.toml (Is that a mistake?).
+        // - Indeed, we can use `mem::transmute` here because `etcd_client::KeyValue`
+        //   has `#[repr(transparent)]`. But before here become a known bottle neck, I'm
+        //   not sure whether it's worthwhile for involving unsafe code.
         KeyValue(MetaKey(kv.key().to_owned()), kv.value().to_owned())
     }
 }
@@ -235,7 +235,8 @@ impl EtcdStore {
 
     /// Make a conditional txn.
     /// For now, this wouldn't split huge transaction into smaller ones,
-    /// so when playing with etcd in PD, conditional transaction should be small.
+    /// so when playing with etcd in PD, conditional transaction should be
+    /// small.
     async fn make_conditional_txn(
         cli: &mut Client,
         mut txn: super::CondTransaction,

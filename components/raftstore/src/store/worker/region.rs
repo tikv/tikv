@@ -48,7 +48,8 @@ use crate::{
     },
 };
 
-// used to periodically check whether we should delete a stale peer's range in region runner
+// used to periodically check whether we should delete a stale peer's range in
+// region runner
 
 #[cfg(test)]
 pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
@@ -137,7 +138,8 @@ struct StalePeerInfo {
 }
 
 /// A structure records all ranges to be deleted with some delay.
-/// The delay is because there may be some coprocessor requests related to these ranges.
+/// The delay is because there may be some coprocessor requests related to these
+/// ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
@@ -202,8 +204,8 @@ impl PendingDeleteRanges {
 
     /// Inserts a new range waiting to be deleted.
     ///
-    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping
-    /// range.
+    /// Before an insert is called, it must call drain_overlap_ranges to clean
+    /// the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(start_key, end_key).is_empty() {
             panic!(
@@ -291,15 +293,16 @@ where
                 "err" => %e,
             );
         }
-        // The error can be ignored as snapshot will be sent in next heartbeat in the end.
+        // The error can be ignored as snapshot will be sent in next heartbeat in the
+        // end.
         let _ = self
             .router
             .send(region_id, CasualMessage::SnapshotGenerated);
         Ok(())
     }
 
-    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the
-    /// actual work.
+    /// Handles the task of generating snapshot of the Region. It calls
+    /// `generate_snap` to do the actual work.
     fn handle_gen(
         &self,
         region_id: u64,
@@ -427,8 +430,8 @@ where
         Ok(())
     }
 
-    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual
-    /// work.
+    /// Tries to apply the snapshot of the specified Region. It calls
+    /// `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
@@ -496,8 +499,8 @@ where
         let mut df_ranges = Vec::with_capacity(overlap_ranges.len());
         for (region_id, start_key, end_key, stale_sequence) in overlap_ranges.iter() {
             // `DeleteFiles` may break current rocksdb snapshots consistency,
-            // so do not use it unless we can make sure there is no reader of the destroyed peer
-            // anymore.
+            // so do not use it unless we can make sure there is no reader of the destroyed
+            // peer anymore.
             if *stale_sequence < oldest_sequence {
                 df_ranges.push(Range::new(start_key, end_key));
             } else {
@@ -592,8 +595,8 @@ where
         }
     }
 
-    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
-    /// Returns true if the ingestion causes write stall.
+    /// Checks the number of files at level 0 to avoid write stall after
+    /// ingesting sst. Returns true if the ingestion causes write stall.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -683,9 +686,9 @@ where
     fn handle_pending_applies(&mut self) {
         fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
-            // should not handle too many applies than the number of files that can be ingested.
-            // check level 0 every time because we can not make sure how does the number of level 0
-            // files change.
+            // should not handle too many applies than the number of files that can be
+            // ingested. check level 0 every time because we can not make sure
+            // how does the number of level 0 files change.
             if self.ctx.ingest_maybe_stall() {
                 break;
             }

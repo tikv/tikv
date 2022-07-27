@@ -371,8 +371,8 @@ impl CfFile {
         assert!(self.size.len() >= idx);
         let file_name = self.gen_file_name(idx);
         if self.size.len() > idx {
-            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger this
-            // branch
+            // Any logic similar to test_snap_corruption_on_size_or_checksum will trigger
+            // this branch
             self.size[idx] = size;
             self.checksum[idx] = checksum;
             self.file_names[idx] = file_name.clone();
@@ -646,8 +646,9 @@ impl Snapshot {
         Ok(s)
     }
 
-    // If all files of the snapshot exist, return `Ok` directly. Otherwise create a new file at
-    // the temporary meta file path, so that all other try will fail.
+    // If all files of the snapshot exist, return `Ok` directly. Otherwise create a
+    // new file at the temporary meta file path, so that all other try will
+    // fail.
     fn init_for_building(&mut self) -> RaftStoreResult<()> {
         if self.exists() {
             return Ok(());
@@ -821,10 +822,10 @@ impl Snapshot {
     fn save_meta_file(&mut self) -> RaftStoreResult<()> {
         let v = box_try!(self.meta_file.meta.write_to_bytes());
         if let Some(mut f) = self.meta_file.file.take() {
-            // `meta_file` could be None for this case: in `init_for_building` the snapshot exists
-            // so no temporary meta file is created, and this field is None. However in `do_build`
-            // it's deleted so we build it again, and then call `save_meta_file` with `meta_file`
-            // as None.
+            // `meta_file` could be None for this case: in `init_for_building` the snapshot
+            // exists so no temporary meta file is created, and this field is
+            // None. However in `do_build` it's deleted so we build it again,
+            // and then call `save_meta_file` with `meta_file` as None.
             // FIXME: We can fix it later by introducing a better snapshot delete mechanism.
             f.write_all(&v[..])?;
             f.flush()?;
@@ -896,8 +897,9 @@ impl Snapshot {
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
-                // Use `kv_count` instead of file size to check empty files because encrypted sst
-                // files contain some metadata so their sizes will never be 0.
+                // Use `kv_count` instead of file size to check empty files because encrypted
+                // sst files contain some metadata so their sizes will never be
+                // 0.
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
                 for tmp_file_path in cf_file.tmp_file_paths() {
@@ -973,7 +975,8 @@ impl Snapshot {
         for cf_file in &self.cf_files {
             // Delete cloned files.
             let clone_file_paths = cf_file.clone_file_paths();
-            // in case the meta file is corrupted or deleted, delete snapshot files with best effort
+            // in case the meta file is corrupted or deleted, delete snapshot files with
+            // best effort
             if clone_file_paths.is_empty() {
                 try_delete_snapshot_files!(cf_file, gen_clone_file_name);
             } else {
@@ -1410,8 +1413,8 @@ impl SnapManager {
         Ok(())
     }
 
-    // [PerformanceCriticalPath]?? I/O involved API should be called in background thread
-    // Return all snapshots which is idle not being used.
+    // [PerformanceCriticalPath]?? I/O involved API should be called in background
+    // thread Return all snapshots which is idle not being used.
     pub fn list_idle_snap(&self) -> io::Result<Vec<(SnapKey, bool)>> {
         // Use a lock to protect the directory when scanning.
         let registry = self.core.registry.rl();
@@ -1490,7 +1493,8 @@ impl SnapManager {
     /// because only one caller can lock temporary disk files.
     ///
     /// NOTE: it calculates snapshot size by scanning the base directory.
-    /// Don't call it in raftstore thread until the size limitation mechanism gets refactored.
+    /// Don't call it in raftstore thread until the size limitation mechanism
+    /// gets refactored.
     pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let mut old_snaps = None;
         while self.get_total_snap_size()? > self.max_total_snap_size() {
@@ -1560,8 +1564,9 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
-    /// Get a `Snapshot` can be used for writting and then `save`. Concurrent calls
-    /// are allowed because only one caller can lock temporary disk files.
+    /// Get a `Snapshot` can be used for writting and then `save`. Concurrent
+    /// calls are allowed because only one caller can lock temporary disk
+    /// files.
     pub fn get_snapshot_for_receiving(
         &self,
         key: &SnapKey,
@@ -2371,7 +2376,8 @@ pub mod tests {
         }
     }
 
-    // Make all the snapshot in the specified dir corrupted to have incorrect checksum.
+    // Make all the snapshot in the specified dir corrupted to have incorrect
+    // checksum.
     fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
         let dir_path = dir.into();
         let mut res = Vec::new();
@@ -2416,7 +2422,8 @@ pub mod tests {
         res
     }
 
-    // Make all the snapshot meta files in the specified corrupted to have incorrect content.
+    // Make all the snapshot meta files in the specified corrupted to have incorrect
+    // content.
     fn corrupt_snapshot_meta_file<T: Into<PathBuf>>(dir: T) -> usize {
         let mut total = 0;
         let dir_path = dir.into();
@@ -2944,7 +2951,8 @@ pub mod tests {
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
 
-        // Test one snapshot can be built multi times. DataKeyManager should be handled correctly.
+        // Test one snapshot can be built multi times. DataKeyManager should be handled
+        // correctly.
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();

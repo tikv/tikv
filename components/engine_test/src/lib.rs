@@ -342,7 +342,8 @@ pub mod ctor {
         /// - The column families specified as `cfs`, with default options, or
         /// - The column families specified as `opts`, with options.
         ///
-        /// Note that if `opts` is not `None` then the `cfs` argument is completely ignored.
+        /// Note that if `opts` is not `None` then the `cfs` argument is
+        /// completely ignored.
         ///
         /// The engine stores its data in the `path` directory.
         /// If that directory does not exist, then it is created.

@@ -167,8 +167,8 @@ impl ServerCluster {
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
-        // We don't actually need to handle snapshot message, just create a dead worker to make it
-        // compile.
+        // We don't actually need to handle snapshot message, just create a dead worker
+        // to make it compile.
         let worker = LazyWorker::new("snap-worker");
         let conn_builder = ConnectionBuilder::new(
             env.clone(),

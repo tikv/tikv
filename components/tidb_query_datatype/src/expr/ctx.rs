@@ -89,8 +89,8 @@ impl EvalConfig {
         } else if req.has_time_zone_offset() {
             box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
         } else {
-            // This should not be reachable. However we will not panic here in case
-            // of compatibility issues.
+            // This should not be reachable. However we will not panic here in
+            // case of compatibility issues.
         }
         if req.has_max_warning_count() {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
@@ -316,8 +316,8 @@ impl EvalContext {
     }
 
     /// Indicates whether values less than 0 should be clipped to 0 for unsigned
-    /// integer types. This is the case for `insert`, `update`, `alter table` and
-    /// `load data infile` statements, when not in strict SQL mode.
+    /// integer types. This is the case for `insert`, `update`, `alter table`
+    /// and `load data infile` statements, when not in strict SQL mode.
     /// see <https://dev.mysql.com/doc/refman/5.7/en/out-of-range-and-overflow.html>
     pub fn should_clip_to_zero(&self) -> bool {
         self.cfg.flag.contains(Flag::IN_INSERT_STMT)

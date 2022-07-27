@@ -158,7 +158,8 @@ impl RocksEngine {
     }
 
     /// `pre_propose` is called before propose.
-    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by
+    /// now.
     fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
         let requests = batch
             .modifies

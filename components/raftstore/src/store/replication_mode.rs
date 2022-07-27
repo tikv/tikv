@@ -93,11 +93,12 @@ impl StoreGroup {
 
     /// Gets the group ID of store.
     ///
-    /// Different version may indicates different label key. If version is less than
-    /// recorded one, then label key has to be changed, new value can't be mixed with
-    /// old values, so `None` is returned. If version is larger, then label key must
-    /// still matches. Because `recalculate` is called before updating regions'
-    /// replication status, so unchanged recorded version means unchanged label key.
+    /// Different version may indicates different label key. If version is less
+    /// than recorded one, then label key has to be changed, new value can't
+    /// be mixed with old values, so `None` is returned. If version is
+    /// larger, then label key must still matches. Because `recalculate` is
+    /// called before updating regions' replication status, so unchanged
+    /// recorded version means unchanged label key.
     #[inline]
     pub fn group_id(&self, version: u64, store_id: u64) -> Option<u64> {
         if version < self.version {

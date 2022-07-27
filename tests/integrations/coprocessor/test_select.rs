@@ -37,7 +37,8 @@ fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     }
 }
 
-/// sort_by sorts the `$v`(a vector of `Vec<Datum>`) by the $index elements in `Vec<Datum>`
+/// sort_by sorts the `$v`(a vector of `Vec<Datum>`) by the $index elements in
+/// `Vec<Datum>`
 macro_rules! sort_by {
     ($v:ident, $index:expr, $t:ident) => {
         $v.sort_by(|a, b| match (&a[$index], &b[$index]) {
@@ -1732,8 +1733,8 @@ fn test_cache() {
     // Cache version must be >= 5 because Raft apply index must be >= 5.
     assert!(cache_version >= 5);
 
-    // Send the request again using is_cache_enabled == false (default) and a matching version.
-    // The request should be processed as usual.
+    // Send the request again using is_cache_enabled == false (default) and a
+    // matching version. The request should be processed as usual.
 
     let mut req2 = req.clone();
     req2.set_cache_if_match_version(cache_version);
@@ -1746,8 +1747,8 @@ fn test_cache() {
     );
     assert_eq!(resp.get_data(), resp2.get_data());
 
-    // Send the request again using is_cached_enabled == true and a matching version.
-    // The request should be skipped.
+    // Send the request again using is_cached_enabled == true and a matching
+    // version. The request should be skipped.
 
     let mut req3 = req.clone();
     req3.set_is_cache_enabled(true);
@@ -1757,7 +1758,8 @@ fn test_cache() {
     assert!(resp3.get_is_cache_hit());
     assert!(resp3.get_data().is_empty());
 
-    // Send the request using a non-matching version. The request should be processed.
+    // Send the request using a non-matching version. The request should be
+    // processed.
 
     let mut req4 = req;
     req4.set_is_cache_enabled(true);

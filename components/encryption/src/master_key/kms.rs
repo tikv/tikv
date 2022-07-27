@@ -124,8 +124,8 @@ impl KmsBackend {
         Ok(content)
     }
 
-    // On decrypt failure, the rule is to return WrongMasterKey error in case it is possible that
-    // a wrong master key has been used, or other error otherwise.
+    // On decrypt failure, the rule is to return WrongMasterKey error in case it is
+    // possible that a wrong master key has been used, or other error otherwise.
     fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let vendor_name = self.kms_provider.name();
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {

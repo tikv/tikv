@@ -2,13 +2,14 @@
 
 //! This module startups all the components of a TiKV server.
 //!
-//! It is responsible for reading from configs, starting up the various server components,
-//! and handling errors (mostly by aborting and reporting to the user).
+//! It is responsible for reading from configs, starting up the various server
+//! components, and handling errors (mostly by aborting and reporting to the
+//! user).
 //!
 //! The entry point is `run_tikv`.
 //!
-//! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKvServer` struct.
+//! Components are often used to initialize other components, and/or must be
+//! explicitly stopped. We keep these components in the `TiKvServer` struct.
 
 use std::{
     cmp,
@@ -363,11 +364,12 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     ///
     /// #  Fatal errors
     ///
-    /// - If `dynamic config` feature is enabled and failed to register config to PD
+    /// - If `dynamic config` feature is enabled and failed to register config
+    ///   to PD
     /// - If some critical configs (like data dir) are differrent from last run
     /// - If the config can't pass `validate()`
-    /// - If the max open file descriptor limit is not high enough to support the main database and
-    ///   the raft database.
+    /// - If the max open file descriptor limit is not high enough to support
+    ///   the main database and the raft database.
     fn init_config(mut config: TiKvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
 
@@ -488,9 +490,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             );
         }
 
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
-        // to do compaction and region migration when TiKV recover. This file is created in
-        // data_dir rather than db_path, because we must not increase store size of db_path.
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
+        // enough space to do compaction and region migration when TiKV recover.
+        // This file is created in data_dir rather than db_path, because we must
+        // not increase store size of db_path.
         let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_stats.total_space();
         if self.config.raft_store.capacity.0 > 0 {
@@ -1017,7 +1020,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        // Start auto gc. Must after `Node::start` because `node_id` is initialized there.
+        // Start auto gc. Must after `Node::start` because `node_id` is initialized
+        // there.
         assert!(node.id() > 0); // Node id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
@@ -1249,8 +1253,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
-        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
-        // dynamically applied later on.
+        // Set up IO limiter even when rate limit is disabled, so that rate limits can
+        // be dynamically applied later on.
         set_io_rate_limiter(Some(limiter));
         fetcher
     }
@@ -1286,8 +1290,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             });
     }
 
-    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is
-    // on the way
+    // Only background cpu quota tuning is implemented at present. iops and frontend
+    // quota tuning is on the way
     fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
         // No need to do auto tune when capacity is really low
         if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO

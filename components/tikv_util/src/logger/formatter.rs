@@ -2,7 +2,8 @@
 
 use std::io;
 
-/// Writes file name into the writer, removes the character which not match `[a-zA-Z0-9\.-_]`
+/// Writes file name into the writer, removes the character which not match
+/// `[a-zA-Z0-9\.-_]`
 pub fn write_file_name<W>(writer: &mut W, file_name: &str) -> io::Result<()>
 where
     W: io::Write + ?Sized,
@@ -30,9 +31,9 @@ where
     Ok(())
 }
 
-/// According to [RFC: Unified Log Format], it returns `true` when this byte stream contains
-/// the following characters, which means this input stream needs to be JSON encoded.
-/// Otherwise, it returns `false`.
+/// According to [RFC: Unified Log Format], it returns `true` when this byte
+/// stream contains the following characters, which means this input stream
+/// needs to be JSON encoded. Otherwise, it returns `false`.
 ///
 /// - U+0000 (NULL) ~ U+0020 (SPACE)
 /// - U+0022 (QUOTATION MARK)
@@ -51,9 +52,10 @@ fn need_json_encode(bytes: &[u8]) -> bool {
     false
 }
 
-/// According to [RFC: Unified Log Format], escapes the given data and writes it into a writer.
-/// If there is no character [`need json encode`], it writes the data into the writer directly.
-/// Else, it serializes the given data structure as JSON into a writer.
+/// According to [RFC: Unified Log Format], escapes the given data and writes it
+/// into a writer. If there is no character [`need json encode`], it writes the
+/// data into the writer directly. Else, it serializes the given data structure
+/// as JSON into a writer.
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 /// [`need json encode`]: #method.need_json_encode

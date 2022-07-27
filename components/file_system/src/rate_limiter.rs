@@ -159,15 +159,15 @@ impl Default for IORateLimiterStatistics {
     }
 }
 
-/// Used to dynamically adjust the proportion of total budgets allocated for rate limited
-/// IO. This is needed when global IOs are only partially rate limited, e.g. when mode is
-/// IORateLimitMode::WriteOnly.
+/// Used to dynamically adjust the proportion of total budgets allocated for
+/// rate limited IO. This is needed when global IOs are only partially rate
+/// limited, e.g. when mode is IORateLimitMode::WriteOnly.
 pub trait IOBudgetAdjustor: Send + Sync {
     fn adjust(&self, threshold: usize) -> usize;
 }
 
-/// Limit total IO flow below provided threshold by throttling lower-priority IOs.
-/// Rate limit is disabled when total IO threshold is set to zero.
+/// Limit total IO flow below provided threshold by throttling lower-priority
+/// IOs. Rate limit is disabled when total IO threshold is set to zero.
 struct PriorityBasedIORateLimiter {
     // High-priority IOs are only limited when strict is true
     strict: bool,
@@ -217,9 +217,10 @@ macro_rules! do_sleep {
 }
 
 /// Actual implementation for requesting IOs from PriorityBasedIORateLimiter.
-/// An attempt will first be recorded. If the attempted amount exceeds the available quotas of
-/// current epoch, the requester will be queued (logically) and sleep until served.
-/// Macro is necessary to de-dup codes used both in async/sync functions.
+/// An attempt will first be recorded. If the attempted amount exceeds the
+/// available quotas of current epoch, the requester will be queued (logically)
+/// and sleep until served. Macro is necessary to de-dup codes used both in
+/// async/sync functions.
 macro_rules! request_imp {
     ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         debug_assert!($amount > 0);
@@ -244,7 +245,8 @@ macro_rules! request_imp {
             // The request is already partially fulfilled in current epoch when consumption
             // overflow bytes are smaller than requested amount.
             let remains = std::cmp::min(bytes_through - cached_bytes_per_epoch, amount);
-            // When there is a recent refill, double check if bytes consumption has been reset.
+            // When there is a recent refill, double check if bytes consumption has been
+            // reset.
             if now + DEFAULT_REFILL_PERIOD < locked.next_refill_time + Duration::from_millis(1)
                 && $limiter.bytes_through[priority_idx].fetch_add(remains, Ordering::Relaxed)
                     + remains
@@ -252,8 +254,8 @@ macro_rules! request_imp {
             {
                 return amount;
             }
-            // Enqueue itself by adding to pending_bytes, whose current value denotes a position
-            // of logical queue to wait in.
+            // Enqueue itself by adding to pending_bytes, whose current value denotes a
+            // position of logical queue to wait in.
             locked.pending_bytes[priority_idx] += remains;
             // Calculate wait duration by queue_len / served_per_epoch.
             let wait = if locked.next_refill_time <= now {
@@ -343,11 +345,13 @@ impl PriorityBasedIORateLimiter {
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
     /// Here we provide best-effort priority control:
-    /// 1) Limited IO budget is assigned to lower priority to ensure higher priority can at least
-    ///    consume the same IO amount as the last few epochs without breaching global threshold.
-    /// 2) Higher priority may temporarily use lower priority's IO budgets. When this happens,
+    /// 1) Limited IO budget is assigned to lower priority to ensure higher
+    /// priority can at least    consume the same IO amount as the last few
+    /// epochs without breaching global threshold. 2) Higher priority may
+    /// temporarily use lower priority's IO budgets. When this happens,
     ///    total IO flow could exceed global threshold.
-    /// 3) Highest priority IO alone must not exceed global threshold (in strict mode).
+    /// 3) Highest priority IO alone must not exceed global threshold (in strict
+    /// mode).
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         let mut total_budgets =
             self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
@@ -368,8 +372,8 @@ impl PriorityBasedIORateLimiter {
         let mut used_budgets = 0;
         for pri in &[IOPriority::High, IOPriority::Medium] {
             let p = *pri as usize;
-            // Skipped epochs can only serve pending requests rather that in-coming ones, catch up
-            // by subtracting them from pending_bytes.
+            // Skipped epochs can only serve pending requests rather that in-coming ones,
+            // catch up by subtracting them from pending_bytes.
             let served_by_skipped_epochs = std::cmp::min(
                 (remaining_budgets as f32 * skipped_epochs) as usize,
                 locked.pending_bytes[p],

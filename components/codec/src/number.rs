@@ -403,7 +403,8 @@ impl NumberCodec {
     }
 
     /// Encodes an unsigned 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -429,13 +430,15 @@ impl NumberCodec {
     }
 
     /// Decodes an unsigned 64 bit integer from `buf` in VarInt encoding.
-    /// Returns decoded result and the number of bytes that successfully decoded.
+    /// Returns decoded result and the number of bytes that successfully
+    /// decoded.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
         unsafe {
@@ -478,7 +481,8 @@ impl NumberCodec {
     }
 
     /// Encodes a signed 64 bit integer `v` to `buf` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note: VarInt encoding is slow, try avoid using it.
     ///
@@ -495,13 +499,15 @@ impl NumberCodec {
     }
 
     /// Decodes a signed 64 bit integer from `buf` in VarInt encoding.
-    /// Returns decoded result and the number of bytes that successfully decoded.
+    /// Returns decoded result and the number of bytes that successfully
+    /// decoded.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
@@ -514,8 +520,8 @@ impl NumberCodec {
         }
     }
 
-    /// Gets the length of the first encoded VarInt in the given buffer. If the buffer is not
-    /// complete, the length of buffer will be returned.
+    /// Gets the length of the first encoded VarInt in the given buffer. If the
+    /// buffer is not complete, the length of buffer will be returned.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
     pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
@@ -761,7 +767,8 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     fn read_var_u64(&mut self) -> Result<u64> {
         let (v, decoded_bytes) = {
@@ -779,7 +786,8 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole
+    /// VarInt.
     #[inline]
     fn read_var_i64(&mut self) -> Result<i64> {
         let (v, decoded_bytes) = {
@@ -1015,11 +1023,13 @@ pub trait NumberEncoder: BufferWriter {
     }
 
     /// Writes an unsigned 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
-    /// - The buffer must reserve 10 bytes for writing, although actual written bytes may be less.
+    /// - The buffer must reserve 10 bytes for writing, although actual written
+    ///   bytes may be less.
     /// - The buffer will be advanced by actual written bytes.
     ///
     /// # Errors
@@ -1039,11 +1049,13 @@ pub trait NumberEncoder: BufferWriter {
     }
 
     /// Writes a signed 64 bit integer `v` in VarInt encoding,
-    /// which is not memory-comparable. Returns the number of bytes that encoded.
+    /// which is not memory-comparable. Returns the number of bytes that
+    /// encoded.
     ///
     /// Note:
     /// - VarInt encoding is slow, try avoid using it.
-    /// - The buffer must reserve 10 bytes for writing, although actual written bytes may be less.
+    /// - The buffer must reserve 10 bytes for writing, although actual written
+    ///   bytes may be less.
     /// - The buffer will be advanced by actual written bytes.
     ///
     /// # Errors
@@ -1818,7 +1830,8 @@ mod benches {
 
     use crate::ErrorInner;
 
-    /// Encode u64 little endian using `NumberCodec` and store position in extra variable.
+    /// Encode u64 little endian using `NumberCodec` and store position in extra
+    /// variable.
     #[bench]
     fn bench_encode_u64_le_number_codec(b: &mut test::Bencher) {
         let mut buf: [u8; 10] = [0; 10];
@@ -1834,7 +1847,8 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `byteorder::WriteBytesExt` over a `Cursor<&mut [u8]>`.
+    /// Encode u64 little endian using `byteorder::WriteBytesExt` over a
+    /// `Cursor<&mut [u8]>`.
     #[bench]
     fn bench_encode_u64_le_byteorder(b: &mut test::Bencher) {
         use byteorder::WriteBytesExt;
@@ -1852,7 +1866,8 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `NumberEncoder` over a `Cursor<&mut [u8]>`.
+    /// Encode u64 little endian using `NumberEncoder` over a `Cursor<&mut
+    /// [u8]>`.
     #[bench]
     fn bench_encode_u64_le_buffer_encoder_slice(b: &mut test::Bencher) {
         use super::NumberEncoder;
@@ -1881,7 +1896,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `NumberCodec` and store position in extra variable.
+    /// Decode u64 little endian using `NumberCodec` and store position in extra
+    /// variable.
     #[bench]
     fn bench_decode_u64_le_number_codec(b: &mut test::Bencher) {
         let buf: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -1894,7 +1910,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `NumberCodec` and store position via slice index.
+    /// Decode u64 little endian using `NumberCodec` and store position via
+    /// slice index.
     #[bench]
     fn bench_decode_u64_le_number_codec_over_slice(b: &mut test::Bencher) {
         let buf: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -1907,7 +1924,8 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `byteorder::ReadBytesExt` over a `Cursor<&[u8]>`.
+    /// Decode u64 little endian using `byteorder::ReadBytesExt` over a
+    /// `Cursor<&[u8]>`.
     #[bench]
     fn bench_decode_u64_le_byteorder(b: &mut test::Bencher) {
         use byteorder::ReadBytesExt;

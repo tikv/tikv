@@ -133,8 +133,9 @@ mod runner {
     extern crate test;
     use test::*;
 
-    /// Check for ignored test cases with ignore message "#ifdef <VAR_NAME>". The test
-    /// case will be enabled if the specific environment variable is set.
+    /// Check for ignored test cases with ignore message "#ifdef <VAR_NAME>".
+    /// The test case will be enabled if the specific environment variable
+    /// is set.
     pub fn run_env_conditional_tests(cases: &[&TestDescAndFn]) {
         let cases: Vec<_> = cases
             .iter()

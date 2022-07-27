@@ -10,7 +10,8 @@
 //! Because there are so many similarly named types across the TiKV codebase,
 //! and so much "import renaming", this crate consistently explicitly names type
 //! that implement a trait as `RocksTraitname`, to avoid the need for import
-//! renaming and make it obvious what type any particular module is working with.
+//! renaming and make it obvious what type any particular module is working
+//! with.
 //!
 //! Please read the engine_trait crate docs before hacking.
 

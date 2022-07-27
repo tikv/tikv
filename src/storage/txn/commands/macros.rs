@@ -23,8 +23,8 @@ macro_rules! ctx {
 /// value of `cmd` and which accepts one parameter whose type name matches
 /// the value of `cmd`.
 /// cmd_ty -> The type of the result of executing this command.
-/// display -> Information needed to implement the `Display` trait for the command.
-/// content -> The fields of the struct definition for the command.
+/// display -> Information needed to implement the `Display` trait for the
+/// command. content -> The fields of the struct definition for the command.
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*

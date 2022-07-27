@@ -639,7 +639,8 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input
+// is positive
 //
 // # Examples
 // ```

@@ -123,15 +123,17 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
 
 impl<T: BufferWriter> V1CompatibleEncoder for T {}
 
-/// These tests mainly focus on transfer the v2 encoding to v1-compatible encoding.
+/// These tests mainly focus on transfer the v2 encoding to v1-compatible
+/// encoding.
 ///
 /// The test path is:
 /// 1. Encode value using v2
-/// 2. Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to v1-compatible
-/// 3. Use `RawDatumDecoder` decode the encoded bytes, check the result.
+/// 2. Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to
+/// v1-compatible 3. Use `RawDatumDecoder` decode the encoded bytes, check the
+/// result.
 ///
-/// Note: a value encoded using v2 then transfer to v1-compatible encoding, is not always equals the
-/// encoded-bytes using v1 directly.
+/// Note: a value encoded using v2 then transfer to v1-compatible encoding, is
+/// not always equals the encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
     use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};

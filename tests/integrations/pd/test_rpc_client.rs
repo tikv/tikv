@@ -354,8 +354,8 @@ fn test_retry_sync() {
 
 fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
-    // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error
-    // header.
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok()
+    // without any error header.
     let not_retry = Arc::new(NotRetry::new());
     let server = MockServer::with_case(eps_count, not_retry);
     let eps = server.bind_addrs();
@@ -535,7 +535,8 @@ fn test_region_heartbeat_on_leader_change() {
     // Change PD leader once then heartbeat PD.
     heartbeat_on_leader_change(1);
 
-    // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
+    // Change PD leader twice without update the heartbeat sender, then heartbeat
+    // PD.
     heartbeat_on_leader_change(2);
 }
 

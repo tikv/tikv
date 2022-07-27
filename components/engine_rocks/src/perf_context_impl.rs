@@ -169,7 +169,8 @@ pub struct PerfContextStatistics {
 const FLUSH_METRICS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl PerfContextStatistics {
-    /// Create an instance which stores instant statistics values, retrieved at creation.
+    /// Create an instance which stores instant statistics values, retrieved at
+    /// creation.
     pub fn new(perf_level: PerfLevel, kind: PerfContextKind) -> Self {
         PerfContextStatistics {
             perf_level,

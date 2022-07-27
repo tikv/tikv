@@ -122,7 +122,8 @@ pub fn init_data_with_commit(
     init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
 
-// This function will create a Product table and initialize with the specified data.
+// This function will create a Product table and initialize with the specified
+// data.
 pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],

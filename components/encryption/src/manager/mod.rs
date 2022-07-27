@@ -263,9 +263,10 @@ impl Dicts {
                     return Ok(None);
                 }
             };
-            // When an encrypted file exists in the file system, the file_dict must have info about
-            // this file. But the opposite is not true, this is because the actual file operation
-            // and file_dict operation are not atomic.
+            // When an encrypted file exists in the file system, the file_dict must have
+            // info about this file. But the opposite is not true, this is
+            // because the actual file operation and file_dict operation are not
+            // atomic.
             check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
@@ -466,8 +467,8 @@ impl DataKeyManager {
         Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
     }
 
-    /// Will block file operation for a considerable amount of time. Only used for debugging
-    /// purpose.
+    /// Will block file operation for a considerable amount of time. Only used
+    /// for debugging purpose.
     pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
         let mut dict = self.dicts.file_dict.lock().unwrap();
         let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
@@ -1295,7 +1296,8 @@ mod tests {
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
 
         let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
-        // When the master key is invalid, the key manager left a empty file dict and return errors.
+        // When the master key is invalid, the key manager left a empty file dict and
+        // return errors.
         assert!(result.is_err());
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
         let result = new_key_manager(&tmp_dir, None, right_key, previous);

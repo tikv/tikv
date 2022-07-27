@@ -339,8 +339,8 @@ where
         );
     }
 
-    /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and
-    /// generates split admin command.
+    /// Checks a Region with split and bucket checkers to produce split keys and
+    /// buckets keys and generates split admin command.
     fn check_split_and_bucket(
         &mut self,
         region: &Region,
@@ -582,8 +582,8 @@ where
                 }
             }
 
-            // if we scan the whole range, we can update approximate size and keys with accurate
-            // value.
+            // if we scan the whole range, we can update approximate size and keys with
+            // accurate value.
             if is_key_range {
                 return;
             }

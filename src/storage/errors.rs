@@ -21,8 +21,9 @@ use crate::storage::{
 };
 
 #[derive(Debug, Error)]
-/// Detailed errors for storage operations. This enum also unifies code for basic error
-/// handling functionality in a single place instead of being spread out.
+/// Detailed errors for storage operations. This enum also unifies code for
+/// basic error handling functionality in a single place instead of being spread
+/// out.
 pub enum ErrorInner {
     #[error("{0}")]
     Kv(#[from] kv::Error),
@@ -177,8 +178,9 @@ pub enum ErrorHeaderKind {
 }
 
 impl ErrorHeaderKind {
-    /// TODO: This function is only used for bridging existing & legacy metric tags.
-    /// It should be removed once Coprocessor starts using new static metrics.
+    /// TODO: This function is only used for bridging existing & legacy metric
+    /// tags. It should be removed once Coprocessor starts using new static
+    /// metrics.
     pub fn get_str(&self) -> &'static str {
         match *self {
             ErrorHeaderKind::NotLeader => "not_leader",
@@ -204,8 +206,8 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
-/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
-/// Returns `ErrorHeaderKind::Other` if no match found.
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
+/// message. Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader

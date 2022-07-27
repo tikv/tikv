@@ -22,8 +22,9 @@ use crate::{
 
 /// `PubSubService` implements [ResourceMeteringPubSub].
 ///
-/// If a client subscribes to resource metering records, the `PubSubService` is responsible for
-/// registering them to the reporter. Then the reporter sends data to the client periodically.
+/// If a client subscribes to resource metering records, the `PubSubService` is
+/// responsible for registering them to the reporter. Then the reporter sends
+/// data to the client periodically.
 ///
 /// [ResourceMeteringPubSub]: kvproto::resource_usage_agent_grpc::ResourceMeteringPubSub
 #[derive(Clone)]

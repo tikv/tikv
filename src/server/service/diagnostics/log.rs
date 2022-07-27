@@ -268,8 +268,8 @@ fn parse(input: &str) -> Result<(&str, (i64, LogLevel)), Error> {
     Ok((content, (timestamp, level)))
 }
 
-/// Parses the start time and end time of a log file and return the maximal and minimal
-/// timestamp in unix milliseconds.
+/// Parses the start time and end time of a log file and return the maximal and
+/// minimal timestamp in unix milliseconds.
 fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
     let file_start_time = parse_start_time(file, 10)?;
     let file_end_time = parse_end_time(file, 10)?;

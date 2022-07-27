@@ -132,7 +132,8 @@ impl RecoveryRunner {
         self.damaged_files.iter().any(|f| f.name == sst_path)
     }
 
-    // Cleans up obsolete damaged files and panics if some files are not handled in time.
+    // Cleans up obsolete damaged files and panics if some files are not handled in
+    // time.
     fn check_damaged_files(&mut self) {
         if self.damaged_files.is_empty() {
             return;
@@ -153,7 +154,8 @@ impl RecoveryRunner {
     }
 
     // Check whether the StoreMeta contains the region range, if it contains,
-    // recorded fault region ids to report to PD and add file info into `damaged_files`.
+    // recorded fault region ids to report to PD and add file info into
+    // `damaged_files`.
     //
     // Acquire meta lock.
     fn check_overlap_damaged_regions(&self, file: &FileInfo) -> bool {
@@ -163,8 +165,8 @@ impl RecoveryRunner {
             meta.update_overlap_damaged_ranges(&file.name, &file.smallest_key, &file.largest_key);
         if !overlap {
             fail_point!("sst_recovery_before_delete_files");
-            // The sst file can be deleted safely and set `include_end` to `true` otherwise the
-            // file with the same largest key will be skipped.
+            // The sst file can be deleted safely and set `include_end` to `true` otherwise
+            // the file with the same largest key will be skipped.
             // Here store meta lock should be held to prevent peers from being added back.
             self.db
                 .delete_files_in_range(&file.smallest_key, &file.largest_key, true)

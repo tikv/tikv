@@ -28,8 +28,8 @@ pub struct Config {
     pub pipelined: bool,
     /// Whether to enable the in-memory pessimistic lock feature.
     /// It will take effect only if the `pipelined` config is true because
-    /// we assume that the success rate of pessimistic transactions is important to
-    /// people who disable the pipelined pessimistic lock feature.
+    /// we assume that the success rate of pessimistic transactions is important
+    /// to people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
 }
 

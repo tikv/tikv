@@ -913,7 +913,8 @@ const RAW_KEY_CASE: &[u8] = b"r\0_a";
 // Test API version verification for txnkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
@@ -980,7 +981,8 @@ fn test_txn_store_txnkv_api_version() {
 // Test API version verification for rawkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![

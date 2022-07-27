@@ -1672,7 +1672,8 @@ fn test_tikv_forwarding() {
     }
 }
 
-/// Test if forwarding works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and
+/// restarted.
 #[test]
 fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
@@ -1761,7 +1762,8 @@ fn test_get_lock_wait_info_api() {
 // Test API version verification for transaction requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
@@ -1964,8 +1966,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the
-        // limit.
+        // write_bandwidth is limited to 1, which means that every write request will
+        // trigger the limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),

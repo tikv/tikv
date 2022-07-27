@@ -280,11 +280,13 @@ impl ToInt for u64 {
 
 impl ToInt for f64 {
     /// This function is ported from TiDB's types.ConvertFloatToInt,
-    /// which checks whether the number overflows the signed lower and upper boundaries of `tp`
+    /// which checks whether the number overflows the signed lower and upper
+    /// boundaries of `tp`
     ///
     /// # Notes
     ///
-    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
+    /// It handles overflows using `ctx` so that the caller would not handle it
+    /// anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
         let val = self.round();
@@ -307,11 +309,13 @@ impl ToInt for f64 {
     }
 
     /// This function is ported from TiDB's types.ConvertFloatToUint,
-    /// which checks whether the number overflows the unsigned upper boundaries of `tp`
+    /// which checks whether the number overflows the unsigned upper boundaries
+    /// of `tp`
     ///
     /// # Notes
     ///
-    /// It handles overflows using `ctx` so that the caller would not handle it anymore.
+    /// It handles overflows using `ctx` so that the caller would not handle it
+    /// anymore.
     #[allow(clippy::float_cmp)]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = self.round();
@@ -444,8 +448,9 @@ impl ToInt for Decimal {
 
 impl ToInt for DateTime {
     // FiXME
-    //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap().round_frac(DEFAULT_FSP)
-    //  will get 2000-01-01T12:13:14, this is a bug
+    //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666",
+    // 4).unwrap().round_frac(DEFAULT_FSP)  will get 2000-01-01T12:13:14, this
+    // is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let t = self.round_frac(ctx, DEFAULT_FSP)?;
@@ -664,8 +669,8 @@ pub fn produce_dec_with_specified_tp(
     }
 }
 
-/// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in TiDB) produces
-/// a new float64 according to `flen` and `decimal` in `self.tp`.
+/// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in TiDB)
+/// produces a new float64 according to `flen` and `decimal` in `self.tp`.
 /// TODO port tests from TiDB(TiDB haven't implemented now)
 pub fn produce_float_with_specified_tp(
     ctx: &mut EvalContext,
@@ -692,8 +697,8 @@ pub fn produce_float_with_specified_tp(
     Ok(res)
 }
 
-/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB) produces
-/// a new string according to `flen` and `chs`.
+/// `produce_str_with_specified_tp`(`ProduceStrWithSpecifiedTp` in TiDB)
+/// produces a new string according to `flen` and `chs`.
 pub fn produce_str_with_specified_tp<'a>(
     ctx: &mut EvalContext,
     s: Cow<'a, [u8]>,
@@ -705,8 +710,8 @@ pub fn produce_str_with_specified_tp<'a>(
         return Ok(s);
     }
     let flen = flen as usize;
-    // flen is the char length, not byte length, for UTF8 charset, we need to calculate the
-    // char count and truncate to flen chars if it is too long.
+    // flen is the char length, not byte length, for UTF8 charset, we need to
+    // calculate the char count and truncate to flen chars if it is too long.
     if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
         let (char_count, truncate_pos) = {
             let s = &String::from_utf8_lossy(&s);
@@ -767,7 +772,8 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
             .unwrap_or(false)
         && s.len() < flen
     {
-        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
+        // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle
+        // it
         s.resize(flen, 0);
     }
 }
@@ -831,8 +837,8 @@ pub fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow
     get_valid_int_prefix_helper(ctx, s, false)
 }
 
-// As TiDB code(getValidIntPrefix()), cast expr needs to give error/warning when input string
-// is like float.
+// As TiDB code(getValidIntPrefix()), cast expr needs to give error/warning when
+// input string is like float.
 pub fn get_valid_int_prefix_helper<'a>(
     ctx: &mut EvalContext,
     s: &'a str,
@@ -868,8 +874,8 @@ pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&
     get_valid_float_prefix_helper(ctx, s, false)
 }
 
-// As TiDB code(getValidFloatPrefix()), cast expr should not give error/warning when input is
-// empty.
+// As TiDB code(getValidFloatPrefix()), cast expr should not give error/warning
+// when input is empty.
 pub fn get_valid_float_prefix_helper<'a>(
     ctx: &mut EvalContext,
     s: &'a str,
@@ -961,14 +967,14 @@ fn round_int_str(num_next_dot: char, s: &str) -> Cow<'_, str> {
 }
 
 /// It converts a valid float string into valid integer string which can be
-/// parsed by `i64::from_str`, we can't parse float first then convert it to string
-/// because precision will be lost.
+/// parsed by `i64::from_str`, we can't parse float first then convert it to
+/// string because precision will be lost.
 ///
 /// When the float string indicating a value that is overflowing the i64,
 /// the original float string is returned and an overflow warning is attached.
 ///
-/// This func will find serious overflow such as the len of result > 20 (without prefix `+/-`)
-/// however, it will not check whether the result overflow BIGINT.
+/// This func will find serious overflow such as the len of result > 20 (without
+/// prefix `+/-`) however, it will not check whether the result overflow BIGINT.
 fn float_str_to_int_string<'a>(ctx: &mut EvalContext, valid_float: &'a str) -> Cow<'a, str> {
     // this func is complex, to make it same as TiDB's version,
     // we impl it like TiDB's version(https://github.com/pingcap/tidb/blob/9b521342bf/types/convert.go#L400)
@@ -1531,7 +1537,8 @@ mod tests {
             ("{}", ERR_TRUNCATE_WRONG_VALUE),
             ("[]", ERR_TRUNCATE_WRONG_VALUE),
         ];
-        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as
+        // true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
@@ -1865,7 +1872,8 @@ mod tests {
             ("{}", ERR_TRUNCATE_WRONG_VALUE),
             ("[]", ERR_TRUNCATE_WRONG_VALUE),
         ];
-        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as true
+        // avoid to use EvalConfig::default_for_test() that set Flag::IGNORE_TRUNCATE as
+        // true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
@@ -2089,8 +2097,8 @@ mod tests {
             assert_eq!(o.unwrap(), i);
         }
 
-        // Secondly, make sure warnings are attached when the float string cannot be casted to a
-        // valid int string
+        // Secondly, make sure warnings are attached when the float string cannot be
+        // casted to a valid int string
         let warnings = ctx.take_warnings().warnings;
         assert_eq!(warnings.len(), 2);
         for warning in warnings {

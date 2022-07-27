@@ -236,8 +236,8 @@ fn test_batch_size_limit() {
     assert_eq!(msg_count.load(Ordering::SeqCst), 10);
 }
 
-/// In edge case that the estimated size may be inaccurate, we need to ensure connection
-/// will not be broken in this case.
+/// In edge case that the estimated size may be inaccurate, we need to ensure
+/// connection will not be broken in this case.
 #[test]
 fn test_batch_size_edge_limit() {
     let msg_count = Arc::new(AtomicUsize::new(0));
@@ -247,13 +247,14 @@ fn test_batch_size_edge_limit() {
 
     let mut raft_client = get_raft_client_by_port(port);
 
-    // Put them in buffer so sibling messages will be likely be batched during sending.
+    // Put them in buffer so sibling messages will be likely be batched during
+    // sending.
     let mut msgs = Vec::with_capacity(5);
     for _ in 0..5 {
         let mut raft_m = RaftMessage::default();
-        // Magic number, this can make estimated size about 4940000, hence two messages will be
-        // batched together, but the total size will be way largher than 10MiB as there are many
-        // indexes and terms.
+        // Magic number, this can make estimated size about 4940000, hence two messages
+        // will be batched together, but the total size will be way largher than
+        // 10MiB as there are many indexes and terms.
         for _ in 0..38000 {
             let mut e = Entry::default();
             e.set_term(1);
@@ -275,8 +276,9 @@ fn test_batch_size_edge_limit() {
     assert_eq!(msg_count.load(Ordering::SeqCst), 5);
 }
 
-// Try to create a mock server with `service`. The server will be binded wiht a random
-// port chosen between [`min_port`, `max_port`]. Return `None` if no port is available.
+// Try to create a mock server with `service`. The server will be binded wiht a
+// random port chosen between [`min_port`, `max_port`]. Return `None` if no port
+// is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>
 where
     T: Tikv + Clone + Send + 'static,

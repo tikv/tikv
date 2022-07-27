@@ -52,7 +52,8 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         out_schema.push(out_ft);
         out_exp.push(exp);
 
-        // Choose a type-aware SUM implementation based on the eval type after rewriting exp.
+        // Choose a type-aware SUM implementation based on the eval type after rewriting
+        // exp.
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnSum::<Decimal>::new()),
             EvalType::Real => Box::new(AggrFnSum::<Real>::new()),
@@ -190,8 +191,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number
+    /// is used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
@@ -266,8 +268,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() that expect a numeric argument cast the argument to a
-    /// number if necessary. For ENUM values, the index number is used in the calculation.
+    /// Functions such as SUM() or AVG() that expect a numeric argument cast the
+    /// argument to a number if necessary. For ENUM values, the index number
+    /// is used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]

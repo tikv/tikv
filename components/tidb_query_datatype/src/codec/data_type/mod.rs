@@ -50,8 +50,8 @@ pub use crate::codec::mysql::{
 };
 use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
 
-/// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
-/// Rust's `bool` type.
+/// A trait of evaluating current concrete eval type into a MySQL logic value,
+/// represented by Rust's `bool` type.
 pub trait AsMySQLBool {
     /// Evaluates into a MySQL logic value.
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool>;
@@ -187,27 +187,28 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// panics if the varient mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self>;
 
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Borrows a slice of this concrete type from a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Self>;
 }
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
     type ChunkedType: ChunkedVec<Self>;
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Converts a vector of this concrete type into a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
 /// # Notes
 ///
-/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0 and the
-/// corresponding value is None.
+/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0
+/// and the corresponding value is None.
 ///
 /// With this guaranty, we can avoid the following issue:
 ///
-/// For Data [Some(1), Some(2), None], we could have different stored representation:
+/// For Data [Some(1), Some(2), None], we could have different stored
+/// representation:
 ///
 /// Bitmap: 110, Value: 1, 2, 0
 /// Bitmap: 110, Value: 1, 2, 1
@@ -368,8 +369,8 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     /// panics if the varient mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self>;
 
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Borrows a slice of this concrete type from a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 
     /// Convert this reference to owned type

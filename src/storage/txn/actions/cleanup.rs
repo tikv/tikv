@@ -12,12 +12,13 @@ use crate::storage::{
     Snapshot, TxnStatus,
 };
 
-/// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
-/// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
-/// transaction, the rollback record is protected from being collapsed.
+/// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If
+/// `current_ts` is 0, cleanup the lock without checking TTL. If the lock is the
+/// primary lock of a pessimistic transaction, the rollback record is protected
+/// from being collapsed.
 ///
-/// Returns the released lock. Returns error if the key is locked or has already been
-/// committed.
+/// Returns the released lock. Returns error if the key is locked or has already
+/// been committed.
 pub fn cleanup<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -193,8 +194,8 @@ pub mod tests {
 
     #[test]
     fn test_cleanup() {
-        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests that not
-        // related to TTL check should be covered by other test cases.
+        // Cleanup's logic is mostly similar to rollback, except the TTL check. Tests
+        // that not related to TTL check should be covered by other test cases.
         let engine = TestEngineBuilder::new().build().unwrap();
 
         // Shorthand for composing ts.
@@ -214,8 +215,8 @@ pub mod tests {
 
         // Try to cleanup another transaction's lock. Does nothing.
         must_succeed(&engine, k, ts(10, 1), ts(120, 0));
-        // If there is no exisiting lock when cleanup, it may be a pessimistic transaction,
-        // so the rollback should be protected.
+        // If there is no exisiting lock when cleanup, it may be a pessimistic
+        // transaction, so the rollback should be protected.
         must_get_rollback_protected(&engine, k, ts(10, 1), true);
         must_locked(&engine, k, ts(10, 0));
 

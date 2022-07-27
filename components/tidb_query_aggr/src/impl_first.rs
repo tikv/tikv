@@ -155,8 +155,9 @@ where
     }
 }
 
-// Here we manually implement `AggrFunctionStateUpdatePartial` instead of implementing
-// `ConcreteAggrFunctionState` so that `update_repeat` and `update_vector` can be faster.
+// Here we manually implement `AggrFunctionStateUpdatePartial` instead of
+// implementing `ConcreteAggrFunctionState` so that `update_repeat` and
+// `update_vector` can be faster.
 impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateFirst<T>
 where
     T: EvaluableRef<'static> + 'static,
@@ -167,8 +168,9 @@ where
     impl_state_update_partial! { T }
 }
 
-// In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we default impl all
-// `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
+// In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we
+// default impl all `AggrFunctionStateUpdatePartial` of `Evaluable` for all
+// `AggrFnStateFirst`.
 impl_unmatched_function_state! { AggrFnStateFirst<T> }
 
 impl<T> super::AggrFunctionState for AggrFnStateFirst<T>

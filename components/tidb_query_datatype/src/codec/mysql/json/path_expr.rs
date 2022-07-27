@@ -17,11 +17,12 @@
 // Examples:
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a') -> "b"
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c') -> [1, "2"]
-//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a', '$.c') -> ["b", [1, "2"]]
-//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[0]') -> 1
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a', '$.c') -> ["b",
+// [1, "2"]]     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[0]') -> 1
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[2]') -> NULL
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
-//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1,
+// "2"]]
 
 use std::ops::Index;
 
@@ -33,7 +34,8 @@ use crate::codec::Result;
 pub const PATH_EXPR_ASTERISK: &str = "*";
 
 // [a-zA-Z_][a-zA-Z0-9_]* matches any identifier;
-// "[^"\\]*(\\.[^"\\]*)*" matches any string literal which can carry escaped quotes.
+// "[^"\\]*(\\.[^"\\]*)*" matches any string literal which can carry escaped
+// quotes.
 const PATH_EXPR_LEG_RE_STR: &str =
     r#"(\.\s*([a-zA-Z_][a-zA-Z0-9_]*|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)"#;
 
@@ -135,7 +137,8 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             legs.push(PathLeg::DoubleAsterisk);
         }
     }
-    // Check `!expr.is_empty()` here because "$" is a valid path to specify the current JSON.
+    // Check `!expr.is_empty()` here because "$" is a valid path to specify the
+    // current JSON.
     if (last_end == 0) && (!expr.is_empty()) {
         return Err(box_err!("Invalid JSON path: {}", path_expr));
     }

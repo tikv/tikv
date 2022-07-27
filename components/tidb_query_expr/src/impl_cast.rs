@@ -223,8 +223,8 @@ fn get_cast_fn_rpn_meta(
 
 /// Gets the cast function between specified data types.
 ///
-/// TODO: This function supports some internal casts performed by TiKV. However it would be better
-/// to be done in TiDB.
+/// TODO: This function supports some internal casts performed by TiKV. However
+/// it would be better to be done in TiDB.
 pub fn get_cast_fn_rpn_node(
     is_from_constant: bool,
     from_field_type: &FieldType,
@@ -333,8 +333,9 @@ fn cast_string_as_int(
     match val {
         None => Ok(None),
         Some(val) => {
-            // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` || `IsBinaryLiteral(b.args[0])`,
-            //  then it will return res from EvalInt() directly.
+            // TODO: in TiDB, if `b.args[0].GetType().Hybrid()` ||
+            // `IsBinaryLiteral(b.args[0])`,  then it will return res from
+            // EvalInt() directly.
             let is_unsigned = extra.ret_field_type.is_unsigned();
             let val = get_valid_utf8_prefix(ctx, val)?;
             let val = val.trim();
@@ -480,8 +481,8 @@ fn cast_signed_int_as_unsigned_real(
     }
 }
 
-// because we needn't to consider if uint overflow upper boundary of signed real,
-// so we can merge uint to signed/unsigned real in one function
+// because we needn't to consider if uint overflow upper boundary of signed
+// real, so we can merge uint to signed/unsigned real in one function
 #[rpn_fn(nullable)]
 #[inline]
 fn cast_unsigned_int_as_signed_or_unsigned_real(val: Option<&Int>) -> Result<Option<Real>> {
@@ -710,9 +711,9 @@ fn cast_float_real_as_string(
     }
 }
 
-// FIXME: We cannot use specialization in current Rust version, so impl ConvertTo<Bytes> for Bytes
-// cannot  pass compile because of we have impl Convert<Bytes> for T where T: ToString + Evaluable
-//  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
+// FIXME: We cannot use specialization in current Rust version, so impl
+// ConvertTo<Bytes> for Bytes cannot  pass compile because of we have impl
+// Convert<Bytes> for T where T: ToString + Evaluable  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_string(
@@ -841,8 +842,8 @@ fn cast_string_as_unsigned_decimal(
     match val {
         None => Ok(None),
         Some(val) => {
-            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of `evalDecimal`
-            // directly
+            // FIXME: in TiDB, if the param IsBinaryLiteral, then return the result of
+            // `evalDecimal` directly
             let d: Decimal = val.convert(ctx)?;
             let d = if metadata.get_in_union() && d.is_negative() {
                 Decimal::zero()
@@ -2562,7 +2563,8 @@ mod tests {
     fn test_time_as_int_and_uint() {
         let mut ctx = EvalContext::default();
         // TODO: add more test case
-        // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated error
+        // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated
+        // error
         let cs: Vec<(Time, i64)> = vec![
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
@@ -3870,8 +3872,8 @@ mod tests {
     }
 
     /// base_cs:
-    /// vector of (T, T to bytes(without any other handle do by cast_as_string_helper),
-    /// T to string for debug output),
+    /// vector of (T, T to bytes(without any other handle do by
+    /// cast_as_string_helper), T to string for debug output),
     /// the object should not be zero len.
     #[allow(clippy::type_complexity)]
     fn test_as_string_helper<T: Clone, FnCast>(
@@ -4988,8 +4990,9 @@ mod tests {
     }
 
     // These test depend on the correctness of
-    // Decimal::from(u64), Decimal::from(i64), Decimal::from_f64(), Decimal::from_bytes()
-    // Decimal::zero(), Decimal::round, max_or_min_dec, max_decimal
+    // Decimal::from(u64), Decimal::from(i64), Decimal::from_f64(),
+    // Decimal::from_bytes() Decimal::zero(), Decimal::round, max_or_min_dec,
+    // max_decimal
     #[test]
     fn test_unsigned_int_as_signed_or_unsigned_decimal() {
         test_none_with_ctx_and_extra(cast_unsigned_int_as_signed_or_unsigned_decimal);
@@ -6092,8 +6095,9 @@ mod tests {
     {
         // cast_real_as_duration call `Duration::parse`, directly,
         // and `Duration::parse`, is test in duration.rs.
-        // Our test here is to make sure that the result is same as calling `Duration::parse`,
-        // no matter whether call_real_as_duration call `Duration::parse`, directly.
+        // Our test here is to make sure that the result is same as calling
+        // `Duration::parse`, no matter whether call_real_as_duration call
+        // `Duration::parse`, directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
                 let mut ctx = CtxConfig {

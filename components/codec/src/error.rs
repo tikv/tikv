@@ -27,7 +27,8 @@ impl ErrorInner {
     }
 }
 
-// ====== The code below is to box the error so that the it can be as small as possible ======
+// ====== The code below is to box the error so that the it can be as small as
+// possible ======
 
 #[derive(Debug, Error)]
 #[error(transparent)]

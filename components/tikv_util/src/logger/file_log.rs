@@ -41,10 +41,12 @@ pub trait Rotator: Send {
     /// Return if the file need to be rotated.
     fn should_rotate(&self) -> bool;
 
-    /// Call by operator, update rotators' state while the operator try to write some data.
+    /// Call by operator, update rotators' state while the operator try to write
+    /// some data.
     fn on_write(&mut self, data: &[u8]) -> io::Result<()>;
 
-    /// Call by operator, update rotators' state while the operator execute a rotation.
+    /// Call by operator, update rotators' state while the operator execute a
+    /// rotation.
     fn on_rotate(&mut self) -> io::Result<()>;
 }
 
@@ -52,7 +54,8 @@ pub trait Rotator: Send {
 /// once the context trigger the `Rotator`, it will execute a rotation.
 ///
 /// After rotating, the original log file would be renamed to "{original
-/// name}.{"%Y-%m-%dT%H-%M-%S%.3f"}". Note: log file will *not* be compressed or otherwise modified.
+/// name}.{"%Y-%m-%dT%H-%M-%S%.3f"}". Note: log file will *not* be compressed or
+/// otherwise modified.
 pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,

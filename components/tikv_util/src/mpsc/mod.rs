@@ -95,7 +95,8 @@ impl<T> Sender<T> {
         self.sender.is_empty()
     }
 
-    /// Blocks the current thread until a message is sent or the channel is disconnected.
+    /// Blocks the current thread until a message is sent or the channel is
+    /// disconnected.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if self.state.is_sender_connected() {
