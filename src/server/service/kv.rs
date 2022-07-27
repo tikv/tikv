@@ -1865,12 +1865,12 @@ fn future_raw_coprocessor<E: Engine, L: LockManager>(
 }
 
 macro_rules! txn_command_future {
-    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident) { $else_branch: expr }) => {
+    ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident) { $else_branch: expr }) => {
         fn $fn_name<E: Engine, L: LockManager>(
             storage: &Storage<E, L>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
-            $prelude
+            $($prelude)*
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
@@ -1901,18 +1901,32 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
-txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp) {
-    match v {
-        Ok(Ok(res)) => {
-            let (res, error) = res.into_pb();
-            resp.set_results(res.into());
-            if let Some(e) = error {
-                resp.set_errors(vec![extract_key_error(&e)].into())
-            }
-        },
-        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse,
+    (req) {
+        let mode = req.get_wait_lock_mode()
+    };
+    (v, resp) {
+        match v {
+            Ok(Ok(res)) => {
+                match mode {
+                    PessimisticWaitLockMode::LockFirst => {
+                        let (res, error) = res.into_pb();
+                        resp.set_results(res.into());
+                        if let Some(e) = error {
+                            resp.set_errors(vec![extract_key_error(&e)].into())
+                        }
+                    }
+                    PessimisticWaitLockMode::RetryFirst => {
+                        let (values, not_founds) = res.into_legacy_values_and_not_founds();
+                        resp.set_values(values.into());
+                    resp.set_not_founds(not_founds);
+                    }
+                }
+            },
+            Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+        }
     }
-});
+);
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });

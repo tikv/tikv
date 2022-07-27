@@ -175,7 +175,26 @@ impl PessimisticLockKeyResult {
         }
     }
 
-    #[cfg(test)]
+    pub fn unwrap_value(self) -> Option<Value> {
+        match self {
+            Self::Value(v) => v,
+            x @ _ => panic!(
+                "pessimistic lock key result expected to be a value, got {:?}",
+                x
+            ),
+        }
+    }
+
+    pub fn unwrap_existence(self) -> bool {
+        match self {
+            Self::Existence(e) => e,
+            x @ _ => panic!(
+                "pessimistic lock key result expected to be existence, got {:?}",
+                x
+            ),
+        }
+    }
+
     pub fn assert_empty(&self) {
         assert!(matches!(self, Self::Empty));
     }
@@ -294,6 +313,42 @@ impl PessimisticLockResults {
             })
             .collect();
         (res, error)
+    }
+
+    pub fn into_legacy_values_and_not_founds(self) -> (Vec<Value>, Vec<bool>) {
+        if self.0.is_empty() {
+            return (vec![], vec![]);
+        }
+
+        match &self.0[0] {
+            PessimisticLockKeyResult::Empty => {
+                self.0.into_iter().for_each(|res| res.assert_empty());
+                (vec![], vec![])
+            }
+            PessimisticLockKeyResult::Existence(_) => {
+                let not_founds = self.0.into_iter().map(|x| !x.unwrap_existence()).collect();
+                (vec![], not_founds)
+            }
+            PessimisticLockKeyResult::Value(_) => {
+                let mut not_founds = Vec::with_capacity(self.0.len());
+                let mut values = Vec::with_capacity(self.0.len());
+                self.0.into_iter().for_each(|x| {
+                    let v = x.unwrap_value();
+                    match v {
+                        Some(v) => {
+                            not_founds.push(false);
+                            values.push(v);
+                        }
+                        None => {
+                            not_founds.push(true);
+                            values.push(vec![]);
+                        }
+                    }
+                });
+                (values, not_founds)
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
