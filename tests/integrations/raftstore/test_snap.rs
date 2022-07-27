@@ -659,7 +659,7 @@ fn random_long_vec(length: usize) -> Vec<u8> {
 }
 
 /// Snapshot is generated using apply term from apply thread, which should be
-/// set correctly otherwise lead to unconsistency.
+/// set correctly otherwise lead to inconsistency.
 #[test]
 fn test_correct_snapshot_term() {
     // Use five replicas so leader can send a snapshot to a new peer without

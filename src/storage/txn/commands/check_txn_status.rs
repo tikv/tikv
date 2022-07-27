@@ -944,8 +944,10 @@ pub mod tests {
             100,
             TimeStamp::zero(),
             1,
-            TimeStamp::zero(), // min_commit_ts
-            TimeStamp::zero(), // max_commit_ts
+            // min_commit_ts
+            TimeStamp::zero(),
+            // max_commit_ts
+            TimeStamp::zero(),
             false,
             kvproto::kvrpcpb::Assertion::None,
             kvproto::kvrpcpb::AssertionLevel::Off,

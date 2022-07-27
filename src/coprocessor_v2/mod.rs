@@ -21,8 +21,8 @@
 //! By registering new coprocessor plugins, users are able to extend the
 //! functionality of TiKV and run code directly on storage nodes. This usually
 //! leads to dramatically increased performance because the CPU of TiKV nodes
-//! can be utilized for computation and the amount of data transfer
-//! can be reduced.
+//! can be utilized for computation and the amount of data transfer can be
+//! reduced.
 //!
 //!
 //! [hbase-copr]: https://blogs.apache.org/hbase/entry/coprocessor_introduction

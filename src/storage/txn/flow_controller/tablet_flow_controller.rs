@@ -163,7 +163,7 @@ impl FlowInfoDispatcher {
                                 .entry(region_id)
                                 .or_insert_with(|| insert_limiter_and_checker(region_id, suffix));
                             // check if the checker's engine is exactly (region_id, suffix)
-                            // if  checker.suffix < suffix, it means its tablet is old and needs the
+                            // if checker.suffix < suffix, it means its tablet is old and needs the
                             // refresh
                             if checker.tablet_suffix() < suffix {
                                 let engine =
@@ -333,7 +333,6 @@ mod tests {
             tablet_suffix,
         ))
         .unwrap();
-        // assert!(!flow_controller.tablet_exist(region_id));
     }
 
     #[test]

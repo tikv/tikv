@@ -204,7 +204,7 @@ impl EtcdStore {
         Compare::value(cond.over_key, op, cond.arg)
     }
 
-    /// Convert the transcation operations to etcd transcation ops.
+    /// Convert the transaction operations to etcd transaction ops.
     fn to_txn(ops: &mut [super::TransactionOp], leases: &HashMap<Duration, i64>) -> Vec<TxnOp> {
         ops.iter_mut().map(|op| match op {
                 TransactionOp::Put(key, opt) => {

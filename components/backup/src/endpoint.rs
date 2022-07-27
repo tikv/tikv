@@ -1092,10 +1092,10 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 /// Construct an backup file name based on the given store id, region, range
 /// start key and local unix timestamp. A name consists with five parts: store
 /// id, region_id, a epoch version, the hash of range start key and timestamp.
-/// range start key is used to keep the unique file name for file,
-/// to handle different tables exists on the same region. local unix timestamp
-/// is used to keep the unique file name for file, to handle receive the same
-/// request after connection reset.
+/// range start key is used to keep the unique file name for file, to handle
+/// different tables exists on the same region. local unix timestamp is used to
+/// keep the unique file name for file, to handle receive the same request after
+/// connection reset.
 pub fn backup_file_name(
     store_id: u64,
     region: &Region,
@@ -2004,8 +2004,8 @@ pub mod tests {
         assert_eq!(responses.len(), 3, "{:?}", responses);
 
         // for testing whether dropping the pool before all tasks finished causes panic.
-        // but the panic must be checked manually... (It may panic at tokio runtime
-        // threads...)
+        // but the panic must be checked manually. (It may panic at tokio runtime
+        // threads)
         let mut pool = ControlThreadPool::new();
         pool.adjust_with(1);
         pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });

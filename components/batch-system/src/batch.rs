@@ -309,7 +309,7 @@ pub trait PollHandler<N, C>: Send + 'static {
     /// This function is called when handling readiness for control FSM.
     ///
     /// If returned value is Some, then it represents a length of channel. This
-    /// function will only be called for the same fsm after channel's lengh is
+    /// function will only be called for the same fsm after channel's length is
     /// larger than the value. If it returns None, then this function will
     /// still be called for the same FSM in the next loop unless the FSM is
     /// stopped.
@@ -321,8 +321,7 @@ pub trait PollHandler<N, C>: Send + 'static {
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = N>) -> HandleResult;
 
     /// This function is called after `handle_normal` is called for all fsm and
-    /// before calling `end`. The function is expected to run lightweight
-    /// work.
+    /// before calling `end`. The function is expected to run lightweight work.
     fn light_end(&mut self, _batch: &mut [Option<impl DerefMut<Target = N>>]) {}
 
     /// This function is called at the end of every round.
@@ -393,13 +392,13 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points. Since we fetch new fsm
-        // every time calling `poll`, we do not need to configure a large value
-        // for `self.max_batch_size`.
+        // every time calling `poll`, we do not need to configure a large value for
+        // `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has
-            // overhead max size of batch. It's helpful to protect regions from
-            // becoming hungry if some regions are hot points.
+            // overhead max size of batch. It's helpful to protect regions from becoming
+            // hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // update some online config if needed.
             {
@@ -459,8 +458,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     run = batch.push(fsm);
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because
-                // ControlFsm may change state of the handler, we shall deal
-                // with it immediately after calling `begin` of `Handler`.
+                // ControlFsm may change state of the handler, we shall deal with it immediately
+                // after calling `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }

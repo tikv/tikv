@@ -264,9 +264,8 @@ impl Dicts {
                 }
             };
             // When an encrypted file exists in the file system, the file_dict must have
-            // info about this file. But the opposite is not true, this is
-            // because the actual file operation and file_dict operation are not
-            // atomic.
+            // info about this file. But the opposite is not true, this is because the
+            // actual file operation and file_dict operation are not atomic.
             check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());

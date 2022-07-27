@@ -511,7 +511,7 @@ impl Filter for SnapshotFilter {
 /// simultaneous delivery of multiple snapshots from different peers. It
 /// collects the snapshots from different peers and drop the subsequent
 /// snapshots from the same peers. Currently, if there are more than 1 snapshots
-/// in this filter, all the snapshots will be dilivered at once.
+/// in this filter, all the snapshots will be delivered at once.
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,

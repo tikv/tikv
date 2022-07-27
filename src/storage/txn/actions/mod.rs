@@ -2,9 +2,10 @@
 
 //! This file contains the "actions" we perform on a
 //! [`crate::storage::mvcc::MvccTxn`] and related tests. "Actions" here means a
-//! group of more basic operations, eg. [`crate::storage::mvcc::MvccReader::
-//! load_lock`], [`crate::storage::mvcc::MvccTxn::put_write`], which are methods
-//! on [`crate::storage::mvcc::MvccTxn`], for archiving a certain target.
+//! group of more basic operations, eg.
+//! [`crate::storage::mvcc::MvccReader::load_lock`],
+//! [`crate::storage::mvcc::MvccTxn::put_write`], which are methods on
+//! [`crate::storage::mvcc::MvccTxn`], for archiving a certain target.
 
 pub mod acquire_pessimistic_lock;
 pub mod check_data_constraint;

@@ -22,10 +22,10 @@ use tikv_util::{config::*, time::Instant, HandyRwLock};
 // The leader keeps a record of its leader lease, and uses the system's
 // monotonic raw clocktime to check whether its lease has expired.
 // If the leader lease has not expired, when the leader receives a read request
-//   1. with `read_quorum == false`, the leader will serve it by reading local
-// data.      This way of handling request is called "lease read".
-//   2. with `read_quorum == true`, the leader will serve it by doing index read
-// (see raft's doc).      This way of handling request is called "index read".
+//   - with `read_quorum == false`, the leader will serve it by reading local
+// data. This way of handling request is called "lease read".
+//   - with `read_quorum == true`, the leader will serve it by doing index read
+// (see raft's doc). This way of handling request is called "index read".
 // If the leader lease has expired, leader will serve both kinds of requests by
 // index read, and propose an no-op entry to raft quorum to renew the lease.
 // No matter what status the leader lease is, a write request is always served
@@ -658,7 +658,7 @@ fn test_not_leader_read_lease() {
 }
 
 /// Test whether read index is greater than applied index.
-/// 1. Add hearbeat msg filter.
+/// 1. Add heartbeat msg filter.
 /// 2. Propose a read index request.
 /// 3. Put a key and get the latest applied index.
 /// 4. Propose another read index request.

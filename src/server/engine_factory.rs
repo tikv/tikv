@@ -184,9 +184,9 @@ impl KvEngineFactory {
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::raw_util::destroy_engine(
-        // tablet_path.to_str().unwrap(),
-        // kv_db_opts,
-        // kv_cfs_opts,
+        //   tablet_path.to_str().unwrap(),
+        //   kv_db_opts,
+        //   kv_cfs_opts,
         // )?;
         let _ = std::fs::remove_dir_all(tablet_path);
         Ok(())

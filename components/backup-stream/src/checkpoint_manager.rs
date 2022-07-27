@@ -171,9 +171,8 @@ pub trait FlushObserver: Send + 'static {
     /// The optional callback to rewrite the resolved ts of this flush.
     /// Because the default method (collect all leader resolved ts in the store,
     /// and use the minimal TS.) may lead to resolved ts rolling back, if we
-    /// desire a stronger consistency, we can rewrite a safer resolved ts
-    /// here. Note the new resolved ts cannot be greater than the
-    /// old resolved ts.
+    /// desire a stronger consistency, we can rewrite a safer resolved ts here.
+    /// Note the new resolved ts cannot be greater than the old resolved ts.
     async fn rewrite_resolved_ts(
         &mut self,
         #[allow(unused_variables)] task: &str,

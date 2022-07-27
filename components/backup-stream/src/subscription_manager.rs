@@ -62,11 +62,10 @@ pub struct ResolvedRegions {
 }
 
 impl ResolvedRegions {
-    /// compose the calculated global checkpoint and region checkpoints.
-    /// note: maybe we can compute the global checkpoint internal and getting
-    /// the interface clear.       however we must take the `min_ts` or we
-    /// cannot provide valid global checkpoint if there       isn't any
-    /// region checkpoint.
+    /// Compose the calculated global checkpoint and region checkpoints.
+    /// Note: Maybe we can compute the global checkpoint internal and getting
+    /// the interface clear. However we must take the `min_ts` or we cannot
+    /// provide valid global checkpoint if there isn't any region checkpoint.
     pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
         Self {
             items: checkpoints,

@@ -190,10 +190,10 @@ impl Key {
     /// the encoded user key `user_key`.
     ///
     /// There is an optimization in this function, which is to compare the last
-    /// 8 encoded bytes first before comparing the rest. It is because in
-    /// TiDB many records are ended with an 8 byte row id and in many
-    /// situations only this part is different when calling this function.
-    // TODO: If the last 8 byte is memory aligned, it would be better.
+    /// 8 encoded bytes first before comparing the rest. It is because in TiDB
+    /// many records are ended with an 8 byte row id and in many situations only
+    /// this part is different when calling this function. TODO: If the last
+    /// 8 byte is memory aligned, it would be better.
     #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
@@ -203,7 +203,7 @@ impl Key {
         if user_key_len >= number::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
             // TODO: Can we just use == to check the left part and right part? `memcmp`
-            // might       be smart enough.
+            // might be smart enough.
             let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
             let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
             if left != right {

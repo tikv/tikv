@@ -306,15 +306,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
     ///
     /// It tries to ensure the write record's `gc_fence`'s ts, if any, greater
     /// than specified `gc_fence_limit`. Pass `None` to `gc_fence_limit` to
-    /// skip the check. The caller must guarantee that there's no other
-    /// `PUT` or `DELETE` versions whose `commit_ts` is between the found
-    /// version and the provided `gc_fence_limit` (`gc_fence_limit` is
-    /// inclusive).
+    /// skip the check. The caller must guarantee that there's no other `PUT` or
+    /// `DELETE` versions whose `commit_ts` is between the found version and
+    /// the provided `gc_fence_limit` (`gc_fence_limit` is inclusive).
     ///
     /// For transactional reads, the `gc_fence_limit` must be provided to ensure
     /// the result is correct. Generally, it should be the read_ts of the
-    /// current transaction, which might be different from the `ts` passed
-    /// to this function.
+    /// current transaction, which might be different from the `ts` passed to
+    /// this function.
     ///
     /// Note that this function does not check for locks on `key`.
     fn get(
@@ -333,13 +332,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// specified `ts`. It tries to ensure the write record's `gc_fence`'s
     /// ts, if any, greater than specified `gc_fence_limit`. Pass `None` to
     /// `gc_fence_limit` to skip the check. The caller must guarantee that
-    /// there's no other `PUT` or `DELETE` versions whose `commit_ts`
-    /// is between the found version and the provided `gc_fence_limit`
-    /// (`gc_fence_limit` is inclusive).
+    /// there's no other `PUT` or `DELETE` versions whose `commit_ts` is between
+    /// the found version and the provided `gc_fence_limit` (`gc_fence_limit` is
+    /// inclusive).
     /// For transactional reads, the `gc_fence_limit` must be provided to ensure
     /// the result is correct. Generally, it should be the read_ts of the
-    /// current transaction, which might be different from the `ts` passed
-    /// to this function.
+    /// current transaction, which might be different from the `ts` passed to
+    /// this function.
     pub fn get_write(
         &mut self,
         key: &Key,
@@ -352,8 +351,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// Gets the write record of the specified key's latest version before
-    /// specified `ts`, and additionally the write record's `commit_ts`, if
-    /// any.
+    /// specified `ts`, and additionally the write record's `commit_ts`, if any.
     ///
     /// See also [`MvccReader::get_write`].
     pub fn get_write_with_commit_ts(
@@ -474,8 +472,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     /// Scan locks that satisfies `filter(lock)` returns true, from the given
-    /// start key `start`. At most `limit` locks will be returned. If
-    /// `limit` is set to `0`, it means unlimited.
+    /// start key `start`. At most `limit` locks will be returned. If `limit` is
+    /// set to `0`, it means unlimited.
     ///
     /// The return type is `(locks, is_remain)`. `is_remain` indicates whether
     /// there MAY be remaining locks that can be scanned.
@@ -1405,7 +1403,7 @@ pub mod tests {
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
         // ts is 2.
         // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE,
-        // 7_6 LOCK,                   5_5 Rollback, 2_1 PUT].
+        // 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
 
         assert!(reader.get_write(&key, 1.into(), None).unwrap().is_none());

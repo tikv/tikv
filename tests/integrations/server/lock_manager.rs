@@ -231,7 +231,7 @@ fn test_detect_deadlock_when_split_region() {
 fn test_detect_deadlock_when_transfer_region() {
     let mut cluster = new_cluster_for_deadlock_test(4);
     // Transfer the leader region to store(4) and the leader of deadlock detector
-    // should be also transfered.
+    // should be also transferred.
     must_transfer_region(&mut cluster, b"k", 1, 4, 4);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);

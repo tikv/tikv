@@ -42,11 +42,10 @@ pub fn commit<S: Snapshot>(
             }
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in
-            // our transaction model. But a pessimistic lock will be left if the
-            // pessimistic rollback request fails to send and the transaction
-            // need not to acquire this lock again(due to WriteConflict). If the
-            // transaction is committed, we should commit this pessimistic lock
-            // too.
+            // our transaction model. But a pessimistic lock will be left if the pessimistic
+            // rollback request fails to send and the transaction need not to acquire this
+            // lock again(due to WriteConflict). If the transaction is committed, we should
+            // commit this pessimistic lock too.
             if lock.lock_type == LockType::Pessimistic {
                 warn!(
                     "commit a pessimistic lock with Lock type";

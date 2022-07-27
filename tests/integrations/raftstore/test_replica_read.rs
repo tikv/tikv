@@ -130,9 +130,6 @@ fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    // let max_lease = Duration::from_secs(2);
-    // cluster.cfg.raft_store.raft_store_max_leader_lease =
-    // ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -479,7 +476,7 @@ fn test_read_local_after_snapshpot_replace_peer() {
     }
 
     // send read request to peer 3, so the local reader will cache the
-    // `ReadDelegate` of peer 3 it is okey only send one request because the
+    // `ReadDelegate` of peer 3 it is okay only send one request because the
     // read pool thread count is 1
     let r = cluster.get_region(b"k1");
     // wait applying snapshot finish

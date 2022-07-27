@@ -889,9 +889,10 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
-    /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])
-    /// Col2(Bytes[Binary]) == Call #1 ==
+    /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])     Col2(Bytes[Binary])
+    /// == Call #1 ==
     /// "aa"                                "aaa"                       "áaA"
     /// NULL                                NULL                        "Aa"
     /// "aa"                                "aa"                        NULL
@@ -902,6 +903,7 @@ mod tests {
     /// "Aa"                                NULL                        "aaa"
     /// "aaa"                               "Aa"                        "áa"
     /// (drained)
+    /// ```
     fn make_bytes_src_executor() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -1144,20 +1146,21 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
-    /// Col0 (LongLong(Unsigned))      Col1(LongLong[Signed])
-    /// Col2(Long[Unsigned]) == Call #1 ==
-    /// 18,446,744,073,709,551,615     -3
-    /// 4,294,967,293 NULL                           NULL
-    /// NULL 18,446,744,073,709,551,613     -1
-    /// 4,294,967,295 == Call #2 ==
+    /// Col0 (LongLong(Unsigned))      Col1(LongLong[Signed])       Col2(Long[Unsigned])
+    /// == Call #1 ==
+    /// 18,446,744,073,709,551,615     -3                           4,294,967,293
+    /// NULL                           NULL                         NULL
+    /// 18,446,744,073,709,551,613     -1                           4,294,967,295
+    /// == Call #2 ==
     /// == Call #3 ==
     /// 2000                           2000                         2000
-    /// 9,223,372,036,854,775,807      9,223,372,036,854,775,807
-    /// 2,147,483,647 300                            300
-    /// 300 9,223,372,036,854,775,808      -9,223,372,036,854,775,808
-    /// 2,147,483,648 (drained)                      (drained)
-    /// (drained)
+    /// 9,223,372,036,854,775,807      9,223,372,036,854,775,807    2,147,483,647
+    /// 300                            300                          300
+    /// 9,223,372,036,854,775,808      -9,223,372,036,854,775,808   2,147,483,648
+    /// (drained)                      (drained)                    (drained)
+    /// ```
     fn make_src_executor_unsigned() -> MockExecutor {
         MockExecutor::new(
             vec![

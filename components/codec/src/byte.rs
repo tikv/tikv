@@ -496,8 +496,8 @@ pub struct CompactByteCodec;
 
 impl CompactByteCodec {
     /// Gets the length of the first encoded byte sequence in the given buffer,
-    /// which is encoded in the compact format. If the buffer is not
-    /// complete, the length of buffer will be returned.
+    /// which is encoded in the compact format. If the buffer is not complete,
+    /// the length of buffer will be returned.
     pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
         let result = NumberCodec::try_decode_var_i64(encoded);
         match result {

@@ -261,7 +261,7 @@ impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
 /// try_read_exact tries to read exact length data as the buffer size.  
 /// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when
 /// cannot read anything more from the `Read`. once returning a size less than
-/// the buffer length, implies a EOF was meet, or nothing readed.
+/// the buffer length, implies a EOF was meet, or nothing read.
 async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     r: &mut R,
     buf: &mut [u8],
@@ -544,9 +544,8 @@ impl BlobStorage for S3Storage {
                 io::ErrorKind::Other
             };
             // Even we can check whether there is an `io::Error` internal and extract it
-            // directly, We still need to keep the message 'failed to put
-            // object' here for adapting the string-matching based retry logic
-            // in BR :(
+            // directly, We still need to keep the message 'failed to put object' here for
+            // adapting the string-matching based retry logic in BR :(
             io::Error::new(error_code, format!("failed to put object {}", e))
         })
     }

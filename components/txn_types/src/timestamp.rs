@@ -164,10 +164,10 @@ impl TsSet {
     }
 
     /// Create a `TsSet` from the given vec of timestamps, but it will be forced
-    /// to use `Vec` as the internal collection type. When it's sure that
-    /// the set will be queried at most once, use this is better than
-    /// `TsSet::new`, since both the querying on `Vec` and the conversion from
-    /// `Vec` to `HashSet` is O(N).
+    /// to use `Vec` as the internal collection type. When it's sure that the
+    /// set will be queried at most once, use this is better than `TsSet::new`,
+    /// since both the querying on `Vec` and the conversion from `Vec` to
+    /// `HashSet` is O(N).
     #[inline]
     pub fn vec(ts: Vec<TimeStamp>) -> Self {
         if ts.is_empty() {

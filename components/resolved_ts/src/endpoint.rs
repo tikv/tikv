@@ -107,8 +107,8 @@ impl ObserveRegion {
                         }
                         ChangeLog::Admin(req_type) => {
                             // TODO: for admin cmd that won't change the region meta like peer list
-                            // and key range (i.e. `CompactLog`,
-                            // `ComputeHash`) we may not need to return error
+                            // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
+                            // return error
                             return Err(format!(
                                 "region met admin command {:?} while initializing resolver",
                                 req_type
@@ -169,9 +169,8 @@ impl ObserveRegion {
                                     "req_type" => ?req_type,
                                 );
                                 // Stop tracking so that `tracked_index` larger than the split/merge
-                                // command index won't be published
-                                // untill `RegionUpdate` event trigger the region re-register and
-                                // re-scan the new key range
+                                // command index won't be published until `RegionUpdate` event
+                                // trigger the region re-register and re-scan the new key range
                                 self.resolver.stop_tracking();
                             }
                             _ => {

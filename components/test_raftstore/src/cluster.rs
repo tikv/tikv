@@ -222,9 +222,9 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    /// Engines in a just created cluster are not bootstraped, which means they
-    /// are not associated with a `node_id`. Call `Cluster::start` can
-    /// bootstrap all nodes in the cluster.
+    /// Engines in a just created cluster are not bootstrapped, which means they
+    /// are not associated with a `node_id`. Call `Cluster::start` can bootstrap
+    /// all nodes in the cluster.
     ///
     /// However sometimes a node can be bootstrapped externally. This function
     /// can be called to mark them as bootstrapped in `Cluster`.
@@ -607,9 +607,9 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(self.pd_client.get_regions_number() as u32, len)
     }
 
-    // For test when a node is already bootstraped the cluster with the first region
-    // But another node may request bootstrap at same time and get is_bootstrap
-    // false Add Region but not set bootstrap to true
+    // For test when a node is already bootstrapped the cluster with the first
+    // region But another node may request bootstrap at same time and get
+    // is_bootstrap false Add Region but not set bootstrap to true
     pub fn add_first_region(&self) -> Result<()> {
         let mut region = metapb::Region::default();
         let region_id = self.pd_client.alloc_id().unwrap();

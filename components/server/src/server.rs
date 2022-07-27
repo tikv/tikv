@@ -492,8 +492,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
         // enough space to do compaction and region migration when TiKV recover.
-        // This file is created in data_dir rather than db_path, because we must
-        // not increase store size of db_path.
+        // This file is created in data_dir rather than db_path, because we must not
+        // increase store size of db_path.
         let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_stats.total_space();
         if self.config.raft_store.capacity.0 > 0 {
@@ -1340,10 +1340,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     };
                     // Try tuning quota when cpu_usage is correctly collected.
                     // rule based tuning:
-                    //      1) if instance is busy, shrink cpu quota for analyze by one quota pace
-                    // until lower bound is hit;      2) if instance cpu usage
-                    // is healthy, no op;      3) if instance is idle, increase
-                    // cpu quota by one quota pace  until upper bound is hit.
+                    // - if instance is busy, shrink cpu quota for analyze by one quota pace until
+                    //   lower bound is hit;
+                    // - if instance cpu usage is healthy, no op;
+                    // - if instance is idle, increase cpu quota by one quota pace  until upper
+                    //   bound is hit.
                     if cpu_usage > 0.0f64 {
                         let mut target_quota = old_quota;
 

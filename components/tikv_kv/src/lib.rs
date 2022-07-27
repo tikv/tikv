@@ -283,8 +283,7 @@ pub trait Engine: Send + Clone + 'static {
     /// Writes data to the engine asynchronously with some extensions.
     ///
     /// When the write request is proposed successfully, the `proposed_cb` is
-    /// invoked. When the write request is finished, the `write_cb` is
-    /// invoked.
+    /// invoked. When the write request is finished, the `write_cb` is invoked.
     fn async_write_ext(
         &self,
         ctx: &Context,

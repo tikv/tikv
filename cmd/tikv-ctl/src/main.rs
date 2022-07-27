@@ -735,9 +735,9 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     for line in corruptions.lines() {
         println!("--------------------------------------------------------");
         // The corruption format may like this:
-        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch:
-        // expected 3754995957, got 708533950  in /path/to/db/057155.sst offset
-        // 3126049 size 22724
+        // ```text
+        // /path/to/db/057155.sst is corrupted: Corruption: block checksum mismatch: expected 3754995957, got 708533950  in /path/to/db/057155.sst offset 3126049 size 22724
+        // ```
         println!("corruption info:\n{}", line);
 
         let r = Regex::new(r"/\w*\.sst").unwrap();
@@ -797,11 +797,10 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
 
         println!("\nsst meta:");
         // The output may like this:
+        // ```text
         // --------------- Column family "write"  (ID 2) --------------
-        // 63:132906243[3555338 ..
-        // 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73'
-        // seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at
-        // level 0
+        // 63:132906243[3555338 .. 3555338]['7A311B40EFCC2CB4C5911ECF3937D728DED26AE53FA5E61BE04F23F2BE54EACC73' seq:3555338, type:1 .. '7A313030302E25CD5F57252E' seq:3555338, type:1] at level 0
+        // ```
         let column_r = Regex::new(r"--------------- (.*) --------------\n(.*)").unwrap();
         if let Some(m) = column_r.captures(&output) {
             println!(

@@ -50,9 +50,9 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 }
 
 /// UnpinReader is a simple wrapper for AsyncRead + Unpin + Send.
-/// This wrapper would remove the lifetime at the argument of the generted async
-/// function in order to make rustc happy. (And reduce the length of signture of
-/// write.) see https://github.com/rust-lang/rust/issues/63033
+/// This wrapper would remove the lifetime at the argument of the generated
+/// async function in order to make rustc happy. (And reduce the length of
+/// signature of write.) see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
 
 #[derive(Debug, Default)]

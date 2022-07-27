@@ -219,10 +219,10 @@ impl ResourceTagFactory {
 /// method. This method can bind a [ResourceMeteringTag] to the scope of this
 /// future (actually, it is stored in the local storage of the thread where
 /// `Future` is located). During the polling period of the future, we can
-/// continue to observe the system resources used by the thread in which
-/// it is located, which is associated with `ResourceMeteringTag` and is also
-/// stored in thread local storage. There is a background thread that
-/// continuously summarizes the storage of each thread and reports it regularly.
+/// continue to observe the system resources used by the thread in which it is
+/// located, which is associated with `ResourceMeteringTag` and is also stored
+/// in thread local storage. There is a background thread that continuously
+/// summarizes the storage of each thread and reports it regularly.
 ///
 /// [Future]: futures::Future
 pub trait FutureExt: Sized {

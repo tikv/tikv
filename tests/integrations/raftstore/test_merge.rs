@@ -830,11 +830,12 @@ fn test_merge_with_slow_promote() {
 
 /// Test whether a isolated store recover properly if there is no target peer
 /// on this store before isolated.
-/// A (-∞, k2), B [k2, +∞) on store 1,2,4
-/// store 4 is isolated
-/// B merge to A (target peer A is not created on store 4. It‘s just exist
-/// logically) A split => C (-∞, k3), A [k3, +∞)
-/// Then network recovery
+/// - A (-∞, k2), B [k2, +∞) on store 1,2,4
+/// - store 4 is isolated
+/// - B merge to A (target peer A is not created on store 4. It‘s just exist
+/// logically)
+/// - A split => C (-∞, k3), A [k3, +∞)
+/// - Then network recovery
 #[test]
 fn test_merge_isolated_store_with_no_target_peer() {
     let mut cluster = new_node_cluster(0, 4);
@@ -1545,14 +1546,15 @@ fn test_stale_message_after_merge() {
     pd_client.must_merge(left.get_id(), right.get_id());
 
     // Such stale message can be sent due to network error, consider the following
-    // example: 1. Store 1 and Store 3 can't reach each other, so peer 1003
-    // start election and send `RequestVote`    message to peer 1001, and fail
+    // example:
+    // - Store 1 and Store 3 can't reach each other, so peer 1003
+    // start election and send `RequestVote` message to peer 1001, and fail
     // due to network error, but this message is keep backoff-retry to send out
-    // 2. Peer 1002 become the new leader and remove peer 1003 and add peer 1004
-    // on store 3, then the region is    merged into other region, the merge can
-    // success because peer 1002 can reach both peer 1001 and peer 1004 3. Network
-    // recover, so peer 1003's `RequestVote` message is sent to peer 1001 after
-    // it is merged
+    // - Peer 1002 become the new leader and remove peer 1003 and add peer 1004 on
+    // store 3, then the region is merged into other region, the merge can
+    // success because peer 1002 can reach both peer 1001 and peer 1004
+    // - Network recover, so peer 1003's `RequestVote` message is sent to peer 1001
+    // after it is merged
     //
     // the backoff-retry of a stale message is hard to simulated in test, so here
     // just send this stale message directly

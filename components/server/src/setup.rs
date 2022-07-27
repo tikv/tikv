@@ -38,8 +38,8 @@ macro_rules! fatal {
 // there are a lot of logs written in a very short time. Consider rename the
 // rotated file with a version number while rotate by size.
 //
-// The file name format after rotated is as follows: "{original
-// name}.{"%Y-%m-%dT%H-%M-%S%.3f"}"
+// The file name format after rotated is as follows:
+// "{original name}.{"%Y-%m-%dT%H-%M-%S%.3f"}"
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.parent().unwrap().to_path_buf();
     let mut new_fname = path.file_stem().unwrap().to_os_string();

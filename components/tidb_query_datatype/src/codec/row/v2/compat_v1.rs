@@ -127,10 +127,10 @@ impl<T: BufferWriter> V1CompatibleEncoder for T {}
 /// encoding.
 ///
 /// The test path is:
-/// 1. Encode value using v2
-/// 2. Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to
-/// v1-compatible 3. Use `RawDatumDecoder` decode the encoded bytes, check the
-/// result.
+/// - Encode value using v2
+/// - Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to
+///   v1-compatible
+/// - Use `RawDatumDecoder` decode the encoded bytes, check the result.
 ///
 /// Note: a value encoded using v2 then transfer to v1-compatible encoding, is
 /// not always equals the encoded-bytes using v1 directly.

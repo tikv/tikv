@@ -122,8 +122,8 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 /// `is_first_append_entry` checks `msg` is the first append message or not.
 /// This meassge is the first message that the learner peers of the new split
 /// region will receive from the leader. It's used for when the message is
-/// received but there is no such region in `Store::region_peers`. In
-/// this case we should put `msg` into `pending_msg` instead of create the peer.
+/// received but there is no such region in `Store::region_peers`. In this case
+/// we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
 fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
@@ -401,13 +401,14 @@ pub fn is_region_initialized(r: &metapb::Region) -> bool {
 
 /// Lease records an expired time, for examining the current moment is in lease
 /// or not. It's dedicated to the Raft leader lease mechanism, contains either
-/// state of   1. Suspect Timestamp
-///      A suspicious leader lease timestamp, which marks the leader may still
-/// hold or lose      its lease until the clock time goes over this timestamp.
-///   2. Valid Timestamp
-///      A valid leader lease timestamp, which marks the leader holds the lease
-/// for now.      The lease is valid until the clock time goes over this
-/// timestamp.
+/// state of
+/// - Suspect Timestamp
+///   - A suspicious leader lease timestamp, which marks the leader may still
+///     hold or lose its lease until the clock time goes over this timestamp.
+/// - Valid Timestamp
+///   - A valid leader lease timestamp, which marks the leader holds the lease
+///     for now. The lease is valid until the clock time goes over this
+///     timestamp.
 ///
 /// ```text
 /// Time
@@ -1050,8 +1051,7 @@ impl RegionReadProgress {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
-            // `read_state` is guaranteed to be valid when it is published by
-            // the leader
+            // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.take_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
@@ -1133,8 +1133,7 @@ struct RegionReadProgressCore {
     region_id: u64,
     applied_index: u64,
     // A wraper of `(apply_index, safe_ts)` item, where the `read_state.ts` is the peer's current
-    // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that
-    // `safe_ts`
+    // `safe_ts` and the `read_state.idx` is the smallest `apply_index` required for that `safe_ts`
     read_state: ReadState,
     // The local peer's acknowledge about the leader
     leader_info: LocalLeaderInfo,

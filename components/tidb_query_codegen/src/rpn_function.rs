@@ -148,7 +148,7 @@
 //! documentation in `components/tidb_query_expr/src/types/function.rs` for more
 //! details.
 //!
-//! The `_Fn` trait can be customised by implementing it manually.
+//! The `_Fn` trait can be customized by implementing it manually.
 //! For example, you are going to implement an RPN function called `regex_match`
 //! taking two arguments, the regex and the string to match. You want to build
 //! the regex only once if the first argument is a scalar. The code may look

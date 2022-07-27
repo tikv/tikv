@@ -294,9 +294,8 @@ mod tests {
         }
 
         /// Aggregate function `Bar` accepts a Real column, returns `(a: Int, b:
-        /// Int, c: Real)`, where `a` is the number of rows including
-        /// nulls, `b` is the number of rows excluding nulls, `c` is the
-        /// sum of all values.
+        /// Int, c: Real)`, where `a` is the number of rows including nulls, `b`
+        /// is the number of rows excluding nulls, `c` is the sum of all values.
         #[derive(Debug, AggrFunction)]
         #[aggr_function(state = AggrFnBarState::new())]
         struct AggrFnBar;

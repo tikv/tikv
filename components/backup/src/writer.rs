@@ -26,9 +26,8 @@ use crate::{backup_file_name, metrics::*, utils::KeyValueCodec, Error, Result};
 
 #[derive(Debug, Clone, Copy)]
 /// CfNameWrap wraps the CfName type.
-/// For removing the 'static lifetime bound in the async function,
-/// which doesn't compile due to 'captures lifetime that does not appear in
-/// bounds' :(. see https://github.com/rust-lang/rust/issues/63033
+/// For removing the 'static lifetime bound in the async function, which doesn't
+/// compile due to 'captures lifetime that does not appear in bounds', see https://github.com/rust-lang/rust/issues/63033
 /// FIXME: remove this.
 pub struct CfNameWrap(pub &'static str);
 

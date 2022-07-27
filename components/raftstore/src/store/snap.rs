@@ -647,8 +647,7 @@ impl Snapshot {
     }
 
     // If all files of the snapshot exist, return `Ok` directly. Otherwise create a
-    // new file at the temporary meta file path, so that all other try will
-    // fail.
+    // new file at the temporary meta file path, so that all other try will fail.
     fn init_for_building(&mut self) -> RaftStoreResult<()> {
         if self.exists() {
             return Ok(());
@@ -898,8 +897,7 @@ impl Snapshot {
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
                 // Use `kv_count` instead of file size to check empty files because encrypted
-                // sst files contain some metadata so their sizes will never be
-                // 0.
+                // sst files contain some metadata so their sizes will never be 0.
                 self.mgr.rename_tmp_cf_file_for_send(cf_file)?;
             } else {
                 for tmp_file_path in cf_file.tmp_file_paths() {

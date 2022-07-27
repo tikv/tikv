@@ -81,9 +81,8 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
-        // to avoid using too much memory. However, if there are a number of
-        // large requests, small requests will still be blocked. This needs to
-        // be improved.
+        // to avoid using too much memory. However, if there are a number of large
+        // requests, small requests will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
             ReadPoolHandle::Yatp { .. } => {
                 Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
@@ -376,9 +375,9 @@ impl<E: Engine> Endpoint<E> {
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the
-    /// snapshot and the given `handler_builder`. Finally, it calls the
-    /// unary request interface of the `RequestHandler` to process the
-    /// request and produce a result.
+    /// snapshot and the given `handler_builder`. Finally, it calls the unary
+    /// request interface of the `RequestHandler` to process the request and
+    /// produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
@@ -514,9 +513,9 @@ impl<E: Engine> Endpoint<E> {
     /// The real implementation of handling a stream request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the
-    /// snapshot and the given `handler_builder`. Finally, it calls the
-    /// stream request interface of the `RequestHandler` multiple times to
-    /// process the request and produce multiple results.
+    /// snapshot and the given `handler_builder`. Finally, it calls the stream
+    /// request interface of the `RequestHandler` multiple times to process the
+    /// request and produce multiple results.
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
@@ -626,9 +625,9 @@ impl<E: Engine> Endpoint<E> {
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each
-    /// result in a `Response` and will never fail. If there are errors
-    /// during parsing or handling, they will be converted into a `Response`
-    /// as the only stream item.
+    /// result in a `Response` and will never fail. If there are errors during
+    /// parsing or handling, they will be converted into a `Response` as the
+    /// only stream item.
     #[inline]
     pub fn parse_and_handle_stream_request(
         &self,
@@ -1470,9 +1469,8 @@ mod tests {
             // `total_suspend_time`. Someday it will be separated, but for now,
             // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req2 payload. So
-            // here: req1 payload <= process time <= (req1 payload + req2
-            // payload)
+            // In the worst case, `total_suspend_time` could be totally req2 payload.
+            // So here: req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
@@ -1494,9 +1492,8 @@ mod tests {
             // `total_suspend_time`. Someday it will be separated, but for now,
             // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req1 payload. So
-            // here: req2 payload <= process time <= (req1 payload + req2
-            // payload)
+            // In the worst case, `total_suspend_time` could be totally req1 payload.
+            // So here: req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(

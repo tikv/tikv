@@ -59,28 +59,26 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         // - scan from a unique index with like: where unique-index like xxx
         //
         // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan
-        // executor is strictly stipulated. The order of columns in the schema
-        // must be the same as index data stored and if PK handle is needed it
-        // must be placed as the last one.
+        // executor is strictly stipulated. The order of columns in the schema must be
+        // the same as index data stored and if PK handle is needed it must be placed as
+        // the last one.
         //
         // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the
         // last one is real). We accept this kind of request for compatibility
         // considerations, but will be forbidden soon.
         //
         // Note 4: When process global indexes, an extra partition ID column with column
-        // ID `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to
-        // indicate which partiton handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
+        // ID `table::EXTRA_PARTITION_ID_COL_ID` will append to column info to indicate which partiton handles belong to. See https://github.com/pingcap/parser/pull/1010 for more information.
         //
         // Note 5: When process a partitioned table's index under
-        // tidb_partition_prune_mode = 'dynamic' and with either an active
-        // transaction buffer or with a SelectLock/pessimistic lock, we need to
-        // return the physical table id since several partitions may be included
-        // in the range.
+        // tidb_partition_prune_mode = 'dynamic' and with either an active transaction
+        // buffer or with a SelectLock/pessimistic lock, we need to return the physical
+        // table id since several partitions may be included in the range.
         //
         // Note 6: Also int_handle (-1), EXTRA_PARTITION_ID_COL_ID (-2) and
         // EXTRA_PHYSICAL_TABLE_ID_COL_ID (-3) must be requested in this order in
-        // columns_info! since current implementation looks for them backards
-        // for -3, -2, -1.
+        // columns_info! since current implementation looks for them backwards for -3,
+        // -2, -1.
         let physical_table_id_column_cnt = columns_info.last().map_or(0, |ci| {
             (ci.get_column_id() == table::EXTRA_PHYSICAL_TABLE_ID_COL_ID) as usize
         });
@@ -283,18 +281,19 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     }
 
     // Value layout: (see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing)
-    // 		+-- IndexValueVersion0  (with restore data, or common handle, or index is
-    // global) 		|
-    // 		|  Layout: TailLen | Options      | Padding      | [IntHandle] |
-    // [UntouchedFlag] 		|  Length:   1     | len(options) | len(padding) |    8
-    // |     1 		|
+    // ```text
+    // 		+-- IndexValueVersion0  (with restore data, or common handle, or index is global)
+    // 		|
+    // 		|  Layout: TailLen | Options      | Padding      | [IntHandle] | [UntouchedFlag]
+    // 		|  Length:   1     | len(options) | len(padding) |    8        |     1
+    // 		|
     // 		|  TailLen:       len(padding) + len(IntHandle) + len(UntouchedFlag)
-    // 		|  Options:       Encode some value for new features, such as common handle,
-    // new collations or global index. 		|                 See below for more
-    // information. 		|  Padding:       Ensure length of value always >= 10. (or
-    // >= 11 if UntouchedFlag exists.) 		|  IntHandle:     Only exists when table
-    // use int handles and index is unique. 		|  UntouchedFlag: Only exists when
-    // index is untouched. 		|
+    // 		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
+    // 		|                 See below for more information.
+    // 		|  Padding:       Ensure length of value always >= 10. (or >= 11 if UntouchedFlag exists.)
+    // 		|  IntHandle:     Only exists when table use int handles and index is unique.
+    // 		|  UntouchedFlag: Only exists when index is untouched.
+    // 		|
     // 		+-- Old Encoding (without restore data, integer handle, local)
     // 		|
     // 		|  Layout: [Handle] | [UntouchedFlag]
@@ -303,36 +302,34 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     // 		|  Handle:        Only exists in unique index.
     // 		|  UntouchedFlag: Only exists when index is untouched.
     // 		|
-    // 		|  If neither Handle nor UntouchedFlag exists, value will be one single byte
-    // '0' (i.e. []byte{'0'}). 		|  Length of value <= 9, use to distinguish from
-    // the new encoding. 		|
+    // 		|  If neither Handle nor UntouchedFlag exists, value will be one single byte '0' (i.e. []byte{'0'}).
+    // 		|  Length of value <= 9, use to distinguish from the new encoding.
+    // 		|
     // 		+-- IndexValueForClusteredIndexVersion1
     // 		|
-    // 		|  Layout: TailLen |    VersionFlag  |    Version     ｜ Options      |
-    // [UntouchedFlag] 		|  Length:   1     |        1        |      1         |
-    // len(options) |         1 		|
+    // 		|  Layout: TailLen |    VersionFlag  |    Version     ｜ Options      |   [UntouchedFlag]
+    // 		|  Length:   1     |        1        |      1         |  len(options) |         1
+    // 		|
     // 		|  TailLen:       len(UntouchedFlag)
-    // 		|  Options:       Encode some value for new features, such as common handle,
-    // new collations or global index. 		|                 See below for more
-    // information. 		|  UntouchedFlag: Only exists when index is untouched.
+    // 		|  Options:       Encode some value for new features, such as common handle, new collations or global index.
+    // 		|                 See below for more information.
+    // 		|  UntouchedFlag: Only exists when index is untouched.
     // 		|
     // 		|  Layout of Options:
     // 		|
-    // 		|     Segment:             Common Handle                 |     Global Index
-    // |   New Collation 		|     Layout:  CHandle Flag | CHandle Len | CHandle
-    // | PidFlag | PartitionID |    restoreData 		|     Length:     1         | 2
-    // | len(CHandle) | 1    |    8        |   len(restoreData) 		|
+    // 		|     Segment:             Common Handle                 |     Global Index      |   New Collation
+    // 		|     Layout:  CHandle Flag | CHandle Len | CHandle      | PidFlag | PartitionID |    restoreData
+    // 		|     Length:     1         | 2           | len(CHandle) |    1    |    8        |   len(restoreData)
+    // 		|
     // 		|     Common Handle Segment: Exists when unique index used common handles.
     // 		|     Global Index Segment:  Exists when index is global.
-    // 		|     New Collation Segment: Exists when new collation is used and index or
-    // handle contains non-binary string. 		|     In v4.0, restored data contains
-    // all the index values. For example, (a int, b char(10)) and index (a, b).
-    // |     The restored data contains both the values of a and b. 		|     In
-    // v5.0, restored data contains only non-binary data(except for
-    // char and _bin). In the above example, the restored data contains only the
-    // value of b. 		| Besides, if the collation of b is _bin, then restored data
-    // is an integer indicate the spaces are truncated. Then we use sortKey 		|
-    // and the restored data together to restore original data.
+    // 		|     New Collation Segment: Exists when new collation is used and index or handle contains non-binary string.
+    // 		|     In v4.0, restored data contains all the index values. For example, (a int, b char(10)) and index (a, b).
+    // 		|     The restored data contains both the values of a and b.
+    // 		|     In v5.0, restored data contains only non-binary data(except for char and _bin). In the above example, the restored data contains only the value of b.
+    // 		|     Besides, if the collation of b is _bin, then restored data is an integer indicate the spaces are truncated. Then we use sortKey
+    // 		|     and the restored data together to restore original data.
+    // ```
     #[inline]
     fn process_kv_pair(
         &mut self,
@@ -444,8 +441,8 @@ impl IndexScanExecutorImpl {
 
     // Process index values that are in old collation.
     // NOTE: We should extract the index columns from the key first, and extract the
-    // handles from value if there is no handle in the key. Otherwise, extract
-    // the handles from the key.
+    // handles from value if there is no handle in the key. Otherwise, extract the
+    // handles from the key.
     fn process_old_collation_kv(
         &mut self,
         mut key_payload: &[u8],
@@ -489,17 +486,21 @@ impl IndexScanExecutorImpl {
 
     // restore_original_data restores the index values whose format is introduced in
     // TiDB 5.0. Unlike the format in TiDB 4.0, the new format is optimized for
-    // storage space: 1. If the index is a composed index, only the non-binary
-    // string column's value need to write to value, not all. 2. If a string
-    // column's collation is _bin, then we only write the number of the
-    // truncated spaces to value. 3. If a string column is char, not varchar, then
-    // we use the sortKey directly. The whole logic of this function is:
-    // 1. For each column pass in, check if it needs the restored data to get to
-    // original data. If not, check the next column. 2. Skip if the `sort key`
-    // is NULL, because the original data must be NULL. 3. Depend on the
-    // collation if `_bin` or not. Process them differently to get the correct
-    // original data. 4. Write the original data into the column, we need to
-    // make sure pop() is called.
+    // storage space:
+    // - If the index is a composed index, only the non-binary string column's value
+    //   need to write to value, not all.
+    // - If a string column's collation is _bin, then we only write the number of
+    //   the truncated spaces to value.
+    // - If a string column is char, not varchar, then we use the sortKey directly.
+    //
+    // The whole logic of this function is:
+    // - For each column pass in, check if it needs the restored data to get to
+    //   original data. If not, check the next column.
+    // - Skip if the `sort key` is NULL, because the original data must be NULL.
+    // - Depend on the collation if `_bin` or not. Process them differently to get
+    //   the correct original data.
+    // - Write the original data into the column, we need to make sure pop() is
+    //   called.
     fn restore_original_data<'a>(
         &self,
         restored_values: &[u8],
@@ -2041,10 +2042,9 @@ mod tests {
         use tidb_query_datatype::builder::FieldTypeBuilder;
 
         // Schema: create table t(a int, b char(10) collate utf8mb4_bin, c char(10)
-        // collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key
-        // i_abc(a, b, c), unique key i_ua(a),  unique key i_ub(b), unique key
-        // i_uc(c), unique key i_uabc(a,b,c)); insert into t values (1, "a ", "A
-        // ");
+        // collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c), key i_abc(a,
+        // b, c), unique key i_ua(a),  unique key i_ub(b), unique key i_uc(c),
+        // unique key i_uabc(a,b,c)); insert into t values (1, "a ", "A ");
 
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
@@ -2279,10 +2279,10 @@ mod tests {
         use tidb_query_datatype::builder::FieldTypeBuilder;
 
         // Schema: create table t(a int, b varchar(10) collate utf8mb4_bin, c
-        // varchar(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key
-        // i_c(c), key i_abc(a, b, c), unique key i_ua(a),  unique key i_ub(b),
-        // unique key i_uc(c), unique key i_uabc(a,b,c)); insert into t values
-        // (1, "a ", "A ");
+        // varchar(10) collate utf8mb4_unicode_ci, key i_a(a), key i_b(b), key i_c(c),
+        // key i_abc(a, b, c), unique key i_ua(a),  unique key i_ub(b), unique
+        // key i_uc(c), unique key i_uabc(a,b,c)); insert into t values (1, "a
+        // ", "A ");
 
         // i_a and i_ua
         let mut idx_exe = IndexScanExecutorImpl {
@@ -2525,10 +2525,10 @@ mod tests {
 
         // create table t(a int, b char(10) collate utf8mb4_bin, c char(10) collate
         // utf8mb4_unicode_ci, d varchar(10) collate utf8mb4_bin, e varchar(10) collate
-        // utf8mb4_general_ci , primary key(a, b, c, d, e),  key i_a(a), key i_b(b), key
-        // i_c(c), key i_d(d), key i_e(e), key i_abcde(a, b, c, d, e), unique key
-        // i_ua(a), unique key i_ub(b), unique key i_uc( c), unique key i_ud(d),
-        // unique key i_ue(e), unique key i_uabcde(a,b,c, d, e));
+        // utf8mb4_general_ci , primary key(a, b, c, d, e),  key i_a(a), key
+        // i_b(b), key i_c(c), key i_d(d), key i_e(e), key i_abcde(a, b, c, d, e),
+        // unique key i_ua(a), unique key i_ub(b), unique key i_uc( c), unique
+        // key i_ud(d), unique key i_ue(e), unique key i_uabcde(a,b,c, d, e));
         //
         // CREATE TABLE `t` (
         //   `a` int(11) NOT NULL,

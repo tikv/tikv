@@ -60,8 +60,8 @@ impl RocksEngine {
         }
 
         // If path is not an empty directory, we say db exists. If path is not an empty
-        // directory but db has not been created, `DB::list_column_families`
-        // fails and we can clean up the directory by this indication.
+        // directory but db has not been created, `DB::list_column_families` fails and
+        // we can clean up the directory by this indication.
         fs::read_dir(&path).unwrap().next().is_some()
     }
 

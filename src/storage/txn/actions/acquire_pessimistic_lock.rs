@@ -41,7 +41,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
-    // Update max_ts for Insert operation to guarante linearizability and snapshot
+    // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
     if should_not_exist {
         txn.concurrency_manager.update_max_ts(for_update_ts);
@@ -672,8 +672,8 @@ pub mod tests {
         // Prewrite on non-pessimistic key meets write with larger commit_ts than
         // current for_update_ts (non-pessimistic data conflict).
         // Normally non-pessimistic keys in pessimistic transactions are used when we
-        // are sure that there won't be conflicts. So this case is also not
-        // checked, and prewrite will succeeed.
+        // are sure that there won't be conflicts. So this case is also not checked, and
+        // prewrite will succeeed.
         must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
         must_locked(&engine, k, 47);
         must_cleanup(&engine, k, 47, 0);
@@ -691,8 +691,8 @@ pub mod tests {
         must_err(&engine, k, k, 49, 60);
 
         // Overlapped rollback record will be written when the current start_ts equals
-        // to another write records' commit ts. Now there is a commit record
-        // with commit_ts = 50.
+        // to another write records' commit ts. Now there is a commit record with
+        // commit_ts = 50.
         must_succeed(&engine, k, k, 50, 61);
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
@@ -857,8 +857,8 @@ pub mod tests {
         // PUT,  LOCK,    READ
         //  `----------^
         // Note that this case is special because usually the `LOCK` is the first write
-        // already got during prewrite/acquire_pessimistic_lock and will
-        // continue searching an older version from the `LOCK` record.
+        // already got during prewrite/acquire_pessimistic_lock and will continue
+        // searching an older version from the `LOCK` record.
         must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
         must_commit(&engine, b"k7", 16, 30);
         must_prewrite_lock(&engine, b"k7", b"k7", 37);

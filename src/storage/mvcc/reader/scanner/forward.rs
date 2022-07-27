@@ -195,13 +195,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         loop {
             // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
             // the encoded user key we are currently dealing with. It may not have a write,
-            // or may not have a lock. It is not a slice to avoid data being
-            // invalidated after cursor moving.
+            // or may not have a lock. It is not a slice to avoid data being invalidated
+            // after cursor moving.
             //
             // `has_write` indicates whether `current_user_key` has at least one
-            // corresponding `write`. If there is one, it is what current write
-            // cursor pointing to. The pointed `write` must be the most recent
-            // (i.e. largest `commit_ts`) write of `current_user_key`.
+            // corresponding `write`. If there is one, it is what current write cursor
+            // pointing to. The pointed `write` must be the most recent (i.e. largest
+            // `commit_ts`) write of `current_user_key`.
             //
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`.
             // If there is one, it is what current lock cursor pointing to.
@@ -304,9 +304,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     }
 
     /// Try to move the write cursor to the `self.cfg.ts` version of the given
-    /// key. Because it is possible that the cursor is moved to the next
-    /// user key or the end of key space, the method returns whether the
-    /// write cursor still points to the given user key.
+    /// key. Because it is possible that the cursor is moved to the next user
+    /// key or the end of key space, the method returns whether the write cursor
+    /// still points to the given user key.
     fn move_write_cursor_to_ts(&mut self, user_key: &Key) -> Result<bool> {
         assert!(self.cursors.write.valid()?);
 
@@ -539,8 +539,8 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we
-        // may meet `Lock` or `Rollback`. In this case, more versions needs to
-        // be looked up.
+        // may meet `Lock` or `Rollback`. In this case, more versions needs to be looked
+        // up.
         let mut write_key = cursors.write.key(&mut statistics.write);
         let entry: Option<TxnEntry> = loop {
             if Key::decode_ts_from(write_key)? <= self.after_ts {
@@ -760,8 +760,8 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             let (write_type, start_ts, short_value) = {
                 // DeltaEntryScanner only returns commit records between `from_ts` and `cfg.ts`.
                 // We can assume that it must ensure GC safepoint doesn't exceed `from_ts`, so
-                // GC fence checking can be skipped. But it's still needed when
-                // loading the old value.
+                // GC fence checking can be skipped. But it's still needed when loading the old
+                // value.
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,
@@ -1240,8 +1240,8 @@ mod latest_kv_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and
-        // stop:   a_8 b_2 b_1 b_0
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
         //                   ^cursor
         assert_eq!(
             scanner.next().unwrap(),
@@ -1731,8 +1731,8 @@ mod latest_entry_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and
-        // stop:   a_8 b_2 b_1 b_0
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
         //                   ^cursor
         let entry = EntryBuilder::default()
             .key(b"b")
@@ -2162,8 +2162,8 @@ mod delta_entry_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and
-        // stop:   a_8 b_2 b_1 b_0
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
         //           ^cursor
         let entry = EntryBuilder::default()
             .key(b"b")

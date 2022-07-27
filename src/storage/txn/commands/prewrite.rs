@@ -1139,8 +1139,8 @@ mod tests {
         .unwrap();
 
         // Test a 1PC request should not be partially written when encounters error on
-        // the halfway. If some of the keys are successfully written as
-        // committed state, the atomicity will be broken.
+        // the halfway. If some of the keys are successfully written as committed state,
+        // the atomicity will be broken.
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
         // Lock k2.
@@ -1255,8 +1255,8 @@ mod tests {
         must_rollback(&engine, k1, 20, true);
 
         // Test a 1PC request should not be partially written when encounters error on
-        // the halfway. If some of the keys are successfully written as
-        // committed state, the atomicity will be broken.
+        // the halfway. If some of the keys are successfully written as committed state,
+        // the atomicity will be broken.
 
         // Lock k2 with a optimistic lock.
         let mut statistics = Statistics::default();
@@ -1690,7 +1690,7 @@ mod tests {
         must_prewrite_delete(&engine, key, key, 8);
         must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
-        // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
+        // T1: start_ts = 10, repeatedly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
             &engine,
             cm,
@@ -2030,8 +2030,8 @@ mod tests {
         must_commit(&engine, b"k2", 35, 40);
 
         // A retrying non-pessimistic-lock prewrite request should not skip constraint
-        // checks. Here it should take no effect, even there's already a newer
-        // version after it. (No matter if it's async commit).
+        // checks. Here it should take no effect, even there's already a newer version
+        // after it. (No matter if it's async commit).
         prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
         must_unlocked(&engine, b"k2");
 
@@ -2120,8 +2120,7 @@ mod tests {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
 
         // Simulate two transactions that tries to insert the same row with a secondary
-        // index, and the second one canceled the first one (by rolling back its
-        // lock).
+        // index, and the second one canceled the first one (by rolling back its lock).
 
         let t1_start_ts = TimeStamp::compose(1, 0);
         let t2_start_ts = TimeStamp::compose(2, 0);

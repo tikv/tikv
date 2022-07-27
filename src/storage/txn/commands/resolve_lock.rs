@@ -101,9 +101,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                 )?
             } else if commit_ts > current_lock.ts {
                 // Continue to resolve locks if the not found committed locks are pessimistic
-                // type. They could be left if the transaction is finally
-                // committed and pessimistic conflict retry happens during
-                // execution.
+                // type. They could be left if the transaction is finally committed and
+                // pessimistic conflict retry happens during execution.
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
                     Ok(res) => res,
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))

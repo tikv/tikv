@@ -253,7 +253,7 @@ fn test_batch_size_edge_limit() {
     for _ in 0..5 {
         let mut raft_m = RaftMessage::default();
         // Magic number, this can make estimated size about 4940000, hence two messages
-        // will be batched together, but the total size will be way largher than
+        // will be batched together, but the total size will be way larger than
         // 10MiB as there are many indexes and terms.
         for _ in 0..38000 {
             let mut e = Entry::default();
@@ -276,7 +276,7 @@ fn test_batch_size_edge_limit() {
     assert_eq!(msg_count.load(Ordering::SeqCst), 5);
 }
 
-// Try to create a mock server with `service`. The server will be binded wiht a
+// Try to create a mock server with `service`. The server will be bounded with a
 // random port chosen between [`min_port`, `max_port`]. Return `None` if no port
 // is available.
 fn create_mock_server<T>(service: T, min_port: u16, max_port: u16) -> Option<(Server, u16)>

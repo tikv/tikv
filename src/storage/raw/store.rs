@@ -233,8 +233,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
     }
 
     /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at
-    /// most `limit` keys. If `start_key` is `None`, it means it's
-    /// unbounded.
+    /// most `limit` keys. If `start_key` is `None`, it means it's unbounded.
     ///
     /// If `key_only` is true, the value
     /// corresponding to the key will not be read out. Only scanned keys will be

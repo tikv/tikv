@@ -46,8 +46,8 @@ pub fn to_uint(ctx: &mut EvalContext, bytes: &[u8]) -> Result<u64> {
 impl BinaryLiteral {
     /// from_u64 creates a new BinaryLiteral instance by the given uint value in
     /// BigEndian. byte size will be used as the length of the new
-    /// BinaryLiteral, with leading bytes filled to zero. If byte size is
-    /// -1, the leading zeros in new BinaryLiteral will be trimmed.
+    /// BinaryLiteral, with leading bytes filled to zero. If byte size is -1,
+    /// the leading zeros in new BinaryLiteral will be trimmed.
     pub fn from_u64(val: u64, byte_size: isize) -> Result<Self> {
         if byte_size != -1 && !(1..=8).contains(&byte_size) {
             return Err(box_err!("invalid byte size: {}", byte_size));

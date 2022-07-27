@@ -1528,7 +1528,7 @@ pub(super) mod tests {
         smoother.observe_with_time(4, now);
         assert_eq!(smoother.trend(), Trend::NoTrend);
 
-        // Incresing trend, the left range contains 3 records, the right range contains
+        // Increasing trend, the left range contains 3 records, the right range contains
         // 1 records.
         let mut smoother = Smoother::<
             f64,

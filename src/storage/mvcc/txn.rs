@@ -146,12 +146,11 @@ impl MvccTxn {
     /// transaction's lock if necessary.
     ///
     /// When putting rollback record on a key that's locked by another
-    /// transaction, the second transaction may overwrite the current
-    /// rollback record when it's committed. Sometimes it may
-    /// break consistency. To solve the problem, add the timestamp of the
-    /// current rollback to the lock. So when the lock is committed, it can
-    /// check if it will overwrite a rollback record by checking the
-    /// information in the lock.
+    /// transaction, the second transaction may overwrite the current rollback
+    /// record when it's committed. Sometimes it may break consistency. To solve
+    /// the problem, add the timestamp of the current rollback to the lock. So
+    /// when the lock is committed, it can check if it will overwrite a rollback
+    /// record by checking the information in the lock.
     pub(crate) fn mark_rollback_on_mismatching_lock(
         &mut self,
         key: &Key,

@@ -713,7 +713,8 @@ fn cast_float_real_as_string(
 
 // FIXME: We cannot use specialization in current Rust version, so impl
 // ConvertTo<Bytes> for Bytes cannot  pass compile because of we have impl
-// Convert<Bytes> for T where T: ToString + Evaluable  Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
+// Convert<Bytes> for T where T: ToString + Evaluable
+// Refactor this part after https://github.com/rust-lang/rust/issues/31844 closed
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_string(
@@ -2575,9 +2576,13 @@ mod tests {
                 20000101121315,
             ),
             // FiXME
-            //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666",
-            // 4).unwrap().round_frac(DEFAULT_FSP)  will get 2000-01-01T12:13:14, this
-            // is a bug (
+            // ```
+            // Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4)
+            //     .unwrap()
+            //     .round_frac(DEFAULT_FSP)
+            // ```
+            // will get 2000-01-01T12:13:14, this is a bug
+            // (
             //     Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
             //     20000101121315,
             // ),
@@ -3533,11 +3538,11 @@ mod tests {
                 vec![ERR_TRUNCATE_WRONG_VALUE, ERR_DATA_OUT_OF_RANGE],
             ),
             // the case below has 3 warning
-            // 1. from getValidFloatPrefix, because of `-1234abc`'s `abc`,
-            // (ERR_TRUNCATE_WRONG_VALUE) 2. from ProduceFloatWithSpecifiedTp, because
-            // of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
-            // 3. from ProduceFloatWithSpecifiedTp, because of unsigned but negative
-            // (ERR_DATA_OUT_OF_RANGE)
+            // - from getValidFloatPrefix, because of `-1234abc`'s `abc`,
+            //   (ERR_TRUNCATE_WRONG_VALUE)
+            // - from ProduceFloatWithSpecifiedTp, because of TruncateFloat (ERR_DATA_OUT_OF_RANGE)
+            // - from ProduceFloatWithSpecifiedTp, because of unsigned but negative
+            //   (ERR_DATA_OUT_OF_RANGE)
             (
                 String::from("-1234abc"),
                 0.0,

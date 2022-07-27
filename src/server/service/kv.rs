@@ -727,8 +727,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                     Self::handle_raft_message(store_id, &ch, msg, reject)
                 {
                     // Return an error here will break the connection, only do that for
-                    // `StoreNotMatch` to let tikv to resolve a correct address
-                    // from PD
+                    // `StoreNotMatch` to let tikv to resolve a correct address from PD
                     return Err(Error::from(err));
                 }
             }
@@ -774,8 +773,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                         Self::handle_raft_message(store_id, &ch, msg, reject)
                     {
                         // Return an error here will break the connection, only do that for
-                        // `StoreNotMatch` to let tikv to resolve a correct
-                        // address from PD
+                        // `StoreNotMatch` to let tikv to resolve a correct address from PD
                         return Err(Error::from(err));
                     }
                 }
@@ -1738,9 +1736,9 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
     //
     // In some TiKV of old versions, only one TTL can be provided and the TTL will
     // be applied to all keys in the request. For compatibility reasons, if the
-    // length of `ttls` is exactly one, then the TTL will be applied to all
-    // keys. Otherwise, the length mismatch between `ttls` and `pairs` will
-    // return an error.
+    // length of `ttls` is exactly one, then the TTL will be applied to all keys.
+    // Otherwise, the length mismatch between `ttls` and `pairs` will return an
+    // error.
     let ttls = if req.get_ttls().is_empty() {
         vec![0; pairs_len]
     } else if req.get_ttls().len() == 1 {

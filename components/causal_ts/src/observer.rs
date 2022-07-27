@@ -20,9 +20,10 @@ use raftstore::{
 
 use crate::{CausalTsProvider, RawTsTracker};
 
-/// CausalObserver appends timestamp for RawKV V2 data,
-/// and invoke causal_ts_provider.flush() on specified event, e.g. leader
-/// transfer, snapshot apply. Should be used ONLY when API v2 is enabled.
+/// CausalObserver appends timestamp for RawKV V2 data, and invoke
+/// causal_ts_provider.flush() on specified event, e.g. leader
+/// transfer, snapshot apply.
+/// Should be used ONLY when API v2 is enabled.
 pub struct CausalObserver<Ts: CausalTsProvider, Tk: RawTsTracker> {
     causal_ts_provider: Arc<Ts>,
     ts_tracker: Tk,
@@ -144,11 +145,11 @@ impl<Ts: CausalTsProvider, Tk: RawTsTracker> RegionChangeObserver for CausalObse
         }
 
         // In the scenario of region merge, the target region would merge some entries
-        // from source region with larger timestamps (when leader of source
-        // region is in another store with larger TSO batch than the store of
-        // target region's leader). So we need a flush after commit merge. See
-        // issue #12680. TODO: do not need flush if leaders of source & target
-        // region are in the same store.
+        // from source region with larger timestamps (when leader of source region is in
+        // another store with larger TSO batch than the store of target region's
+        // leader). So we need a flush after commit merge. See issue #12680.
+        // TODO: do not need flush if leaders of source & target region are in the same
+        // store.
         if let RegionChangeEvent::Update(RegionChangeReason::CommitMerge) = event {
             self.flush_timestamp(ctx.region(), REASON_REGION_MERGE);
         }

@@ -283,9 +283,9 @@ pub struct IORateLimitConfig {
     #[online_config(skip)]
     pub mode: IORateLimitMode,
     /// When this flag is off, high-priority IOs are counted but not limited.
-    /// Default set to false because the optimal throughput target provided
-    /// by user might not be the maximum available bandwidth. For
-    /// multi-tenancy use case, this flag should be turned on.
+    /// Default set to false because the optimal throughput target provided by
+    /// user might not be the maximum available bandwidth. For multi-tenancy
+    /// use case, this flag should be turned on.
     #[online_config(skip)]
     pub strict: bool,
     pub foreground_read_priority: IOPriority,

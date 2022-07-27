@@ -567,17 +567,17 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    // The default size index distance is too large for small data,
-    // we flush multiple times to generate more size index handles.
+    // The default size index distance is too large for small data, we flush
+    // multiple times to generate more size index handles.
     for _ in 0..10 {
         put_till_size(cluster, region_max_size, &mut range);
     }
 
-    // Peer will split when size of region meet region_max_size,
-    // so assume the last region_max_size of data is not involved in split,
-    // there will be at least (region_max_size * 10 - region_max_size) /
-    // region_split_size regions. But region_max_size of data should be split
-    // too, so there will be at least 2 more regions.
+    // Peer will split when size of region meet region_max_size, so assume the last
+    // region_max_size of data is not involved in split, there will be at least
+    // `(region_max_size * 10 - region_max_size) / region_split_size` regions.
+    // But region_max_size of data should be split too, so there will be at
+    // least 2 more regions.
     let min_region_cnt = (region_max_size * 10 - region_max_size) / region_split_size + 2;
 
     let mut try_cnt = 0;
@@ -753,8 +753,8 @@ fn test_node_split_epoch_not_match_right_derive() {
     test_split_epoch_not_match(&mut cluster, true);
 }
 
-// For the peer which is the leader of the region before split,
-// it should campaigns immediately. and then this peer may take the leadership
+// For the peer which is the leader of the region before split, it should
+// campaigns immediately. and then this peer may take the leadership
 // earlier. `test_quick_election_after_split` is a helper function for testing
 // this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -1200,7 +1200,7 @@ fn test_gen_split_check_bucket_ranges() {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
-    // disable report buckets; as it will reset the user traffic stats to randmize
+    // disable report buckets; as it will reset the user traffic stats to randomize
     // the test result
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);
     // Make merge check resume quickly.

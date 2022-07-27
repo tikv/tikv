@@ -128,8 +128,7 @@ fn test_rpc_client() {
 
     block_on(client.store_heartbeat(
         pdpb::StoreStats::default(),
-        // store_report=
-        None,
+        None, // store_report
         None,
     ))
     .unwrap();

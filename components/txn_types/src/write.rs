@@ -72,11 +72,11 @@ pub struct Write {
     /// The `commit_ts` of transactions can be non-globally-unique. But since we
     /// store Rollback records in the same CF where Commit records is, and
     /// Rollback records are saved with `user_key{start_ts}` as the internal
-    /// key, the collision between Commit and Rollback records can't be
-    /// avoided. In this case, we keep the Commit record, and set the
+    /// key, the collision between Commit and Rollback records can't be avoided.
+    /// In this case, we keep the Commit record, and set the
     /// `has_overlapped_rollback` flag to indicate that there's also a Rollback
-    /// record. Also note that `has_overlapped_rollback` field is only
-    /// necessary when the Rollback record should be protected.
+    /// record. Also note that `has_overlapped_rollback` field is only necessary
+    /// when the Rollback record should be protected.
     pub has_overlapped_rollback: bool,
 
     /// Records the next version after this version when overlapping rollback
@@ -107,10 +107,10 @@ pub struct Write {
     /// MVCC-deleted at 120) but finds `Key_100_put`
     ///
     /// To solve the problem, when marking `has_overlapped_rollback` on an
-    /// already-existed commit record, add a special field `gc_fence` on it.
-    /// If there is a newer version after the record being rewritten, the
-    /// next version's `commit_ts` will be recorded. When MVCC reading finds
-    /// a commit record with a GC fence timestamp but the corresponding version
+    /// already-existed commit record, add a special field `gc_fence` on it. If
+    /// there is a newer version after the record being rewritten, the next
+    /// version's `commit_ts` will be recorded. When MVCC reading finds a commit
+    /// record with a GC fence timestamp but the corresponding version
     /// that matches that ts doesn't exist, the current version will be
     /// believed to be already GC-ed and ignored.
     ///
@@ -130,9 +130,9 @@ pub struct Write {
     /// rollback instead of an actual commit.
     ///
     /// Note: GC fence will only be written on `PUT` and `DELETE` versions, and
-    /// may only point to a `PUT` or `DELETE` version. If there are other
-    /// `Lock` and `Rollback` records after the record that's being
-    /// rewritten, they will be skipped. For example, in this case:
+    /// may only point to a `PUT` or `DELETE` version. If there are other `Lock`
+    /// and `Rollback` records after the record that's being rewritten, they
+    /// will be skipped. For example, in this case:
     ///
     /// ```text
     /// Key_100_put, Key_105_lock, Key_110_rollback, Key_120_del
@@ -243,11 +243,11 @@ pub struct WriteRef<'a> {
     /// The `commit_ts` of transactions can be non-globally-unique. But since we
     /// store Rollback records in the same CF where Commit records is, and
     /// Rollback records are saved with `user_key{start_ts}` as the internal
-    /// key, the collision between Commit and Rollback records can't be
-    /// avoided. In this case, we keep the Commit record, and set the
+    /// key, the collision between Commit and Rollback records can't be avoided.
+    /// In this case, we keep the Commit record, and set the
     /// `has_overlapped_rollback` flag to indicate that there's also a Rollback
-    /// record. Also note that `has_overlapped_rollback` field is only
-    /// necessary when the Rollback record should be protected.
+    /// record. Also note that `has_overlapped_rollback` field is only necessary
+    /// when the Rollback record should be protected.
     pub has_overlapped_rollback: bool,
 
     /// Records the next version after this version when overlapping rollback
@@ -351,7 +351,7 @@ impl WriteRef<'_> {
     ///     current GC safepoint.
     /// Return:
     ///   Whether the `Write` record is valid, ie. there's no GC fence or GC
-    /// fence doesn't points to any other   version.
+    /// fence doesn't points to any other version.
     pub fn check_gc_fence_as_latest_version(&self, read_ts: TimeStamp) -> bool {
         // It's a valid write record if there's no GC fence or GC fence doesn't points
         // to any other version.

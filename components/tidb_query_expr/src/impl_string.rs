@@ -383,10 +383,12 @@ pub fn rpad_utf8(
 
 // when target_len is 0, return Some(0), means the pad function should return
 // empty string currently there are three conditions it return None, which means
-// pad function should return Null   1. target_len is negative
-//   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
-//   3. target_len is greater than length of input string, *and* pad string is
-// empty otherwise return Some(target_len)
+// pad function should return Null
+// - target_len is negative
+// - target_len of type in byte is larger then MAX_BLOB_WIDTH
+// - target_len is greater than length of input string, *and* pad string is
+//   empty
+// otherwise return Some(target_len)
 #[inline]
 fn validate_target_len_for_pad(
     len_unsigned: bool,

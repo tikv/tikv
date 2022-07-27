@@ -995,8 +995,8 @@ where
     /// Sends a message.
     ///
     /// If the message fails to be sent, false is returned. Returning true means
-    /// the message is enqueued to buffer. Caller is expected to call
-    /// `flush` to ensure all buffered messages are sent out.
+    /// the message is enqueued to buffer. Caller is expected to call `flush` to
+    /// ensure all buffered messages are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;

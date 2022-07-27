@@ -467,8 +467,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches
-    /// are acquired, the method initiates a get snapshot operation for
-    /// further processing.
+    /// are acquired, the method initiates a get snapshot operation for further
+    /// processing.
     fn try_to_wake_up(&self, cid: u64) {
         match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
@@ -632,8 +632,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
 
         // If pipelined pessimistic lock or async apply prewrite takes effect, it's not
-        // guaranteed that the proposed or committed callback is surely invoked,
-        // which takes and invokes `tctx.cb(tctx.pr)`.
+        // guaranteed that the proposed or committed callback is surely invoked, which
+        // takes and invokes `tctx.cb(tctx.pr)`.
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.or(tctx.pr).unwrap(),
@@ -970,10 +970,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             } else {
                 let start = Instant::now_coarse();
                 // Control mutex is used to ensure there is only one request consuming the
-                // quota. The delay may exceed 1s, and the speed limit is
-                // changed every second. If the speed of next second is larger
-                // than the one of first second, without the mutex, the write
-                // flow can't throttled strictly.
+                // quota. The delay may exceed 1s, and the speed limit is changed every second.
+                // If the speed of next second is larger than the one of first second, without
+                // the mutex, the write flow can't throttled strictly.
                 let control_mutex = self.inner.control_mutex.clone();
                 let _guard = control_mutex.lock().await;
                 let delay = self.inner.flow_controller.consume(region_id, write_size);
@@ -1002,8 +1001,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // Mutations on the lock CF should overwrite the memory locks.
         // We only set a deleted flag here, and the lock will be finally removed when it
-        // finishes applying. See the comments in `PeerPessimisticLocks` for how
-        // this flag is used.
+        // finishes applying. See the comments in `PeerPessimisticLocks` for how this
+        // flag is used.
         let txn_ext2 = txn_ext.clone();
         let mut pessimistic_locks_guard = txn_ext2
             .as_ref()
@@ -1033,12 +1032,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // sent to the raftstore.
         //
         // If some in-memory pessimistic locks need to be proposed, we will propose
-        // another TransferLeader command. Then, we can guarentee even if the
-        // proposed locks don't include the locks deleted here, the response
-        // message of the transfer leader command must be later than this write
-        // command because this write command has been sent to the raftstore.
-        // Then, we don't need to worry this request will fail due to
-        // the voluntary leader transfer.
+        // another TransferLeader command. Then, we can guarentee even if the proposed
+        // locks don't include the locks deleted here, the response message of the
+        // transfer leader command must be later than this write command because this
+        // write command has been sent to the raftstore. Then, we don't need to worry
+        // this request will fail due to the voluntary leader transfer.
         let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
@@ -1049,8 +1047,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let ok = result.is_ok();
             if ok && !removed_pessimistic_locks.is_empty() {
                 // Removing pessimistic locks when it succeeds to apply. This should be done in
-                // the apply thread, to make sure it happens before other admin
-                // commands are executed.
+                // the apply thread, to make sure it happens before other admin commands are
+                // executed.
                 if let Some(mut pessimistic_locks) = txn_ext
                     .as_ref()
                     .map(|txn_ext| txn_ext.pessimistic_locks.write())
@@ -1084,8 +1082,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
                     if !ok {
                         // Only consume the quota when write succeeds, otherwise failed write
-                        // requests may exhaust the quota and other write
-                        // requests would be in long delay.
+                        // requests may exhaust the quota and other write requests would be in long
+                        // delay.
                         if sched.inner.flow_controller.enabled() {
                             sched.inner.flow_controller.unconsume(region_id, write_size);
                         }
@@ -1125,8 +1123,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         // When not writable, it only means we cannot write locks to the in-memory lock
         // table, but it is still possible for the region to propose request.
         // When term or epoch version has changed, the request must fail. To be simple,
-        // here we just let the request fallback to propose and let raftstore
-        // generate an appropriate error.
+        // here we just let the request fallback to propose and let raftstore generate
+        // an appropriate error.
         if !pessimistic_locks.is_writable()
             || pessimistic_locks.term != context.get_term()
             || pessimistic_locks.version != context.get_region_epoch().get_version()

@@ -162,10 +162,10 @@ impl rocksdb::EventListener for RocksEventListener {
 }
 
 // Here are some expected error examples:
-// 1. Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst.
-// Size recorded in manifest 6975, actual size 6959 2. Corruption: Bad table
-// magic number: expected 9863518390377041911, found 759105309091689679 in
-// /qps/data/tikv-10014/db/000021.sst
+// ```text
+// 1. Corruption: Sst file size mismatch: /qps/data/tikv-10014/db/000398.sst. Size recorded in manifest 6975, actual size 6959
+// 2. Corruption: Bad table magic number: expected 9863518390377041911, found 759105309091689679 in /qps/data/tikv-10014/db/000021.sst
+// ```
 //
 // We assume that only the corruption sst file path is printed inside error.
 fn resolve_sst_filename_from_err(err: &str) -> Option<String> {

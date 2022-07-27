@@ -397,7 +397,7 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
 }
 
 /// a shortcut for handing the result return from `Router::on_events`, when any
-/// faliure, send a fatal error to the `doom_messenger`.
+/// failure, send a fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
         if let Err(err) = res {
@@ -527,12 +527,12 @@ impl ReadThroughputRecorder {
         let begin = self.begin.as_ref()?;
         let end = ins.io_stat().ok()??;
         let bytes_read = end.read - begin.read;
-        // FIXME: In our test environment, there may be too many caches hence
-        //        the `bytes_read` is always zero :(
-        //        For now, we eject here and let rocksDB prove that we did read
-        // something        When the proc think we don't touch the block device
-        // (even in fact we didn't).  NOTE: In the real-world, we would accept
-        // the zero `bytes_read` value since the cache did exists.
+        // FIXME: In our test environment, there may be too many caches hence the
+        // `bytes_read` is always zero.
+        // For now, we eject here and let rocksDB prove that we did read something when
+        // the proc think we don't touch the block device (even in fact we didn't).
+        // NOTE: In the real-world, we would accept the zero `bytes_read` value since
+        // the cache did exists.
         #[cfg(test)]
         if bytes_read == 0 {
             // use println here so we can get this message even log doesn't enabled.

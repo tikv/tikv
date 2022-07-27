@@ -34,14 +34,14 @@ pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 /// multiple rows. To save memory, this functionality is provided via an
 /// incremental update model:
 ///
-/// 1. Each aggregate function associates a state structure, storing partially
-/// computed aggregate    results.
+/// - Each aggregate function associates a state structure, storing partially
+/// computed aggregate results.
 ///
-/// 2. The caller calls `update()` or `update_vector()` for each row to update
+/// - The caller calls `update()` or `update_vector()` for each row to update
 /// the state.
 ///
-/// 3. The caller finally calls `push_result()` to aggregate a summary value and
-/// push it into the    given data container.
+/// - The caller finally calls `push_result()` to aggregate a summary value and
+/// push it into the given data container.
 ///
 /// This trait can be auto derived by using `tidb_query_codegen::AggrFunction`.
 pub trait AggrFunction: std::fmt::Debug + Send + 'static {

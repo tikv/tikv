@@ -34,9 +34,9 @@ impl WriteBatchExt for RocksEngine {
 /// help to deal with these small WriteBatch when it is calling
 /// `MultiBatchCommit` and wait the front writer to finish writing.
 /// `MultiBatchWrite` will perform much better than traditional
-/// `pipelined_write` when TiKV writes very large data into RocksDB. We will
-/// remove this feature when `unordered_write` of RocksDB becomes more stable
-/// and becomes compatible with Titan.
+/// `pipelined_write` when TiKV writes very large data into RocksDB.
+/// We will remove this feature when `unordered_write` of RocksDB becomes more
+/// stable and becomes compatible with Titan.
 pub struct RocksWriteBatchVec {
     db: Arc<DB>,
     wbs: Vec<RawWriteBatch>,

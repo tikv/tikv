@@ -96,9 +96,9 @@ impl SubscriptionTracer {
 
     // Register a region as tracing.
     // The `start_ts` is used to tracking the progress of initial scanning.
-    // (Note: the `None` case of `start_ts` is for testing / refresh region status
-    // when split / merge,    maybe we'd better provide some special API for
-    // those cases and remove the `Option`?)
+    // Note: the `None` case of `start_ts` is for testing / refresh region status
+    // when split / merge, maybe we'd better provide some special API for those
+    // cases and remove the `Option`?
     pub fn register_region(
         &self,
         region: &Region,
@@ -290,7 +290,8 @@ impl SubscriptionTracer {
 
 /// This enhanced version of `Resolver` allow some unordered lock events.  
 /// The name "2-phase" means this is used for 2 *concurrency* phases of
-/// observing a region: 1. Doing the initial scanning.
+/// observing a region:
+/// 1. Doing the initial scanning.
 /// 2. Listening at the incremental data.
 ///
 /// ```text

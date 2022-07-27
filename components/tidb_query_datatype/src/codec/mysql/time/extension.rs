@@ -59,12 +59,12 @@ impl DateTimeExtension for Time {
     }
 
     /// returns the week of year and year. should not be called directly.
-    /// when monday_first == true, Monday is considered as the first day in the
-    /// week,         otherwise Sunday.
-    /// when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
-    /// when first_weekday == true, the week that contains the first
-    /// 'first-day-of-week' is week 1,         otherwise weeks are numbered
-    /// according to ISO 8601:1988.
+    /// - when monday_first == true, Monday is considered as the first day in
+    ///   the week, otherwise Sunday.
+    /// - when week_year == true, week is from 1 to 53, otherwise from 0 to 53.
+    /// - when first_weekday == true, the week that contains the first
+    ///   'first-day-of-week' is week 1, otherwise weeks are numbered according
+    ///   to ISO 8601:1988.
     fn calc_year_week(
         &self,
         monday_first: bool,

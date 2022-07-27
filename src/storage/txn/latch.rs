@@ -49,10 +49,10 @@ impl Latch {
     }
 
     /// Remove the first command ID in the queue whose hash value is equal to
-    /// hash_key. If the element which would be removed does not appear at
-    /// the front of the queue, it will leave a hole in the queue. So we
-    /// must remove consecutive hole when remove the head of the queue to
-    /// make the queue not too long.
+    /// hash_key. If the element which would be removed does not appear at the
+    /// front of the queue, it will leave a hole in the queue. So we must remove
+    /// consecutive hole when remove the head of the queue to make the queue not
+    /// too long.
     pub fn pop_front(&mut self, key_hash: u64) -> Option<(u64, u64)> {
         if let Some(item) = self.waiting.pop_front() {
             if let Some((k, _)) = item.as_ref() {
@@ -168,9 +168,9 @@ impl Latches {
     /// `who`.
     ///
     /// This method will enqueue the command ID into the waiting queues of the
-    /// latches. A latch is considered acquired if the command ID is the
-    /// first one of elements in the queue which have the same hash value.
-    /// Returns true if all the Latches are acquired, false otherwise.
+    /// latches. A latch is considered acquired if the command ID is the first
+    /// one of elements in the queue which have the same hash value. Returns
+    /// true if all the Latches are acquired, false otherwise.
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for &key_hash in &lock.required_hashes[lock.owned_count..] {

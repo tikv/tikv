@@ -917,8 +917,8 @@ impl<S: Snapshot> SampleBuilder<S> {
 
             if self.analyze_common_handle {
                 // cur_val recording the current value's data and its counts when iterating
-                // index's rows. Once we met a new value, the old value will be
-                // pushed into the topn_heap to maintain the top-n information.
+                // index's rows. Once we met a new value, the old value will be pushed into the
+                // topn_heap to maintain the top-n information.
                 let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
                 let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
@@ -981,20 +981,20 @@ impl<S: Snapshot> SampleBuilder<S> {
                     )?;
 
                     // This is a workaround for different encoding methods used by TiDB and TiKV for
-                    // CM Sketch. We need this because we must ensure we are
-                    // using the same encoding method when we are querying values from
-                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
+                    // CM Sketch. We need this because we must ensure we are using the same encoding
+                    // method when we are querying values from CM Sketch (in TiDB) and inserting
+                    // values into CM Sketch (here).
                     // We are inserting raw bytes from TableScanExecutor into CM Sketch here and
-                    // query CM Sketch using bytes   encoded by
-                    // tablecodec.EncodeValue() in TiDB. Their results are different after row
-                    // format becomes ver 2.
+                    // query CM Sketch using bytes encoded by tablecodec.EncodeValue() in TiDB.
+                    // Their results are different after row format becomes ver 2.
                     //
-                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to
-                    // VAR_UINT bytes,   and (3) "flatten" the duration value
-                    // from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
+                    // Here we:
+                    // - convert INT bytes to VAR_INT bytes
+                    // - convert UINT bytes to VAR_UINT bytes
+                    // - "flatten" the duration value from DURATION bytes into i64 value, then
+                    //   convert it to VAR_INT bytes.
                     // These are the only 3 cases we need to care about according to TiDB's
-                    // tablecodec.EncodeValue() and
-                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    // tablecodec.EncodeValue() and TiKV's V1CompatibleEncoder::write_v2_as_datum().
                     val = match val[0] {
                         INT_FLAG | UINT_FLAG | DURATION_FLAG => {
                             let mut mut_val = &val[..];

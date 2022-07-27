@@ -167,9 +167,8 @@ struct TableScanExecutorImpl {
     primary_column_ids: Vec<i64>,
 
     /// A vector of flags indicating whether corresponding column is filled in
-    /// `next_batch`. It is a struct level field in order to prevent
-    /// repeated memory allocations since its length is fixed for each
-    /// `next_batch` call.
+    /// `next_batch`. It is a struct level field in order to prevent repeated
+    /// memory allocations since its length is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
 }
 

@@ -744,8 +744,7 @@ impl AutoSplitController {
     }
 
     // flush the read stats info into the recorder and check if the region needs to
-    // be split according to all the stats info the recorder has collected
-    // before.
+    // be split according to all the stats info the recorder has collected before.
     pub fn flush(
         &mut self,
         read_stats_vec: Vec<ReadStats>,

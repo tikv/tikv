@@ -61,7 +61,7 @@
 //!   can be written. This includes engines and write batches.
 //!
 //! - [`WriteBatch`] - types that can commit multiple key/value pairs in
-//!   batches. A `WriteBatchExt::WriteBtach` commits all pairs in one atomic
+//!   batches. A `WriteBatchExt::WriteBatch` commits all pairs in one atomic
 //!   transaction. A `WriteBatchExt::WriteBatchVec` does not (FIXME: is this
 //!   correct?).
 //!

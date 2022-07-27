@@ -128,8 +128,8 @@ pub enum PessimisticLockRes {
     /// `AcquirePessimisticLock` command.
     Values(Vec<Option<Value>>),
     /// Checked whether the key exists while handling the
-    /// `AcquirePessimisticLock` command. The i-th item is true if the i-th
-    /// key in the `AcquirePessimisticLock` command exists.
+    /// `AcquirePessimisticLock` command. The i-th item is true if the i-th key
+    /// in the `AcquirePessimisticLock` command exists.
     Existence(Vec<bool>),
     Empty,
 }

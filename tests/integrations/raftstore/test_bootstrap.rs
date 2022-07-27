@@ -25,8 +25,8 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd
     // successfully
     cluster.add_first_region().unwrap();
-    // now at same time start the another node, and will recive cluster is not
-    // bootstrap it will try to bootstrap with a new region, but will failed
+    // now at same time start the another node, and will receive `cluster is not
+    // bootstrap` it will try to bootstrap with a new region, but will failed
     // the region number still 1
     cluster.start().unwrap();
     cluster.check_regions_number(1);

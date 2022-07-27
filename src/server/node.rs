@@ -292,10 +292,11 @@ where
             .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
             .expect("Store should have bootstrapped");
         // API version is not written into `StoreIdent` in legacy TiKV, thus it will be
-        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow
-        // upgrading from legacy V1 TiKV, the config switch between V1 and V1ttl
-        // are not checked here. It's safe to do so because `storage.enable_ttl`
-        // is impossible to change thanks to the config check.
+        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading
+        // from legacy V1 TiKV, the config switch between V1 and V1ttl are not checked
+        // here. It's safe to do so because `storage.enable_ttl` is impossible to change
+        // thanks to the config check. let should_check = match (ident.api_version,
+        // self.api_version) {
         let should_check = match (ident.api_version, self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,

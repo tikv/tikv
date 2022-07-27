@@ -405,9 +405,9 @@ pub enum Cmd {
             default_value = crate::executor::METRICS_PROMETHEUS,
             possible_values = &["prometheus", "jemalloc", "rocksdb_raft", "rocksdb_kv"],
         )]
-        /// Set the metrics tag, one of
-        /// prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not
-        /// specified, print prometheus
+        /// Set the metrics tag
+        /// Options: prometheus/jemalloc/rocksdb_raft/rocksdb_kv
+        /// If not specified, print prometheus
         tag: Vec<String>,
     },
     /// Force a consistency-check for a specified region
@@ -418,12 +418,13 @@ pub enum Cmd {
     },
     /// Get all regions with corrupt raft
     BadRegions {},
-    /// Modify tikv config, eg. tikv-ctl --host ip:port modify-tikv-config -n
+    /// Modify tikv config.
+    /// Eg. tikv-ctl --host ip:port modify-tikv-config -n
     /// rocksdb.defaultcf.disable-auto-compactions -v true
     ModifyTikvConfig {
         #[structopt(short = "n")]
-        /// The config name are same as the name used on config file, eg.
-        /// raftstore.messages-per-tick, raftdb.max-background-jobs
+        /// The config name are same as the name used on config file.
+        /// eg. raftstore.messages-per-tick, raftdb.max-background-jobs
         config_name: String,
 
         #[structopt(short = "v")]
@@ -613,8 +614,8 @@ pub enum RaftCmd {
 pub enum FailCmd {
     /// Inject failures
     Inject {
-        /// Inject fail point and actions pairs. E.g. tikv-ctl fail inject a=off
-        /// b=panic
+        /// Inject fail point and actions pairs.
+        /// E.g. tikv-ctl fail inject a=off b=panic
         args: Vec<String>,
 
         #[structopt(short = "f")]

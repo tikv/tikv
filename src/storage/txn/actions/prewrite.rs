@@ -33,7 +33,7 @@ pub fn prewrite<S: Snapshot>(
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
 
-    // Update max_ts for Insert operation to guarante linearizability and snapshot
+    // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
     if mutation.should_not_exist {
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
@@ -102,8 +102,8 @@ pub fn prewrite<S: Snapshot>(
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
         let min_commit_ts = if mutation.need_min_commit_ts() {
             // Don't calculate the min_commit_ts according to the concurrency manager's
-            // max_ts for a should_not_write mutation because it's not persisted
-            // and doesn't change data.
+            // max_ts for a should_not_write mutation because it's not persisted and doesn't
+            // change data.
             cmp::max(txn_props.min_commit_ts, txn_props.start_ts.next())
         } else {
             TimeStamp::zero()
@@ -386,8 +386,7 @@ impl<'a> PrewriteMutation<'a> {
                     self.write_conflict_error(&write, commit_ts)?;
                 }
                 // Should check it when no lock exists, otherwise it can report error when there
-                // is a lock belonging to a committed transaction which deletes
-                // the key.
+                // is a lock belonging to a committed transaction which deletes the key.
                 check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
                 Ok(Some((write, commit_ts)))
@@ -666,10 +665,10 @@ fn amend_pessimistic_lock<S: Snapshot>(
         //
         // So, if the key's latest commit_ts is still less than or equal to lock's
         // for_update_ts, the data is not changed. However, we can't get lock's
-        // for_update_ts in current implementation (txn's for_update_ts is
-        // updated for each DML), we can only use txn's start_ts to check -- If
-        // the key's commit_ts is less than txn's start_ts, it's less
-        // than lock's for_update_ts too.
+        // for_update_ts in current implementation (txn's for_update_ts is updated for
+        // each DML), we can only use txn's start_ts to check -- If the key's
+        // commit_ts is less than txn's start_ts, it's less than
+        // lock's for_update_ts too.
         if *commit_ts >= reader.start_ts {
             warn!(
                 "prewrite failed (pessimistic lock not found)";
@@ -1236,8 +1235,8 @@ pub mod tests {
         // PUT,  LOCK,    READ
         //  `----------^
         // Note that this case is special because usually the `LOCK` is the first write
-        // already got during prewrite/acquire_pessimistic_lock and will
-        // continue searching an older version from the `LOCK` record.
+        // already got during prewrite/acquire_pessimistic_lock and will continue
+        // searching an older version from the `LOCK` record.
         must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
         must_commit(&engine, b"k7", 16, 30);
         must_prewrite_lock(&engine, b"k7", b"k7", 37);
@@ -1389,8 +1388,8 @@ pub mod tests {
         must_commit(&engine, b"k2", 10, 20);
 
         // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In
-        // production, the caller will need to check if the current transaction
-        // is already committed before, in order to provide the idempotency.
+        // production, the caller will need to check if the current transaction is
+        // already committed before, in order to provide the idempotency.
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",

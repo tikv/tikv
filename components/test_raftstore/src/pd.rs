@@ -411,8 +411,8 @@ impl PdCluster {
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let store_id = store.get_id();
         // There is a race between put_store and handle_region_heartbeat_response. If
-        // store id is 0, it means it's a placeholder created by latter, we just
-        // need to update the meta. Otherwise we should overwrite it.
+        // store id is 0, it means it's a placeholder created by latter, we just need to
+        // update the meta. Otherwise we should overwrite it.
         if self
             .stores
             .get(&store_id)

@@ -165,8 +165,8 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
-    /// limit memory increasing. For server layer some messages will be
-    /// rejected or droped, if they utilize memory more than
+    /// limit memory increasing. For server layer some messages will be rejected
+    /// or dropped, if they utilize memory more than
     /// `reject_messages_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable message rejecting.

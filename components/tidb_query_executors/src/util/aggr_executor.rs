@@ -392,9 +392,10 @@ pub mod tests {
 
     /// Builds an executor that will return these logical data:
     ///
+    /// ```text
     /// == Schema ==
-    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
-    /// Col4(Bytes-utf8_general_ci) == Call #1 ==
+    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)  Col4(Bytes-utf8_general_ci)
+    /// == Call #1 ==
     /// NULL         1.0         abc         1          aa
     /// 7.0          2.0         NULL        NULL       aaa
     /// NULL         NULL        ""          NULL       áá
@@ -403,6 +404,7 @@ pub mod tests {
     /// == Call #3 ==
     /// 1.5          4.5         aaaaa       5          ááá
     /// (drained)
+    /// ```
     pub fn make_src_executor_1() -> MockExecutor {
         MockExecutor::new(
             vec![

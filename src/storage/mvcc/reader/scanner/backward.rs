@@ -132,9 +132,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
                                 // We are scanning from largest user key to smallest user key, so
-                                // this indicate that we meet a lock
-                                // first, thus its corresponding write
-                                // does not exist.
+                                // this indicate that we meet a lock first, thus its corresponding
+                                // write does not exist.
                                 (lk, false, true)
                             }
                             Ordering::Greater => {
@@ -221,9 +220,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     }
 
     /// Attempt to get the value of a key specified by `user_key` and
-    /// `self.cfg.ts` in reverse order. This function requires that the
-    /// write cursor is currently pointing to the earliest version of
-    /// `user_key`.
+    /// `self.cfg.ts` in reverse order. This function requires that the write
+    /// cursor is currently pointing to the earliest version of `user_key`.
     #[inline]
     fn reverse_get(
         &mut self,
@@ -414,8 +412,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     }
 
     /// Load the value by the given `some_write`. If value is carried in
-    /// `some_write`, it will be returned directly. Otherwise there will be
-    /// a default CF look up.
+    /// `some_write`, it will be returned directly. Otherwise there will be a
+    /// default CF look up.
     ///
     /// The implementation is similar to `PointGetter::load_data_by_write`.
     #[inline]
@@ -443,12 +441,12 @@ impl<S: Snapshot> BackwardKvScanner<S> {
     }
 
     /// After `self.reverse_get()`, our write cursor may be pointing to current
-    /// user key (if we found a desired version), or previous user key (if
-    /// there is no desired version), or out of bound.
+    /// user key (if we found a desired version), or previous user key (if there
+    /// is no desired version), or out of bound.
     ///
     /// If it is pointing to current user key, we need to step it until we meet
-    /// a new key. We first try to `prev()` a few times. If still not
-    /// reaching another user key, we `seek_for_prev()`.
+    /// a new key. We first try to `prev()` a few times. If still not reaching
+    /// another user key, we `seek_for_prev()`.
     #[inline]
     fn move_write_cursor_to_prev_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {

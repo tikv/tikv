@@ -617,8 +617,8 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
         for i in 0..2000 {
             // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
-            // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36,
-            // expect each bucket has about 80 keys
+            // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
+            // bucket has about 80 keys
             let s = key_gen(format!("{:04}00", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
@@ -648,8 +648,8 @@ pub mod tests {
         // insert keys into 0000 ~ 0020 with 000000 ~ 002000
         for i in 0..2000 {
             // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has
-            // about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
-            // bucket has about 80 keys
+            // about 210 keys if mvcc, kv size is about 18*2 = 36, expect each bucket has
+            // about 80 keys
             let s = key_gen(format!("{:06}", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 {

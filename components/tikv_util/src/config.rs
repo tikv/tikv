@@ -1243,7 +1243,7 @@ impl TomlLine {
     }
 }
 
-/// TomlWriter use to update the config file and only cover the most commom toml
+/// TomlWriter use to update the config file and only cover the most common toml
 /// format that used by tikv config file, toml format like: quoted keys,
 /// multi-line value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
@@ -1407,7 +1407,7 @@ macro_rules! numeric_enum_serializing_mod {
 }
 
 /// Helper for migrating Raft data safely. Such migration is defined as
-/// multiple states that can be uniquely distinguished. And the transtions
+/// multiple states that can be uniquely distinguished. And the transitions
 /// between these states are atomic.
 ///
 /// States:

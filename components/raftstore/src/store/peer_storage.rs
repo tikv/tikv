@@ -1465,15 +1465,14 @@ where
             let first_index = self.first_index();
             // It's possible that logs between `last_compacted_idx` and `first_index` are
             // being deleted in raftlog_gc worker. But it's OK as:
-            // 1. If the peer accepts a new snapshot, it must start with an index larger
-            // than    this `first_index`;
-            // 2. If the peer accepts new entries after this snapshot or new snapshot, it
-            // must    start with the new applied index, which is larger than
-            // `first_index`. So new logs won't be deleted by on going
-            // raftlog_gc task accidentally. It's possible that there will be
-            // some logs between `last_compacted_idx` and `first_index` are not
-            // deleted. So a cleanup task for the range should be triggered
-            // after applying the snapshot.
+            // - If the peer accepts a new snapshot, it must start with an index larger than
+            //   this `first_index`;
+            // - If the peer accepts new entries after this snapshot or new snapshot, it
+            //   must start with the new applied index, which is larger than `first_index`.
+            // So new logs won't be deleted by on going raftlog_gc task accidentally.
+            // It's possible that there will be some logs between `last_compacted_idx` and
+            // `first_index` are not deleted. So a cleanup task for the range should be
+            // triggered after applying the snapshot.
             self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
@@ -1501,10 +1500,10 @@ where
         // is not after handing snapshot from ready, at the time of writing, it's no
         // problem for now.
         // The reason why the update of `region` is delayed is that we expect `region`
-        // stays consistent with the one in `StoreMeta::regions` which should be
-        // updated after persisting due to atomic snapshot and peer create
-        // process. So if we can fix these issues in future(maybe not?), the
-        // `region` and `StoreMeta::regions` can updated here immediately.
+        // stays consistent with the one in `StoreMeta::regions` which should be updated
+        // after persisting due to atomic snapshot and peer create process. So if we can
+        // fix these issues in future(maybe not?), the `region` and `StoreMeta::regions`
+        // can updated here immediately.
 
         info!(
             "apply snapshot with state ok";
@@ -1810,12 +1809,12 @@ where
         // Note that the correctness depends on the fact that these source regions MUST
         // NOT serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
-        // 1. After `PrepareMerge` log is committed, the source region leader's lease
-        // will be    suspected immediately which makes the local reader not
-        // serve read request. 2. No read request can be responsed in peer fsm
-        // during merging. These conditions are used to prevent reading
-        // **stale** data in the past. At present, they are also used to prevent
-        // reading **corrupt** data.
+        // - After `PrepareMerge` log is committed, the source region leader's lease
+        //   will be suspected immediately which makes the local reader not serve read
+        //   request.
+        // - No read request can be responsed in peer fsm during merging. These
+        //   conditions are used to prevent reading **stale** data in the past. At
+        //   present, they are also used to prevent reading **corrupt** data.
         for r in &res.destroy_regions {
             if let Err(e) = self.clear_extra_data(r, &res.region) {
                 error!(?e;

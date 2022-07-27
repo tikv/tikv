@@ -154,10 +154,10 @@ impl LazyBatchColumn {
     }
 
     /// Decodes this column if the column is not decoded, according to the given
-    /// logical rows map. After decoding, the decoded column will have the
-    /// same physical layout as the encoded one (i.e. the same logical
-    /// rows), but elements in unnecessary positions will not be decoded and
-    /// will be `None`.
+    /// logical rows map. After decoding, the decoded column will have the same
+    /// physical layout as the encoded one (i.e. the same logical rows), but
+    /// elements in unnecessary positions will not be decoded and will be
+    /// `None`.
     ///
     /// The field type is needed because we use the same `DateTime` structure
     /// when handling Date, Time or Timestamp.

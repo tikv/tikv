@@ -34,8 +34,8 @@ fn test_unsafe_recovery_send_report() {
     })
     .unwrap();
 
-    // Mannually makes an update, and wait for the apply to be triggered, to
-    // simulate "some entries are commited but not applied" scenario.
+    // Manually makes an update, and wait for the apply to be triggered, to
+    // simulate "some entries are committed but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
     apply_triggered_rx
         .recv_timeout(Duration::from_secs(1))

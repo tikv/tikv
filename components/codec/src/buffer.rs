@@ -494,8 +494,6 @@ mod tests {
 
             let mut buffer = base.clone();
             let mut buf_slice = buffer.as_mut_slice();
-            // let buffer_viewer = std::slice::from_raw_parts(buffer as *const u8,
-            // buffer.len());
 
             buf_slice.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
             assert_eq!(&buf_slice[0..13], &base_write[0..13]);
@@ -589,8 +587,8 @@ mod tests {
         }
     }
 
-    /// Test whether it is safe to store values in `Vec` after `len()`, i.e.
-    /// during reallocation these values are copied.
+    /// Test whether it is safe to store values in `Vec` after `len()`,
+    /// i.e. during reallocation these values are copied.
     #[test]
     // FIXME(#4331) Don't ignore this test.
     #[ignore]
@@ -637,7 +635,6 @@ mod tests {
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
 
-            // assert_ne!(vec_ptr, vec.as_ptr());
             if vec_ptr == vec.as_ptr() {
                 in_place_reallocs += 1;
             }

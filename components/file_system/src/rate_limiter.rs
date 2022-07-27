@@ -345,13 +345,13 @@ impl PriorityBasedIORateLimiter {
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
     /// Here we provide best-effort priority control:
-    /// 1) Limited IO budget is assigned to lower priority to ensure higher
-    /// priority can at least    consume the same IO amount as the last few
-    /// epochs without breaching global threshold. 2) Higher priority may
-    /// temporarily use lower priority's IO budgets. When this happens,
-    ///    total IO flow could exceed global threshold.
-    /// 3) Highest priority IO alone must not exceed global threshold (in strict
-    /// mode).
+    /// - Limited IO budget is assigned to lower priority to ensure higher
+    ///   priority can at least consume the same IO amount as the last few
+    ///   epochs without breaching global threshold.
+    /// - Higher priority may temporarily use lower priority's IO budgets. When
+    ///   this happens, total IO flow could exceed global threshold.
+    /// - Highest priority IO alone must not exceed global threshold (in strict
+    ///   mode).
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         let mut total_budgets =
             self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);

@@ -123,8 +123,8 @@ impl ExternalStorage for LocalStorage {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
         // We used std i/o here for removing the requirement of tokio reactor when
-        // restoring. FIXME: when restore side get ready, use tokio::fs::File
-        // for returning.
+        // restoring.
+        // FIXME: when restore side get ready, use tokio::fs::File for returning.
         match StdFile::open(self.base.join(name)) {
             Ok(file) => Box::new(AllowStdIo::new(file)) as _,
             Err(e) => Box::new(error_stream(e).into_async_read()) as _,

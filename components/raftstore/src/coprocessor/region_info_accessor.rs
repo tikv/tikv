@@ -27,8 +27,8 @@ use super::{
 /// `RegionInfoAccessor` is used to collect all regions' information on this
 /// TiKV into a collection so that other parts of TiKV can get region
 /// information from it. It registers a observer to raftstore, which is named
-/// `RegionEventListener`. When the events that we are interested in
-/// happen (such as creating and deleting regions), `RegionEventListener` simply
+/// `RegionEventListener`. When the events that we are interested in happen
+/// (such as creating and deleting regions), `RegionEventListener` simply
 /// sends the events through a channel.
 /// In the mean time, `RegionCollector` keeps fetching messages from the
 /// channel, and mutates the collection according to the messages. When an
@@ -84,7 +84,7 @@ impl RegionInfo {
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<RangeKey, u64>;
 
-// RangeKey is a wrapper used to unify the comparsion between region start key
+// RangeKey is a wrapper used to unify the comparison between region start key
 // and region end key. Region end key is special as empty stands for the
 // infinite, so we need to take special care for cases where the end key is
 // empty.
@@ -283,9 +283,9 @@ impl RegionCollector {
 
     fn handle_create_region(&mut self, region: Region, role: StateRole) {
         // During tests, we found that the `Create` event may arrive multiple times. And
-        // when we receive an `Update` message, the region may have been deleted
-        // for some reason. So we handle it according to whether the region
-        // exists in the collection.
+        // when we receive an `Update` message, the region may have been deleted for
+        // some reason. So we handle it according to whether the region exists in the
+        // collection.
         if self.regions.contains_key(&region.get_id()) {
             info!(
                 "trying to create region but it already exists, try to update it";
@@ -363,9 +363,9 @@ impl RegionCollector {
 
         // Only compare conf_ver when they have the same version.
         // When a region A merges region B, region B may have a greater conf_ver. Then,
-        // the new merged region meta has larger version but smaller conf_ver
-        // than the original B's. In this case, the incoming region meta has a
-        // smaller conf_ver but is not stale.
+        // the new merged region meta has larger version but smaller conf_ver than the
+        // original B's. In this case, the incoming region meta has a smaller conf_ver
+        // but is not stale.
         epoch.get_version() < current_epoch.get_version()
             || (epoch.get_version() == current_epoch.get_version()
                 && epoch.get_conf_ver() < current_epoch.get_conf_ver())
@@ -379,8 +379,8 @@ impl RegionCollector {
     /// region above has newer epoch.
     /// If the given `region` is not stale, all other regions in the collection
     /// that overlaps with the given `region` must be stale. Returns true in
-    /// this case, and if `clear_regions_in_range` is true, those
-    /// out-of-date regions will be removed from the collection.
+    /// this case, and if `clear_regions_in_range` is true, those out-of-date
+    /// regions will be removed from the collection.
     fn check_region_range(&mut self, region: &Region, clear_regions_in_range: bool) -> bool {
         if let Some(region_with_same_id) = self.regions.get(&region.get_id()) {
             if self.is_region_epoch_stale(region, &region_with_same_id.region) {
@@ -469,10 +469,9 @@ impl RegionCollector {
             if region.get_region_epoch().get_version() == 0 {
                 // Ignore messages with version 0.
                 // In raftstore `Peer::replicate`, the region meta's fields are all initialized
-                // with default value except region_id. So if there is more than
-                // one region replicating when the TiKV just starts, the
-                // assertion "Any two region with different ids and overlapping
-                // ranges must have different version" fails.
+                // with default value except region_id. So if there is more than one region
+                // replicating when the TiKV just starts, the assertion "Any two region with
+                // different ids and overlapping ranges must have different version" fails.
                 //
                 // Since 0 is actually an invalid value of version, we can simply ignore the
                 // messages with version 0. The region will be created later when the region's
@@ -1116,9 +1115,9 @@ mod tests {
     }
 
     /// Simulates splitting a region into 3 regions, and the region with old id
-    /// will be the `derive_index`-th region of them. The events are
-    /// triggered in order indicated by `seq`. This is to ensure the
-    /// collection is correct, no matter what the events' order to happen is.
+    /// will be the `derive_index`-th region of them. The events are triggered
+    /// in order indicated by `seq`. This is to ensure the collection is
+    /// correct, no matter what the events' order to happen is.
     /// Values in `seq` and of `derive_index` start from 1.
     fn test_split_impl(derive_index: usize, seq: &[usize]) {
         let mut c = RegionCollector::new();
@@ -1233,9 +1232,9 @@ mod tests {
         must_change_role(&mut c, &new_region(2, b"k1", b"k9", 1), StateRole::Leader);
         must_update_region(&mut c, &new_region(2, b"k1", b"k5", 2), StateRole::Leader);
         // TODO: In fact, region 2's role should be follower. However because it's
-        // previous state was removed while creating updating region 4, it can't
-        // be successfully updated. Fortunately this case may hardly happen so
-        // it can be fixed later.
+        // previous state was removed while creating updating region 4, it can't be
+        // successfully updated. Fortunately this case may hardly happen so it can be
+        // fixed later.
         check_collection(
             &c,
             &[
@@ -1247,8 +1246,8 @@ mod tests {
         );
 
         // While merging, region 2 expanded and covered region 4 (and their end key
-        // become the same) but region 4 still has an `update` event which
-        // haven't been handled.
+        // become the same) but region 4 still has an `update` event which haven't been
+        // handled.
         must_update_region(&mut c, &new_region(2, b"k1", b"k9", 3), StateRole::Leader);
         must_update_region(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Follower);
         must_change_role(&mut c, &new_region(4, b"k5", b"k9", 2), StateRole::Leader);

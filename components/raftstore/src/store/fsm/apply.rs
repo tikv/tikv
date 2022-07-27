@@ -400,11 +400,11 @@ where
 
     /// We must delete the ingested file before calling `callback` so that any
     /// ingest-request reaching this peer could see this update if leader
-    /// had changed. We must also delete them after the applied-index has
-    /// been persisted to kvdb because this entry may replay because of
-    /// panic or power-off, which happened before `WriteBatch::write` and after
-    /// `SstImporter::delete`. We shall make sure that this entry will never
-    /// apply again at first, then we can delete the ssts files.
+    /// had changed. We must also delete them after the applied-index
+    /// has been persisted to kvdb because this entry may replay because of
+    /// panic or power-off, which happened before `WriteBatch::write` and
+    /// after `SstImporter::delete`. We shall make sure that this entry will
+    /// never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
@@ -1000,8 +1000,8 @@ where
 
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
             // `unimplemented!()`, which can break compatibility (i.e. old version tikv
-            // running on data written by new version tikv), but PD will reject old
-            // version tikv join the cluster, so this should not happen.
+            // running on data written by new version tikv), but PD will reject old version
+            // tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
@@ -1251,12 +1251,13 @@ where
     /// Applies raft command.
     ///
     /// An apply operation can fail in the following situations:
-    ///   1. it encounters an error that will occur on all stores, it can
+    ///   - it encounters an error that will occur on all stores, it can
     /// continue applying next entry safely, like epoch not match for
-    /// example;   2. it encounters an error that may not occur on all
-    /// stores, in this case we should try to apply the entry again or
-    /// panic. Considering that this usually due to disk operation fail,
-    /// which is rare, so just panic is ok.
+    /// example;
+    ///   - it encounters an error that may not occur on all stores, in this
+    ///     case we should try to apply the entry again or panic. Considering
+    ///     that this usually due to disk operation fail, which is rare, so just
+    ///     panic is ok.
     fn apply_raft_cmd(
         &mut self,
         ctx: &mut ApplyContext<EK>,
@@ -2538,17 +2539,20 @@ where
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1.   `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source
-    // peer fsm 2.   `on_catch_up_logs_for_merge` in source peer fsm
-    // 3.   if the source peer has already executed the corresponding
-    // `on_ready_prepare_merge`, set pending_remove and jump to step 6 4.   ...
-    // (raft append and apply logs) 5.   `on_ready_prepare_merge` in source peer
-    // fsm and set pending_remove (means source region has finished applying all
-    // logs) 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its
-    // apply fsm and send Noop to trigger the target apply fsm) 7.   resume
-    // `exec_commit_merge` in target apply fsm 8.   `on_ready_commit_merge` in
-    // target peer fsm and send `MergeResult` to source peer fsm 9.
-    // `on_merge_result` in source peer fsm (destroy itself)
+    // - `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source
+    //   peer fsm
+    // - `on_catch_up_logs_for_merge` in source peer fsm
+    // - if the source peer has already executed the corresponding
+    //   `on_ready_prepare_merge`, set pending_remove and jump to step 6
+    // - ... (raft append and apply logs)
+    // - `on_ready_prepare_merge` in source peer fsm and set pending_remove (means
+    //   source region has finished applying all logs)
+    // - `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and
+    //   send Noop to trigger the target apply fsm)
+    // - resume `exec_commit_merge` in target apply fsm
+    // - `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source
+    //   peer fsm
+    // - `on_merge_result` in source peer fsm (destroy itself)
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext<EK>,
@@ -3570,7 +3574,8 @@ where
             "peer_id" => self.delegate.id(),
         );
         // The source peer fsm will be destroyed when the target peer executes
-        // `on_ready_commit_merge` and sends `merge result` to the source peer fsm.
+        // `on_ready_commit_merge` and sends `merge result` to the source peer
+        // fsm.
         self.destroy(ctx);
         catch_up_logs
             .logs_up_to_date

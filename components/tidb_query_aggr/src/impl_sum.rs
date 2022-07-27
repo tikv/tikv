@@ -192,8 +192,8 @@ where
     /// # Notes
     ///
     /// Functions such as SUM() or AVG() that expect a numeric argument cast the
-    /// argument to a number if necessary. For ENUM values, the index number
-    /// is used in the calculation.
+    /// argument to a number if necessary. For ENUM values, the index number is
+    /// used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
@@ -269,8 +269,8 @@ where
     /// # Notes
     ///
     /// Functions such as SUM() or AVG() that expect a numeric argument cast the
-    /// argument to a number if necessary. For ENUM values, the index number
-    /// is used in the calculation.
+    /// argument to a number if necessary. For ENUM values, the index number is
+    /// used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]

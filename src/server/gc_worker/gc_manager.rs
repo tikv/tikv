@@ -393,10 +393,9 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     /// all of them. Regions are scanned and GC-ed in lexicographical order.
     ///
     /// While the `gc_a_round` function is running, it will periodically check
-    /// whether safe_point is updated before the function `gc_a_round`
-    /// finishes. If so, *Rewinding* will occur. For example, when we just
-    /// starts to do GC, our progress is like this: ('^' means our current
-    /// progress)
+    /// whether safe_point is updated before the function `gc_a_round` finishes.
+    /// If so, *Rewinding* will occur. For example, when we just starts to do
+    /// GC, our progress is like this: ('^' means our current progress)
     ///
     /// ```text
     /// | region 1 | region 2 | region 3| region 4 | region 5 | region 6 |
@@ -483,8 +482,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
                 };
                 if finished {
                     // We have worked to the end of the TiKV or our progress has reached `end`, and
-                    // we don't need to rewind. In this case, the round of GC
-                    // has finished.
+                    // we don't need to rewind. In this case, the round of GC has finished.
                     info!("gc_worker: auto gc finishes"; "processed_regions" => processed_regions);
                     return Ok(());
                 }
@@ -775,9 +773,9 @@ mod tests {
     /// region_id)`
     ///
     /// The first value in param `safe_points` will be used to initialize the
-    /// GcManager, and the remaining values will be checked before every
-    /// time GC-ing a region. If the length of `safe_points` is less than
-    /// executed GC tasks, the last value will be used for extra GC tasks.
+    /// GcManager, and the remaining values will be checked before every time
+    /// GC-ing a region. If the length of `safe_points` is less than executed GC
+    /// tasks, the last value will be used for extra GC tasks.
     ///
     /// Param `expected_gc_tasks` is a `Vec` of tuples which is `(region_id,
     /// safe_point)`.
@@ -956,8 +954,8 @@ mod tests {
 
             let mut safe_points = vec![233, 233, 233, 234, 234, 234, 235];
             // The logic of `gc_a_round` wastes a loop when the last region's end_key is not
-            // null, so it will check safe point one more time before GC-ing the
-            // first region after rewinding.
+            // null, so it will check safe point one more time before GC-ing the first
+            // region after rewinding.
             if !regions.last().unwrap().1.is_empty() {
                 safe_points.insert(5, 234);
             }

@@ -269,8 +269,7 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
         }
         Err(Error(box ErrorInner::Closed)) => {
             // TiKV is closing, return an RegionError to tell the client that this region is
-            // unavailable temporarily, the client should retry the request in other
-            // TiKVs.
+            // unavailable temporarily, the client should retry the request in other TiKVs.
             let mut err = errorpb::Error::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)

@@ -143,7 +143,7 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
     // scope of raw keys. The validity is ensured by client & Storage
     // interfaces.
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
@@ -157,7 +157,7 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
     // scope of raw keys. The validity is ensured by client & Storage
     // interfaces.
     fn encode_raw_key_owned(mut user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {

@@ -1088,9 +1088,9 @@ where
                     );
                 }
                 // When rolling update, there might be some old version tikvs that don't support
-                // batch split in cluster. In this situation, PD version check would
-                // refuse `ask_batch_split`. But if update time is long, it may
-                // cause large Regions, so call `ask_split` instead.
+                // batch split in cluster. In this situation, PD version check would refuse
+                // `ask_batch_split`. But if update time is long, it may cause large Regions, so
+                // call `ask_split` instead.
                 Err(Error::Incompatible) => {
                     let (region_id, peer_id) = (region.id, peer.id);
                     info!(

@@ -34,8 +34,7 @@ pub trait SubRecorder: Send {
     /// The default period is 1 second.
     ///
     /// The [RawRecords] and [LocalStorage] map of all threads will be passed in
-    /// through parameters. `usize` is thread_id without platform
-    /// dependency.
+    /// through parameters. `usize` is thread_id without platform dependency.
     ///
     /// [RawRecords]: crate::model::RawRecords
     /// [LocalStorage]: crate::localstorage::LocalStorage

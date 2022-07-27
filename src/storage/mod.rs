@@ -1301,9 +1301,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
-                // not a good idea to return an error to the client, making the
-                // GC fail. A better approach is to wait for these locks to be
-                // unlocked.
+                // not a good idea to return an error to the client, making the GC fail. A
+                // better approach is to wait for these locks to be unlocked.
                 concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -1451,11 +1450,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///
     /// All keys in the range will be deleted permanently regardless of their
     /// timestamps. This means that deleted keys will not be retrievable by
-    /// specifying an older timestamp. If `notify_only` is set, the data
-    /// will not be immediately deleted, but the operation will
-    /// still be replicated via Raft. This is used to notify that the data will
-    /// be deleted by [`unsafe_destroy_range`](crate::server::gc_worker::
-    /// GcTask::UnsafeDestroyRange) soon.
+    /// specifying an older timestamp. If `notify_only` is set, the data will
+    /// not be immediately deleted, but the operation will still be replicated
+    /// via Raft. This is used to notify that the data will be deleted by
+    /// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::
+    /// UnsafeDestroyRange) soon.
     pub fn delete_range(
         &self,
         ctx: Context,
@@ -1621,9 +1620,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let ctx = req.take_context();
                     let key = F::encode_raw_key_owned(req.take_key(), None);
                     // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
-                    // region split. Don't place in loop of `snaps`, otherwise
-                    // `snap.wait` may run in another thread, and cause the
-                    // `thread-local` statistics unstable for test.
+                    // region split. Don't place in loop of `snaps`, otherwise `snap.wait` may run
+                    // in another thread, and cause the `thread-local` statistics unstable for test.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1954,9 +1952,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Delete all raw keys in [`start_key`, `end_key`).
     /// Note that in API V2, data is still "physical" deleted, as "logical"
-    /// delete for a range will be quite expensive. Notification of range
-    /// delete operations will be through a special channel (unimplemented
-    /// yet).
+    /// delete for a range will be quite expensive. Notification of range delete
+    /// operations will be through a special channel (unimplemented yet).
     pub fn raw_delete_range(
         &self,
         ctx: Context,
@@ -8006,8 +8003,8 @@ mod tests {
 
     // This is one of the series of tests to test overlapped timestamps.
     // Overlapped ts means there is a rollback record and a commit record with the
-    // same ts. In this test we check that if rollback happens before commit,
-    // then they should not have overlapped ts, which is an expected property.
+    // same ts. In this test we check that if rollback happens before commit, then
+    // they should not have overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();

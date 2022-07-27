@@ -585,12 +585,11 @@ where
                     );
                     self.message_metrics.add(msg_type, false);
                     // If this msg is snapshot, it is unnecessary to send
-                    // snapshot status to this peer because
-                    // it has already become follower.
-                    // (otherwise the snapshot msg should be sent in store
-                    // thread other than here)
-                    // Also, the follower don't need flow control, so don't send
-                    // unreachable msg here.
+                    // snapshot status to this peer because it has already
+                    // become follower. (otherwise the snapshot msg should be
+                    // sent in store thread other than here) Also, the follower
+                    // don't need flow control, so don't send unreachable msg
+                    // here.
                 } else {
                     self.message_metrics.add(msg_type, true);
                 }

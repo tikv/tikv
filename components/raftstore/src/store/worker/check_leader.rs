@@ -75,10 +75,9 @@ impl Runner {
                 data_end_key(key_range.get_end_key()),
             );
             // `store_safe_ts` won't be accessed frequently (like per-request or
-            // per-transaction), also this branch won't entry because the
-            // request key range is empty currently (in v5.1) keep this branch
-            // for robustness and future use, so it is okay
-            // getting `store_safe_ts` from `store_meta` (behide a mutex)
+            // per-transaction), also this branch won't entry because the request key range
+            // is empty currently (in v5.1) keep this branch for robustness and future use,
+            // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
             let meta = self.store_meta.lock().unwrap();
             meta.region_read_progress.with(|registry| {
                 meta.region_ranges

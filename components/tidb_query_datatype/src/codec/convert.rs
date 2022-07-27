@@ -448,9 +448,12 @@ impl ToInt for Decimal {
 
 impl ToInt for DateTime {
     // FiXME
-    //  Time::parse_utc_datetime("2000-01-01T12:13:14.6666",
-    // 4).unwrap().round_frac(DEFAULT_FSP)  will get 2000-01-01T12:13:14, this
-    // is a bug
+    // ```
+    // Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4)
+    //     .unwrap()
+    //     .round_frac(DEFAULT_FSP)
+    // ```
+    // will get 2000-01-01T12:13:14, this is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         let t = self.round_frac(ctx, DEFAULT_FSP)?;
@@ -2656,7 +2659,8 @@ mod tests {
             // FIXME:
             //  according to Decimal::prec_and_frac,
             //  the decimals' prec(the number of all digits) and frac(the number of digit after
-            // number point) are  Decimal::zero()'s is (1, 0)
+            // number point) are:
+            //  Decimal::zero()'s is (1, 0)
             //  Decimal::from_bytes(b"00.00")'s is (2, 2)
             //  Decimal::from_bytes(b"000.00")'s is (2, 2)
             //  Decimal::from_bytes(b"000.00")'s is (2, 2)

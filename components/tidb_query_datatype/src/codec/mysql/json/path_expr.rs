@@ -15,14 +15,15 @@
 //     2) double asterisk(**) could not be last leg;
 //
 // Examples:
+// ```
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a') -> "b"
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c') -> [1, "2"]
-//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a', '$.c') -> ["b",
-// [1, "2"]]     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[0]') -> 1
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.a', '$.c') -> ["b", [1, "2"]]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[0]') -> 1
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[2]') -> NULL
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
-//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1,
-// "2"]]
+//     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
+// ```
 
 use std::ops::Index;
 

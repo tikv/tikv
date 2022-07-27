@@ -121,9 +121,9 @@ where
         callback: Callback<Vec<LockInfo>>,
     },
     /// If GC in compaction filter is enabled, versions on default CF will be
-    /// handled with `DB::delete` in write CF's compaction filter. However
-    /// if the compaction filter finds the DB is stalled, it will send the
-    /// task to GC worker to ensure the compaction can be continued.
+    /// handled with `DB::delete` in write CF's compaction filter. However if
+    /// the compaction filter finds the DB is stalled, it will send the task
+    /// to GC worker to ensure the compaction can be continued.
     ///
     /// NOTE: It's possible that the TiKV instance fails after a compaction
     /// result is installed but its orphan versions are not deleted. Those
@@ -1155,11 +1155,11 @@ where
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range
-    /// might span over multiple regions, and the `ctx` doesn't indicate
-    /// region. The request will be done directly on RocksDB, bypassing the
-    /// Raft layer. User must promise that, after calling `destroy_range`,
-    /// the range will never be accessed any more. However, `destroy_range` is
-    /// allowed to be called multiple times on an single range.
+    /// might span over multiple regions, and the `ctx` doesn't indicate region.
+    /// The request will be done directly on RocksDB, bypassing the Raft layer.
+    /// User must promise that, after calling `destroy_range`, the range will
+    /// never be accessed any more. However, `destroy_range` is allowed to be
+    /// called multiple times on an single range.
     pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
@@ -1293,10 +1293,10 @@ mod tests {
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a
-    /// 'z' prefix will be added to keys by raftstore layer before writing
-    /// to db. Some functionalities of `GCWorker` bypasses Raft layer, so
-    /// they needs to know how data is actually represented in db. This
-    /// wrapper allows test engines write 'z'-prefixed keys to db.
+    /// 'z' prefix will be added to keys by raftstore layer before writing to
+    /// db. Some functionalities of `GCWorker` bypasses Raft layer, so they
+    /// needs to know how data is actually represented in db. This wrapper
+    /// allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]
     struct PrefixedEngine(kv::RocksEngine);
 

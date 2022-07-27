@@ -125,9 +125,9 @@ pub struct StoreMeta {
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
-    /// split Regions shouldn't be dropped if there is no such Region in
-    /// this store now. So the messages are recorded temporarily and will be
-    /// handled later.
+    /// split Regions shouldn't be dropped if there is no such Region in this
+    /// store now. So the messages are recorded temporarily and will be handled
+    /// later.
     pub pending_msgs: RingQueue<RaftMessage>,
     /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
@@ -1843,8 +1843,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         // A tombstone peer may not apply the conf change log which removes itself.
         // In this case, the local epoch is stale and the local peer can be found from
-        // region. We can compare the local peer id with to_peer_id to verify
-        // whether it is correct to create a new peer.
+        // region. We can compare the local peer id with to_peer_id to verify whether it
+        // is correct to create a new peer.
         if let Some(local_peer_id) =
             util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
         {
@@ -2036,11 +2036,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 _ => return Ok(false),
             }
             // Note that `StoreMeta` lock is held and status is (peer_id, false)
-            // in `pending_create_peers` now. If this peer is
-            // created from splitting latter and then status in
-            // `pending_create_peers` is changed, that peer creation
-            // in `on_ready_split_region` must be executed **after** current
-            // peer creation because of the `StoreMeta` lock.
+            // in `pending_create_peers` now. If this peer is created from
+            // splitting latter and then status in `pending_create_peers` is
+            // changed, that peer creation in `on_ready_split_region` must be
+            // executed **after** current peer creation because of the
+            // `StoreMeta` lock.
         }
 
         if meta.overlap_damaged_range(
@@ -2552,9 +2552,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         // When there is an import job running, the region which this sst belongs may
-        // has not been  split from the origin region because the apply thread
-        // is so busy that it can not apply  SplitRequest as soon as possible.
-        // So we can not delete this sst file.
+        // has not been split from the origin region because the apply thread is so busy
+        // that it can not apply SplitRequest as soon as possible. So we can not
+        // delete this sst file.
         if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
             let task = CleanupSstTask::ValidateSst {
                 ssts: validate_ssts,

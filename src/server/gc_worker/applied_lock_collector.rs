@@ -35,9 +35,9 @@ struct LockObserverState {
     max_ts: AtomicU64,
 
     /// `is_clean` is true, only it's sure that all applying of stale locks
-    /// (locks with start_ts <= specified max_ts) are monitored and
-    /// collected. If there are too many stale locks or any error happens,
-    /// `is_clean` must be set to `false`.
+    /// (locks with start_ts <= specified max_ts) are monitored and collected.
+    /// If there are too many stale locks or any error happens, `is_clean`
+    /// must be set to `false`.
     is_clean: AtomicBool,
 }
 
@@ -313,9 +313,8 @@ impl LockCollectorRunner {
                 info!("start collecting locks"; "max_ts" => max_ts);
                 self.collected_locks.clear();
                 // TODO: `is_clean` may be unexpectedly set to false here, if any error happens
-                // on a previous observing. It need to be solved, although it's
-                // very unlikely to happen and doesn't affect correctness of
-                // data.
+                // on a previous observing. It need to be solved, although it's very unlikely to
+                // happen and doesn't affect correctness of data.
                 self.observer_state.mark_clean();
                 self.observer_state.store_max_ts(max_ts);
                 Ok(())
@@ -430,16 +429,15 @@ impl AppliedLockCollector {
         // prewrite requests uses a min_commit_ts less than the safepoint.
         // `max_ts` here is the safepoint of the current round of GC.
         // Ths is similar to that we update max_ts and check memory lock when handling
-        // other transactional read requests. However this is done at
-        // start_collecting instead of physical_scan_locks. The reason is that,
-        // to fully scan a TiKV store, it might needs more
-        // than one physical_scan_lock requests. However memory lock needs to be checked
-        // before scanning the locks, and we can't know the `end_key` of the
-        // scan range at that time. As a result, each physical_scan_lock request
-        // will cause scanning memory lock from the start_key to the very-end of
-        // the TiKV node, which is a waste. But since we always start collecting
-        // applied locks before physical scan lock, so a better idea is to check the
-        // memory lock before physical_scan_lock.
+        // other transactional read requests. However this is done at start_collecting
+        // instead of physical_scan_locks. The reason is that, to fully scan a TiKV
+        // store, it might needs more than one physical_scan_lock requests. However
+        // memory lock needs to be checked before scanning the locks, and we can't know
+        // the `end_key` of the scan range at that time. As a result, each
+        // physical_scan_lock request will cause scanning memory lock from the start_key
+        // to the very-end of the TiKV node, which is a waste. But since we always start
+        // collecting applied locks before physical scan lock, so a better idea is to
+        // check the memory lock before physical_scan_lock.
         self.concurrency_manager.update_max_ts(max_ts);
         self.concurrency_manager
             .read_range_check(None, None, |key, lock| {
@@ -461,8 +459,8 @@ impl AppliedLockCollector {
     /// Get the collected locks after `start_collecting`. Only valid when
     /// `max_ts` matches the `max_ts` provided to `start_collecting`.
     /// Collects at most `MAX_COLLECT_SIZE` locks. If there are (even
-    /// potentially) more locks than `MAX_COLLECT_SIZE` or any error
-    /// happens, the flag `is_clean` will be unset, which represents
+    /// potentially) more locks than `MAX_COLLECT_SIZE` or any error happens,
+    /// the flag `is_clean` will be unset, which represents
     /// `AppliedLockCollector` cannot collect all locks.
     pub fn get_collected_locks(
         &self,

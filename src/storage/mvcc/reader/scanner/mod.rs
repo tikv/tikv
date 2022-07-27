@@ -255,8 +255,8 @@ pub struct ScannerConfig<S: Snapshot> {
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`.
     /// `upper_bound` is used in initial seek(or `lower_bound` in initial
-    /// backward seek) as well. They will be consumed after `default_cursor`
-    /// is being created.
+    /// backward seek) as well. They will be consumed after `default_cursor` is
+    /// being created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
     // hint for we will only scan data with commit ts >= hint_min_ts
@@ -438,9 +438,9 @@ pub fn has_data_in_range<S: Snapshot>(
 /// GC fence will be checked against the specified `gc_fence_limit`. If
 /// `gc_fence_limit` is greater than the `commit_ts` of the current write record
 /// pointed by the cursor, The caller must guarantee that there are no other
-/// versions in range `(current_commit_ts, gc_fence_limit]`. Note
-/// that if a record is determined as invalid by checking GC fence, the
-/// `write_cursor`'s position will be left remain on it.
+/// versions in range `(current_commit_ts, gc_fence_limit]`. Note that if a
+/// record is determined as invalid by checking GC fence, the `write_cursor`'s
+/// position will be left remain on it.
 pub fn seek_for_valid_write<I>(
     write_cursor: &mut Cursor<I>,
     user_key: &Key,
@@ -488,9 +488,9 @@ where
 /// GC fence will be checked against the specified `gc_fence_limit`. If
 /// `gc_fence_limit` is greater than the `commit_ts` of the current write record
 /// pointed by the cursor, The caller must guarantee that there are no other
-/// versions in range `(current_commit_ts, gc_fence_limit]`. Note
-/// that if a record is determined as invalid by checking GC fence, the
-/// `write_cursor`'s position will be left remain on it.
+/// versions in range `(current_commit_ts, gc_fence_limit]`. Note that if a
+/// record is determined as invalid by checking GC fence, the `write_cursor`'s
+/// position will be left remain on it.
 ///
 /// `write_cursor` maybe created with an `TsFilter`, which can filter out some
 /// key-value pairs with less `commit_ts` than `ts_filter`. So if the got value

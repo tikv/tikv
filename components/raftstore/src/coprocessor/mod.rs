@@ -456,7 +456,7 @@ pub trait CmdObserver<E>: Coprocessor {
         cmd_batches: &mut Vec<CmdBatch>,
         engine: &E,
     );
-    // TODO: maybe shoulde move `on_applied_current_term` to a separated
+    // TODO: maybe should move `on_applied_current_term` to a separated
     // `Coprocessor`
     /// Hook to call at the first time the leader applied on its term
     fn on_applied_current_term(&self, role: StateRole, region: &Region);

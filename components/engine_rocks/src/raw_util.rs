@@ -158,8 +158,6 @@ pub fn new_engine_opt(
     let mut db = DB::open_cf(db_opt, path, cfds)?;
 
     // Drops discarded column families.
-    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y ==
-    // x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
         if cf != CF_DEFAULT {
@@ -194,8 +192,8 @@ pub fn db_exist(path: &str) -> bool {
 
     // If path is not an empty directory, and current file exists, we say db exists.
     // If path is not an empty directory but db has not been created,
-    // `DB::list_column_families` fails and we can clean up the directory by
-    // this indication.
+    // `DB::list_column_families` fails and we can clean up the directory by this
+    // indication.
     fs::read_dir(&path).unwrap().next().is_some()
 }
 

@@ -111,7 +111,7 @@ fn test_stale_read_basic_flow_lock() {
         b"key1".to_vec(),
     );
 
-    // Assert `(key1, value2)` can't be readed with `commit_ts2` due to it's larger
+    // Assert `(key1, value2)` can't be read with `commit_ts2` due to it's larger
     // than the `start_ts` of `key2`.
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
     assert!(resp.get_region_error().has_data_is_not_ready());
@@ -601,7 +601,7 @@ fn test_stale_read_on_learner() {
 }
 
 // Testing that stale read request with a future ts should not update the
-// `concurency_manager`'s `max_ts`
+// `concurrency_manager`'s `max_ts`
 #[test]
 fn test_stale_read_future_ts_not_update_max_ts() {
     let (_cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));

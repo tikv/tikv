@@ -10,12 +10,14 @@
 //! request). It also handles analyzing requests and checksum requests.
 //!
 //! The entry point of handling all coprocessor requests is `Endpoint`. Common
-//! steps are: 1. Parse the request into a DAG request, Checksum request or
-//! Analyze request. 2. Retrieve a snapshot from the underlying engine according
-//! to the given timestamp. 3. Build corresponding request handlers from the
-//! snapshot and request detail. 4. Run request handlers once (for unary
-//! requests) or multiple times (for streaming requests)    on a future thread
-//! pool. 5. Return handling result as a response.
+//! steps are:
+//! - Parse the request into a DAG request, Checksum request or Analyze request.
+//! - Retrieve a snapshot from the underlying engine according to the given
+//!   timestamp.
+//! - Build corresponding request handlers from the snapshot and request detail.
+//! - Run request handlers once (for unary requests) or multiple times (for
+//!   streaming requests) on a future thread pool.
+//! - Return handling result as a response.
 //!
 //! Please refer to `Endpoint` for more details.
 

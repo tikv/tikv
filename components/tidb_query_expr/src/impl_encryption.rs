@@ -117,10 +117,11 @@ pub fn uncompress(
     let mut d = ZlibDecoder::new(&input[4..]);
     let mut vec = Vec::with_capacity(len);
 
-    // if the length of uncompressed string is greater than the length we read from
-    // the first     four bytes, return null and generate a length corrupted
-    // warning. if the length of uncompressed string is zero or uncompress fail,
-    // return null and generate     a data corrupted warning
+    // - if the length of uncompressed string is greater than the length we read
+    //   from the first four bytes, return null and generate a length corrupted
+    //   warning.
+    // - if the length of uncompressed string is zero or uncompress fail, return
+    //   null and generate a data corrupted warning match d.read_to_end(&mut vec) {
     match d.read_to_end(&mut vec) {
         Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => {
             Ok(writer.write_ref(Some(vec.as_ref())))

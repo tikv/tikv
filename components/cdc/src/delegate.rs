@@ -79,7 +79,7 @@ impl Default for DownstreamState {
     }
 }
 
-/// Shold only be called when it's uninitialized or stopped. Return false if
+/// Should only be called when it's uninitialized or stopped. Return false if
 /// it's stopped.
 pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
@@ -89,8 +89,8 @@ pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     .is_ok()
 }
 
-/// Shold only be called when it's initializing or stopped. Return false if it's
-/// stopped.
+/// Should only be called when it's initializing or stopped. Return false if
+/// it's stopped.
 pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
         .is_ok()
@@ -353,7 +353,7 @@ impl Delegate {
 
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
     /// transaction layer to determine whether to capture modifications' old
-    /// value or not. Unsubsribing all downstreams or calling
+    /// value or not. Unsubscribing all downstreams or calling
     /// `Delegate::stop` will store it with `TxnExtraOp::Noop`.
     ///
     /// NOTE: Dropping a `Delegate` won't update this flag.
@@ -673,9 +673,8 @@ impl Delegate {
         };
         let send = move |downstream: &Downstream| {
             // No ready downstream or a downstream that does not match the kv_api type, will
-            // be ignored. There will be one region that contains both Txn & Raw
-            // entries. The judgement here is for sending entries to downstreams
-            // with correct kv_api.
+            // be ignored. There will be one region that contains both Txn & Raw entries.
+            // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
             }

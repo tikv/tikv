@@ -43,8 +43,8 @@ pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
 // The default version that can enable compaction filter for GC. This is
 // necessary because after compaction filter is enabled, it's impossible to
-// fallback to ealier version which modifications of GC are distributed to other
-// replicas by Raft.
+// fallback to earlier version which modifications of GC are distributed to
+// other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
 // Global context to create a compaction filter for write CF. It's necessary as

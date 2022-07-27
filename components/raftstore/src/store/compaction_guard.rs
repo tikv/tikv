@@ -60,7 +60,7 @@ impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
 
     fn create_partitioner(&self, context: &SstPartitionerContext<'_>) -> Option<Self::Partitioner> {
         // create_partitioner can be called in RocksDB while holding db_mutex. It can
-        // block other operations on RocksDB. To avoid such caces, we defer
+        // block other operations on RocksDB. To avoid such cases, we defer
         // region info query to the first time should_partition is called.
         Some(CompactionGuardGenerator {
             cf_name: self.cf_name,

@@ -97,9 +97,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                             // We needn't write a rollback once there is a write record for it:
                             // If it's a committed record, it cannot be changed.
                             // If it's a rollback record, it either comes from another
-                            // check_secondary_lock (thus protected) or
-                            // the client stops commit actively. So we don't need
-                            // to make it protected again.
+                            // check_secondary_lock (thus protected) or the client stops commit
+                            // actively. So we don't need to make it protected again.
                             (status, false, None)
                         }
                         TxnCommitRecord::OverlappedRollback { .. } => {

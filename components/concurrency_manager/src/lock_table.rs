@@ -37,10 +37,9 @@ impl LockTable {
                 // handle to the table.
 
                 // SAFETY: The `table` field in `KeyHandle` is only accessed through the
-                // `set_table` or the `drop` method. It's impossible to have a
-                // concurrent `drop` here and `set_table` is only called here.
-                // So there is no concurrent access to the `table` field in
-                // `KeyHandle`.
+                // `set_table` or the `drop` method. It's impossible to have a concurrent `drop`
+                // here and `set_table` is only called here. So there is no concurrent access to
+                // the `table` field in `KeyHandle`.
                 unsafe {
                     guard.handle().set_table(self.clone());
                 }

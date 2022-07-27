@@ -127,9 +127,9 @@ pub struct ApplyEvents {
 impl ApplyEvents {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error
     /// commands. At the same time, advancing status of the `Resolver` by
-    /// those keys. Note: the resolved ts cannot be advanced if there is no
-    /// command,       maybe we also need to update resolved_ts when
-    /// flushing?
+    /// those keys.
+    /// Note: the resolved ts cannot be advanced if there is no command, maybe
+    /// we also need to update resolved_ts when flushing?
     pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Self {
         let region_id = cmd.region_id;
         let mut result = vec![];
@@ -392,10 +392,10 @@ impl RouterInner {
     /// Because the observer interface yields encoded data key, the key should
     /// be ENCODED DATA KEY too. (i.e. encoded by
     /// `Key::from_raw(key).into_encoded()`, [`utils::wrap_key`] could be
-    /// a shortcut.). We keep ranges in memory to filter kv events not in these
-    /// ranges.
+    /// a shortcut.). We keep ranges in memory to filter kv events not in
+    /// these ranges.
     fn register_ranges(&self, task_name: &str, ranges: Vec<(Vec<u8>, Vec<u8>)>) {
-        // TODO reigister ranges to filter kv event
+        // TODO register ranges to filter kv event
         // register ranges has two main purpose.
         // 1. filter kv event that no need to backup
         // 2. route kv event to the corresponding file.
@@ -502,8 +502,8 @@ impl RouterInner {
         task_info.on_events(events).await?;
 
         // When this event make the size of temporary files exceeds the size limit, make
-        // a flush. Note that we only flush if the size is less than the limit
-        // before the event, or we may send multiplied flush requests.
+        // a flush. Note that we only flush if the size is less than the limit before
+        // the event, or we may send multiplied flush requests.
         debug!(
             "backup stream statics size";
             "task" => ?task,
@@ -710,8 +710,9 @@ impl TempFileKey {
     }
 
     /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/
-    /// 434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
+    /// ```text
+    /// v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
+    /// ```
     fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
@@ -727,8 +728,9 @@ impl TempFileKey {
     }
 
     /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/
-    /// 434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    /// ```text
+    /// v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
+    /// ```
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
@@ -771,7 +773,7 @@ pub struct StreamTaskInfo {
     /// Total size of all temporary files in byte.
     total_size: AtomicUsize,
     /// This should only be set to `true` by `compare_and_set(current=false,
-    /// value=ture)`. The thread who setting it to `true` takes the
+    /// value=true)`. The thread who setting it to `true` takes the
     /// responsibility of sending the request to the scheduler for flushing
     /// the files then.
     ///
@@ -852,7 +854,7 @@ impl StreamTaskInfo {
         let mut w = self.files.write().await;
         // double check before insert. there may be someone already insert that
         // when we are waiting for the write lock.
-        // slience the lint advising us to use the `Entry` API which may introduce
+        // silence the lint advising us to use the `Entry` API which may introduce
         // copying.
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
@@ -1052,8 +1054,8 @@ impl StreamTaskInfo {
     /// execute the flush: copy local files to external storage.
     /// if success, return the last resolved ts of this flush.
     /// The caller can try to advance the resolved ts and provide it to the
-    /// function, and we would use max(resolved_ts_provided,
-    /// resolved_ts_from_file).
+    /// function, and we would use `max(resolved_ts_provided,
+    /// resolved_ts_from_file)`.
     pub async fn do_flush(
         &self,
         store_id: u64,

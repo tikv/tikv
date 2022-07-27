@@ -16,13 +16,13 @@ use txn_types::{Key, PessimisticLock};
 #[derive(Default)]
 pub struct TxnExt {
     /// The max timestamp recorded in the concurrency manager is only updated at
-    /// leader. So if a peer becomes leader from a follower, the max
-    /// timestamp can be outdated. We need to update the max timestamp with
-    /// a latest timestamp from PD before this peer can work.
-    /// From the least significant to the most, 1 bit marks whether the
-    /// timestamp is updated, 31 bits for the current epoch version, 32 bits
-    /// for the current term. The version and term are stored to prevent
-    /// stale UpdateMaxTimestamp task from marking the lowest bit.
+    /// leader. So if a peer becomes leader from a follower, the max timestamp
+    /// can be outdated. We need to update the max timestamp with a latest
+    /// timestamp from PD before this peer can work. From the least significant
+    /// to the most, 1 bit marks whether the timestamp is updated, 31 bits for
+    /// the current epoch version, 32 bits for the current term. The version
+    /// and term are stored to prevent stale UpdateMaxTimestamp task from
+    /// marking the lowest bit.
     pub max_ts_sync_status: AtomicU64,
 
     /// The in-memory pessimistic lock table of the peer.
@@ -68,10 +68,10 @@ pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
     /// The bool marks an ongoing write request (which has been sent to the
-    /// raftstore while not applied yet) will delete this lock. The lock
-    /// will be really deleted after applying the write request. The flag
-    /// will decide whether this lock should be migrated to other peers
-    /// on leader or region changes:
+    /// raftstore while not applied yet) will delete this lock. The lock will be
+    /// really deleted after applying the write request. The flag will decide
+    /// whether this lock should be migrated to other peers on leader or region
+    /// changes:
     ///
     /// - Transfer leader The lock with the deleted mark SHOULD NOT be proposed
     ///   before transferring leader. Considering the following cases with
@@ -83,7 +83,7 @@ pub struct PeerPessimisticLocks {
     ///   cases because the write request has been sent to the raftstore, it is
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
-    ///   transferree.
+    ///   transferee.
     ///  
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with

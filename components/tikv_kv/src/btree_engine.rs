@@ -158,9 +158,9 @@ impl BTreeEngineIterator {
     }
 
     /// In general, there are 2 endpoints in a range, the left one and the right
-    /// one. This method will seek to the left one if left is `true`, else
-    /// seek to the right one. Returns true when the endpoint is valid,
-    /// which means the endpoint exist and in `self.bounds`.
+    /// one. This method will seek to the left one if left is `true`, else seek
+    /// to the right one. Returns true when the endpoint is valid, which means
+    /// the endpoint exist and in `self.bounds`.
     fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
