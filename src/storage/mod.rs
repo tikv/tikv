@@ -7353,6 +7353,74 @@ mod tests {
                 rx1.recv().unwrap();
             }
         }
+
+        // Check the channel is clear to avoid misusing in the above test code.
+        tx.send(100).unwrap();
+        assert_eq!(rx.recv().unwrap(), 100);
+
+        // Test request queueing.
+        storage
+            .sched_txn_command(
+                new_acquire_pessimistic_lock_command(
+                    vec![(Key::from_raw(b"k21"), false)],
+                    10,
+                    10,
+                    false,
+                    false,
+                )
+                .allow_lock_with_conflict(true)
+                .lock_wait_timeout(Some(WaitTimeout::Default)),
+                expect_pessimistic_lock_res_callback(tx.clone(), results_empty(1)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let channels: Vec<_> = (0..4).map(|_| channel()).collect();
+        let start_ts = &[20, 50, 30, 40];
+        for i in 0..4 {
+            storage
+                .sched_txn_command(
+                    new_acquire_pessimistic_lock_command(
+                        vec![(Key::from_raw(b"k21"), false)],
+                        start_ts[i],
+                        start_ts[i],
+                        false,
+                        false,
+                    )
+                    .allow_lock_with_conflict(true)
+                    .lock_wait_timeout(Some(WaitTimeout::Default)),
+                    expect_pessimistic_lock_res_callback(channels[i].0.clone(), results_empty(1)),
+                )
+                .unwrap();
+            channels[i]
+                .1
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap_err();
+        }
+
+        delete_pessimistic_lock(&storage, Key::from_raw(b"k21"), 10, 10);
+        channels[0].1.recv().unwrap();
+        channels[2]
+            .1
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        delete_pessimistic_lock(&storage, Key::from_raw(b"k21"), 20, 20);
+        channels[2].1.recv().unwrap();
+        channels[3]
+            .1
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        delete_pessimistic_lock(&storage, Key::from_raw(b"k21"), 30, 30);
+        channels[3].1.recv().unwrap();
+        channels[1]
+            .1
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+
+        delete_pessimistic_lock(&storage, Key::from_raw(b"k21"), 40, 40);
+        channels[1].1.recv().unwrap();
     }
 
     #[test]

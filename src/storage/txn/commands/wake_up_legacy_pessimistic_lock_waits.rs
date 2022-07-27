@@ -40,22 +40,21 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
         let mut popped_entries = vec![];
         let mut released_locks = ReleasedLocks::new();
 
-        while let Some(entry) = queue.pop_front() {
-            if !entry.allow_lock_with_conflict {
-                popped_entries.push(entry);
+        while let Some(entry) = queue.peek() {
+            if !entry.0.allow_lock_with_conflict {
+                popped_entries.push(queue.pop().unwrap());
                 continue;
             }
 
             // If we found an waiting request in new mode, wake it up and stop.
             released_locks.push(Some(ReleasedLock::new(0.into(), None, self.key, false)));
-            // Put it back for waking it up in latch.
-            queue.push_front(entry);
             break;
         }
 
         if !popped_entries.is_empty() {
             *sync_cmd_ctx.on_finished = Some(Box::new(move || {
                 for entry in popped_entries {
+                    let entry = entry.unwrap();
                     let cb = entry.key_cb.unwrap();
                     let e = StorageError::from(TxnError::from(MvccError::from(
                         MvccErrorInner::KeyIsLocked(entry.last_found_lock),

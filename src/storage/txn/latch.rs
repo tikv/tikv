@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::collections::hash_map::{DefaultHasher, RandomState};
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 use std::usize;
@@ -17,8 +17,48 @@ use txn_types::Key;
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
 const WAITING_LIST_MAX_CAPACITY: usize = 16;
 
+pub struct LockWaitInfoComparableWrapper(pub Box<WriteResultLockInfo>);
+
+impl From<WriteResultLockInfo> for LockWaitInfoComparableWrapper {
+    fn from(x: WriteResultLockInfo) -> Self {
+        LockWaitInfoComparableWrapper(Box::new(x))
+    }
+}
+
+impl LockWaitInfoComparableWrapper {
+    pub fn unwrap(self) -> WriteResultLockInfo {
+        *self.0
+    }
+}
+
+impl Eq for LockWaitInfoComparableWrapper {}
+
+impl PartialEq<Self> for LockWaitInfoComparableWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.parameters.start_ts == other.0.parameters.start_ts
+    }
+}
+
+impl PartialOrd<Self> for LockWaitInfoComparableWrapper {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // Reverse it since the std BinaryHeap is max heap and we want to pop the minimal.
+        other
+            .0
+            .parameters
+            .start_ts
+            .partial_cmp(&self.0.parameters.start_ts)
+    }
+}
+
+impl Ord for LockWaitInfoComparableWrapper {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse it since the std BinaryHeap is max heap and we want to pop the minimal.
+        other.0.parameters.start_ts.cmp(&self.0.parameters.start_ts)
+    }
+}
+
 pub(super) type LockWaitQueueMap =
-    std::collections::HashMap<Key, VecDeque<WriteResultLockInfo>, RandomState>;
+    std::collections::HashMap<Key, BinaryHeap<LockWaitInfoComparableWrapper>, RandomState>;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -323,15 +363,17 @@ impl Latches {
         )
     }
 
+    #[inline]
     fn push_lock_waiting(queues: &mut Option<LockWaitQueueMap>, lock_info: WriteResultLockInfo) {
         let key = lock_info.key.clone();
         queues
             .get_or_insert_with(LockWaitQueueMap::new)
             .entry(key)
-            .or_insert_with(VecDeque::new)
-            .push_back(lock_info);
+            .or_insert_with(BinaryHeap::new)
+            .push(lock_info.into());
     }
 
+    #[inline]
     fn pop_lock_waiting(
         queues: &mut Option<LockWaitQueueMap>,
         key: &Key,
@@ -339,10 +381,10 @@ impl Latches {
     ) -> Option<WriteResultLockInfo> {
         let queue = queues.as_mut()?.get_mut(key)?;
         let mut result = None;
-        while let Some(lock_info) = queue.pop_front() {
+        while let Some(lock_info) = queue.pop() {
             // TODO: Early cancel entries with mismatching term.
-            let lock_info: WriteResultLockInfo = lock_info;
             if lock_info
+                .0
                 .req_states
                 .as_ref()
                 .unwrap()
@@ -364,7 +406,7 @@ impl Latches {
             }
         }
 
-        result
+        result.map(LockWaitInfoComparableWrapper::unwrap)
     }
 
     #[inline]

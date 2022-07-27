@@ -1455,22 +1455,22 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         return None;
                     }
 
-                    let front = queue.front().unwrap();
+                    let front = queue.peek().unwrap();
                     wake_up_events.push(lock_manager::KeyWakeUpEvent {
                         key: released_lock.key.clone(),
                         released_start_ts: released_lock.start_ts,
-                        awakened_start_ts: front.parameters.start_ts,
-                        awakened_allow_resuming: front.allow_lock_with_conflict,
+                        awakened_start_ts: front.0.parameters.start_ts,
+                        awakened_allow_resuming: front.0.allow_lock_with_conflict,
                     });
 
-                    if front.allow_lock_with_conflict {
+                    if front.0.allow_lock_with_conflict {
                         Some(released_lock)
                     } else {
-                        let lock_info = queue.pop_front().unwrap();
+                        let lock_info = queue.pop().unwrap();
                         if queue.is_empty() {
                             key_queue_map.remove(&released_lock.key);
                         }
-                        legacy_wakeup_list.push((lock_info, released_lock));
+                        legacy_wakeup_list.push((lock_info.unwrap(), released_lock));
                         None
                     }
                 })
