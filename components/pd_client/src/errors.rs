@@ -33,14 +33,9 @@ pub type Result<T> = result::Result<T, Error>;
 impl Error {
     pub fn retryable(&self) -> bool {
         match self {
-<<<<<<< HEAD
-            Error::Grpc(_) | Error::Other(_) | Error::ClusterNotBootstrapped(_) => true,
-            Error::RegionNotFound(_)
-=======
             Error::Grpc(_) | Error::ClusterNotBootstrapped(_) | Error::StreamDisconnect(_) => true,
             Error::Other(_)
             | Error::RegionNotFound(_)
->>>>>>> 50f6c6fc2... pd-client:  pd client should update if the grpc stream sender failed. (#13094)
             | Error::StoreTombstone(_)
             | Error::GlobalConfigNotFound(_)
             | Error::ClusterBootstrapped(_)
