@@ -783,6 +783,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
 
 const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
+/// The reason for it to be pub is that it is shared with raftstore v2.
 #[derive(Clone)]
 pub struct ReadMetrics {
     pub local_executed_requests: u64,
