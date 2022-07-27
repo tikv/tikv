@@ -74,8 +74,8 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, ReadDelegate,
+        ReadDelegateTrait, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
     },
     RaftRouterCompactedEventSender,
 };
@@ -139,8 +139,8 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
-    let mut tikv = TiKvServer::<CER>::init::<F>(config);
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat, D: ReadDelegateTrait>(config: TiKvConfig) {
+    let mut tikv = TiKvServer::<CER, D>::init::<F>(config);
 
     // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -190,9 +190,9 @@ pub fn run_tikv(config: TiKvConfig) {
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            run_impl::<RocksEngine, API>(config)
+            run_impl::<RocksEngine, API, ReadDelegate>(config)
         } else {
-            run_impl::<RaftLogEngine, API>(config)
+            run_impl::<RaftLogEngine, API, ReadDelegate>(config)
         }
     })
 }
@@ -206,7 +206,7 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
-struct TiKvServer<ER: RaftEngine> {
+struct TiKvServer<ER: RaftEngine, D: ReadDelegateTrait> {
     config: TiKvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
@@ -220,8 +220,8 @@ struct TiKvServer<ER: RaftEngine> {
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKvEngines<RocksEngine, ER>>,
-    servers: Option<Servers<RocksEngine, ER>>,
+    engines: Option<TiKvEngines<RocksEngine, ER, D>>,
+    servers: Option<Servers<RocksEngine, ER, D>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     to_stop: Vec<Box<dyn Stop>>,
@@ -235,15 +235,15 @@ struct TiKvServer<ER: RaftEngine> {
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
-struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
+struct TiKvEngines<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> {
     engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
-    engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
+    engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER, D>>,
 }
 
-struct Servers<EK: KvEngine, ER: RaftEngine> {
+struct Servers<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> {
     lock_mgr: LockManager,
-    server: LocalServer<EK, ER>,
+    server: LocalServer<EK, ER, D>,
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
@@ -252,12 +252,12 @@ struct Servers<EK: KvEngine, ER: RaftEngine> {
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
 }
 
-type LocalServer<EK, ER> =
-    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
-type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
+type LocalServer<EK, ER, D> =
+    Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER, D>>;
+type LocalRaftKv<EK, ER, D> = RaftKv<EK, ServerRaftStoreRouter<EK, ER, D>>;
 
-impl<ER: RaftEngine> TiKvServer<ER> {
-    fn init<F: KvFormat>(mut config: TiKvConfig) -> TiKvServer<ER> {
+impl<ER: RaftEngine, D: ReadDelegateTrait> TiKvServer<ER, D> {
+    fn init<F: KvFormat>(mut config: TiKvConfig) -> TiKvServer<ER, D> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -573,7 +573,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     fn init_gc_worker(
         &mut self,
     ) -> GcWorker<
-        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
+        RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER, D>>,
         RaftRouter<RocksEngine, ER>,
     > {
         let engines = self.engines.as_ref().unwrap();
@@ -1625,7 +1625,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
+impl<CER: ConfiguredRaftEngine, D: ReadDelegateTrait> TiKvServer<CER, D> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,

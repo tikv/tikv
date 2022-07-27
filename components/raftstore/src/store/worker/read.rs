@@ -143,7 +143,7 @@ pub trait ReadExecutor<E: KvEngine> {
     }
 }
 
-pub trait ReadDelegateTrait: Send + Sync + Clone {
+pub trait ReadDelegateTrait: Send + Sync + Clone + 'static {
     fn from_meta(meta: &MutexGuard<StoreMeta>, region_id: u64) -> Option<Self>;
 
     fn delegate(&self) -> &ReadDelegateInner;
@@ -199,12 +199,24 @@ pub struct ReadDelegateInner {
     pub track_ver: TrackVer,
 }
 
-pub trait ReadDelegateExtTrait<E, D>: ReadExecutor<E>
+pub trait ReadDelegateExtTrait<'a, E, D>: ReadExecutor<E>
 where
     E: KvEngine,
     D: ReadDelegateTrait,
 {
-    fn from_read_delegate(delegate: D) -> Self;
+    fn from_read_delegate(
+        delegate: D,
+        kv_engine: &'a E,
+        metrics: &'a mut ReadMetrics,
+        read_id: &'a mut ThreadReadId,
+        snap_cache: &'a mut Option<Arc<E::Snapshot>>,
+    ) -> Self;
+
+    fn delegate(&self) -> &ReadDelegateInner;
+
+    fn take_delegate(&mut self) -> D;
+
+    fn metrics(&mut self) -> &mut ReadMetrics;
 }
 
 pub struct ReadDelegateExt<'a, E, D>
@@ -212,22 +224,46 @@ where
     E: KvEngine,
     D: ReadDelegateTrait,
 {
-    delegate: Arc<D>,
+    delegate: Option<D>,
     kv_engine: &'a E,
     metrics: &'a mut ReadMetrics,
     read_id: &'a mut ThreadReadId,
     snap_cache: &'a mut Option<Arc<E::Snapshot>>,
 }
 
-impl<'a, E, D> ReadDelegateExtTrait<E, D> for ReadDelegateExt<'a, E, D>
+impl<'a, E, D> ReadDelegateExtTrait<'a, E, D> for ReadDelegateExt<'a, E, D>
 where
     E: KvEngine,
     D: ReadDelegateTrait,
 {
-    fn from_read_delegate(delegate: D, kv_engine: &'a E) -> Self {
-        ReadDelegateExt {
-            delegate: Arc::new(delegate),
+    fn from_read_delegate(
+        delegate: D,
+        kv_engine: &'a E,
+        metrics: &'a mut ReadMetrics,
+        read_id: &'a mut ThreadReadId,
+        snap_cache: &'a mut Option<Arc<E::Snapshot>>,
+    ) -> Self {
+        ReadDelegateExt::<'a, _, _> {
+            delegate: Some(delegate),
+            kv_engine,
+            metrics,
+            read_id,
+            snap_cache,
         }
+    }
+
+    fn delegate(&self) -> &ReadDelegateInner {
+        // It should not be called after calling take_delegate
+        assert!(self.delegate.is_some());
+        self.delegate.as_ref().unwrap().delegate()
+    }
+
+    fn take_delegate(&mut self) -> D {
+        self.delegate.take().unwrap()
+    }
+
+    fn metrics(&mut self) -> &mut ReadMetrics {
+        self.metrics
     }
 }
 
@@ -530,7 +566,7 @@ where
     }
 }
 
-impl<C, E, D> LocalReader<C, E, D>
+impl<'a, C, E, D> LocalReader<C, E, D>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
@@ -597,10 +633,7 @@ where
 
                 let (meta_len, meta_reader) = {
                     let meta = self.store_meta.as_ref().lock().unwrap();
-                    (
-                        meta.readers.len(),
-                        D::from_meta(&meta, region_id),
-                    )
+                    (meta.readers.len(), D::from_meta(&meta, region_id))
                 };
 
                 // Remove the stale delegate
@@ -687,14 +720,17 @@ where
         }
     }
 
-    pub fn propose_raft_command(
-        &mut self,
+    pub fn propose_raft_command<Ext>(
+        &'a mut self,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
-    ) {
+    ) where
+        Ext: ReadDelegateExtTrait<'a, E, D>,
+    {
         match self.pre_propose_raft_command(&req) {
-            Ok(Some((delegate, policy))) => {
+            Ok(Some((mut delegate, policy))) => {
+                let mut delegate_ext: Ext;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -717,13 +753,24 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response =
-                            self.execute(&req, &delegate.delegate().region, None, read_id);
+
+                        delegate_ext = Ext::from_read_delegate(
+                            delegate,
+                            &self.kv_engine,
+                            &mut self.metrics,
+                            &mut self.cache_read_id,
+                            &mut self.snap_cache,
+                        );
+
+                        let region = Arc::clone(&delegate_ext.delegate().region);
+                        let response = delegate_ext.execute(&req, &region, None, read_id);
                         // Try renew lease in advance
+                        delegate = delegate_ext.take_delegate();
+
                         delegate.delegate().maybe_renew_lease_advance(
                             &self.router,
                             snapshot_ts,
-                            &mut self.metrics,
+                            delegate_ext.metrics(),
                         );
                         response
                     }
@@ -739,19 +786,28 @@ where
                             return;
                         }
 
-                        // Getting the snapshot
-                        let response =
-                            self.execute(&req, &delegate.delegate().region, None, read_id);
+                        delegate_ext = Ext::from_read_delegate(
+                            delegate,
+                            &self.kv_engine,
+                            &mut self.metrics,
+                            &mut self.cache_read_id,
+                            &mut self.snap_cache,
+                        );
 
+                        let region = Arc::clone(&delegate_ext.delegate().region);
+                        // Getting the snapshot
+                        let response = delegate_ext.execute(&req, &region, None, read_id);
+
+                        delegate = delegate_ext.take_delegate();
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
                         if let Err(resp) = delegate
                             .delegate()
-                            .check_stale_read_safe(read_ts, &mut self.metrics)
+                            .check_stale_read_safe(read_ts, delegate_ext.metrics())
                         {
                             cb.invoke_read(resp);
                             return;
                         }
-                        self.metrics.local_executed_stale_read_requests += 1;
+                        delegate_ext.metrics().local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
@@ -792,7 +848,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        self.propose_raft_command(read_id, req, cb);
+        self.propose_raft_command::<ReadDelegateExt<'_, E, D>>(read_id, req, cb);
         self.metrics.maybe_flush();
     }
 
