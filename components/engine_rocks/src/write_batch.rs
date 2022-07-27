@@ -219,9 +219,11 @@ impl Mutable for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Peekable, WriteBatch};
+    use engine_traits::{Peekable, WriteBatch, CF_DEFAULT};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
+
+    use crate::RocksCfOptions;
 
     use super::{
         super::{util::new_engine_opt, RocksDBOptions},
@@ -241,7 +243,7 @@ mod tests {
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
             RocksDBOptions::from_raw(opt),
-            vec![],
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();
         assert!(
@@ -287,7 +289,7 @@ mod tests {
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
             RocksDBOptions::from_raw(opt),
-            vec![],
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();
         assert!(

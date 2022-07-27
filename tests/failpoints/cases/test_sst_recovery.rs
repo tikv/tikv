@@ -14,7 +14,7 @@ fn assert_corruption(res: engine_traits::Result<impl Debug>) {
     match res {
         Err(engine_traits::Error::Engine(s)) => {
             // TODO: check code instead after using tirocks.
-            assert!(s.state().contains("corrupted"), "{:?}", s);
+            assert!(s.state().contains("Corruption"), "{:?}", s);
         }
         _ => panic!("expected corruption, got {:?}", res),
     }

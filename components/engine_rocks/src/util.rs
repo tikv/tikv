@@ -367,11 +367,10 @@ mod tests {
         let mut opts = RocksCfOptions::default();
         opts.set_level_compaction_dynamic_level_bytes(true);
         cfs_opts.push(("cf_dynamic_level_bytes", opts.clone()));
-        {
-            let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
-            column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
-            check_dynamic_level_bytes(&db);
-        }
+        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+        check_dynamic_level_bytes(&db);
+        drop(db);
 
         // add cf1.
         let cfs_opts = vec![
@@ -379,23 +378,24 @@ mod tests {
             ("cf_dynamic_level_bytes", opts.clone()),
             ("cf1", opts),
         ];
-        {
-            let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
-            column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
-            check_dynamic_level_bytes(&db);
-        }
+        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        check_dynamic_level_bytes(&db);
+        drop(db);
 
         // drop cf1.
         let cfs = vec![CF_DEFAULT, "cf_dynamic_level_bytes"];
-        {
-            let db = new_engine(path_str, &cfs).unwrap();
-            column_families_must_eq(path_str, cfs);
-            check_dynamic_level_bytes(&db);
-        }
+        let db = new_engine(path_str, &cfs).unwrap();
+        column_families_must_eq(path_str, cfs);
+        check_dynamic_level_bytes(&db);
+        drop(db);
 
-        // never drop default cf
-        let cfs_opts = vec![];
-        new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        // drop all cfs.
+        new_engine(path_str, &[CF_DEFAULT]).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT]);
+
+        // not specifying default cf should error.
+        new_engine(path_str, &[]).unwrap_err();
         column_families_must_eq(path_str, vec![CF_DEFAULT]);
     }
 
