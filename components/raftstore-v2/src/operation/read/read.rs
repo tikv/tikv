@@ -27,8 +27,7 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
-        ReadDelegate as ReadDelegateV1, ReadExecutor, ReadMetrics, ReadProgress, ReadResponse,
+        ReadDelegateInner as ReadDelegateV1, ReadExecutor, ReadMetrics, ReadProgress, ReadResponse,
         RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
@@ -45,7 +44,7 @@ use crate::tablet::CachedTablet;
 
 #[derive(Clone, Debug)]
 pub struct ReadDelegateInner {
-    pub read_delegate: ReadDelegateV1,
+    pub read_delegate: ReadDelegateInner,
     logger: Logger,
 }
 
@@ -99,7 +98,7 @@ impl ReadDelegateInner {
         logger: Logger,
     ) -> ReadDelegateInner {
         ReadDelegateInner {
-            read_delegate: ReadDelegateV1::from_peer(peer),
+            read_delegate: ReadDelegateInner::from_peer(peer),
             logger,
         }
     }
@@ -108,7 +107,7 @@ impl ReadDelegateInner {
     pub fn mock(region: &metapb::Region) -> Self {
         let region_id = region.get_id();
         ReadDelegateInner {
-            read_delegate: ReadDelegateV1 {
+            read_delegate: ReadDelegateInner {
                 region: Arc::new(region.clone()),
                 peer_id: 1,
                 term: 1,
@@ -364,7 +363,7 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                let mut region_with_metric;
+                let mut read_delegate_ext;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -392,21 +391,21 @@ where
                         }
 
                         let region = Arc::clone(&delegate.delegate_inner.read_delegate.region);
-                        region_with_metric = ReadDelegateExt {
+                        read_delegate_ext = ReadDelegateExt {
                             delegate,
                             metrics: &mut self.metrics,
                         };
-                        let response = region_with_metric.execute(&req, &region, None, None);
+                        let response = read_delegate_ext.execute(&req, &region, None, None);
 
                         // Try renew lease in advance
-                        region_with_metric
+                        read_delegate_ext
                             .delegate
                             .delegate_inner
                             .read_delegate
                             .maybe_renew_lease_advance(
                                 &self.router,
                                 snapshot_ts,
-                                region_with_metric.metrics,
+                                read_delegate_ext.metrics,
                             );
                         response
                     }
@@ -424,30 +423,30 @@ where
                         }
 
                         let region = Arc::clone(&delegate.delegate_inner.read_delegate.region);
-                        region_with_metric = ReadDelegateExt {
+                        read_delegate_ext = ReadDelegateExt {
                             delegate,
                             metrics: &mut self.metrics,
                         };
-                        let response = region_with_metric.execute(&req, &region, None, None);
+                        let response = read_delegate_ext.execute(&req, &region, None, None);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Err(resp) = region_with_metric
+                        if let Err(resp) = read_delegate_ext
                             .delegate
                             .delegate_inner
                             .read_delegate
-                            .check_stale_read_safe(read_ts, region_with_metric.metrics)
+                            .check_stale_read_safe(read_ts, read_delegate_ext.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
-                        region_with_metric
+                        read_delegate_ext
                             .metrics
                             .local_executed_stale_read_requests += 1;
                         response
                     }
                     _ => unreachable!(),
                 };
-                let ReadDelegateExt { delegate, .. } = region_with_metric;
+                let ReadDelegateExt { delegate, .. } = read_delegate_ext;
                 cmd_resp::bind_term(
                     &mut response.response,
                     delegate.delegate_inner.read_delegate.term,

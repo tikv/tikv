@@ -1404,7 +1404,7 @@ mod tests {
     };
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
-        store::{msg::CasualMessage, PeerMsg, ReadDelegate},
+        store::{msg::CasualMessage, PeerMsg, ReadDelegateInner},
     };
     use test_raftstore::{MockRaftStoreRouter, TestPdClient};
     use tikv::{
@@ -1441,7 +1441,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .readers
-                .insert(region_id, ReadDelegate::mock(region_id));
+                .insert(region_id, ReadDelegateInner::mock(region_id));
         }
 
         fn fill_raft_rx(&self, region_id: u64) {

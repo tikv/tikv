@@ -14,7 +14,7 @@ use crate::{
         fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
-        SignificantMsg, StoreMsg,
+        ReadDelegateTrait, SignificantMsg, StoreMsg,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -168,12 +168,12 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
+pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> {
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
+    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK, D>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> Clone for ServerRaftStoreRouter<EK, ER, D> {
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -182,12 +182,12 @@ impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> ServerRaftStoreRouter<EK, ER, D> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK>,
-    ) -> ServerRaftStoreRouter<EK, ER> {
+        reader: LocalReader<RaftRouter<EK, ER>, EK, D>,
+    ) -> ServerRaftStoreRouter<EK, ER, D> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
@@ -196,13 +196,13 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> StoreRouter<EK> for ServerRaftStoreRouter<EK, ER, D> {
     fn send(&self, msg: StoreMsg<EK>) -> RaftStoreResult<()> {
         StoreRouter::send(&self.router, msg)
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> ProposalRouter<EK::Snapshot> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> ProposalRouter<EK::Snapshot> for ServerRaftStoreRouter<EK, ER, D> {
     fn send(
         &self,
         cmd: RaftCommand<EK::Snapshot>,
@@ -211,13 +211,13 @@ impl<EK: KvEngine, ER: RaftEngine> ProposalRouter<EK::Snapshot> for ServerRaftSt
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> CasualRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> CasualRouter<EK> for ServerRaftStoreRouter<EK, ER, D> {
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> RaftStoreResult<()> {
         CasualRouter::send(&self.router, region_id, msg)
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> SignificantRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> SignificantRouter<EK> for ServerRaftStoreRouter<EK, ER, D> {
     fn significant_send(
         &self,
         region_id: u64,
@@ -227,7 +227,7 @@ impl<EK: KvEngine, ER: RaftEngine> SignificantRouter<EK> for ServerRaftStoreRout
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> RaftStoreRouter<EK> for ServerRaftStoreRouter<EK, ER, D> {
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
         RaftStoreRouter::send_raft_msg(&self.router, msg)
     }
@@ -237,7 +237,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
     }
 }
 
-impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
+impl<EK: KvEngine, ER: RaftEngine, D: ReadDelegateTrait> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER, D> {
     fn read(
         &self,
         read_id: Option<ThreadReadId>,

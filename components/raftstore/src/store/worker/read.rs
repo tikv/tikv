@@ -6,7 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -143,9 +143,43 @@ pub trait ReadExecutor<E: KvEngine> {
     }
 }
 
+pub trait ReadDelegateTrait: Send + Sync + Clone {
+    fn from_meta(meta: &MutexGuard<StoreMeta>, region_id: u64) -> Option<Self>;
+
+    fn delegate(&self) -> &ReadDelegateInner;
+}
+
+pub struct ReadDelegate {
+    delegate: Arc<ReadDelegateInner>,
+}
+
+impl ReadDelegateTrait for ReadDelegate {
+    fn from_meta(meta: &MutexGuard<StoreMeta>, region_id: u64) -> Option<Self> {
+        let reader = meta.readers.get(&region_id).cloned();
+        if let Some(reader) = reader {
+            return Some(ReadDelegate {
+                delegate: Arc::new(reader),
+            });
+        }
+        None
+    }
+
+    fn delegate(&self) -> &ReadDelegateInner {
+        self.delegate.as_ref()
+    }
+}
+
+impl Clone for ReadDelegate {
+    fn clone(&self) -> Self {
+        ReadDelegate {
+            delegate: Arc::clone(&self.delegate),
+        }
+    }
+}
+
 /// A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
-pub struct ReadDelegate {
+pub struct ReadDelegateInner {
     pub region: Arc<metapb::Region>,
     pub peer_id: u64,
     pub term: u64,
@@ -165,7 +199,39 @@ pub struct ReadDelegate {
     pub track_ver: TrackVer,
 }
 
-impl Drop for ReadDelegate {
+pub trait ReadDelegateExtTrait<E, D>: ReadExecutor<E>
+where
+    E: KvEngine,
+    D: ReadDelegateTrait,
+{
+    fn from_read_delegate(delegate: D) -> Self;
+}
+
+pub struct ReadDelegateExt<'a, E, D>
+where
+    E: KvEngine,
+    D: ReadDelegateTrait,
+{
+    delegate: Arc<D>,
+    kv_engine: &'a E,
+    metrics: &'a mut ReadMetrics,
+    read_id: &'a mut ThreadReadId,
+    snap_cache: &'a mut Option<Arc<E::Snapshot>>,
+}
+
+impl<'a, E, D> ReadDelegateExtTrait<E, D> for ReadDelegateExt<'a, E, D>
+where
+    E: KvEngine,
+    D: ReadDelegateTrait,
+{
+    fn from_read_delegate(delegate: D, kv_engine: &'a E) -> Self {
+        ReadDelegateExt {
+            delegate: Arc::new(delegate),
+        }
+    }
+}
+
+impl Drop for ReadDelegateInner {
     fn drop(&mut self) {
         // call `inc` to notify the source `ReadDelegate` is dropped
         self.track_ver.inc();
@@ -221,12 +287,12 @@ impl Clone for TrackVer {
     }
 }
 
-impl ReadDelegate {
-    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegate {
+impl ReadDelegateInner {
+    pub fn from_peer<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegateInner {
         let region = peer.region().clone();
         let region_id = region.get_id();
         let peer_id = peer.peer.get_id();
-        ReadDelegate {
+        ReadDelegateInner {
             region: Arc::new(region),
             peer_id,
             term: peer.term(),
@@ -354,7 +420,7 @@ impl ReadDelegate {
         let mut region: metapb::Region = Default::default();
         region.set_id(region_id);
         let read_progress = Arc::new(RegionReadProgress::new(&region, 0, 0, "mock".to_owned()));
-        ReadDelegate {
+        ReadDelegateInner {
             region: Arc::new(region),
             peer_id: 1,
             term: 1,
@@ -372,7 +438,7 @@ impl ReadDelegate {
     }
 }
 
-impl Display for ReadDelegate {
+impl Display for ReadDelegateInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -418,10 +484,11 @@ impl Progress {
     }
 }
 
-pub struct LocalReader<C, E>
+pub struct LocalReader<C, E, D>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
+    D: ReadDelegateTrait,
 {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -429,44 +496,45 @@ where
     metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
-    delegates: LruCache<u64, Arc<ReadDelegate>>,
+    delegates: LruCache<u64, D>,
     snap_cache: Option<Arc<E::Snapshot>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
 }
 
-impl<C, E> ReadExecutor<E> for LocalReader<C, E>
+impl<'a, E, D> ReadExecutor<E> for ReadDelegateExt<'_, E, D>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
+    D: ReadDelegateTrait,
 {
     fn get_tablet(&self) -> &E {
-        &self.kv_engine
+        self.kv_engine
     }
 
     fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
         self.metrics.local_executed_requests += 1;
         if let Some(ts) = create_time {
-            if ts == self.cache_read_id {
+            if ts == *self.read_id {
                 if let Some(snap) = self.snap_cache.as_ref() {
                     self.metrics.local_executed_snapshot_cache_hit += 1;
                     return snap.clone();
                 }
             }
             let snap = Arc::new(self.kv_engine.snapshot());
-            self.cache_read_id = ts;
-            self.snap_cache = Some(snap.clone());
+            self.read_id.update(ts);
+            *self.snap_cache.as_mut().unwrap() = snap.clone();
             return snap;
         }
         Arc::new(self.kv_engine.snapshot())
     }
 }
 
-impl<C, E> LocalReader<C, E>
+impl<C, E, D> LocalReader<C, E, D>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
+    D: ReadDelegateTrait,
 {
     pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -519,19 +587,19 @@ where
     // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
     // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
-    fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
+    fn get_delegate(&mut self, region_id: u64) -> Option<D> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
-            Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
+            Some(d) if !d.delegate().track_ver.any_new() => Some(d.clone()),
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
                 let (meta_len, meta_reader) = {
-                    let meta = self.store_meta.lock().unwrap();
+                    let meta = self.store_meta.as_ref().lock().unwrap();
                     (
                         meta.readers.len(),
-                        meta.readers.get(&region_id).cloned().map(Arc::new),
+                        D::from_meta(&meta, region_id),
                     )
                 };
 
@@ -540,7 +608,7 @@ where
                 self.delegates.resize(meta_len);
                 match meta_reader {
                     Some(reader) => {
-                        self.delegates.insert(region_id, Arc::clone(&reader));
+                        self.delegates.insert(region_id, reader.clone());
                         Some(reader)
                     }
                     None => None,
@@ -548,13 +616,13 @@ where
             }
         };
         // Return `None` if the read delegate is pending remove
-        rd.filter(|r| !r.pending_remove)
+        rd.filter(|r| !r.delegate().pending_remove)
     }
 
     fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
-    ) -> Result<Option<(Arc<ReadDelegate>, RequestPolicy)>> {
+    ) -> Result<Option<(D, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
@@ -582,16 +650,16 @@ where
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
-        if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
+        if let Err(e) = util::check_peer_id(req, delegate.delegate().peer_id) {
             self.metrics.rejected_by_peer_id_mismatch += 1;
             return Err(e);
         }
 
         // Check term.
-        if let Err(e) = util::check_term(req, delegate.term) {
+        if let Err(e) = util::check_term(req, delegate.delegate().term) {
             debug!(
                 "check term";
-                "delegate_term" => delegate.term,
+                "delegate_term" => delegate.delegate().term,
                 "header_term" => req.get_header().get_term(),
             );
             self.metrics.rejected_by_term_mismatch += 1;
@@ -599,15 +667,15 @@ where
         }
 
         // Check region epoch.
-        if util::check_region_epoch(req, &delegate.region, false).is_err() {
+        if util::check_region_epoch(req, &delegate.delegate().region, false).is_err() {
             self.metrics.rejected_by_epoch += 1;
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            debug!("rejected by epoch not match"; "tag" => &delegate.delegate().tag);
             return Ok(None);
         }
 
         let mut inspector = Inspector {
-            delegate: &delegate,
+            delegate: &delegate.delegate(),
             metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
@@ -634,21 +702,25 @@ where
                             // If this peer became Leader not long ago and just after the cached
                             // snapshot was created, this snapshot can not see all data of the peer.
                             Some(id) => {
-                                if id.create_time <= delegate.last_valid_ts {
+                                if id.create_time <= delegate.delegate().last_valid_ts {
                                     id.create_time = monotonic_raw_now();
                                 }
                                 id.create_time
                             }
                             None => monotonic_raw_now(),
                         };
-                        if !delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                        if !delegate
+                            .delegate()
+                            .is_in_leader_lease(snapshot_ts, &mut self.metrics)
+                        {
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+                        let response =
+                            self.execute(&req, &delegate.delegate().region, None, read_id);
                         // Try renew lease in advance
-                        delegate.maybe_renew_lease_advance(
+                        delegate.delegate().maybe_renew_lease_advance(
                             &self.router,
                             snapshot_ts,
                             &mut self.metrics,
@@ -659,19 +731,22 @@ where
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        if let Err(resp) = delegate
+                            .delegate()
+                            .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
                         }
 
                         // Getting the snapshot
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+                        let response =
+                            self.execute(&req, &delegate.delegate().region, None, read_id);
 
                         // Double check in case `safe_ts` change after the first check and before getting snapshot
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
+                        if let Err(resp) = delegate
+                            .delegate()
+                            .check_stale_read_safe(read_ts, &mut self.metrics)
                         {
                             cb.invoke_read(resp);
                             return;
@@ -681,12 +756,12 @@ where
                     }
                     _ => unreachable!(),
                 };
-                cmd_resp::bind_term(&mut response.response, delegate.term);
+                cmd_resp::bind_term(&mut response.response, delegate.delegate().term);
                 if let Some(snap) = response.snapshot.as_mut() {
-                    snap.txn_ext = Some(delegate.txn_ext.clone());
-                    snap.bucket_meta = delegate.bucket_meta.clone();
+                    snap.txn_ext = Some(delegate.delegate().txn_ext.clone());
+                    snap.bucket_meta = delegate.delegate().bucket_meta.clone();
                 }
-                response.txn_extra_op = delegate.txn_extra_op.load();
+                response.txn_extra_op = delegate.delegate().txn_extra_op.load();
                 cb.invoke_read(response);
             }
             // Forward to raftstore.
@@ -694,7 +769,7 @@ where
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self.delegates.get(&req.get_header().get_region_id()) {
-                    cmd_resp::bind_term(&mut response, delegate.term);
+                    cmd_resp::bind_term(&mut response, delegate.delegate().term);
                 }
                 cb.invoke_read(ReadResponse {
                     response,
@@ -726,10 +801,11 @@ where
     }
 }
 
-impl<C, E> Clone for LocalReader<C, E>
+impl<C, E, D> Clone for LocalReader<C, E, D>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
+    D: ReadDelegateTrait,
 {
     fn clone(&self) -> Self {
         LocalReader {
@@ -746,7 +822,7 @@ where
 }
 
 struct Inspector<'r, 'm> {
-    delegate: &'r ReadDelegate,
+    delegate: &'r ReadDelegateInner,
     metrics: &'m mut ReadMetrics,
 }
 
@@ -1082,7 +1158,7 @@ mod tests {
         // But the applied_index_term is stale.
         {
             let mut meta = store_meta.lock().unwrap();
-            let read_delegate = ReadDelegate {
+            let read_delegate = ReadDelegateInner {
                 tag: String::new(),
                 region: Arc::new(region1.clone()),
                 peer_id: leader2.get_id(),
@@ -1325,7 +1401,7 @@ mod tests {
         region.set_id(1);
         {
             let mut meta = store_meta.lock().unwrap();
-            let read_delegate = ReadDelegate {
+            let read_delegate = ReadDelegateInner {
                 tag: String::new(),
                 region: Arc::new(region.clone()),
                 peer_id: 1,

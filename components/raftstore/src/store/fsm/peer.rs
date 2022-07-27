@@ -88,7 +88,7 @@ use crate::{
         util::{is_learner, KeysInfoFormatter, LeaseState},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
-            GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
+            GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegateInner, ReadProgress,
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
@@ -3745,7 +3745,7 @@ where
                 .is_none();
             assert!(not_exist, "[region {}] should not exist", new_region_id);
             meta.readers
-                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+                .insert(new_region_id, ReadDelegateInner::from_peer(new_peer.get_peer()));
             meta.region_read_progress
                 .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {
@@ -4438,7 +4438,7 @@ where
 
         meta.readers.insert(
             self.fsm.region_id(),
-            ReadDelegate::from_peer(&self.fsm.peer),
+            ReadDelegateInner::from_peer(&self.fsm.peer),
         );
 
         // Remove this region's snapshot region from the `pending_snapshot_regions`
