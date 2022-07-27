@@ -283,7 +283,9 @@ impl<E: KvEngine> Initializer<E> {
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
+            CDC_BOUNDED_SINK_PENDING.inc();
             self.sink_scan_events(entries, done).await?;
+            CDC_BOUNDED_SINK_PENDING.dec();
         }
 
         if !post_init_downstream(&self.downstream_state) {

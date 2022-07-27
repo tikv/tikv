@@ -14,22 +14,24 @@ use futures::{
         channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
         TrySendError, UnboundedReceiver, UnboundedSender,
     },
+    compat::Compat01As03,
     executor::block_on,
-    stream, SinkExt, Stream, StreamExt,
+    stream, FutureExt, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{impl_display_as_debug, time::Instant, warn};
+use tikv_util::{
+    impl_display_as_debug,
+    time::{duration_to_ms, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
+    warn,
+};
 
 use crate::metrics::*;
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
-
-/// The maximum count of `CdcEvent::Event`s can be batched into
-/// one ChangeDataEvent, 64.
-const CDC_EVENT_MAX_COUNT: usize = 64;
 
 /// The default `channel` capacity for sending incremental scan events.
 ///
@@ -41,12 +43,6 @@ pub const CDC_CHANNLE_CAPACITY: usize = 128;
 
 /// The maximum bytes of ChangeDataEvent, 6MB.
 const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
-
-/// Assume the average size of batched `CdcEvent::Event`s is 32KB and
-/// the average count of batched `CdcEvent::Event`s is 64.
-///
-/// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
-const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
@@ -167,10 +163,7 @@ impl EventBatcher {
                 self.last_size = CDC_RESP_MAX_BYTES;
                 self.total_resolved_ts_bytes += size as usize;
             }
-            CdcEvent::Barrier(_) => {
-                // Barrier requires events must be batched across the barrier.
-                self.last_size = CDC_RESP_MAX_BYTES;
-            }
+            CdcEvent::Barrier(_) => {}
         }
     }
 
@@ -357,7 +350,7 @@ pub struct Drain {
 }
 
 impl<'a> Drain {
-    pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
+    pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + Unpin + 'a {
         stream::select(&mut self.bounded_receiver, &mut self.unbounded_receiver).map(
             |(mut event, size)| {
                 if let CdcEvent::Barrier(ref mut barrier) = event {
@@ -381,14 +374,31 @@ impl<'a> Drain {
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
 
         let memory_quota = self.memory_quota.clone();
-        let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
-        while let Some(events) = chunks.next().await {
-            let mut bytes = 0;
-            let mut batcher = EventBatcher::with_capacity(CDC_RESP_MAX_BATCH_COUNT);
-            events.into_iter().for_each(|(e, size)| {
-                bytes += size;
-                batcher.push(e);
-            });
+        let mut drain = self.drain();
+        let mut finished = false;
+        while !finished {
+            let delay = std::time::Instant::now() + Duration::from_millis(50);
+            let timeout = async { drop(Compat01As03::new(GLOBAL_TIMER_HANDLE.delay(delay)).await) };
+            let (mut count, mut bytes) = (0, 0);
+            let mut batcher = EventBatcher::with_capacity(128);
+            let f = async {
+                while let Some((event, size)) = drain.next().await {
+                    batcher.push(event);
+                    bytes += size as u32;
+                    count += 1;
+                    if bytes >= CDC_RESP_MAX_BYTES {
+                        return true;
+                    }
+                }
+                false
+            };
+            let now = std::time::Instant::now();
+            futures::select! {
+                remain = f.fuse() => finished = !remain,
+                _ = timeout.fuse() => {},
+            }
+            CDC_GRPC_CHUNK_DURATION.observe(duration_to_ms(now.elapsed()) as f64);
+            CDC_GRPC_CHUNK_SIZE.observe(count as f64);
             let (event_bytes, resolved_ts_bytes) = batcher.statistics();
             let resps = batcher.build();
             let resps_len = resps.len();
@@ -399,7 +409,11 @@ impl<'a> Drain {
                 let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
                 sink.feed((e, write_flags)).await?;
             }
+            CDC_GRPC_FEED_DURATION.observe(duration_to_ms(now.elapsed()) as f64);
             sink.flush().await?;
+            CDC_GRPC_FLUSH_DURATION.observe(duration_to_ms(now.elapsed()) as f64);
+            CDC_GRPC_FLUSH_BATCH.observe(resps_len as f64);
+            CDC_GRPC_FLUSH_SIZE.observe(bytes as f64);
             total_event_bytes.inc_by(event_bytes as u64);
             total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
         }
@@ -441,7 +455,6 @@ pub fn poll_timeout<F, I>(fut: &mut F, dur: std::time::Duration) -> Result<I, ()
 where
     F: std::future::Future<Output = I> + Unpin,
 {
-    use futures::FutureExt;
     let mut timeout = futures_timer::Delay::new(dur).fuse();
     let mut f = fut.fuse();
     futures::executor::block_on(async {

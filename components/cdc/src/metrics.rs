@@ -214,6 +214,47 @@ lazy_static! {
 
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref CDC_GRPC_FEED_DURATION: Histogram = register_histogram!(
+        "tikv_cdc_grpc_feed_duration",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_FLUSH_DURATION: Histogram = register_histogram!(
+        "tikv_cdc_grpc_flush_duration",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_CHUNK_DURATION: Histogram = register_histogram!(
+        "tikv_cdc_grpc_chunk_duration",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_CHUNK_SIZE: Histogram = register_histogram!(
+        "tikv_cdc_grpc_chunk_size",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_FLUSH_BATCH: Histogram = register_histogram!(
+        "tikv_cdc_grpc_flush_batch",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_GRPC_FLUSH_SIZE: Histogram = register_histogram!(
+        "tikv_cdc_grpc_flush_size",
+        "Bucketed histogram of cdc async scan duration",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref CDC_BOUNDED_SINK_PENDING: IntGauge = register_int_gauge!(
+        "tikv_cdc_bounded_sink_pending",
+        "CDC endpoint pending tasks"
+    ).unwrap();
 }
 
 thread_local! {
