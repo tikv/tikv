@@ -74,9 +74,8 @@ pub(crate) enum StaleState {
     LeaderMissing,
 }
 
-pub(crate) fn notify_stale_req(term: u64, cb: Callback) {
-    let bt = std::backtrace::Backtrace::force_capture();
-    info!("notify stale req backtrace {:?}", bt);
+pub(crate) fn notify_stale_req(term: u64, cb: Callback, reason: &str) {
+    info!("notify stale req reason: {}", reason);
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -134,7 +133,7 @@ impl ProposalQueue {
                     );
                 }
             } else {
-                notify_stale_req(current_term, p.cb);
+                notify_stale_req(current_term, p.cb, "old term");
             }
         }
         None
@@ -250,7 +249,7 @@ impl CmdEpochChecker {
             self.term = term;
             for cmd in self.proposed_admin_cmd.drain(..) {
                 for cb in cmd.cbs {
-                    notify_stale_req(term, cb);
+                    notify_stale_req(term, cb, "old term");
                 }
             }
         }
@@ -363,7 +362,7 @@ impl Drop for CmdEpochChecker {
         } else {
             for state in self.proposed_admin_cmd.drain(..) {
                 for cb in state.cbs {
-                    notify_stale_req(self.term, cb);
+                    notify_stale_req(self.term, cb, "drop");
                 }
             }
         }
@@ -1530,7 +1529,7 @@ impl Peer {
                 // The request could be proposed when the peer was leader.
                 // TODO: figure out that it's necessary to notify stale or not.
                 let term = self.term();
-                notify_stale_req(term, cb);
+                notify_stale_req(term, cb, "replica read index on leader");
             }
         }
     }
@@ -2244,7 +2243,8 @@ impl Peer {
             && self.is_leader()
         {
             // The message gets dropped silently, can't be handled anymore.
-            notify_stale_req(self.term(), cb);
+            let reason = format!("{} not applied to current term", self.tag());
+            notify_stale_req(self.term(), cb, &reason);
             return false;
         }
 

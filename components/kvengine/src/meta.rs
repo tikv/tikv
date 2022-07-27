@@ -179,7 +179,8 @@ impl ShardMeta {
             }
             info!(
                 "{} skip duplicated move_down compaction level:{}",
-                self.tag(), comp.level
+                self.tag(),
+                comp.level
             );
             return true;
         }

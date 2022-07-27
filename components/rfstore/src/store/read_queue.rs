@@ -157,7 +157,7 @@ impl ReadIndexQueue {
         for mut read in self.reads.drain(self.ready_cnt..) {
             removed += read.cmds.len();
             for (_, cb, _) in read.cmds.drain(..) {
-                super::notify_stale_req(term, cb);
+                super::notify_stale_req(term, cb, "role change");
             }
         }
         RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);

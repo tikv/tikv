@@ -948,16 +948,13 @@ impl<'a> PeerMsgHandler<'a> {
         let cb = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
                 let err_msg = resp.response.get_header().get_error().get_message();
-                warn!(
-                    "failed to propose engine change set {:?} for {:?}",
-                    err_msg, tag
-                );
+                warn!("{} failed to propose engine change set {:?}", tag, err_msg);
                 // TODO(x): handle the error.
                 // We need to detect if this error can be retried and retry it.
                 // Or we may lose data if it is a flush.
                 // And we need to stop propose change set if previous change set propose failed.
             } else {
-                info!("proposed meta change event for {:?}", tag);
+                info!("{} proposed meta change event", tag);
             }
         }));
         self.propose_raft_command(req, cb);

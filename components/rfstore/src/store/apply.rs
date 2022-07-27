@@ -595,7 +595,7 @@ impl Applier {
                 if cmd.index == index && cmd.term == term {
                     return Some(cmd.cb);
                 }
-                notify_stale_req(term, cmd.cb);
+                notify_stale_req(term, cmd.cb, "conf change term not match");
             }
             return None;
         }
@@ -610,7 +610,7 @@ impl Applier {
             }
             // Because of the lack of original RaftCmdRequest, we skip calling
             // coprocessor here.
-            notify_stale_req(term, head.cb);
+            notify_stale_req(term, head.cb, "term not match");
         }
         None
     }
@@ -1150,7 +1150,7 @@ impl Applier {
         let propose_num = props_drainer.len();
         if self.stopped {
             for p in props_drainer {
-                notify_stale_req(p.term, p.cb);
+                notify_stale_req(p.term, p.cb, "stopped");
             }
             return;
         }
@@ -1162,7 +1162,7 @@ impl Applier {
                     // a stale pending conf change before next conf change is applied. If it
                     // becomes leader again with the stale pending conf change, will enter
                     // this block, so we notify leadership may have been changed.
-                    notify_stale_req(self.term, cmd.cb);
+                    notify_stale_req(self.term, cmd.cb, "pending conf change");
                 }
                 self.pending_cmds.set_conf_change(cmd);
             } else {
@@ -1308,10 +1308,10 @@ impl Applier {
 
     fn clear_all_commands_as_stale(&mut self) {
         for cmd in self.pending_cmds.normals.drain(..) {
-            notify_stale_req(self.term, cmd.cb);
+            notify_stale_req(self.term, cmd.cb, "reregistration");
         }
         if let Some(cmd) = self.pending_cmds.conf_change.take() {
-            notify_stale_req(self.term, cmd.cb);
+            notify_stale_req(self.term, cmd.cb, "reregistration");
         }
     }
 
