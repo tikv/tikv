@@ -307,7 +307,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         if rows_len > 0 && self.n_bytes == 0 {
             self.alloc_trace(rows_len * size_of::<usize>());
         }
-      
+
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
 

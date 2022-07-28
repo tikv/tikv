@@ -256,14 +256,13 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-
         if rows_len > 0 && self.n_bytes == 0 {
             self.alloc_trace(rows_len * size_of::<usize>());
         }
 
         // Decode columns with mutable input first, so subsequent access to input can be
         // immutable (and the borrow checker will be happy)
-      
+
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
