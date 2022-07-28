@@ -15,3 +15,22 @@ use crate::codec::{
     data_type::{Bytes, BytesRef},
     Error, Result,
 };
+
+fn format_invalid_char(data: BytesRef<'_>) -> String {
+    let mut buf = String::with_capacity(50);
+    const MAX_BYTES_TO_SHOW: usize = 5;
+    buf.push('\'');
+    for i in 0..data.len() {
+        if i > MAX_BYTES_TO_SHOW {
+            buf.push_str("...");
+            break;
+        }
+        if data[i].is_ascii() {
+            buf.push(char::from(data[i]));
+        } else {
+            buf.push_str(format!("\\x{:X}", data[i]).as_str());
+        }
+    }
+    buf.push('\'');
+    buf
+}
