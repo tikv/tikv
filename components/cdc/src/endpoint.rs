@@ -529,11 +529,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
         let change = self.config.diff(&validate_cfg);
-        info!(
-            "cdc config updated";
-            "current config" => ?self.config,
-            "change" => ?change
-        );
+        info!("cdc config updated"; "current config" => ?self.config, "change" => ?change);
+
         // Update the config here. The following adjustments will all use the new values.
         self.config.update(change.clone()).unwrap();
 
@@ -769,6 +766,10 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             return;
         }
         if is_new_delegate {
+            if self.config.old_value_from_transaction_layer {
+                delegate.load_old_value_from_transaction_layer();
+            }
+
             // The region has never been registered.
             // Subscribe the change events of the region.
             let old_observe_id = self.observer.subscribe_region(region_id, observe_id);

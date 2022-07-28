@@ -854,9 +854,8 @@ impl Delegate {
 
     fn add_downstream(&mut self, downstream: Downstream) {
         self.downstreams_mut().push(downstream);
-        // TODO: fixme.
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue {
-            prefer_load_data: true,
+            prefer_load_data: false,
         });
     }
 
@@ -904,6 +903,21 @@ impl Delegate {
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
+    }
+
+    // Must be called after the delegate is in subscribing.
+    pub fn load_old_value_from_transaction_layer(&mut self) {
+        let mut curr = self.txn_extra_op.load();
+        match curr {
+            TxnExtraOp::Noop => unreachable!(),
+            TxnExtraOp::ReadOldValue {
+                ref mut prefer_load_data,
+            } => {
+                assert!(!*prefer_load_data);
+                *prefer_load_data = true;
+            }
+        }
+        self.txn_extra_op.store(curr);
     }
 }
 

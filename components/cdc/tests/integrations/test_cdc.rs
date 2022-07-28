@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{sync::*, time::Duration};
+use std::sync::mpsc::sync_channel;
+use std::collections::HashMap;
 
 use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
@@ -14,6 +16,7 @@ use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, Lock, LockType};
+use online_config::{ConfigValue};
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
@@ -2363,33 +2366,55 @@ fn test_txn_read_long_old_value() {
     let rid = suite.cluster.get_region(&[]).id;
     let ctx = suite.get_context(rid);
     let client = suite.get_tikv_client(rid).clone();
+    let scheduler = suite.endpoints[&1].scheduler();
 
-    // Start a changefeed and wait incremental scan finished.
-    let req = suite.new_changedata_request(rid);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    let _ = receive_event(false);
+    let get_cache_stats = || -> (usize, usize) {
+        let (tx, rx) = sync_channel(1);
+        scheduler.schedule(Task::Validate(Validate::OldValueCache(Box::new(move |c| {
+            let _ = tx.send((c.access_count(), c.miss_count()));
+        })))).unwrap();
+        rx.recv_timeout(Duration::from_micros(100)).unwrap()
+    };
 
-    let key = b"key".to_vec();
-    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+    let (mut start_ts, mut commit_ts) = (10, 11);
+    for &(old_value_from_data, miss_count) in &[
+        (true, 0),
+        (false, 1),
+    ] {
+        let mut cfg_change = HashMap::with_capacity(1);
+        let cfg_v = ConfigValue::Bool(old_value_from_data);
+        cfg_change.insert("old_value_from_transaction_layer".to_owned(), cfg_v);
+        scheduler.schedule(Task::ChangeConfig(cfg_change)).unwrap();
 
-    let mut muts = vec![Mutation::default()];
-    muts[0].set_op(Op::Put);
-    muts[0].key = key.clone();
-    muts[0].value = large_value.clone();
+        // Start a changefeed and wait incremental scan finished.
+        let req = suite.new_changedata_request(rid);
+        let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+        block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        let _ = receive_event(false);
 
-    must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), 10);
-    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 10, 11, 11);
-    let _ = receive_event(false);
-    println!("case 1 finished");
+        let key = b"key".to_vec();
+        let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
 
-    must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), 12);
-    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 12, 13, 13);
-    println!("case 2 finished");
+        let mut muts = vec![Mutation::default()];
+        muts[0].set_op(Op::Put);
+        muts[0].key = key.clone();
+        muts[0].value = large_value.clone();
 
-    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, key.clone(), 14);
-    must_kv_commit(&client, ctx.clone(), vec![key.clone()], 14, 15, 15);
-    println!("case 3 finished");
+        start_ts += 2;
+        commit_ts += 2;
+        must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), start_ts);
+        must_kv_commit(&client, ctx.clone(), vec![key.clone()], start_ts, commit_ts, commit_ts);
+        let _ = receive_event(false);
 
-    std::thread::park();
+        let (acce, miss) = get_cache_stats();
+        println!("case 1 finished: {}, {}", acce, miss);
+
+        start_ts += 2;
+        commit_ts += 2;
+        must_kv_prewrite(&client, ctx.clone(), muts.clone(), key.clone(), start_ts);
+        must_kv_commit(&client, ctx.clone(), vec![key.clone()], start_ts, commit_ts, commit_ts);
+        let _ = receive_event(false);
+        let (acce, miss) = get_cache_stats();
+        println!("case 2 finished: {}, {}", acce, miss);
+    }
 }

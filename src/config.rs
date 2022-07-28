@@ -2526,12 +2526,19 @@ pub struct CdcConfig {
     pub tso_worker_threads: usize,
 
     pub sink_memory_quota: ReadableSize,
+
     pub old_value_cache_memory_quota: ReadableSize,
+
+    /// Whether to allow fetching old value at transaction layer or not. It could increase
+    /// transaction latency but can reduce cdc endpoint CPU usage, which is a single point.
+    #[doc(hidden)]
+    pub old_value_from_transaction_layer: bool,
 
     /// Threshold of raw regions' resolved_ts outlier detection. 60s by default.
     #[online_config(skip)]
     #[doc(hidden)]
     pub raw_min_ts_outlier_threshold: ReadableDuration,
+
     // Deprecated! preserved for compatibility check.
     #[online_config(skip)]
     #[doc(hidden)]
@@ -2557,6 +2564,7 @@ impl Default for CdcConfig {
             sink_memory_quota: ReadableSize::mb(512),
             // 512MB memory for old value cache.
             old_value_cache_memory_quota: ReadableSize::mb(512),
+            old_value_from_transaction_layer: true,
             // Trigger raw region outlier judgement if resolved_ts's lag is over 60s.
             raw_min_ts_outlier_threshold: ReadableDuration::secs(60),
             // Deprecated! preserved for compatibility check.
