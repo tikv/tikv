@@ -2805,9 +2805,7 @@ where
 
     /// Check long uncommitted proposals and log some info to help find why.
     pub fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        // Only check long uncommitted proposals when it has uncommitted log.
-        // Otherwise, it may waste CPU since it's a little bit expensive to get current time.
-        if self.has_uncommitted_log() && self.has_long_uncommitted_proposals(ctx) {
+        if self.has_long_uncommitted_proposals(ctx) {
             let status = self.raft_group.status();
             let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
             if let Some(prs) = status.progress {
