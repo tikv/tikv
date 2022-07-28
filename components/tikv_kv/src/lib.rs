@@ -648,7 +648,7 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
-pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];
 
 pub mod tests {
     use tikv_util::codec::bytes;

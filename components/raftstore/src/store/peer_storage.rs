@@ -1285,8 +1285,7 @@ pub mod tests {
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
-        let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap();
+        let kv_db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_db, raft_db);
@@ -2087,8 +2086,7 @@ pub mod tests {
         let region_sched = region_worker.scheduler();
         let raftlog_fetch_worker = LazyWorker::new("raftlog-fetch-worker");
         let raftlog_fetch_sched = raftlog_fetch_worker.scheduler();
-        let kv_db =
-            engine_test::kv::new_engine(td.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = engine_test::kv::new_engine(td.path().to_str().unwrap(), ALL_CFS).unwrap();
         let raft_path = td.path().join(Path::new("raft"));
         let raft_db = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_db, raft_db);

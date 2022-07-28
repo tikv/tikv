@@ -5,15 +5,14 @@ use std::{
     iter::FromIterator,
     path::Path,
     result,
-    sync::Arc,
     thread::{Builder as ThreadBuilder, JoinHandle},
 };
 
 use collections::HashSet;
 use engine_rocks::{
-    raw::{CompactOptions, DBBottommostLevelCompaction, DB},
+    raw::{CompactOptions, DBBottommostLevelCompaction},
     util::get_cf_handle,
-    Compat, RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatchVec,
+    RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksWriteBatchVec,
 };
 use engine_traits::{
     Engines, IterOptions, Iterable, Iterator as EngineIterator, Mutable, MvccProperties, Peekable,
@@ -167,9 +166,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(regions)
     }
 
-    fn get_db_from_type(&self, db: DBType) -> Result<&Arc<DB>> {
+    fn get_db_from_type(&self, db: DBType) -> Result<&RocksEngine> {
         match db {
-            DBType::Kv => Ok(self.engines.kv.as_inner()),
+            DBType::Kv => Ok(&self.engines.kv),
             DBType::Raft => Err(box_err!("Get raft db is not allowed")),
             _ => Err(box_err!("invalid DBType type")),
         }
@@ -178,7 +177,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
-        match db.c().get_value_cf(cf, key) {
+        match db.get_value_cf(cf, key) {
             Ok(Some(v)) => Ok(v.to_vec()),
             Ok(None) => Err(Error::NotFound(format!(
                 "value for key {:?} in db {:?}",
@@ -323,7 +322,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     ) -> Result<()> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
-        let handle = box_try!(get_cf_handle(db, cf));
+        let handle = box_try!(get_cf_handle(db.as_inner(), cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
         info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
@@ -331,7 +330,8 @@ impl<ER: RaftEngine> Debugger<ER> {
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
-        db.compact_range_cf_opt(handle, &opts, start, end);
+        db.as_inner()
+            .compact_range_cf_opt(handle, &opts, start, end);
         info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
@@ -346,7 +346,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db.as_inner(), store_id, region, &mut wb) {
+            if let Err(e) = set_region_tombstone(db, store_id, region, &mut wb) {
                 errors.push((region_id, e));
             }
         }
@@ -403,7 +403,7 @@ impl<ER: RaftEngine> Debugger<ER> {
         for region in regions {
             let region_id = region.get_id();
             if let Err(e) = recover_mvcc_for_range(
-                db.as_inner(),
+                db,
                 region.get_start_key(),
                 region.get_end_key(),
                 read_only,
@@ -417,18 +417,15 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
-        let db = self.engines.kv.clone();
+        let db = &self.engines.kv;
 
         info!("Calculating split keys...");
-        let split_keys = divide_db(db.as_inner(), threads)
-            .unwrap()
-            .into_iter()
-            .map(|k| {
-                let k = Key::from_encoded(keys::origin_key(&k).to_vec())
-                    .truncate_ts()
-                    .unwrap();
-                k.as_encoded().clone()
-            });
+        let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
+            let k = Key::from_encoded(keys::origin_key(&k).to_vec())
+                .truncate_ts()
+                .unwrap();
+            k.as_encoded().clone()
+        });
 
         let mut range_borders = vec![b"".to_vec()];
         range_borders.extend(split_keys);
@@ -454,13 +451,8 @@ impl<ER: RaftEngine> Debugger<ER> {
                         log_wrappers::Value::key(&end_key)
                     );
 
-                    let result = recover_mvcc_for_range(
-                        db.as_inner(),
-                        &start_key,
-                        &end_key,
-                        read_only,
-                        thread_index,
-                    );
+                    let result =
+                        recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
                     tikv_alloc::remove_thread_memory_accessor();
                     result
                 })
@@ -861,8 +853,8 @@ impl<ER: RaftEngine> Debugger<ER> {
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
 
-        let mut res = dump_write_cf_properties(self.engines.kv.as_inner(), &start, &end)?;
-        let mut res1 = dump_default_cf_properties(self.engines.kv.as_inner(), &start, &end)?;
+        let mut res = dump_write_cf_properties(&self.engines.kv, &start, &end)?;
+        let mut res1 = dump_default_cf_properties(&self.engines.kv, &start, &end)?;
         res.append(&mut res1);
 
         let middle_key = match box_try!(get_region_approximate_middle(&self.engines.kv, region)) {
@@ -885,12 +877,12 @@ impl<ER: RaftEngine> Debugger<ER> {
 
     pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut props = dump_write_cf_properties(
-            self.engines.kv.as_inner(),
+            &self.engines.kv,
             &keys::data_key(start),
             &keys::data_end_key(end),
         )?;
         let mut props1 = dump_default_cf_properties(
-            self.engines.kv.as_inner(),
+            &self.engines.kv,
             &keys::data_key(start),
             &keys::data_end_key(end),
         )?;
@@ -904,13 +896,13 @@ impl<ER: RaftEngine> Debugger<ER> {
 }
 
 fn dump_default_cf_properties(
-    db: &Arc<DB>,
+    db: &RocksEngine,
     start: &[u8],
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
-    let collection = box_try!(db.c().get_range_properties_cf(CF_DEFAULT, start, end));
+    let collection = box_try!(db.get_range_properties_cf(CF_DEFAULT, start, end));
     let num_files = collection.len();
 
     for (_, v) in collection.iter() {
@@ -937,13 +929,13 @@ fn dump_default_cf_properties(
 }
 
 fn dump_write_cf_properties(
-    db: &Arc<DB>,
+    db: &RocksEngine,
     start: &[u8],
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
 
-    let collection = box_try!(db.c().get_range_properties_cf(CF_WRITE, start, end));
+    let collection = box_try!(db.get_range_properties_cf(CF_WRITE, start, end));
     let num_files = collection.len();
 
     let mut mvcc_properties = MvccProperties::new();
@@ -998,19 +990,19 @@ fn dump_write_cf_properties(
 }
 
 fn recover_mvcc_for_range(
-    db: &Arc<DB>,
+    db: &RocksEngine,
     start_key: &[u8],
     end_key: &[u8],
     read_only: bool,
     thread_index: usize,
 ) -> Result<()> {
-    let mut mvcc_checker = box_try!(MvccChecker::new(Arc::clone(db), start_key, end_key));
+    let mut mvcc_checker = box_try!(MvccChecker::new(db.clone(), start_key, end_key));
     mvcc_checker.thread_index = thread_index;
 
     let wb_limit: usize = 10240;
 
     loop {
-        let mut wb = db.c().write_batch();
+        let mut wb = db.write_batch();
         mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();
@@ -1050,7 +1042,7 @@ pub struct MvccChecker {
 }
 
 impl MvccChecker {
-    fn new(db: Arc<DB>, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+    fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let gen_iter = |cf: &str| -> Result<_> {
@@ -1061,7 +1053,7 @@ impl MvccChecker {
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             );
-            let mut iter = box_try!(db.c().iterator_opt(cf, readopts));
+            let mut iter = box_try!(db.iterator_opt(cf, readopts));
             iter.seek_to_first().unwrap();
             Ok(iter)
         };
@@ -1330,7 +1322,7 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
 }
 
 fn set_region_tombstone(
-    db: &Arc<DB>,
+    db: &RocksEngine,
     store_id: u64,
     region: Region,
     wb: &mut RocksWriteBatchVec,
@@ -1339,7 +1331,6 @@ fn set_region_tombstone(
     let key = keys::region_state_key(id);
 
     let region_state = db
-        .c()
         .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
         .map_err(|e| box_err!(e))
         .and_then(|s| s.ok_or_else(|| Error::Other("Can't find RegionLocalState".into())))?;
@@ -1378,25 +1369,19 @@ fn set_region_tombstone(
     Ok(())
 }
 
-fn divide_db(db: &Arc<DB>, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let range = Range::new(&start, &end);
     Ok(box_try!(
-        RocksEngine::from_db(db.clone()).get_range_approximate_split_keys(range, parts - 1)
+        db.get_range_approximate_split_keys(range, parts - 1)
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use engine_rocks::{
-        raw::{ColumnFamilyOptions, DBOptions},
-        raw_util::{new_engine_opt, CFOptions},
-        RocksEngine,
-    };
+    use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
         kvrpcpb::ApiVersion,
@@ -1409,7 +1394,7 @@ mod tests {
     use crate::storage::mvcc::{Lock, LockType};
 
     fn init_region_state(
-        engine: &Arc<DB>,
+        engine: &RocksEngine,
         region_id: u64,
         stores: &[u64],
         mut learner: usize,
@@ -1430,7 +1415,7 @@ mod tests {
         region_state.set_state(PeerState::Normal);
         region_state.set_region(region.clone());
         let key = keys::region_state_key(region_id);
-        engine.c().put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
+        engine.put_msg_cf(CF_RAFT, &key, &region_state).unwrap();
         region
     }
 
@@ -1456,10 +1441,9 @@ mod tests {
         raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
     }
 
-    fn get_region_state(engine: &Arc<DB>, region_id: u64) -> RegionLocalState {
+    fn get_region_state(engine: &RocksEngine, region_id: u64) -> RegionLocalState {
         let key = keys::region_state_key(region_id);
         engine
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &key)
             .unwrap()
             .unwrap()
@@ -1535,24 +1519,9 @@ mod tests {
     fn new_debugger() -> Debugger<RocksEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(
-                path,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-            )
-            .unwrap(),
-        );
+        let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
-        let engines = Engines::new(
-            RocksEngine::from_db(Arc::clone(&engine)),
-            RocksEngine::from_db(engine),
-        );
+        let engines = Engines::new(engine.clone(), engine);
         Debugger::new(engines, ConfigController::default())
     }
 
@@ -1720,21 +1689,21 @@ mod tests {
         let engine = &debugger.engines.kv;
 
         // region 1 with peers at stores 11, 12, 13.
-        let region_1 = init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
+        let region_1 = init_region_state(engine, 1, &[11, 12, 13], 0);
         // Got the target region from pd, which doesn't contains the store.
         let mut target_region_1 = region_1.clone();
         target_region_1.mut_peers().remove(0);
         target_region_1.mut_region_epoch().set_conf_ver(100);
 
         // region 2 with peers at stores 11, 12, 13.
-        let region_2 = init_region_state(engine.as_inner(), 2, &[11, 12, 13], 0);
+        let region_2 = init_region_state(engine, 2, &[11, 12, 13], 0);
         // Got the target region from pd, which has different peer_id.
         let mut target_region_2 = region_2.clone();
         target_region_2.mut_peers()[0].set_id(100);
         target_region_2.mut_region_epoch().set_conf_ver(100);
 
         // region 3 with peers at stores 21, 22, 23.
-        let region_3 = init_region_state(engine.as_inner(), 3, &[21, 22, 23], 0);
+        let region_3 = init_region_state(engine, 3, &[21, 22, 23], 0);
         // Got the target region from pd but the peers are not changed.
         let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
@@ -1748,21 +1717,15 @@ mod tests {
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].0, 3);
-        assert_eq!(
-            get_region_state(engine.as_inner(), 1).take_region(),
-            region_1
-        );
-        assert_eq!(
-            get_region_state(engine.as_inner(), 2).take_region(),
-            region_2
-        );
+        assert_eq!(get_region_state(engine, 1).take_region(), region_1);
+        assert_eq!(get_region_state(engine, 2).take_region(), region_2);
 
         // After set_region_tombstone success, all region should be adjusted.
         let target_regions = vec![target_region_1, target_region_2];
         let errors = debugger.set_region_tombstone(target_regions).unwrap();
         assert!(errors.is_empty());
         for &region_id in &[1, 2] {
-            let state = get_region_state(engine.as_inner(), region_id).get_state();
+            let state = get_region_state(engine, region_id).get_state();
             assert_eq!(state, PeerState::Tombstone);
         }
     }
@@ -1778,19 +1741,19 @@ mod tests {
         assert!(!errors.is_empty());
 
         // region 1 with peers at stores 11, 12, 13.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13], 0);
-        let mut expected_state = get_region_state(engine.as_inner(), 1);
+        init_region_state(engine, 1, &[11, 12, 13], 0);
+        let mut expected_state = get_region_state(engine, 1);
         expected_state.set_state(PeerState::Tombstone);
 
         // tombstone region 1.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
-        assert_eq!(get_region_state(engine.as_inner(), 1), expected_state);
+        assert_eq!(get_region_state(engine, 1), expected_state);
 
         // tombstone region 1 again.
         let errors = debugger.set_region_tombstone_by_id(vec![1]).unwrap();
         assert!(errors.is_empty());
-        assert_eq!(get_region_state(engine.as_inner(), 1), expected_state);
+        assert_eq!(get_region_state(engine, 1), expected_state);
     }
 
     #[test]
@@ -1799,7 +1762,7 @@ mod tests {
         debugger.set_store_id(100);
         let engine = &debugger.engines.kv;
 
-        let get_region_stores = |engine: &Arc<DB>, region_id: u64| {
+        let get_region_stores = |engine: &RocksEngine, region_id: u64| {
             get_region_state(engine, region_id)
                 .get_region()
                 .get_peers()
@@ -1808,7 +1771,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let get_region_learner = |engine: &Arc<DB>, region_id: u64| {
+        let get_region_learner = |engine: &RocksEngine, region_id: u64| {
             get_region_state(engine, region_id)
                 .get_region()
                 .get_peers()
@@ -1818,9 +1781,9 @@ mod tests {
         };
 
         // region 1 with peers at stores 11, 12, 13 and 14.
-        init_region_state(engine.as_inner(), 1, &[11, 12, 13, 14], 0);
+        init_region_state(engine, 1, &[11, 12, 13, 14], 0);
         // region 2 with peers at stores 21, 22 and 23.
-        init_region_state(engine.as_inner(), 2, &[21, 22, 23], 0);
+        init_region_state(engine, 2, &[21, 22, 23], 0);
 
         // Only remove specified stores from region 1.
         debugger
@@ -1828,43 +1791,43 @@ mod tests {
             .unwrap();
 
         // 13 and 14 should be removed from region 1.
-        assert_eq!(get_region_stores(engine.as_inner(), 1), &[11, 12]);
+        assert_eq!(get_region_stores(engine, 1), &[11, 12]);
         // 21 and 23 shouldn't be removed from region 2.
-        assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22, 23]);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22, 23]);
 
         // Remove specified stores from all regions.
         debugger
             .remove_failed_stores(vec![11, 23], None, false)
             .unwrap();
 
-        assert_eq!(get_region_stores(engine.as_inner(), 1), &[12]);
-        assert_eq!(get_region_stores(engine.as_inner(), 2), &[21, 22]);
+        assert_eq!(get_region_stores(engine, 1), &[12]);
+        assert_eq!(get_region_stores(engine, 2), &[21, 22]);
 
         // Should fail when the store itself is in the failed list.
-        init_region_state(engine.as_inner(), 3, &[100, 31, 32, 33], 0);
+        init_region_state(engine, 3, &[100, 31, 32, 33], 0);
         debugger
             .remove_failed_stores(vec![100], None, false)
             .unwrap_err();
 
         // no learner, promote learner does nothing
-        init_region_state(engine.as_inner(), 4, &[41, 42, 43, 44], 0);
+        init_region_state(engine, 4, &[41, 42, 43, 44], 0);
         debugger.remove_failed_stores(vec![44], None, true).unwrap();
-        assert_eq!(get_region_stores(engine.as_inner(), 4), &[41, 42, 43]);
-        assert_eq!(get_region_learner(engine.as_inner(), 4), 0);
+        assert_eq!(get_region_stores(engine, 4), &[41, 42, 43]);
+        assert_eq!(get_region_learner(engine, 4), 0);
 
         // promote learner
-        init_region_state(engine.as_inner(), 5, &[51, 52, 53, 54], 1);
+        init_region_state(engine, 5, &[51, 52, 53, 54], 1);
         debugger
             .remove_failed_stores(vec![52, 53, 54], None, true)
             .unwrap();
-        assert_eq!(get_region_stores(engine.as_inner(), 5), &[51]);
-        assert_eq!(get_region_learner(engine.as_inner(), 5), 0);
+        assert_eq!(get_region_stores(engine, 5), &[51]);
+        assert_eq!(get_region_learner(engine, 5), 0);
 
         // no need to promote learner
-        init_region_state(engine.as_inner(), 6, &[61, 62, 63, 64], 1);
+        init_region_state(engine, 6, &[61, 62, 63, 64], 1);
         debugger.remove_failed_stores(vec![64], None, true).unwrap();
-        assert_eq!(get_region_stores(engine.as_inner(), 6), &[61, 62, 63]);
-        assert_eq!(get_region_learner(engine.as_inner(), 6), 1);
+        assert_eq!(get_region_stores(engine, 6), &[61, 62, 63]);
+        assert_eq!(get_region_learner(engine, 6), 1);
     }
 
     #[test]
@@ -1874,8 +1837,8 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
 
-        init_region_state(kv_engine.as_inner(), 1, &[100, 101], 1);
-        init_region_state(kv_engine.as_inner(), 2, &[100, 103], 1);
+        init_region_state(kv_engine, 1, &[100, 101], 1);
+        init_region_state(kv_engine, 2, &[100, 103], 1);
         init_raft_state(kv_engine, raft_engine, 1, 100, 90, 80);
         init_raft_state(kv_engine, raft_engine, 2, 80, 80, 80);
 
@@ -2026,10 +1989,7 @@ mod tests {
         remove_region_state(1);
         remove_region_state(2);
         assert!(debugger.recreate_region(region.clone()).is_ok());
-        assert_eq!(
-            get_region_state(engine.as_inner(), 100).get_region(),
-            &region
-        );
+        assert_eq!(get_region_state(engine, 100).get_region(), &region);
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());
@@ -2177,27 +2137,28 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let cfs_opts = ALL_CFS
             .iter()
-            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
+            .map(|cf| (*cf, RocksCfOptions::default()))
             .collect();
-        let db_opt = DBOptions::new();
+        let db_opt = RocksDBOptions::default();
         db_opt.enable_multi_batch_write(true);
-        let db = Arc::new(new_engine_opt(path_str, db_opt, cfs_opts).unwrap());
+        let db = new_engine_opt(path_str, db_opt, cfs_opts).unwrap();
         // Write initial KVs.
-        let mut wb = RocksEngine::from_db(db.clone()).write_batch();
+        let mut wb = db.write_batch();
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         wb.write().unwrap();
         // Fix problems.
-        let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"l").unwrap();
-        let mut wb = db.c().write_batch();
+        let mut checker = MvccChecker::new(db.clone(), b"k", b"l").unwrap();
+        let mut wb = db.write_batch();
         checker.check_mvcc(&mut wb, None).unwrap();
         wb.write().unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
+                .as_inner()
                 .get_cf(
-                    get_cf_handle(&db, cf).unwrap(),
+                    get_cf_handle(db.as_inner(), cf).unwrap(),
                     &keys::data_key(k.as_encoded()),
                 )
                 .unwrap();

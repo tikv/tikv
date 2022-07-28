@@ -136,13 +136,9 @@ mod tests {
     fn test_bootstrap() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let raft_path = path.path().join("raft");
-        let kv_engine = engine_test::kv::new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            &[CF_DEFAULT, CF_RAFT],
-            None,
-        )
-        .unwrap();
+        let kv_engine =
+            engine_test::kv::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT])
+                .unwrap();
         let raft_engine = engine_test::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap();
         let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
         let region = initial_region(1, 1, 1);

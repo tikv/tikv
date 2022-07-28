@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -495,10 +495,10 @@ mod tests {
             path,
             DBOptions::default(),
             vec![
-                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, ColumnFamilyOptions::new()),
+                (CF_WRITE, ColumnFamilyOptions::new()),
+                (CF_LOCK, ColumnFamilyOptions::new()),
+                (CF_RAFT, ColumnFamilyOptions::new()),
             ],
         )
         .unwrap();

@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
@@ -371,8 +371,8 @@ impl<T: Simulator> Cluster<T> {
         debug!("node {} stopped", node_id);
     }
 
-    pub fn get_engine(&self, node_id: u64) -> Arc<DB> {
-        Arc::clone(self.engines[&node_id].kv.as_inner())
+    pub fn get_engine(&self, node_id: u64) -> RocksEngine {
+        self.engines[&node_id].kv.clone()
     }
 
     pub fn get_raft_engine(&self, node_id: u64) -> RaftTestEngine {
@@ -736,14 +736,14 @@ impl<T: Simulator> Cluster<T> {
         self.leaders.remove(&region_id);
     }
 
-    pub fn assert_quorum<F: FnMut(&Arc<DB>) -> bool>(&self, mut condition: F) {
+    pub fn assert_quorum<F: FnMut(&RocksEngine) -> bool>(&self, mut condition: F) {
         if self.engines.is_empty() {
             return;
         }
         let half = self.engines.len() / 2;
         let mut qualified_cnt = 0;
         for (id, engines) in &self.engines {
-            if !condition(engines.kv.as_inner()) {
+            if !condition(&engines.kv) {
                 debug!("store {} is not qualified yet.", id);
                 continue;
             }
@@ -1178,7 +1178,6 @@ impl<T: Simulator> Cluster<T> {
     pub fn apply_state(&self, region_id: u64, store_id: u64) -> RaftApplyState {
         let key = keys::apply_state_key(region_id);
         self.get_engine(store_id)
-            .c()
             .get_msg_cf::<RaftApplyState>(engine_traits::CF_RAFT, &key)
             .unwrap()
             .unwrap()
@@ -1197,7 +1196,6 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
         self.get_engine(store_id)
-            .c()
             .get_msg_cf::<RegionLocalState>(
                 engine_traits::CF_RAFT,
                 &keys::region_state_key(region_id),
@@ -1210,7 +1208,6 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..100 {
             let state = self
                 .get_engine(store_id)
-                .c()
                 .get_msg_cf::<RegionLocalState>(
                     engine_traits::CF_RAFT,
                     &keys::region_state_key(region_id),

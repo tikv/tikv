@@ -230,7 +230,7 @@ pub fn get_region_approximate_keys(
 mod tests {
     use std::{cmp, sync::mpsc, u64};
 
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
     use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::{
         metapb::{Peer, Region},
@@ -290,13 +290,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -400,13 +394,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -466,10 +454,7 @@ mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
@@ -575,13 +560,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -655,10 +634,7 @@ mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         // size >= 4194304 will insert a new point in range properties
