@@ -337,7 +337,8 @@ impl<ER: RaftEngine> Debugger<ER> {
     }
 
     /// Set regions to tombstone by manual, and apply other status(such as
-    /// peers, version, and key range) from `region` which comes from PD normally.
+    /// peers, version, and key range) from `region` which comes from PD
+    /// normally.
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_ident()?.get_store_id();
         let db = &self.engines.kv;
@@ -675,8 +676,9 @@ impl<ER: RaftEngine> Debugger<ER> {
         for region_id in region_ids {
             let region_state = self.region_info(region_id)?;
 
-            // It's safe to unwrap region_local_state here, because get_all_regions_in_store()
-            // guarantees that the region state exists in kvdb.
+            // It's safe to unwrap region_local_state here, because
+            // get_all_regions_in_store() guarantees that the region state
+            // exists in kvdb.
             if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
                 continue;
             }
@@ -1933,7 +1935,8 @@ mod tests {
             // last index < commit index
             mock_raft_state(&mut wb1, 10, 100, 110);
 
-            // commit index < last index < apply index, or commit index < apply index < last index.
+            // commit index < last index < apply index, or commit index < apply index < last
+            // index.
             mock_raft_state(&mut wb1, 11, 100, 90);
             mock_apply_state(&mut wb2, 11, 110);
             mock_raft_state(&mut wb1, 12, 100, 90);
@@ -2012,10 +2015,14 @@ mod tests {
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
             (b"k1", 100, 0, LockType::Put, false, Expect::Remove), // k1: remove orphan lock.
-            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), // k2: Delete doesn't need default.
-            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), // k3: short value doesn't need default.
-            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), // k4: corresponding default exists.
-            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), // k5: duplicated lock and write.
+            (b"k2", 100, 0, LockType::Delete, false, Expect::Keep), /* k2: Delete doesn't need
+                                                                    * default. */
+            (b"k3", 100, 0, LockType::Put, true, Expect::Keep), /* k3: short value doesn't need
+                                                                 * default. */
+            (b"k4", 100, 0, LockType::Put, false, Expect::Keep), /* k4: corresponding default
+                                                                  * exists. */
+            (b"k5", 100, 0, LockType::Put, false, Expect::Remove), /* k5: duplicated lock and
+                                                                    * write. */
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value, check
@@ -2032,11 +2039,14 @@ mod tests {
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value
-            (b"k6", 100, 101, WriteType::Put, true, Expect::Keep), // short value doesn't need default.
-            (b"k6", 99, 99, WriteType::Rollback, false, Expect::Keep), // rollback doesn't need default.
-            (b"k6", 97, 98, WriteType::Delete, false, Expect::Keep), // delete doesn't need default.
-            (b"k6", 94, 94, WriteType::Put, false, Expect::Keep),    // ok.
-            (b"k6", 92, 93, WriteType::Put, false, Expect::Remove),  // extra write.
+            (b"k6", 100, 101, WriteType::Put, true, Expect::Keep), /* short value doesn't need
+                                                                    * default. */
+            (b"k6", 99, 99, WriteType::Rollback, false, Expect::Keep), /* rollback doesn't need
+                                                                        * default. */
+            (b"k6", 97, 98, WriteType::Delete, false, Expect::Keep), /* delete doesn't need
+                                                                      * default. */
+            (b"k6", 94, 94, WriteType::Put, false, Expect::Keep), // ok.
+            (b"k6", 92, 93, WriteType::Put, false, Expect::Remove), // extra write.
             (b"k6", 90, 91, WriteType::Delete, false, Expect::Keep),
             (b"k6", 88, 89, WriteType::Put, true, Expect::Keep),
         ]);
@@ -2066,7 +2076,9 @@ mod tests {
         lock.extend(vec![
             // key, start_ts, for_update_ts, lock_type, short_value, check
             (b"k8", 90, 105, LockType::Pessimistic, false, Expect::Remove), // newer writes exist
-            (b"k9", 90, 115, LockType::Put, true, Expect::Keep), // prewritten lock from a pessimistic txn
+            (b"k9", 90, 115, LockType::Put, true, Expect::Keep),            /* prewritten lock
+                                                                             * from a pessimistic
+                                                                             * txn */
         ]);
         write.extend(vec![
             // key, start_ts, commit_ts, write_type, short_value

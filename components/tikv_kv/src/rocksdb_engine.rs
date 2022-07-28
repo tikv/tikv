@@ -104,7 +104,7 @@ impl RocksEngine {
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = db_opts.unwrap_or_default();
         if io_rate_limiter.is_some() {
-            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
         }
 
         let db = engine_rocks::util::new_engine_opt(&path, db_opts, cfs_opts)?;
@@ -151,7 +151,8 @@ impl RocksEngine {
     }
 
     /// `pre_propose` is called before propose.
-    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by
+    /// now.
     fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
         let requests = batch
             .modifies

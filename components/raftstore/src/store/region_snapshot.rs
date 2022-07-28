@@ -118,8 +118,8 @@ where
         ))
     }
 
-    // scan scans database using an iterator in range [start_key, end_key), calls function f for
-    // each iteration, if f returns false, terminates this scan.
+    // scan scans database using an iterator in range [start_key, end_key), calls
+    // function f for each iteration, if f returns false, terminates this scan.
     pub fn scan<F>(
         &self,
         cf: &str,

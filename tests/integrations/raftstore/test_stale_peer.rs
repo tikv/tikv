@@ -15,17 +15,19 @@ use tikv_util::{config::ReadableDuration, HandyRwLock};
 /// If a peer detects the leader is missing for a specified long time,
 /// it should consider itself as a stale peer which is removed from the region.
 /// This test case covers the following scenario:
-/// At first, there are three peer A, B, C in the cluster, and A is leader.
-/// Peer B gets down. And then A adds D, E, F into the cluster.
-/// Peer D becomes leader of the new cluster, and then removes peer A, B, C.
-/// After all these peer in and out, now the cluster has peer D, E, F.
-/// If peer B goes up at this moment, it still thinks it is one of the cluster
-/// and has peers A, C. However, it could not reach A, C since they are removed from
-/// the cluster or probably destroyed.
-/// Meantime, D, E, F would not reach B, Since it's not in the cluster anymore.
-/// In this case, Peer B would notice that the leader is missing for a long time,
-/// and it would check with pd to confirm whether it's still a member of the cluster.
-/// If not, it should destroy itself as a stale peer which is removed out already.
+///   - At first, there are three peer A, B, C in the cluster, and A is leader.
+///   - Peer B gets down. And then A adds D, E, F into the cluster.
+///   - Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+///   - After all these peer in and out, now the cluster has peer D, E, F.
+///   - If peer B goes up at this moment, it still thinks it is one of the
+///     cluster and has peers A, C. However, it could not reach A, C since they
+///     are removed from the cluster or probably destroyed.
+///   - Meantime, D, E, F would not reach B, Since it's not in the cluster
+///     anymore.
+/// In this case, Peer B would notice that the leader is missing for a long
+/// time, and it would check with pd to confirm whether it's still a member of
+/// the cluster. If not, it should destroy itself as a stale peer which is
+/// removed out already.
 fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
@@ -47,7 +49,8 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.add_send_filter(IsolationFilterFactory::new(2));
 
     // In case 2 is leader, it will fail to pass the healthy nodes check,
-    // so remove isolated node first. Because 2 is isolated, so it can't remove itself.
+    // so remove isolated node first. Because 2 is isolated, so it can't remove
+    // itself.
     pd_client.must_remove_peer(r1, new_peer(2, 2));
 
     // Add peer [(4, 4), (5, 5), (6, 6)].
@@ -96,18 +99,18 @@ fn test_server_stale_peer_out_of_region() {
     test_stale_peer_out_of_region(&mut cluster);
 }
 
-/// A help function for testing the behaviour of the gc of stale peer
-/// which is out or region.
-/// If a peer detects the leader is missing for a specified long time,
-/// it should consider itself as a stale peer which is removed from the region.
-/// This test case covers the following scenario:
-/// A peer, B is initialized as a replicated peer without data after
-/// receiving a single raft AE message. But then it goes through some process like
-/// the case of `test_stale_peer_out_of_region`, it's removed out of the region
-/// and wouldn't be contacted anymore.
-/// In both cases, peer B would notice that the leader is missing for a long time,
-/// and it's an initialized peer without any data. It would destroy itself as
-/// as stale peer directly and should not impact other region data on the same store.
+/// A help function for testing the behaviour of the gc of stale peer which is
+/// out or region. If a peer detects the leader is missing for a specified long
+/// time, it should consider itself as a stale peer which is removed from the
+/// region. This test case covers the following scenario:
+/// - A peer, B is initialized as a replicated peer without data after receiving
+///   a single raft AE message. But then it goes through some process like the
+///   case of `test_stale_peer_out_of_region`, it's removed out of the region
+///   and wouldn't be contacted anymore.
+/// In both cases, peer B would notice that the leader is missing for a long
+/// time, and it's an initialized peer without any data. It would destroy itself
+/// as stale peer directly and should not impact other region data on the
+/// same store.
 fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
 

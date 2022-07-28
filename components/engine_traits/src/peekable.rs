@@ -19,7 +19,8 @@ pub trait Peekable {
     /// Returns `None` if they key does not exist.
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>>;
 
-    /// Read a value for a key from a given column family, given a set of options.
+    /// Read a value for a key from a given column family, given a set of
+    /// options.
     ///
     /// Returns `None` if the key does not exist.
     fn get_value_cf_opt(

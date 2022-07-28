@@ -38,7 +38,8 @@ impl RaftEngineReadOnly for RocksEngine {
         let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
 
         if high - low <= RAFT_LOG_MULTI_GET_CNT {
-            // If election happens in inactive regions, they will just try to fetch one empty log.
+            // If election happens in inactive regions, they will just try to fetch one
+            // empty log.
             for i in low..high {
                 if total_size > 0 && total_size >= max_size {
                     break;

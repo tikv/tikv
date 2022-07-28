@@ -180,7 +180,8 @@ impl<T: Simulator> Cluster<T> {
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
     ) -> Cluster<T> {
-        // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
+        // TODO: In the future, maybe it's better to test both case where
+        // `use_delete_range` is true and false
         Cluster {
             cfg: Config {
                 tikv: new_tikv_config_with_api_ver(id, api_version),
@@ -221,11 +222,12 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    /// Engines in a just created cluster are not bootstraped, which means they are not associated
-    /// with a `node_id`. Call `Cluster::start` can bootstrap all nodes in the cluster.
+    /// Engines in a just created cluster are not bootstrapped, which means they
+    /// are not associated with a `node_id`. Call `Cluster::start` can bootstrap
+    /// all nodes in the cluster.
     ///
-    /// However sometimes a node can be bootstrapped externally. This function can be called to
-    /// mark them as bootstrapped in `Cluster`.
+    /// However sometimes a node can be bootstrapped externally. This function
+    /// can be called to mark them as bootstrapped in `Cluster`.
     pub fn set_bootstrapped(&mut self, node_id: u64, offset: usize) {
         let engines = self.dbs[offset].clone();
         let key_mgr = self.key_managers[offset].clone();
@@ -248,7 +250,7 @@ impl<T: Simulator> Cluster<T> {
             self.cfg
                 .storage
                 .io_rate_limit
-                .build(true /*enable_statistics*/),
+                .build(true /* enable_statistics */),
         ));
         for _ in 0..self.count {
             self.create_engine(None);
@@ -304,7 +306,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn flush_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.flush_cf(CF_DEFAULT, true /*sync*/).unwrap();
+            db.flush_cf(CF_DEFAULT, true /* sync */).unwrap();
         }
     }
 
@@ -605,9 +607,9 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(self.pd_client.get_regions_number() as u32, len)
     }
 
-    // For test when a node is already bootstraped the cluster with the first region
-    // But another node may request bootstrap at same time and get is_bootstrap false
-    // Add Region but not set bootstrap to true
+    // For test when a node is already bootstrapped the cluster with the first
+    // region But another node may request bootstrap at same time and get
+    // is_bootstrap false Add Region but not set bootstrap to true
     pub fn add_first_region(&self) -> Result<()> {
         let mut region = metapb::Region::default();
         let region_id = self.pd_client.alloc_id().unwrap();
@@ -1347,8 +1349,8 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    // It's similar to `ask_split`, the difference is the msg, it sends, is `Msg::SplitRegion`,
-    // and `region` will not be embedded to that msg.
+    // It's similar to `ask_split`, the difference is the msg, it sends, is
+    // `Msg::SplitRegion`, and `region` will not be embedded to that msg.
     // Caller must ensure that the `split_key` is in the `region`.
     pub fn split_region(
         &mut self,

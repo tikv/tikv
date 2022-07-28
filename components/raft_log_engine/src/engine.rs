@@ -311,7 +311,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in `append`.
+        // It's unnecessary because overlapped entries can be handled in
+        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {

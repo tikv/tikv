@@ -162,7 +162,8 @@ pub fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
-/// `checked_add_i64`  checks and adds `r` to the `l`. Return None if the sum is negative.
+/// `checked_add_i64`  checks and adds `r` to the `l`. Return None if the sum is
+/// negative.
 #[inline]
 fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
     if r >= 0 {
@@ -908,8 +909,8 @@ pub trait DatumDecoder:
             NIL_FLAG => Datum::Null,
             FLOAT_FLAG => self.read_f64().map(Datum::F64)?,
             DURATION_FLAG => {
-                // Decode the i64 into `Duration` with `MAX_FSP`, then unflatten it with concrete
-                // `FieldType` information
+                // Decode the i64 into `Duration` with `MAX_FSP`, then unflatten it with
+                // concrete `FieldType` information
                 let nanos = self.read_i64()?;
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Datum::Dur(dur)
@@ -1010,7 +1011,7 @@ pub trait DatumEncoder:
                     self.write_u8(JSON_FLAG)?;
                     self.write_json(j.as_ref())?;
                 }
-                //TODO: implement datum write here.
+                // TODO: implement datum write here.
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),
             }
@@ -1073,7 +1074,8 @@ pub fn encode(ctx: &mut EvalContext, values: &[Datum], comparable: bool) -> Resu
     Ok(buf)
 }
 
-/// `encode_key` encodes a datum slice into a memory comparable buffer as the key.
+/// `encode_key` encodes a datum slice into a memory comparable buffer as the
+/// key.
 pub fn encode_key(ctx: &mut EvalContext, values: &[Datum]) -> Result<Vec<u8>> {
     encode(ctx, values, true)
 }
@@ -1134,7 +1136,8 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 
 /// `skip_n_datum_slices` skip `n` datum slices within `buf`
 /// and advances the buffer pointer.
-/// If the datum buffer contains less than `n` slices, an error will be returned.
+/// If the datum buffer contains less than `n` slices, an error will be
+/// returned.
 pub fn skip_n(buf: &mut &[u8], n: usize) -> Result<()> {
     let origin = *buf;
     for i in 0..n {

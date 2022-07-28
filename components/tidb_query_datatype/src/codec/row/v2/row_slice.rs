@@ -61,12 +61,13 @@ impl RowSlice<'_> {
 
     /// Search `id` in non-null ids
     ///
-    /// Returns the `start` position and `offset` in `values` field if found, otherwise returns `None`
+    /// Returns the `start` position and `offset` in `values` field if found,
+    /// otherwise returns `None`
     ///
     /// # Errors
     ///
-    /// If the id is found with no offset(It will only happen when the row data is broken),
-    /// `Error::ColumnOffset` will be returned.
+    /// If the id is found with no offset(It will only happen when the row data
+    /// is broken), `Error::ColumnOffset` will be returned.
     pub fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);
@@ -170,7 +171,8 @@ impl RowSlice<'_> {
 /// Decodes `len` number of ints from `buf` in little endian
 ///
 /// Note:
-/// This method is only implemented on little endianness currently, since x86 use little endianness.
+/// This method is only implemented on little endianness currently, since x86
+/// use little endianness.
 #[cfg(target_endian = "little")]
 #[inline]
 fn read_le_bytes<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<LEBytes<'a, T>>
@@ -280,7 +282,7 @@ mod tests {
         let cols = vec![
             Column::new(1, 1000),
             Column::new(356, 2),
-            Column::new(33, ScalarValue::Int(None)), //0x21
+            Column::new(33, ScalarValue::Int(None)), // 0x21
             Column::new(3, 3),
             Column::new(64123, 5),
         ];

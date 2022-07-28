@@ -35,7 +35,8 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
     rx
 }
 
-// Validate that prevote is used in elections after partition or reboot of some nodes.
+// Validate that prevote is used in elections after partition or reboot of some
+// nodes.
 fn test_prevote<T: Simulator>(
     cluster: &mut Cluster<T>,
     failure_type: FailureType<'_>,
@@ -44,8 +45,8 @@ fn test_prevote<T: Simulator>(
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
-    // Disable this feature because the test could run slow, in which case peers shouldn't
-    // hibernate, otherwise it's possible to detect no vote messages.
+    // Disable this feature because the test could run slow, in which case peers
+    // shouldn't hibernate, otherwise it's possible to detect no vote messages.
     cluster.cfg.raft_store.hibernate_regions = false;
     // To stable the test, we use a large election timeout to make
     // leader's readiness get handle within an election timeout
@@ -149,8 +150,8 @@ fn test_prevote_partition_leader_in_majority_detect_in_majority() {
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_minority() {
     let mut cluster = new_node_cluster(0, 5);
-    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
-    // old leader.
+    // The follower is in the minority and is part of a prevote process. On rejoin
+    // it adopts the old leader.
     test_prevote(
         &mut cluster,
         FailureType::Partition(&[1, 2, 3], &[4, 5]),
@@ -164,8 +165,8 @@ fn test_prevote_partition_leader_in_majority_detect_in_minority() {
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_majority() {
     let mut cluster = new_node_cluster(0, 5);
-    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
-    // old leader.
+    // The follower is in the minority and is part of a prevote process. On rejoin
+    // it adopts the old leader.
     test_prevote(
         &mut cluster,
         FailureType::Partition(&[1, 2], &[3, 4, 5]),
@@ -179,8 +180,8 @@ fn test_prevote_partition_leader_in_minority_detect_in_majority() {
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_minority() {
     let mut cluster = new_node_cluster(0, 5);
-    // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
-    // old leader.
+    // The follower is in the minority and is part of a prevote process. On rejoin
+    // it adopts the old leader.
     test_prevote(
         &mut cluster,
         FailureType::Partition(&[1, 2, 3], &[3, 4, 5]),
@@ -216,18 +217,21 @@ fn test_prevote_reboot_minority_followers() {
     );
 }
 
-// Test isolating a minority of the cluster and make sure that the remove themselves.
+// Test isolating a minority of the cluster and make sure that the remove
+// themselves.
 fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the rest.
+    // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are
+    // isolated from the rest.
     cluster.run();
     // Choose a predictable leader so we don't accidentally partition the leader.
     cluster.must_transfer_leader(region, new_peer(1, 1));
     cluster.partition(vec![1, 2, 3], vec![4, 5]);
 
-    // Then, add a policy to PD that it should ask the Raft leader to remove the peer from the group.
+    // Then, add a policy to PD that it should ask the Raft leader to remove the
+    // peer from the group.
     pd_client.must_remove_peer(region, new_peer(4, 4));
     pd_client.must_remove_peer(region, new_peer(5, 5));
 

@@ -37,7 +37,8 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+    // minimizes disruption when a partitioned node rejoins the cluster by using a two phase
+    // election.
     #[online_config(skip)]
     pub prevote: bool,
     #[online_config(skip)]
@@ -120,12 +121,13 @@ pub struct Config {
     /// the peer is considered to be down and is reported to PD.
     pub max_peer_down_duration: ReadableDuration,
 
-    /// If the leader of a peer is missing for longer than max_leader_missing_duration,
-    /// the peer would ask pd to confirm whether it is valid in any region.
-    /// If the peer is stale and is not valid in any region, it will destroy itself.
+    /// If the leader of a peer is missing for longer than
+    /// max_leader_missing_duration, the peer would ask pd to confirm
+    /// whether it is valid in any region. If the peer is stale and is not
+    /// valid in any region, it will destroy itself.
     pub max_leader_missing_duration: ReadableDuration,
-    /// Similar to the max_leader_missing_duration, instead it will log warnings and
-    /// try to alert monitoring systems, if there is any.
+    /// Similar to the max_leader_missing_duration, instead it will log warnings
+    /// and try to alert monitoring systems, if there is any.
     pub abnormal_leader_missing_duration: ReadableDuration,
     pub peer_stale_state_check_interval: ReadableDuration,
 
@@ -156,11 +158,11 @@ pub struct Config {
     #[online_config(hidden)]
     pub right_derive_when_split: bool,
 
-    /// This setting can only ensure conf remove will not be proposed by the peer
-    /// being removed. But it can't guarantee the remove is applied when the target
-    /// is not leader. That means we always need to check if it's working as expected
-    /// when a leader applies a self-remove conf change. Keep the configuration only
-    /// for convenient test.
+    /// This setting can only ensure conf remove will not be proposed by the
+    /// peer being removed. But it can't guarantee the remove is applied
+    /// when the target is not leader. That means we always need to check if
+    /// it's working as expected when a leader applies a self-remove conf
+    /// change. Keep the configuration only for convenient test.
     #[cfg(any(test, feature = "testexport"))]
     pub allow_remove_leader: bool,
 
@@ -213,9 +215,10 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
-    /// increasing. For raftstore layer entries will be evicted from entry cache, if they
-    /// utilize memory more than `evict_cache_on_memory_ratio` * total.
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// limit memory increasing. For raftstore layer entries will be evicted
+    /// from entry cache, if they utilize memory more than
+    /// `evict_cache_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable cache evict.
     // By default it's 0.2. So for different system memory capacity, cache evict happens:
@@ -226,13 +229,14 @@ pub struct Config {
 
     pub cmd_batch: bool,
 
-    /// When the count of concurrent ready exceeds this value, command will not be proposed
-    /// until the previous ready has been persisted.
+    /// When the count of concurrent ready exceeds this value, command will not
+    /// be proposed until the previous ready has been persisted.
     /// If `cmd_batch` is 0, this config will have no effect.
     /// If it is 0, it means no limit.
     pub cmd_batch_concurrent_ready_max_count: usize,
 
-    /// When the size of raft db writebatch exceeds this value, write will be triggered.
+    /// When the size of raft db writebatch exceeds this value, write will be
+    /// triggered.
     pub raft_write_size_limit: ReadableSize,
 
     pub waterfall_metrics: bool,
@@ -256,7 +260,8 @@ pub struct Config {
     #[serde(skip_serializing)]
     #[online_config(skip)]
     pub region_split_size: ReadableSize,
-    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
+    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot
+    // sequence number.
     #[doc(hidden)]
     #[serde(skip_serializing)]
     #[online_config(skip)]
@@ -268,8 +273,8 @@ pub struct Config {
     // Interval to report min resolved ts, if it is zero, it means disabled.
     pub report_min_resolved_ts_interval: ReadableDuration,
 
-    /// Interval to check whether to reactivate in-memory pessimistic lock after being disabled
-    /// before transferring leader.
+    /// Interval to check whether to reactivate in-memory pessimistic lock after
+    /// being disabled before transferring leader.
     pub reactive_memory_lock_tick_interval: ReadableDuration,
     /// Max tick count before reactivating in-memory pessimistic lock.
     pub reactive_memory_lock_timeout_tick: usize,
@@ -460,8 +465,8 @@ impl Config {
             ));
         }
 
-        // The adjustment of this value is related to the number of regions, usually 16384 is
-        // already a large enough value
+        // The adjustment of this value is related to the number of regions, usually
+        // 16384 is already a large enough value
         if self.raft_max_inflight_msgs == 0 || self.raft_max_inflight_msgs > 16384 {
             return Err(box_err!(
                 "raft max inflight msgs should be greater than 0 and less than or equal to 16384"

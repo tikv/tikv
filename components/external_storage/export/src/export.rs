@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! To use External storage with protobufs as an application, import this module.
-//! external_storage contains the actual library code
+//! To use External storage with protobufs as an application, import this
+//! module. external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
 use std::{
     io::{self, Write},
@@ -55,8 +55,9 @@ pub fn create_storage(
     }
 }
 
-// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage is automatically wrapped with a client
-// This function is used by the library/server to avoid any wrapping
+// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage
+// is automatically wrapped with a client This function is used by the
+// library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
     config: BackendConfig,

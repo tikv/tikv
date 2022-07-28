@@ -63,13 +63,15 @@ impl<I: Iterator> Cursor<I> {
         self.cur_value_has_read.set(false);
     }
 
-    /// Mark key as read. Returns whether key was marked as read before this call.
+    /// Mark key as read. Returns whether key was marked as read before this
+    /// call.
     #[inline]
     fn mark_key_read(&self) -> bool {
         self.cur_key_has_read.replace(true)
     }
 
-    /// Mark value as read. Returns whether value was marked as read before this call.
+    /// Mark value as read. Returns whether value was marked as read before this
+    /// call.
     #[inline]
     fn mark_value_read(&self) -> bool {
         self.cur_value_has_read.replace(true)
@@ -148,7 +150,8 @@ impl<I: Iterator> Cursor<I> {
                 }
             } else if self.prefix_seek {
                 // When prefixed seek and prefix_same_as_start enabled
-                // seek_to_first may return false due to no key's prefix is same as iter lower bound's
+                // seek_to_first may return false due to no key's prefix is same as iter lower
+                // bound's
                 return self.seek(key, statistics);
             } else {
                 assert!(self.seek_to_first(statistics));
@@ -375,9 +378,9 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
-    // (1) We reached the end of the data. In this case, status() is OK();
-    // (2) there is an error. In this case status() is not OK().
+    // As Rocksdb described, if Iterator::Valid() is false, there are two
+    // possibilities: (1) We reached the end of the data. In this case, status()
+    // is OK(); (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
         match self.iter.valid() {
@@ -418,7 +421,8 @@ impl<I: Iterator> Cursor<I> {
     }
 }
 
-/// A handy utility to build a snapshot cursor according to various configurations.
+/// A handy utility to build a snapshot cursor according to various
+/// configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {
     snapshot: &'a S,
     cf: CfName,
@@ -555,7 +559,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         iter_opt.set_key_only(self.key_only);
         iter_opt.set_max_skippable_internal_keys(self.max_skippable_internal_keys);
 
-        // prefix_seek is only used for single key, so set prefix_same_as_start for safety.
+        // prefix_seek is only used for single key, so set prefix_same_as_start for
+        // safety.
         if self.prefix_seek {
             iter_opt.use_prefix_seek();
             iter_opt.set_prefix_same_as_start(true);

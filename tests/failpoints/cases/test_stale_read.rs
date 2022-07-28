@@ -338,8 +338,9 @@ fn test_read_index_when_transfer_leader_2() {
     must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
-    // Put and test again to ensure that peer 3 get the latest writes by message append
-    // instead of snapshot, so that transfer leader to peer 3 can 100% success.
+    // Put and test again to ensure that peer 3 get the latest writes by message
+    // append instead of snapshot, so that transfer leader to peer 3 can 100%
+    // success.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
@@ -403,8 +404,8 @@ fn test_read_index_when_transfer_leader_2() {
         }
     }
 
-    // Resume reserved messages in one batch to make sure the old leader can get read and role
-    // change in one `Ready`.
+    // Resume reserved messages in one batch to make sure the old leader can get
+    // read and role change in one `Ready`.
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
     for raft_msg in reserved_msgs {
         router.send_raft_message(raft_msg).unwrap();
@@ -472,8 +473,9 @@ fn test_read_after_peer_destroyed() {
     );
 }
 
-/// In previous implementation, we suspect the leader lease at the position of `leader_commit_prepare_merge`
-/// failpoint when `PrepareMerge` log is committed, which is too late to prevent stale read.
+/// In previous implementation, we suspect the leader lease at the position of
+/// `leader_commit_prepare_merge` failpoint when `PrepareMerge` log is
+/// committed, which is too late to prevent stale read.
 #[test]
 fn test_stale_read_during_merging_2() {
     let mut cluster = new_node_cluster(0, 3);

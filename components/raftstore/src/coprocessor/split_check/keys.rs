@@ -62,7 +62,8 @@ where
         if self.current_count > self.split_threshold && !over_limit {
             self.split_keys.push(keys::origin_key(key.key()).to_vec());
             // if for previous on_kv() self.current_count == self.split_threshold,
-            // the split key would be pushed this time, but the entry for this time should not be ignored.
+            // the split key would be pushed this time, but the entry for this time should
+            // not be ignored.
             self.current_count = 1;
             over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
@@ -184,7 +185,8 @@ where
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
         // if bucket checker using scan is added, to utilize the scan,
         // add keys checker as well for free
-        // It has the assumption that the size's checker is before the keys's check in the host
+        // It has the assumption that the size's checker is before the keys's check in
+        // the host
         let need_split_region = region_keys >= host.cfg.region_max_keys();
         if need_split_region {
             info!(
@@ -608,8 +610,8 @@ mod tests {
         let region_size =
             get_region_approximate_size(&engine, &region, ReadableSize::mb(1000).0).unwrap();
         // to make the region_max_size < region_split_size + region_size
-        // The split by keys should still work. But if the bug in on_kv() in size.rs exists,
-        // it will result in split by keys failed.
+        // The split by keys should still work. But if the bug in on_kv() in size.rs
+        // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = ReadableSize(region_size * 4 / 5);
         runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));

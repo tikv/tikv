@@ -64,7 +64,7 @@ pub fn new_debug_executor(
     let cache = cfg.storage.block_cache.build_shared_cache();
     let shared_block_cache = cache.is_some();
     let env = cfg
-        .build_shared_rocks_env(key_manager.clone(), None /*io_rate_limiter*/)
+        .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
     let mut kv_db_opts = cfg.rocksdb.build_opt();
@@ -105,7 +105,7 @@ pub fn new_debug_executor(
             error!("raft engine not exists: {}", config.dir);
             tikv_util::logger::exit_process_gracefully(-1);
         }
-        let raft_db = RaftLogEngine::new(config, key_manager, None /*io_rate_limiter*/).unwrap();
+        let raft_db = RaftLogEngine::new(config, key_manager, None /* io_rate_limiter */).unwrap();
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>
     }

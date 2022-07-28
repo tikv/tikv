@@ -104,7 +104,8 @@ pub fn new_engine_opt(
     let mut db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
 
     // Drops discarded column families.
-    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
+    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y ==
+    // x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
         // Never drop default column families.
         if cf != CF_DEFAULT {
@@ -115,8 +116,8 @@ pub fn new_engine_opt(
     Ok(RocksEngine::new(db))
 }
 
-/// Turns "dynamic level size" off for the existing column family which was off before.
-/// Column families are small, HashMap isn't necessary.
+/// Turns "dynamic level size" off for the existing column family which was off
+/// before. Column families are small, HashMap isn't necessary.
 fn adjust_dynamic_level_bytes(
     cf_descs: &[CColumnFamilyDescriptor],
     name: &str,
@@ -146,9 +147,10 @@ pub fn db_exist(path: &str) -> bool {
         return false;
     }
 
-    // If path is not an empty directory, and current file exists, we say db exists. If path is not an empty directory
-    // but db has not been created, `DB::list_column_families` fails and we can clean up
-    // the directory by this indication.
+    // If path is not an empty directory, and current file exists, we say db exists.
+    // If path is not an empty directory but db has not been created,
+    // `DB::list_column_families` fails and we can clean up the directory by
+    // this indication.
     fs::read_dir(&path).unwrap().next().is_some()
 }
 

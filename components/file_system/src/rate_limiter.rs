@@ -159,15 +159,15 @@ impl Default for IORateLimiterStatistics {
     }
 }
 
-/// Used to dynamically adjust the proportion of total budgets allocated for rate limited
-/// IO. This is needed when global IOs are only partially rate limited, e.g. when mode is
-/// IORateLimitMode::WriteOnly.
+/// Used to dynamically adjust the proportion of total budgets allocated for
+/// rate limited IO. This is needed when global IOs are only partially rate
+/// limited, e.g. when mode is IORateLimitMode::WriteOnly.
 pub trait IOBudgetAdjustor: Send + Sync {
     fn adjust(&self, threshold: usize) -> usize;
 }
 
-/// Limit total IO flow below provided threshold by throttling lower-priority IOs.
-/// Rate limit is disabled when total IO threshold is set to zero.
+/// Limit total IO flow below provided threshold by throttling lower-priority
+/// IOs. Rate limit is disabled when total IO threshold is set to zero.
 struct PriorityBasedIORateLimiter {
     // High-priority IOs are only limited when strict is true
     strict: bool,
@@ -197,13 +197,13 @@ impl PriorityBasedIORateLimiterProtected {
 }
 
 macro_rules! do_sleep {
-    ($duration:expr, sync) => {
+    ($duration:expr,sync) => {
         std::thread::sleep($duration);
     };
-    ($duration:expr, async) => {
+    ($duration:expr,async) => {
         tokio::time::sleep($duration).await;
     };
-    ($duration:expr, skewed_sync) => {
+    ($duration:expr,skewed_sync) => {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let subtraction: bool = rng.gen();
@@ -217,9 +217,10 @@ macro_rules! do_sleep {
 }
 
 /// Actual implementation for requesting IOs from PriorityBasedIORateLimiter.
-/// An attempt will first be recorded. If the attempted amount exceeds the available quotas of
-/// current epoch, the requester will be queued (logically) and sleep until served.
-/// Macro is necessary to de-dup codes used both in async/sync functions.
+/// An attempt will first be recorded. If the attempted amount exceeds the
+/// available quotas of current epoch, the requester will be queued (logically)
+/// and sleep until served. Macro is necessary to de-dup codes used both in
+/// async/sync functions.
 macro_rules! request_imp {
     ($limiter:ident, $priority:ident, $amount:ident, $mode:tt) => {{
         debug_assert!($amount > 0);
@@ -244,7 +245,8 @@ macro_rules! request_imp {
             // The request is already partially fulfilled in current epoch when consumption
             // overflow bytes are smaller than requested amount.
             let remains = std::cmp::min(bytes_through - cached_bytes_per_epoch, amount);
-            // When there is a recent refill, double check if bytes consumption has been reset.
+            // When there is a recent refill, double check if bytes consumption has been
+            // reset.
             if now + DEFAULT_REFILL_PERIOD < locked.next_refill_time + Duration::from_millis(1)
                 && $limiter.bytes_through[priority_idx].fetch_add(remains, Ordering::Relaxed)
                     + remains
@@ -252,8 +254,8 @@ macro_rules! request_imp {
             {
                 return amount;
             }
-            // Enqueue itself by adding to pending_bytes, whose current value denotes a position
-            // of logical queue to wait in.
+            // Enqueue itself by adding to pending_bytes, whose current value denotes a
+            // position of logical queue to wait in.
             locked.pending_bytes[priority_idx] += remains;
             // Calculate wait duration by queue_len / served_per_epoch.
             let wait = if locked.next_refill_time <= now {
@@ -343,11 +345,13 @@ impl PriorityBasedIORateLimiter {
 
     /// Updates and refills IO budgets for next epoch based on IO priority.
     /// Here we provide best-effort priority control:
-    /// 1) Limited IO budget is assigned to lower priority to ensure higher priority can at least
-    ///    consume the same IO amount as the last few epochs without breaching global threshold.
-    /// 2) Higher priority may temporarily use lower priority's IO budgets. When this happens,
-    ///    total IO flow could exceed global threshold.
-    /// 3) Highest priority IO alone must not exceed global threshold (in strict mode).
+    /// - Limited IO budget is assigned to lower priority to ensure higher
+    ///   priority can at least consume the same IO amount as the last few
+    ///   epochs without breaching global threshold.
+    /// - Higher priority may temporarily use lower priority's IO budgets. When
+    ///   this happens, total IO flow could exceed global threshold.
+    /// - Highest priority IO alone must not exceed global threshold (in strict
+    ///   mode).
     fn refill(&self, locked: &mut PriorityBasedIORateLimiterProtected, now: Instant) {
         let mut total_budgets =
             self.bytes_per_epoch[IOPriority::High as usize].load(Ordering::Relaxed);
@@ -368,8 +372,8 @@ impl PriorityBasedIORateLimiter {
         let mut used_budgets = 0;
         for pri in &[IOPriority::High, IOPriority::Medium] {
             let p = *pri as usize;
-            // Skipped epochs can only serve pending requests rather that in-coming ones, catch up
-            // by subtracting them from pending_bytes.
+            // Skipped epochs can only serve pending requests rather that in-coming ones,
+            // catch up by subtracting them from pending_bytes.
             let served_by_skipped_epochs = std::cmp::min(
                 (remaining_budgets as f32 * skipped_epochs) as usize,
                 locked.pending_bytes[p],
@@ -460,8 +464,8 @@ impl IORateLimiter {
     pub fn new_for_test() -> Self {
         IORateLimiter::new(
             IORateLimitMode::AllIo,
-            true, /*strict*/
-            true, /*enable_statistics*/
+            true, // strict
+            true, // enable_statistics
         )
     }
 
@@ -629,15 +633,15 @@ mod tests {
         let t0 = Instant::now();
         let _write_context = start_background_jobs(
             &limiter,
-            1, /*job_count*/
+            1, // job_count
             Request(IOType::ForegroundWrite, IOOp::Write, 10),
-            None, /*interval*/
+            None, // interval
         );
         let _compaction_context = start_background_jobs(
             &limiter,
-            1, /*job_count*/
+            1, // job_count
             Request(IOType::Compaction, IOOp::Write, 10),
-            None, /*interval*/
+            None, // interval
         );
         std::thread::sleep(Duration::from_secs(1));
         let t1 = Instant::now();
@@ -679,9 +683,9 @@ mod tests {
             {
                 let _context = start_background_jobs(
                     limiter,
-                    2, /*job_count*/
+                    2, // job_count
                     Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                    None, /*interval*/
+                    None, // interval
                 );
                 std::thread::sleep(duration);
             }
@@ -699,8 +703,8 @@ mod tests {
         let bytes_per_sec = 2000;
         let limiter = Arc::new(IORateLimiter::new(
             IORateLimitMode::AllIo,
-            false, /*strict*/
-            true,  /*enable_statistics*/
+            false, // strict
+            true,  // enable_statistics
         ));
         limiter.set_io_priority(IOType::ForegroundWrite, IOPriority::Medium);
         verify_rate_limit(&limiter, bytes_per_sec, Duration::from_secs(2));
@@ -712,9 +716,9 @@ mod tests {
             {
                 let _context = start_background_jobs(
                     &limiter,
-                    2, /*job_count*/
+                    2, // job_count
                     Request(IOType::ForegroundWrite, IOOp::Write, 10),
-                    None, /*interval*/
+                    None, // interval
                 );
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -750,7 +754,7 @@ mod tests {
                 // each thread request at most 1000 bytes per second
                 let _context = start_background_jobs(
                     &limiter,
-                    actual_kbytes_per_sec, /*job_count*/
+                    actual_kbytes_per_sec, // job_count
                     Request(IOType::Compaction, IOOp::Write, 1),
                     Some(Duration::from_millis(1)),
                 );
@@ -781,7 +785,7 @@ mod tests {
         {
             let _write = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::ForegroundWrite,
                     IOOp::Write,
@@ -791,7 +795,7 @@ mod tests {
             );
             let _compaction = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::Compaction,
                     IOOp::Write,
@@ -801,7 +805,7 @@ mod tests {
             );
             let _import = start_background_jobs(
                 &limiter,
-                1, /*job_count*/
+                1, // job_count
                 Request(
                     IOType::Import,
                     IOOp::Write,
@@ -826,7 +830,7 @@ mod tests {
 
     #[bench]
     fn bench_critical_section(b: &mut test::Bencher) {
-        let inner_limiter = PriorityBasedIORateLimiter::new(true /*strict*/);
+        let inner_limiter = PriorityBasedIORateLimiter::new(true /* strict */);
         inner_limiter.set_bytes_per_sec(1024);
         let now = Instant::now_coarse();
         b.iter(|| {
