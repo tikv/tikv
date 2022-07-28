@@ -4967,7 +4967,7 @@ mod tests {
             }
         }
 
-        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest, _: u64, _: u64) -> bool {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog
                 && self.filter_compact_log.deref().load(Ordering::SeqCst)
