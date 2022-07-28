@@ -3744,8 +3744,10 @@ where
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
             assert!(not_exist, "[region {}] should not exist", new_region_id);
-            meta.readers
-                .insert(new_region_id, ReadDelegateCore::from_peer(new_peer.get_peer()));
+            meta.readers.insert(
+                new_region_id,
+                ReadDelegateCore::from_peer(new_peer.get_peer()),
+            );
             meta.region_read_progress
                 .insert(new_region_id, new_peer.peer.read_progress.clone());
             if last_region_id == new_region_id {

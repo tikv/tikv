@@ -28,9 +28,9 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        DelegateStore, ReadDelegateCore, ReadDelegateExtTrait, ReadDelegateTrait, ReadExecutor,
-        ReadMetrics, ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy,
-        TrackVer, TxnExt,
+        DelegateStore, ReadDelegateCore, ReadDelegateTrait, ReadExecutor, ReadMetrics,
+        ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer,
+        TxnExt,
     },
     Error, Result,
 };
@@ -53,7 +53,7 @@ where
     cached_tablet: CachedTablet<E>,
 }
 
-impl<E> ReadDelegateTrait for ReadDelegate<E>
+impl<E> ReadDelegateTrait<E> for ReadDelegate<E>
 where
     E: KvEngine,
 {
@@ -89,73 +89,28 @@ where
 /// ReadExecutor, in v2, we use ReadDelegateExt to implement ReadDelegateExt so that each delegate can get its
 /// tablet/snapshot very quickly. But we also need to update some metrics which is a field of LocalReader, so we use this wrapper
 /// which will be used as a temporary local variable to make compiler happy.
-pub struct ReadDelegateExt<'a, E>
-where
-    E: KvEngine,
-{
-    delegate: Option<ReadDelegate<E>>,
-    metrics: &'a mut ReadMetrics,
-}
+// pub struct ReadDelegateExt<'a, E>
+// where
+//     E: KvEngine,
+// {
+//     delegate: ReadDelegate<E>,
+//     metrics: &'a mut ReadMetrics,
+// }
 
-impl<'a, E> ReadDelegateExtTrait<'a, E, ReadDelegate<E>> for ReadDelegateExt<'a, E>
-where
-    E: KvEngine,
-{
-    fn from_read_delegate(
-        delegate: ReadDelegate<E>,
-        _kv_engine: &'a E,
-        metrics: &'a mut ReadMetrics,
-        _read_id: &'a mut ThreadReadId,
-        _snap_cache: &'a mut Option<Arc<<E as KvEngine>::Snapshot>>,
-    ) -> Self {
-        ReadDelegateExt::<'a, _> {
-            delegate: Some(delegate),
-            metrics,
-        }
-    }
-
-    fn delegate(&self) -> &ReadDelegateCore {
-        // It should not be called after calling take_delegate
-        assert!(self.delegate.is_some());
-        self.delegate.as_ref().unwrap().delegate()
-    }
-
-    fn take_delegate(&mut self) -> ReadDelegate<E> {
-        // It should only be called once
-        assert!(self.delegate.is_some());
-        self.delegate.take().unwrap()
-    }
-
-    fn metrics(&mut self) -> &mut ReadMetrics {
-        self.metrics
-    }
-}
-
-impl<E> ReadExecutor<E> for ReadDelegateExt<'_, E>
+impl<E> ReadExecutor<E> for ReadDelegate<E>
 where
     E: KvEngine,
 {
     fn get_tablet(&mut self) -> &E {
-        self.delegate
-            .as_mut()
-            .unwrap()
-            .cached_tablet
-            .latest()
-            .unwrap()
+        self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
-        self.metrics.local_executed_requests += 1;
-        Arc::new(
-            self.delegate
-                .as_mut()
-                .unwrap()
-                .cached_tablet
-                .latest()
-                .unwrap()
-                .clone()
-                .snapshot(),
-        )
+    fn get_snapshot(
+        &mut self,
+        _: Option<ThreadReadId>,
+        _: &mut Option<raftstore::store::ReadDelegateExt<'_, E>>,
+    ) -> Arc<E::Snapshot> {
+        Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
 }
 
@@ -171,14 +126,12 @@ impl<E> StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    pub fn new(store_meta: StoreMeta<E>) -> StoreMetaDelegate<E> {
-        StoreMetaDelegate {
-            store_meta: Arc::new(Mutex::new(store_meta)),
-        }
+    pub fn new(store_meta: Arc<Mutex<StoreMeta<E>>>) -> StoreMetaDelegate<E> {
+        StoreMetaDelegate { store_meta }
     }
 }
 
-impl<E> DelegateStore for StoreMetaDelegate<E>
+impl<E> DelegateStore<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
@@ -214,7 +167,7 @@ mod tests {
     use engine_rocks::raw::Writable;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2};
     use engine_traits::{Peekable, SyncMutable, ALL_CFS};
-    use kvproto::raft_cmdpb::*;
+    use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
         RaftCommand,
@@ -271,7 +224,7 @@ mod tests {
     fn new_reader_and_factory(
         path: &str,
         store_id: u64,
-        store_meta: StoreMetaDelegate<KvTestEngine>,
+        store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
     ) -> (
         TempDir,
         LocalReader<
@@ -287,7 +240,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let db = engine_test::kv::new_engine(path_str, None, ALL_CFS, None).unwrap();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(db, store_meta, ch);
+        let mut reader = LocalReader::new(db, StoreMetaDelegate::new(store_meta), ch);
         reader.store_id = Cell::new(Some(store_id));
 
         let factory = Arc::new(TestTabletFactoryV2::new(path_str, None, ALL_CFS, None));
@@ -296,16 +249,17 @@ mod tests {
     }
 
     fn new_read_delegate(
-        region_id: u64,
+        region: &Region,
         peer_id: u64,
         term: u64,
         applied_index_term: u64,
     ) -> ReadDelegateCore {
-        let mut read_delegate_inner = ReadDelegateCore::mock(region_id);
-        read_delegate_inner.peer_id = peer_id;
-        read_delegate_inner.term = term;
-        read_delegate_inner.applied_index_term = applied_index_term;
-        read_delegate_inner
+        let mut read_delegate_core = ReadDelegateCore::mock(region.id);
+        read_delegate_core.peer_id = peer_id;
+        read_delegate_core.term = term;
+        read_delegate_core.applied_index_term = applied_index_term;
+        read_delegate_core.region = Arc::new(region.clone());
+        read_delegate_core
     }
 
     fn new_peers(store_id: u64, pr_ids: Vec<u64>) -> Vec<metapb::Peer> {
@@ -330,7 +284,7 @@ mod tests {
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
-        reader.propose_raft_command::<ReadDelegateExt<'_, KvTestEngine>>(
+        reader.propose_raft_command(
             None,
             cmd.clone(),
             Callback::Read(Box::new(|resp| {
@@ -355,11 +309,7 @@ mod tests {
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
-        reader.propose_raft_command::<ReadDelegateExt<'_, KvTestEngine>>(
-            None,
-            task.request,
-            task.callback,
-        );
+        reader.propose_raft_command(None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -408,7 +358,7 @@ mod tests {
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_no_region, 1);
         assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
-        assert!(reader.cached_delegates.get(&1).is_none());
+        assert!(reader.delegates.get(&1).is_none());
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -419,9 +369,9 @@ mod tests {
         {
             let mut meta = store_meta.lock().unwrap();
             let mut read_delegate = new_read_delegate(&region1, leader2.get_id(), term6, term6 - 1);
-            read_delegate.read_delegate.leader_lease = Some(remote);
+            read_delegate.leader_lease = Some(remote);
             meta.readers.insert(1, read_delegate);
-            meta.caches.insert(1, cached_tablet1);
+            meta.tablet_caches.insert(1, cached_tablet1);
         }
 
         // The applied_index_term is stale
@@ -433,7 +383,7 @@ mod tests {
         let pg = ReadProgress::applied_index_term(term6);
         {
             let mut meta = store_meta.lock().unwrap();
-            meta.readers.get_mut(&1).unwrap().read_delegate.update(pg);
+            meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
@@ -553,12 +503,10 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .read_delegate
                 .update(ReadProgress::term(term6 + 3));
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .read_delegate
                 .update(ReadProgress::applied_index_term(term6 + 3));
         }
         reader.propose_raft_command(
@@ -588,7 +536,7 @@ mod tests {
         let pg = ReadProgress::leader_lease(remote_lease);
         {
             let mut meta = store_meta.lock().unwrap();
-            meta.readers.get_mut(&1).unwrap().read_delegate.update(pg);
+            meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
             RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
@@ -636,7 +584,7 @@ mod tests {
     #[test]
     fn test_get_snapshot_from_different_regions() {
         let store_id = 2;
-        let store_meta = StoreMetaDelegate::new(StoreMeta::<KvTestEngine>::new());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         let (_tmp, mut reader, rx, factory) =
             new_reader_and_factory("test-local-reader", store_id, store_meta.clone());
         let mut region1 = metapb::Region::default();
@@ -690,9 +638,9 @@ mod tests {
         let mut cached_tablet1 = CachedTablet::new(Some(tablet1));
         let mut cached_tablet2 = CachedTablet::new(Some(tablet2));
         {
-            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
-            let mut read_delegate1 = new_read_delegate(region1.id, 1, 1, 1);
-            let mut read_delegate2 = new_read_delegate(region2.id, 2, 1, 1);
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            let mut read_delegate1 = new_read_delegate(&region1, 1, 1, 1);
+            let mut read_delegate2 = new_read_delegate(&region2, 2, 1, 1);
 
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250));
             lease.renew(monotonic_raw_now());
@@ -767,15 +715,15 @@ mod tests {
     #[test]
     fn test_read_delegate_cache_update() {
         let store_id = 2;
-        let store_meta = StoreMetaDelegate::new(StoreMeta::<KvTestEngine>::new());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         let (_tmp, mut reader, rx, factory) =
             new_reader_and_factory("test-local-reader", store_id, store_meta.clone());
         let mut region = metapb::Region::default();
         region.set_id(1);
         let tablet = factory.create_tablet(1, 0).unwrap();
         {
-            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
-            let read_delegate = new_read_delegate(region.id, 1, 1, 1);
+            let mut meta = store_meta.as_ref().lock().unwrap();
+            let read_delegate = new_read_delegate(&region, 1, 1, 1);
             meta.readers.insert(1, read_delegate);
             meta.tablet_caches
                 .insert(1, CachedTablet::new(Some(tablet)));
@@ -790,7 +738,7 @@ mod tests {
 
         {
             region.mut_region_epoch().set_version(10);
-            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
+            let mut meta = store_meta.as_ref().lock().unwrap();
             meta.readers
                 .get_mut(&1)
                 .unwrap()
@@ -799,7 +747,7 @@ mod tests {
         assert_eq!(&*reader.get_delegate(1).unwrap().delegate.region, &region);
 
         {
-            let mut meta = store_meta.store_meta.lock().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             meta.readers
                 .get_mut(&1)
                 .unwrap()
@@ -808,7 +756,7 @@ mod tests {
         assert_eq!(reader.get_delegate(1).unwrap().delegate.term, 2);
 
         {
-            let mut meta = store_meta.store_meta.lock().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             meta.readers
                 .get_mut(&1)
                 .unwrap()
@@ -823,7 +771,7 @@ mod tests {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
             let remote = lease.maybe_new_remote_lease(3).unwrap();
             let pg = ReadProgress::leader_lease(remote);
-            let mut meta = store_meta.store_meta.lock().unwrap();
+            let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let d = reader.get_delegate(1).unwrap();

@@ -1,10 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{
-    cell::RefCell,
-    sync::{Arc, Mutex},
-};
+use std::cell::RefCell;
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -14,10 +11,10 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::{RaftRouter, StoreMeta},
-        transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
+        fsm::RaftRouter,
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
         Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, ReadDelegate,
-        ReadDelegateExt, SignificantMsg, StoreMsg,
+        SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -171,13 +168,15 @@ where
 }
 
 /// A router that routes messages to the raftstore
+#[allow(clippy::type_complexity)]
 pub struct ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK, ReadDelegate, Arc<Mutex<StoreMeta>>>>,
+    local_reader:
+        RefCell<LocalReader<RaftRouter<EK, ER>, EK, ReadDelegate<EK>, StoreMetaDelegate<EK>>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -197,7 +196,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK, ReadDelegate, Arc<Mutex<StoreMeta>>>,
+        reader: LocalReader<RaftRouter<EK, ER>, EK, ReadDelegate<EK>, StoreMetaDelegate<EK>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
@@ -256,7 +255,7 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read::<ReadDelegateExt<'_, EK>>(read_id, req, cb);
+        local_reader.read(read_id, req, cb);
         Ok(())
     }
 

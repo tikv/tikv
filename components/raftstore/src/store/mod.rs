@@ -63,9 +63,9 @@ pub use self::{
     worker::{
         AutoSplitController, Bucket, BucketRange, CheckLeaderRunner, CheckLeaderTask,
         DelegateStore, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, PdTask,
-        QueryStats, ReadDelegate, ReadDelegateCore, ReadDelegateExt, ReadDelegateExtTrait,
-        ReadDelegateTrait, ReadExecutor, ReadMetrics, ReadProgress, ReadStats, RefreshConfigTask,
-        RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, TrackVer,
-        WriteStats,
+        QueryStats, ReadDelegate, ReadDelegateCore, ReadDelegateExt, ReadDelegateTrait,
+        ReadExecutor, ReadMetrics, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
+        TrackVer, WriteStats,
     },
 };
