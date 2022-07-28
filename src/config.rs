@@ -26,19 +26,19 @@ use engine_rocks::{
     get_env,
     properties::MvccPropertiesCollectorFactory,
     raw::{
-        BlockBasedOptions, Cache, ChecksumType, ColumnFamilyOptions, CompactionPriority,
-        DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env,
-        LRUCacheOptions, PrepopulateBlockCache, TitanDBOptions,
+        BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
+        DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+        PrepopulateBlockCache,
     },
-    raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDBOptions, RocksEngine,
+    RocksEventListener, RocksTitanDBOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptionsExt, TabletAccessor,
-    TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as _, DBOptionsExt,
+    TabletAccessor, TabletErrorCollector, TitanDBOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use file_system::IORateLimiter;
 use keys::region_raft_prefix_len;
@@ -178,8 +178,8 @@ impl Default for TitanCfConfig {
 }
 
 impl TitanCfConfig {
-    fn build_opts(&self) -> TitanDBOptions {
-        let mut opts = TitanDBOptions::new();
+    fn build_opts(&self) -> RocksTitanDBOptions {
+        let mut opts = RocksTitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
@@ -533,7 +533,7 @@ macro_rules! build_cf_opt {
         block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
         block_base_opts.set_format_version($opt.format_version);
         block_base_opts.set_checksum($opt.checksum);
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
         assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
@@ -592,7 +592,7 @@ macro_rules! build_cf_opt {
                     $opt.compaction_guard_min_output_file_size.0,
                 )
                 .unwrap();
-                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
+                cf_opts.set_sst_partitioner_factory(factory);
                 cf_opts.set_target_file_size_base($opt.compaction_guard_max_output_file_size.0);
             } else {
                 warn!("compaction guard is disabled due to region info provider not available")
@@ -671,7 +671,7 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-    ) -> ColumnFamilyOptions {
+    ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
@@ -782,7 +782,7 @@ impl WriteCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
+    ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
@@ -876,7 +876,7 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
         cf_opts
@@ -952,7 +952,7 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
         cf_opts
@@ -991,8 +991,8 @@ impl Default for TitanDBConfig {
 }
 
 impl TitanDBConfig {
-    fn build_opts(&self) -> TitanDBOptions {
-        let mut opts = TitanDBOptions::new();
+    fn build_opts(&self) -> RocksTitanDBOptions {
+        let mut opts = RocksTitanDBOptions::new();
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
@@ -1131,8 +1131,8 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn build_opt(&self) -> DBOptions {
-        let mut opts = DBOptions::new();
+    pub fn build_opt(&self) -> RocksDBOptions {
+        let mut opts = RocksDBOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1195,20 +1195,20 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-    ) -> Vec<CFOptions<'_>> {
+    ) -> Vec<(&'static str, RocksCfOptions)> {
         vec![
-            CFOptions::new(
+            (
                 CF_DEFAULT,
                 self.defaultcf
                     .build_opt(cache, region_info_accessor, api_version),
             ),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(
+            (CF_LOCK, self.lockcf.build_opt(cache)),
+            (
                 CF_WRITE,
                 self.writecf.build_opt(cache, region_info_accessor),
             ),
             // TODO: remove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            (CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
@@ -1319,7 +1319,7 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
@@ -1431,8 +1431,8 @@ impl Default for RaftDbConfig {
 }
 
 impl RaftDbConfig {
-    pub fn build_opt(&self) -> DBOptions {
-        let mut opts = DBOptions::new();
+    pub fn build_opt(&self) -> RocksDBOptions {
+        let mut opts = RocksDBOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1473,8 +1473,8 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<(&'static str, RocksCfOptions)> {
+        vec![(CF_DEFAULT, self.defaultcf.build_opt(cache))]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
@@ -1597,14 +1597,11 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let r = db.get_options_cf(cf);
-                if let Ok(opt) = r {
-                    let r = opt.set_block_cache_capacity(size.0);
-                    if let Err(r) = r {
-                        error_collector.add_result(region_id, suffix, Err(r.into()));
-                    }
-                } else if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r));
+                let r = db
+                    .get_options_cf(cf)
+                    .and_then(|opt| opt.set_block_cache_capacity(size.0));
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 }
             });
         // Write config to metric
@@ -1618,10 +1615,10 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.as_inner().get_db_options();
+                let mut opt = db.get_db_options();
                 let r = opt.set_rate_bytes_per_sec(rate_bytes_per_sec);
-                if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 }
             });
         error_collector.take_result()
@@ -1634,20 +1631,24 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
             .for_each_opened_tablet(&mut |region_id, suffix, db: &RocksEngine| {
-                let mut opt = db.as_inner().get_db_options();
-                let r = opt.set_auto_tuned(rate_limiter_auto_tuned);
-                if let Err(r) = r {
-                    error_collector.add_result(region_id, suffix, Err(r.into()));
+                let mut opt = db.get_db_options();
+                let r = opt.set_rate_limiter_auto_tuned(rate_limiter_auto_tuned);
+                if r.is_err() {
+                    error_collector.add_result(region_id, suffix, r);
                 } else {
                     // double check the new state
-                    let new_auto_tuned = opt.get_auto_tuned();
+                    let new_auto_tuned = opt.get_rate_limiter_auto_tuned();
                     if new_auto_tuned.is_none()
                         || new_auto_tuned.unwrap() != rate_limiter_auto_tuned
                     {
                         error_collector.add_result(
                             region_id,
                             suffix,
-                            Err("fail to set rate_limiter_auto_tuned".to_string().into()),
+                            Err(engine_traits::Status::with_error(
+                                engine_traits::Code::IoError,
+                                "fail to set rate_limiter_auto_tuned",
+                            )
+                            .into()),
                         );
                     }
                 }
@@ -4047,7 +4048,6 @@ mod tests {
     use case_macros::*;
     use engine_traits::{
         ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
-        ALL_CFS,
     };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
@@ -4468,15 +4468,14 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            ALL_CFS,
-            Some(cfg.rocksdb.build_cf_opts(
+            Some(cfg.rocksdb.build_opt()),
+            cfg.rocksdb.build_cf_opts(
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
-            )),
+            ),
             true,
             None,
-            Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
         let storage =
@@ -4929,7 +4928,7 @@ mod tests {
         cfg.quota.foreground_write_bandwidth = ReadableSize::mb(256);
         assert_eq!(cfg_controller.get_current(), cfg);
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(125));
@@ -4939,7 +4938,7 @@ mod tests {
             .unwrap();
         cfg.quota.foreground_read_bandwidth = ReadableSize::mb(512);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(500));
@@ -4956,7 +4955,7 @@ mod tests {
         cfg.quota.background_write_bandwidth = ReadableSize::mb(256);
         assert_eq!(cfg_controller.get_current(), cfg);
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_read_bytes(ReadableSize::mb(32).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(125));
@@ -4966,7 +4965,7 @@ mod tests {
             .unwrap();
         cfg.quota.background_read_bandwidth = ReadableSize::mb(512);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(500));
@@ -4976,12 +4975,12 @@ mod tests {
             .unwrap();
         cfg.quota.max_delay_duration = ReadableDuration::millis(50);
         assert_eq!(cfg_controller.get_current(), cfg);
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, true));
         assert_eq!(should_delay, Duration::from_millis(50));
 
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(false);
         sample.add_write_bytes(ReadableSize::mb(128).0 as usize);
         let should_delay = block_on(quota_limiter.consume_sample(sample, false));
         assert_eq!(should_delay, Duration::from_millis(50));

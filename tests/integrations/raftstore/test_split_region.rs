@@ -7,8 +7,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
-use engine_traits::{Iterable, Peekable, CF_WRITE};
+use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
@@ -202,11 +201,17 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut size = 0;
     cluster.engines[&store_id]
         .kv
-        .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
-            size += k.len() as u64;
-            size += v.len() as u64;
-            Ok(true)
-        })
+        .scan(
+            CF_DEFAULT,
+            &data_key(b""),
+            &data_key(middle_key),
+            false,
+            |k, v| {
+                size += k.len() as u64;
+                size += v.len() as u64;
+                Ok(true)
+            },
+        )
         .expect("");
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
@@ -289,7 +294,7 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             // Note that a follower can still commit the log by an empty MsgAppend
             // when bcast commit is disabled. A heartbeat response comes to leader
             // before MsgAppendResponse will trigger MsgAppend.
-            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+            match engine.get_value(&keys::data_key(k)).unwrap() {
                 Some(res) => assert_eq!(v, &res[..]),
                 None => missing_count += 1,
             }

@@ -561,7 +561,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             iter_opt.set_prefix_same_as_start(true);
         }
         Ok(Cursor::new(
-            self.snapshot.iter_cf(self.cf, iter_opt)?,
+            self.snapshot.iter(self.cf, iter_opt)?,
             self.scan_mode,
             self.prefix_seek,
         ))
@@ -570,13 +570,9 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_rocks::{
-        raw::ColumnFamilyOptions,
-        raw_util::{new_engine, CFOptions},
-        util::{new_temp_engine, FixedPrefixSliceTransform},
-        RocksEngine, RocksSnapshot,
+        util::{new_engine_opt, new_temp_engine, FixedPrefixSliceTransform},
+        RocksCfOptions, RocksDBOptions, RocksEngine, RocksSnapshot,
     };
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
@@ -613,22 +609,19 @@ mod tests {
     #[test]
     fn test_seek_and_prev_with_prefix_seek() {
         let path = Builder::new().prefix("test-cursor").tempdir().unwrap();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts
             .set_prefix_extractor(
                 "FixedPrefixSliceTransform",
                 FixedPrefixSliceTransform::new(3),
             )
             .unwrap();
-        let engine = new_engine(
+        let engine = new_engine_opt(
             path.path().to_str().unwrap(),
-            None,
-            &[CF_DEFAULT],
-            Some(vec![CFOptions::new(CF_DEFAULT, cf_opts)]),
+            RocksDBOptions::default(),
+            vec![(CF_DEFAULT, cf_opts)],
         )
         .unwrap();
-        let engine = Arc::new(engine);
-        let engine = RocksEngine::from_db(engine);
 
         let (region, _) = load_default_dataset(engine.clone());
 
@@ -637,7 +630,7 @@ mod tests {
         let mut iter_opt = IterOptions::default();
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
-        let it = snap.iter(iter_opt);
+        let it = snap.iter(CF_DEFAULT, iter_opt).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, true);
 
         assert!(
@@ -677,7 +670,7 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv.clone(), region);
         let mut statistics = CfStatistics::default();
-        let it = snap.iter(IterOptions::default());
+        let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(
             !iter
@@ -735,7 +728,7 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         let snap = RegionSnapshot::<RocksSnapshot>::from_raw(engines.kv, region);
-        let it = snap.iter(IterOptions::default());
+        let it = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         let mut iter = Cursor::new(it, ScanMode::Mixed, false);
         assert!(
             !iter

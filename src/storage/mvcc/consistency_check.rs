@@ -12,8 +12,8 @@ use std::{
 };
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, SeekKey, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, CF_DEFAULT, CF_LOCK,
+    CF_RAFT, CF_WRITE,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use raftstore::{
@@ -105,7 +105,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
         }
 
         let mut scanner = MvccInfoScanner::new(
-            |cf, opts| snap.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+            |cf, opts| snap.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
             Some(&keys::data_key(region.get_start_key())),
             Some(&keys::data_end_key(region.get_end_key())),
             MvccChecksum::new(safe_point),
@@ -162,7 +162,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         let iter_opts = IterOptions::new(key_builder(from)?, key_builder(to)?, false);
         let gen_iter = |cf: &str| -> Result<Iter> {
             let mut iter = f(cf, iter_opts.clone())?;
-            box_try!(iter.seek(SeekKey::Key(from)));
+            box_try!(iter.seek(from));
             Ok(iter)
         };
 
@@ -464,7 +464,7 @@ mod tests {
         for &safe_point in &[150, 160, 100] {
             let raw = engine.get_rocksdb();
             let mut scanner = MvccInfoScanner::new(
-                |cf, opts| raw.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| raw.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 Some(&keys::data_key(b"")),
                 Some(&keys::data_end_key(b"")),
                 MvccChecksum::new(safe_point),
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -495,10 +495,10 @@ mod tests {
             path,
             DBOptions::default(),
             vec![
-                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, ColumnFamilyOptions::new()),
+                (CF_WRITE, ColumnFamilyOptions::new()),
+                (CF_LOCK, ColumnFamilyOptions::new()),
+                (CF_RAFT, ColumnFamilyOptions::new()),
             ],
         )
         .unwrap();
@@ -556,7 +556,7 @@ mod tests {
 
         let scan_mvcc = |start: &[u8], end: &[u8], limit: u64| {
             MvccInfoIterator::new(
-                |cf, opts| engine.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| engine.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 if start.is_empty() { None } else { Some(start) },
                 if end.is_empty() { None } else { Some(end) },
                 limit as usize,

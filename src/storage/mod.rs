@@ -569,7 +569,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
 
         let quota_limiter = self.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -898,7 +898,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -2728,16 +2728,12 @@ impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
         self.snapshot.get_cf_opt(opts, cf, key)
     }
 
-    fn iter(&self, iter_opt: engine_traits::IterOptions) -> tikv_kv::Result<Self::Iter> {
-        self.snapshot.iter(iter_opt)
-    }
-
-    fn iter_cf(
+    fn iter(
         &self,
         cf: CfName,
         iter_opt: engine_traits::IterOptions,
     ) -> tikv_kv::Result<Self::Iter> {
-        self.snapshot.iter_cf(cf, iter_opt)
+        self.snapshot.iter(cf, iter_opt)
     }
 
     fn ext(&self) -> Self::Ext<'_> {
@@ -3105,8 +3101,7 @@ mod tests {
 
     use api_version::{test_kv_format_impl, ApiV2};
     use collections::HashMap;
-    use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{raw_ttl::ttl_current_ts, CF_LOCK, CF_RAFT, CF_WRITE};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
@@ -3236,7 +3231,10 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs([CF_DEFAULT, "foo"])
+            .build()
+            .unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
             .build()
             .unwrap();
@@ -3642,27 +3640,25 @@ mod tests {
         };
         let engine = {
             let path = "".to_owned();
-            let cfs = ALL_CFS.to_vec();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(
+                (
                     CF_DEFAULT,
                     cfg_rocksdb
                         .defaultcf
                         .build_opt(&cache, None, ApiVersion::V1),
                 ),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
                 &path,
-                &cfs,
-                Some(cfs_opts),
+                None,
+                cfs_opts,
                 cache.is_some(),
                 None, /*io_rate_limiter*/
-                None, /* CFOptions */
             )
         }
         .unwrap();

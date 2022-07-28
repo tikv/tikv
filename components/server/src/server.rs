@@ -649,7 +649,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         if let Some(sst_worker) = &mut self.sst_worker {
             let sst_runner = RecoveryRunner::new(
-                engines.engines.kv.get_sync_db(),
+                engines.engines.kv.clone(),
                 engines.store_meta.clone(),
                 self.config.storage.background_error_recovery_window.into(),
                 DEFAULT_CHECK_INTERVAL,
@@ -1186,7 +1186,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
+            engines.engines.kv.clone(),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),
@@ -1551,10 +1551,9 @@ impl ConfiguredRaftEngine for RocksEngine {
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb =
-            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+        let mut raftdb =
+            engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
                 .expect("failed to open raftdb");
-        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(block_cache.is_some());
 
         if should_dump {
@@ -1609,13 +1608,12 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             let mut raft_db_opts = config_raftdb.build_opt();
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::raw_util::new_engine_opt(
+            let raftdb = engine_rocks::util::new_engine_opt(
                 &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )
             .expect("failed to open raftdb for migration");
-            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
             raftdb.stop();
             drop(raftdb);

@@ -8,7 +8,7 @@ use std::{
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, ALL_CFS};
+use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -49,25 +49,12 @@ impl Transport for MockTransport {
 }
 
 fn create_tmp_engine(dir: &TempDir) -> Engines<RocksEngine, RocksEngine> {
-    let db = Arc::new(
-        engine_rocks::raw_util::new_engine(
-            dir.path().join("db").to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-        )
-        .unwrap(),
-    );
-    let raft_db = Arc::new(
-        engine_rocks::raw_util::new_engine(
-            dir.path().join("raft").to_str().unwrap(),
-            None,
-            &[],
-            None,
-        )
-        .unwrap(),
-    );
-    Engines::new(RocksEngine::from_db(db), RocksEngine::from_db(raft_db))
+    let db =
+        engine_rocks::util::new_engine(dir.path().join("db").to_str().unwrap(), ALL_CFS).unwrap();
+    let raft_db =
+        engine_rocks::util::new_engine(dir.path().join("raft").to_str().unwrap(), &[CF_DEFAULT])
+            .unwrap();
+    Engines::new(db, raft_db)
 }
 
 fn start_raftstore(

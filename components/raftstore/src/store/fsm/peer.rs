@@ -2110,7 +2110,7 @@ where
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
-                    res.applied_index_term,
+                    res.applied_term,
                     &res.metrics,
                 );
                 // After applying, several metrics are updated, report it to pd to

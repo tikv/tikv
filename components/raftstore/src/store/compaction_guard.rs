@@ -195,16 +195,14 @@ impl<P: RegionInfoProvider> SstPartitioner for CompactionGuardGenerator<P> {
 
 #[cfg(test)]
 mod tests {
-    use std::{str, sync::Arc};
+    use std::str;
 
     use engine_rocks::{
-        raw::{BlockBasedOptions, ColumnFamilyOptions, DBCompressionType, DBOptions},
-        raw_util::{new_engine_opt, CFOptions},
-        RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
+        raw::{BlockBasedOptions, DBCompressionType},
+        util::new_engine_opt,
+        RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
-    use engine_traits::{
-        CompactExt, Iterator, MiscExt, SeekKey, SstReader, SyncMutable, CF_DEFAULT,
-    };
+    use engine_traits::{CompactExt, Iterator, MiscExt, SstReader, SyncMutable, CF_DEFAULT};
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::TempDir;
@@ -369,7 +367,7 @@ mod tests {
     fn new_test_db(provider: MockRegionInfoProvider) -> (RocksEngine, TempDir) {
         let temp_dir = TempDir::new().unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
         cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
             CompactionGuardGeneratorFactory::new(CF_DEFAULT, provider, MIN_OUTPUT_FILE_SIZE)
@@ -391,20 +389,18 @@ mod tests {
         block_based_opts.set_block_size(100);
         cf_opts.set_block_based_table_factory(&block_based_opts);
 
-        let db = RocksEngine::from_db(Arc::new(
-            new_engine_opt(
-                temp_dir.path().to_str().unwrap(),
-                DBOptions::new(),
-                vec![CFOptions::new(CF_DEFAULT, cf_opts)],
-            )
-            .unwrap(),
-        ));
+        let db = new_engine_opt(
+            temp_dir.path().to_str().unwrap(),
+            RocksDBOptions::default(),
+            vec![(CF_DEFAULT, cf_opts)],
+        )
+        .unwrap();
         (db, temp_dir)
     }
 
     fn collect_keys(path: &str) -> Vec<Vec<u8>> {
         let mut sst_reader = RocksSstReader::open(path).unwrap().iter();
-        let mut valid = sst_reader.seek(SeekKey::Start).unwrap();
+        let mut valid = sst_reader.seek_to_first().unwrap();
         let mut ret = vec![];
         while valid {
             ret.push(sst_reader.key().to_owned());

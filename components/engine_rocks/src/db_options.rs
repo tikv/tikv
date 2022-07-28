@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::{Deref, DerefMut};
+
 use engine_traits::{DBOptions, DBOptionsExt, Result, TitanDBOptions};
 use rocksdb::{DBOptions as RawDBOptions, TitanDBOptions as RawTitanDBOptions};
 use tikv_util::box_err;
@@ -19,6 +21,7 @@ impl DBOptionsExt for RocksEngine {
     }
 }
 
+#[derive(Default)]
 pub struct RocksDBOptions(RawDBOptions);
 
 impl RocksDBOptions {
@@ -32,6 +35,22 @@ impl RocksDBOptions {
 
     pub fn get_max_background_flushes(&self) -> i32 {
         self.0.get_max_background_flushes()
+    }
+}
+
+impl Deref for RocksDBOptions {
+    type Target = RawDBOptions;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RocksDBOptions {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -80,6 +99,22 @@ impl RocksTitanDBOptions {
 
     pub fn as_raw(&self) -> &RawTitanDBOptions {
         &self.0
+    }
+}
+
+impl Deref for RocksTitanDBOptions {
+    type Target = RawTitanDBOptions;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RocksTitanDBOptions {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

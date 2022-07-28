@@ -44,7 +44,7 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64 {
         panic!()
     }
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         panic!()
     }
     fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
