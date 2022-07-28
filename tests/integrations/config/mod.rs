@@ -14,7 +14,7 @@ use engine_rocks::{
     },
 };
 use engine_traits::PerfLevel;
-use file_system::{IOPriority, IORateLimitMode};
+use file_system::{IoPriority, IoRateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
@@ -32,7 +32,7 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
@@ -681,21 +681,21 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         },
-        io_rate_limit: IORateLimitConfig {
+        io_rate_limit: IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(1000),
-            mode: IORateLimitMode::AllIo,
+            mode: IoRateLimitMode::AllIo,
             strict: true,
-            foreground_read_priority: IOPriority::Low,
-            foreground_write_priority: IOPriority::Low,
-            flush_priority: IOPriority::Low,
-            level_zero_compaction_priority: IOPriority::Low,
-            compaction_priority: IOPriority::High,
-            replication_priority: IOPriority::Low,
-            load_balance_priority: IOPriority::Low,
-            gc_priority: IOPriority::High,
-            import_priority: IOPriority::High,
-            export_priority: IOPriority::High,
-            other_priority: IOPriority::Low,
+            foreground_read_priority: IoPriority::Low,
+            foreground_write_priority: IoPriority::Low,
+            flush_priority: IoPriority::Low,
+            level_zero_compaction_priority: IoPriority::Low,
+            compaction_priority: IoPriority::High,
+            replication_priority: IoPriority::Low,
+            load_balance_priority: IoPriority::Low,
+            gc_priority: IoPriority::High,
+            import_priority: IoPriority::High,
+            export_priority: IoPriority::High,
+            other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),
     };

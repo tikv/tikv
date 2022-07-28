@@ -52,49 +52,49 @@ use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
-pub trait AsMySQLBool {
+pub trait AsMySqlBool {
     /// Evaluates into a MySQL logic value.
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool>;
 }
 
-impl AsMySQLBool for Int {
+impl AsMySqlBool for Int {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(*self != 0)
     }
 }
 
-impl AsMySQLBool for Real {
+impl AsMySqlBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(self.into_inner() != 0f64)
     }
 }
 
-impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
+impl<'a, T: AsMySqlBool> AsMySqlBool for &'a T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         (**self).as_mysql_bool(context)
     }
 }
 
-impl AsMySQLBool for Bytes {
+impl AsMySqlBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         self.as_slice().as_mysql_bool(context)
     }
 }
 
-impl<'a> AsMySQLBool for BytesRef<'a> {
+impl<'a> AsMySqlBool for BytesRef<'a> {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
-impl<'a, T> AsMySQLBool for Option<&'a T>
+impl<'a, T> AsMySqlBool for Option<&'a T>
 where
-    T: AsMySQLBool,
+    T: AsMySqlBool,
 {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
@@ -104,25 +104,25 @@ where
     }
 }
 
-impl<'a> AsMySQLBool for JsonRef<'a> {
+impl<'a> AsMySqlBool for JsonRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_zero())
     }
 }
 
-impl<'a> AsMySQLBool for EnumRef<'a> {
+impl<'a> AsMySqlBool for EnumRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySQLBool for SetRef<'a> {
+impl<'a> AsMySqlBool for SetRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
+impl<'a> AsMySqlBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -131,7 +131,7 @@ impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
+impl<'a> AsMySqlBool for Option<JsonRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -140,7 +140,7 @@ impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
+impl<'a> AsMySqlBool for Option<EnumRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -149,7 +149,7 @@ impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<SetRef<'a>> {
+impl<'a> AsMySqlBool for Option<SetRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),

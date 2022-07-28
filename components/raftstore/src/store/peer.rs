@@ -2548,7 +2548,7 @@ where
         let persisted_msgs = ready.take_persisted_messages();
         let mut has_write_ready = false;
         match &res {
-            HandleReadyResult::SendIOTask | HandleReadyResult::Snapshot { .. } => {
+            HandleReadyResult::SendIoTask | HandleReadyResult::Snapshot { .. } => {
                 if !persisted_msgs.is_empty() {
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
@@ -2579,7 +2579,7 @@ where
                     self.raft_group.advance_append_async(ready);
                 }
             }
-            HandleReadyResult::NoIOTask => {
+            HandleReadyResult::NoIoTask => {
                 if let Some(last) = self.unpersisted_readies.back_mut() {
                     // Attach to the last unpersisted ready so that it can be considered to be
                     // persisted with the last ready at the same time.

@@ -1177,7 +1177,7 @@ pub mod tests {
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
-    use file_system::{IOOp, IORateLimiter, IOType};
+    use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::metapb;
     use raftstore::{
@@ -1261,7 +1261,7 @@ pub mod tests {
     }
 
     pub fn new_endpoint_with_limiter(
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Option<Arc<IoRateLimiter>>,
         api_version: ApiVersion,
         is_raw_kv: bool,
         causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
@@ -1504,7 +1504,7 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task() {
-        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), ApiVersion::V1, false, None);
         let engine = endpoint.engine.clone();
@@ -1581,8 +1581,8 @@ pub mod tests {
             );
             let (none, _rx) = block_on(rx.into_future());
             assert!(none.is_none(), "{:?}", none);
-            assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
-            assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
+            assert_eq!(stats.fetch(IoType::Export, IoOp::Write), 0);
+            assert_ne!(stats.fetch(IoType::Export, IoOp::Read), 0);
         }
     }
 
@@ -1643,7 +1643,7 @@ pub mod tests {
     }
 
     fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
-        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
         let engine = endpoint.engine.clone();
@@ -1755,8 +1755,8 @@ pub mod tests {
         );
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
-        assert_eq!(stats.fetch(IOType::Export, IOOp::Write), 0);
-        assert_ne!(stats.fetch(IOType::Export, IOOp::Read), 0);
+        assert_eq!(stats.fetch(IoType::Export, IoOp::Write), 0);
+        assert_ne!(stats.fetch(IoType::Export, IoOp::Read), 0);
         true
     }
 
@@ -1784,7 +1784,7 @@ pub mod tests {
 
     #[test]
     fn test_backup_raw_apiv2_causal_ts() {
-        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
         let ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
         let start_ts = ts_provider.get_ts().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(

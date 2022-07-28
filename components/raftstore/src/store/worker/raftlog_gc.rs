@@ -6,8 +6,8 @@ use std::{
     sync::mpsc::Sender,
 };
 
-use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
-use file_system::{IOType, WithIOType};
+use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGcTask};
+use file_system::{IoType, WithIoType};
 use thiserror::Error;
 use tikv_util::{
     box_try, debug, error,
@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
+    fn gc_raft_log(&mut self, regions: Vec<RaftLogGcTask>) -> Result<usize, Error> {
         fail::fail_point!("worker_gc_raft_log", |s| {
             Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
         });
@@ -136,7 +136,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     "end_index" => t.end_idx,
                 );
             }
-            groups.push(RaftLogGCTask {
+            groups.push(RaftLogGcTask {
                 raft_group_id: t.region_id,
                 from: t.start_idx,
                 to: t.end_idx,
@@ -170,7 +170,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
+        let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
         let flush_now = task.flush;
         self.tasks.push(task);
         // TODO: maybe they should also be batched even `flush_now` is true.

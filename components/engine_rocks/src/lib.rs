@@ -110,7 +110,7 @@ pub mod raw;
 
 pub fn get_env(
     key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
-    limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
+    limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
     let env = encryption::get_env(None /*base_env*/, key_manager)?;
     file_system::get_env(Some(env), limiter)

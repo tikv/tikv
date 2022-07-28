@@ -19,7 +19,7 @@ use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{Context, LockInfo},
@@ -766,7 +766,7 @@ where
 
     #[inline]
     fn run(&mut self, task: GcTask<E::Local>) {
-        let _io_type_guard = WithIOType::new(IOType::Gc);
+        let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();

@@ -1958,7 +1958,7 @@ pub trait TimeDecoder: NumberDecoder {
 
 impl<T: BufferReader> TimeDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Time {
+impl crate::codec::data_type::AsMySqlBool for Time {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())

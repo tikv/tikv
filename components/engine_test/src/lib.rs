@@ -312,7 +312,7 @@ pub mod ctor {
 
     use encryption::DataKeyManager;
     use engine_traits::Result;
-    use file_system::IORateLimiter;
+    use file_system::IoRateLimiter;
 
     /// Kv engine construction
     ///
@@ -354,7 +354,7 @@ pub mod ctor {
     #[derive(Clone, Default)]
     pub struct DbOptions {
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
         enable_multi_batch_write: bool,
     }
 
@@ -363,7 +363,7 @@ pub mod ctor {
             self.key_manager = key_manager;
         }
 
-        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
+        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IoRateLimiter>>) {
             self.rate_limiter = rate_limiter;
         }
 

@@ -16,7 +16,7 @@ use engine_rocks::{
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -91,7 +91,7 @@ impl RocksEngine {
         db_opts: Option<RocksDbOptions>,
         cfs_opts: Vec<(CfName, RocksCfOptions)>,
         shared_block_cache: bool,
-        io_rate_limiter: Option<Arc<IORateLimiter>>,
+        io_rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {

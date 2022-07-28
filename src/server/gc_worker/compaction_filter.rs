@@ -23,7 +23,7 @@ use engine_rocks::{
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -464,7 +464,7 @@ impl WriteCompactionFilter {
             wb: &RocksWriteBatchVec,
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
-            let _io_type_guard = WithIOType::new(IOType::Gc);
+            let _io_type_guard = WithIoType::new(IoType::Gc);
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
                 Err(engine_traits::Error::Engine(
                     engine_traits::Status::with_error(
@@ -722,7 +722,7 @@ pub mod test_utils {
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
 
-        TestGCRunner::new(safe_point).gc(&engine);
+        TestGcRunner::new(safe_point).gc(&engine);
     }
 
     lazy_static! {
@@ -737,7 +737,7 @@ pub mod test_utils {
         compact_opts
     }
 
-    pub struct TestGCRunner<'a> {
+    pub struct TestGcRunner<'a> {
         pub safe_point: u64,
         pub ratio_threshold: Option<f64>,
         pub start: Option<&'a [u8]>,
@@ -748,11 +748,11 @@ pub mod test_utils {
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
-    impl<'a> TestGCRunner<'a> {
+    impl<'a> TestGcRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
 
-            TestGCRunner {
+            TestGcRunner {
                 safe_point,
                 ratio_threshold: None,
                 start: None,
@@ -765,7 +765,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'a> TestGCRunner<'a> {
+    impl<'a> TestGcRunner<'a> {
         pub fn safe_point(&mut self, sp: u64) -> &mut Self {
             self.safe_point = sp;
             self
@@ -912,7 +912,7 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         // GC can't delete keys after the given safe point.
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -945,7 +945,7 @@ pub mod tests {
         let value = vec![b'v'; 512];
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc(&raw_engine);
@@ -1013,7 +1013,7 @@ pub mod tests {
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         for start_ts in &[100, 110, 120, 130] {
             must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
@@ -1078,7 +1078,7 @@ pub mod tests {
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         // So the construction of SST files will be:
         // L6: |key_110|

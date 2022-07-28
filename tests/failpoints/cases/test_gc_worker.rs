@@ -17,7 +17,7 @@ use raftstore::coprocessor::{
 use test_raftstore::*;
 use tikv::{
     server::gc_worker::{
-        AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGCRunner,
+        AutoGcConfig, GcSafePointProvider, GcTask, Result as GcWorkerResult, TestGcRunner,
     },
     storage::{
         kv::TestEngineBuilder,
@@ -317,7 +317,7 @@ fn test_error_in_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::new(200);
+    let mut gc_runner = TestGcRunner::new(200);
     gc_runner.gc(&raw_engine);
 
     match gc_runner.gc_receiver.recv().unwrap() {
@@ -370,7 +370,7 @@ fn test_orphan_versions_from_compaction_filter() {
     let fp = "write_compaction_filter_flush_write_batch";
     fail::cfg(fp, "return").unwrap();
 
-    let mut gc_runner = TestGCRunner::new(100);
+    let mut gc_runner = TestGcRunner::new(100);
     gc_runner.gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
     gc_runner.gc(&engine.kv);
 

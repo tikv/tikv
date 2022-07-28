@@ -42,21 +42,21 @@ use openssl::{
     hash::{self, Hasher, MessageDigest},
 };
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IOBudgetAdjustor, IORateLimitMode, IORateLimiter,
-    IORateLimiterStatistics,
+    get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
+    IoRateLimiterStatistics,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IOOp {
+pub enum IoOp {
     Read,
     Write,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount, EnumIter)]
-pub enum IOType {
+pub enum IoType {
     Other = 0,
     // Including coprocessor and storage read.
     ForegroundRead = 1,
@@ -74,37 +74,37 @@ pub enum IOType {
     Export = 10,
 }
 
-impl IOType {
+impl IoType {
     pub fn as_str(&self) -> &str {
         match *self {
-            IOType::Other => "other",
-            IOType::ForegroundRead => "foreground_read",
-            IOType::ForegroundWrite => "foreground_write",
-            IOType::Flush => "flush",
-            IOType::LevelZeroCompaction => "level_zero_compaction",
-            IOType::Compaction => "compaction",
-            IOType::Replication => "replication",
-            IOType::LoadBalance => "load_balance",
-            IOType::Gc => "gc",
-            IOType::Import => "import",
-            IOType::Export => "export",
+            IoType::Other => "other",
+            IoType::ForegroundRead => "foreground_read",
+            IoType::ForegroundWrite => "foreground_write",
+            IoType::Flush => "flush",
+            IoType::LevelZeroCompaction => "level_zero_compaction",
+            IoType::Compaction => "compaction",
+            IoType::Replication => "replication",
+            IoType::LoadBalance => "load_balance",
+            IoType::Gc => "gc",
+            IoType::Import => "import",
+            IoType::Export => "export",
         }
     }
 }
 
-pub struct WithIOType {
-    previous_io_type: IOType,
+pub struct WithIoType {
+    previous_io_type: IoType,
 }
 
-impl WithIOType {
-    pub fn new(new_io_type: IOType) -> WithIOType {
+impl WithIoType {
+    pub fn new(new_io_type: IoType) -> WithIoType {
         let previous_io_type = get_io_type();
         set_io_type(new_io_type);
-        WithIOType { previous_io_type }
+        WithIoType { previous_io_type }
     }
 }
 
-impl Drop for WithIOType {
+impl Drop for WithIoType {
     fn drop(&mut self) {
         set_io_type(self.previous_io_type);
     }
@@ -112,12 +112,12 @@ impl Drop for WithIOType {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
-pub struct IOBytes {
+pub struct IoBytes {
     read: u64,
     write: u64,
 }
 
-impl std::ops::Sub for IOBytes {
+impl std::ops::Sub for IoBytes {
     type Output = Self;
 
     fn sub(self, other: Self) -> Self::Output {
@@ -130,18 +130,18 @@ impl std::ops::Sub for IOBytes {
 
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
-pub enum IOPriority {
+pub enum IoPriority {
     Low = 0,
     Medium = 1,
     High = 2,
 }
 
-impl IOPriority {
+impl IoPriority {
     pub fn as_str(&self) -> &str {
         match *self {
-            IOPriority::Low => "low",
-            IOPriority::Medium => "medium",
-            IOPriority::High => "high",
+            IoPriority::Low => "low",
+            IoPriority::Medium => "medium",
+            IoPriority::High => "high",
         }
     }
 
@@ -150,19 +150,19 @@ impl IOPriority {
     }
 }
 
-impl std::str::FromStr for IOPriority {
+impl std::str::FromStr for IoPriority {
     type Err = String;
-    fn from_str(s: &str) -> Result<IOPriority, String> {
+    fn from_str(s: &str) -> Result<IoPriority, String> {
         match s {
-            "low" => Ok(IOPriority::Low),
-            "medium" => Ok(IOPriority::Medium),
-            "high" => Ok(IOPriority::High),
+            "low" => Ok(IoPriority::Low),
+            "medium" => Ok(IoPriority::Medium),
+            "high" => Ok(IoPriority::High),
             s => Err(format!("expect: low, medium or high, got: {:?}", s)),
         }
     }
 }
 
-impl Serialize for IOPriority {
+impl Serialize for IoPriority {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -171,7 +171,7 @@ impl Serialize for IOPriority {
     }
 }
 
-impl<'de> Deserialize<'de> for IOPriority {
+impl<'de> Deserialize<'de> for IoPriority {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -179,17 +179,17 @@ impl<'de> Deserialize<'de> for IOPriority {
         use serde::de::{Error, Unexpected, Visitor};
         struct StrVistor;
         impl<'de> Visitor<'de> for StrVistor {
-            type Value = IOPriority;
+            type Value = IoPriority;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(formatter, "a IO priority")
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<IOPriority, E>
+            fn visit_str<E>(self, value: &str) -> Result<IoPriority, E>
             where
                 E: Error,
             {
-                let p = match IOPriority::from_str(&*value.trim().to_lowercase()) {
+                let p = match IoPriority::from_str(&*value.trim().to_lowercase()) {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
@@ -206,15 +206,15 @@ impl<'de> Deserialize<'de> for IOPriority {
     }
 }
 
-impl From<IOPriority> for ConfigValue {
-    fn from(mode: IOPriority) -> ConfigValue {
+impl From<IoPriority> for ConfigValue {
+    fn from(mode: IoPriority) -> ConfigValue {
         ConfigValue::String(mode.as_str().to_owned())
     }
 }
 
-impl TryFrom<ConfigValue> for IOPriority {
+impl TryFrom<ConfigValue> for IoPriority {
     type Error = String;
-    fn try_from(c: ConfigValue) -> Result<IOPriority, Self::Error> {
+    fn try_from(c: ConfigValue) -> Result<IoPriority, Self::Error> {
         if let ConfigValue::String(s) = c {
             Self::from_str(s.as_str())
         } else {

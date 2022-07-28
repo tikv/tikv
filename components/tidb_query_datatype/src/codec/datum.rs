@@ -24,7 +24,7 @@ use super::{
 use crate::{
     codec::{
         convert::{ConvertTo, ToInt},
-        data_type::AsMySQLBool,
+        data_type::AsMySqlBool,
     },
     expr::EvalContext,
     FieldTypeTp,

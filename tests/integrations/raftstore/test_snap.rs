@@ -12,7 +12,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, RaftEngineReadOnly};
-use file_system::{IOOp, IOType};
+use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
@@ -500,23 +500,23 @@ fn test_inspected_snapshot() {
         .unwrap()
         .statistics()
         .unwrap();
-    assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IoType::Replication, IoOp::Read), 0);
+    assert_eq!(stats.fetch(IoType::Replication, IoOp::Write), 0);
     // Make sure snapshot read hits disk
     cluster.flush_data();
     // Let store 3 inform leader to generate a snapshot.
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    assert_ne!(stats.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_ne!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IoType::Replication, IoOp::Read), 0);
+    assert_ne!(stats.fetch(IoType::Replication, IoOp::Write), 0);
 
     pd_client.must_remove_peer(1, new_peer(2, 2));
-    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
+    assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
     pd_client.must_add_peer(1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
-    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
+    assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
 }
 
 // Test snapshot generating and receiving can share one I/O limiter fairly.
