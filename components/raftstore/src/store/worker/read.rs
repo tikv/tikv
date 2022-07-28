@@ -6,7 +6,7 @@ use std::{
     fmt::{self, Display, Formatter},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -174,16 +174,6 @@ pub struct ReadDelegate {
 }
 
 impl ReadDelegateTrait for ReadDelegate {
-    // fn from_meta(meta: &MutexGuard<StoreMeta>, region_id: u64) -> Option<Self> {
-    //     let reader = meta.readers.get(&region_id).cloned();
-    //     if let Some(reader) = reader {
-    //         return Some(ReadDelegate {
-    //             delegate: Arc::new(reader),
-    //         });
-    //     }
-    //     None
-    // }
-
     fn delegate(&self) -> &ReadDelegateCore {
         self.delegate.as_ref()
     }
@@ -272,31 +262,33 @@ impl Drop for ReadDelegateCore {
     }
 }
 
-pub trait DelegateStore {
+pub trait DelegateStore: Send + Clone + 'static {
     type Delegate: ReadDelegateTrait;
 
-    fn store_id(&self) -> u64;
+    fn store_id(&self) -> Option<u64>;
 
-    fn len(&self) -> usize;
-
-    fn get_delegate(region_id: u64) -> Option<Self::Delegate>;
+    fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>);
 }
 
-impl DelegateStore for StoreMeta {
+impl DelegateStore for Arc<Mutex<StoreMeta>> {
     type Delegate = ReadDelegate;
 
     fn store_id(&self) -> Option<u64> {
-        self.store_id
+        self.as_ref().lock().unwrap().store_id
     }
 
-    fn get_delegate(region_id: u64) -> Option<Self::Delegate> {
+    fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>) {
+        let meta = self.as_ref().lock().unwrap();
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
-            return Some(ReadDelegate {
-                delegate: Arc::new(reader),
-            });
+            return (
+                meta.readers.len(),
+                Some(ReadDelegate {
+                    delegate: Arc::new(reader),
+                }),
+            );
         }
-        None
+        (meta.readers.len(), None)
     }
 }
 
@@ -546,14 +538,15 @@ impl Progress {
     }
 }
 
-pub struct LocalReader<C, E, D>
+pub struct LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadDelegateTrait,
+    S: DelegateStore<Delegate = D>,
 {
     store_id: Cell<Option<u64>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: S,
     kv_engine: E,
     metrics: ReadMetrics,
     // region id -> ReadDelegate
@@ -592,13 +585,14 @@ where
     }
 }
 
-impl<'a, C, E, D> LocalReader<C, E, D>
+impl<'a, C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadDelegateTrait,
+    S: DelegateStore<Delegate = D>,
 {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
@@ -657,10 +651,7 @@ where
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
-                let (meta_len, meta_reader) = {
-                    let meta = self.store_meta.as_ref().lock().unwrap();
-                    (meta.readers.len(), D::from_meta(&meta, region_id))
-                };
+                let (meta_len, meta_reader) = { self.store_meta.get_delegate_and_len(region_id) };
 
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
@@ -684,7 +675,7 @@ where
     ) -> Result<Option<(D, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
-            let store_id = self.store_meta.lock().unwrap().store_id;
+            let store_id = self.store_meta.store_id();
             self.store_id.set(store_id);
         }
         let store_id = self.store_id.get().unwrap();
@@ -883,11 +874,12 @@ where
     }
 }
 
-impl<C, E, D> Clone for LocalReader<C, E, D>
+impl<C, E, D, S> Clone for LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
     D: ReadDelegateTrait,
+    S: DelegateStore<Delegate = D>,
 {
     fn clone(&self) -> Self {
         LocalReader {
@@ -1136,7 +1128,7 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<MockRouter, KvTestEngine, ReadDelegate>,
+        LocalReader<MockRouter, KvTestEngine, ReadDelegate, Arc<Mutex<StoreMeta>>>,
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
@@ -1161,7 +1153,7 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<MockRouter, KvTestEngine, ReadDelegate>,
+        reader: &mut LocalReader<MockRouter, KvTestEngine, ReadDelegate, Arc<Mutex<StoreMeta>>>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
@@ -1181,7 +1173,7 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<MockRouter, KvTestEngine, ReadDelegate>,
+        reader: &mut LocalReader<MockRouter, KvTestEngine, ReadDelegate, Arc<Mutex<StoreMeta>>>,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
