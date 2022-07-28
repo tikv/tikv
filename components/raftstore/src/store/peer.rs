@@ -2831,9 +2831,7 @@ where
     fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         let mut has_long_uncommitted = false;
         if let Some(propose_time) = self.proposals.oldest().and_then(|p| p.propose_time) {
-            // Each time a proposal is pushed, the current_time is refreshed.
-            // So the current_time should not be none.
-            debug_assert!(ctx.current_time.is_some());
+            // When a proposal was proposed with this ctx before, the current_time can be some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
             let elapsed = match (current_time - propose_time).to_std() {
                 Ok(elapsed) => elapsed,
