@@ -81,7 +81,8 @@ impl ExpectedWrite {
     }
 }
 
-/// `ExpectedWriteList` represents a list of writes expected to write to the engine
+/// `ExpectedWriteList` represents a list of writes expected to write to the
+/// engine
 struct ExpectedWriteList(Mutex<LinkedList<ExpectedWrite>>);
 
 // We implement drop here instead of on MockEngine

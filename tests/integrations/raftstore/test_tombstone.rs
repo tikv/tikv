@@ -3,7 +3,7 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_traits::{CFNamesExt, Iterable, Peekable, RaftEngineReadOnly, SyncMutable, CF_RAFT};
+use engine_traits::{CfNamesExt, Iterable, Peekable, RaftEngineReadOnly, SyncMutable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
@@ -263,9 +263,9 @@ fn test_server_stale_meta() {
 
 /// Tests a tombstone peer won't trigger wrong gc message.
 ///
-/// An uninitialized peer's peer list is empty. If a message from a healthy peer passes
-/// all the other checks accidentally, it may trigger a tombstone message which will
-/// make the healthy peer destroy all its data.
+/// An uninitialized peer's peer list is empty. If a message from a healthy peer
+/// passes all the other checks accidentally, it may trigger a tombstone message
+/// which will make the healthy peer destroy all its data.
 #[test]
 fn test_safe_tombstone_gc() {
     let mut cluster = new_node_cluster(0, 5);

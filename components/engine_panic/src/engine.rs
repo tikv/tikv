@@ -5,7 +5,7 @@ use engine_traits::{
     TabletAccessor, WriteOptions,
 };
 
-use crate::{db_vector::PanicDBVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
+use crate::{db_vector::PanicDbVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
 
 #[derive(Clone, Debug)]
 pub struct PanicEngine;
@@ -35,9 +35,9 @@ impl TabletAccessor<PanicEngine> for PanicEngine {
 }
 
 impl Peekable for PanicEngine {
-    type DBVector = PanicDBVector;
+    type DbVector = PanicDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         panic!()
     }
     fn get_value_cf_opt(
@@ -45,7 +45,7 @@ impl Peekable for PanicEngine {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<Self::DBVector>> {
+    ) -> Result<Option<Self::DbVector>> {
         panic!()
     }
 }

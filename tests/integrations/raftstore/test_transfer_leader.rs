@@ -361,7 +361,8 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         LocksStatus::TransferringLeader
     );
 
-    // After several ticks, in-memory pessimistic locks should become available again.
+    // After several ticks, in-memory pessimistic locks should become available
+    // again.
     thread::sleep(Duration::from_secs(1));
     assert_eq!(txn_ext.pessimistic_locks.read().status, LocksStatus::Normal);
     cluster.reset_leader_of_region(1);

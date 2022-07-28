@@ -75,8 +75,7 @@ fn default_engine() -> TempDirEnginePair {
 fn multi_batch_write_engine() -> TempDirEnginePair {
     use engine_test::{
         ctor::{
-            ColumnFamilyOptions as KvTestCFOptions, DBOptions as KvTestDBOptions,
-            KvEngineConstructorExt,
+            CfOptions as KvTestCfOptions, DbOptions as KvTestDbOptions, KvEngineConstructorExt,
         },
         kv::KvTestEngine,
     };
@@ -84,10 +83,10 @@ fn multi_batch_write_engine() -> TempDirEnginePair {
 
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
-    let mut opt = KvTestDBOptions::default();
+    let mut opt = KvTestDbOptions::default();
     opt.set_enable_multi_batch_write(true);
     let engine =
-        KvTestEngine::new_kv_engine_opt(path, opt, vec![(CF_DEFAULT, KvTestCFOptions::new())])
+        KvTestEngine::new_kv_engine_opt(path, opt, vec![(CF_DEFAULT, KvTestCfOptions::new())])
             .unwrap();
     TempDirEnginePair {
         engine,
