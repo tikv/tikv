@@ -34,7 +34,7 @@ pub use self::{
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
         LocalReader, Progress as ReadProgress, ReadDelegate, ReadDelegateExtTrait,
-        ReadDelegateInner, ReadDelegateTrait, ReadExecutor, ReadMetrics, TrackVer,
+        ReadDelegateCore, ReadDelegateTrait, ReadExecutor, ReadMetrics, TrackVer,
     },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,

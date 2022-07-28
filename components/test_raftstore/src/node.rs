@@ -47,7 +47,10 @@ use crate::Config;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>>>,
+    routers: HashMap<
+        u64,
+        SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine, ReadDelegate>>,
+    >,
 }
 
 #[derive(Clone)]
@@ -176,7 +179,7 @@ impl NodeCluster {
     pub fn get_node_router(
         &self,
         node_id: u64,
-    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine>> {
+    ) -> SimulateTransport<ServerRaftStoreRouter<RocksEngine, RaftTestEngine, ReadDelegate>> {
         self.trans
             .core
             .lock()

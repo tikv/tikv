@@ -97,7 +97,7 @@ use crate::{
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
-            HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegateInner, ReadExecutor,
+            HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegateCore, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
@@ -1464,7 +1464,7 @@ where
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost<impl KvEngine>,
-        reader: &mut ReadDelegateInner,
+        reader: &mut ReadDelegateCore,
         region: metapb::Region,
         reason: RegionChangeReason,
     ) {
@@ -3267,7 +3267,7 @@ where
         }
     }
 
-    fn maybe_update_read_progress(&self, reader: &mut ReadDelegateInner, progress: ReadProgress) {
+    fn maybe_update_read_progress(&self, reader: &mut ReadDelegateCore, progress: ReadProgress) {
         if self.pending_remove {
             return;
         }
@@ -5375,7 +5375,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_tablet(&self) -> &EK {
+    fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }
 
