@@ -10,8 +10,9 @@ use super::{
 use crate::{codec::Datum, FieldTypeAccessor};
 
 /// `Chunk` stores multiple rows of data.
-/// Values are appended in compact format and can be directly accessed without decoding.
-/// When the chunk is done processing, we can reuse the allocated memory by resetting it.
+/// Values are appended in compact format and can be directly accessed without
+/// decoding. When the chunk is done processing, we can reuse the allocated
+/// memory by resetting it.
 pub struct Chunk {
     columns: Vec<Column>,
 }
@@ -32,7 +33,8 @@ impl Chunk {
     }
 
     /// Reset the chunk, so the memory it allocated can be reused.
-    /// Make sure all the data in the chunk is not used anymore before you reuse this chunk.
+    /// Make sure all the data in the chunk is not used anymore before you reuse
+    /// this chunk.
     pub fn reset(&mut self) {
         for column in &mut self.columns {
             column.reset();

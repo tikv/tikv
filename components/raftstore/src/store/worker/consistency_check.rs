@@ -141,13 +141,7 @@ mod tests {
     #[test]
     fn test_consistency_check() {
         let path = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let db = new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            &[CF_DEFAULT, CF_RAFT],
-            None,
-        )
-        .unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());

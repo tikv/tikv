@@ -196,8 +196,9 @@ impl<T> Receiver<T> {
     }
 }
 
-/// Creates a unbounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a unbounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -215,8 +216,9 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     )
 }
 
-/// Creates a bounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a bounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -285,9 +287,10 @@ where
     I: Fn() -> E + Unpin,
     C: BatchCollector<E, T> + Unpin,
 {
-    /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
-    /// used to generate a initial value, and `collector` will collect every (at most
-    /// `max_batch_size`) raw items into the batched value.
+    /// Creates a new `BatchReceiver` with given `initializer` and `collector`.
+    /// `initializer` is used to generate a initial value, and `collector`
+    /// will collect every (at most `max_batch_size`) raw items into the
+    /// batched value.
     pub fn new(rx: Receiver<T>, max_batch_size: usize, initializer: I, collector: C) -> Self {
         BatchReceiver {
             rx,

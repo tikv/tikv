@@ -1,30 +1,31 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::raw::{CompactOptions, Writable, DB};
-use engine_traits::{CF_DEFAULT, CF_LOCK};
+use engine_rocks::{raw::CompactOptions, RocksEngine};
+use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK};
 use test_raftstore::*;
 
-fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
+fn init_db_with_sst_files(db: &RocksEngine, level: i32, n: u8) {
     let mut opts = CompactOptions::new();
     opts.set_change_level(true);
     opts.set_target_level(level);
     for cf_name in &[CF_DEFAULT, CF_LOCK] {
-        let handle = db.cf_handle(cf_name).unwrap();
+        let handle = db.as_inner().cf_handle(cf_name).unwrap();
         // Each SST file has only one kv.
         for i in 0..n {
             let k = keys::data_key(&[i]);
-            db.put_cf(handle, &k, &k).unwrap();
-            db.flush_cf(handle, true).unwrap();
-            db.compact_range_cf_opt(handle, &opts, None, None);
+            db.put_cf(cf_name, &k, &k).unwrap();
+            db.flush_cf(cf_name, true).unwrap();
+            db.as_inner()
+                .compact_range_cf_opt(handle, &opts, None, None);
         }
     }
 }
 
-fn check_db_files_at_level(db: &DB, level: i32, num_files: u64) {
+fn check_db_files_at_level(db: &RocksEngine, level: i32, num_files: u64) {
     for cf_name in &[CF_DEFAULT, CF_LOCK] {
-        let handle = db.cf_handle(cf_name).unwrap();
+        let handle = db.as_inner().cf_handle(cf_name).unwrap();
         let name = format!("rocksdb.num-files-at-level{}", level);
-        let value = db.get_property_int_cf(handle, &name).unwrap();
+        let value = db.as_inner().get_property_int_cf(handle, &name).unwrap();
         if value != num_files {
             panic!(
                 "cf {} level {} should have {} files, got {}",
@@ -34,11 +35,10 @@ fn check_db_files_at_level(db: &DB, level: i32, num_files: u64) {
     }
 }
 
-fn check_kv_in_all_cfs(db: &DB, i: u8, found: bool) {
+fn check_kv_in_all_cfs(db: &RocksEngine, i: u8, found: bool) {
     for cf_name in &[CF_DEFAULT, CF_LOCK] {
-        let handle = db.cf_handle(cf_name).unwrap();
         let k = keys::data_key(&[i]);
-        let v = db.get_cf(handle, &k).unwrap();
+        let v = db.get_value_cf(cf_name, &k).unwrap();
         if found {
             assert_eq!(v.unwrap(), &k);
         } else {

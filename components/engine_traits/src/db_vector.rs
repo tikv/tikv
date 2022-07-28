@@ -6,4 +6,4 @@ use std::{fmt::Debug, ops::Deref};
 ///
 /// The database may optimize this type to be a view into
 /// its own cache.
-pub trait DBVector: Debug + Deref<Target = [u8]> + for<'a> PartialEq<&'a [u8]> {}
+pub trait DbVector: Debug + Deref<Target = [u8]> + for<'a> PartialEq<&'a [u8]> {}
