@@ -639,7 +639,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
         self.async_fetch_results
             .borrow_mut()
-            .insert(low, RaftlogFetchState::Fetching(Instant::now()));
+            .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
         self.raftlog_fetch_scheduler
             .schedule(RaftlogFetchTask::PeerStorage {
                 region_id,
