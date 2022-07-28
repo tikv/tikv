@@ -6,6 +6,7 @@ use crate::storage::txn::commands::{CommandExt, ReleasedLocks, SyncCommand, Sync
 use crate::storage::txn::Error as TxnError;
 use crate::storage::Error as StorageError;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use txn_types::Key;
 
 command! {
@@ -41,6 +42,18 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
         let mut released_locks = ReleasedLocks::new();
 
         while let Some(entry) = queue.peek() {
+            if entry
+                .0
+                .req_states
+                .as_ref()
+                .unwrap()
+                .finished
+                .load(Ordering::Acquire)
+            {
+                queue.pop();
+                continue;
+            }
+
             if !entry.0.allow_lock_with_conflict {
                 popped_entries.push(queue.pop().unwrap());
                 continue;

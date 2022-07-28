@@ -1449,6 +1449,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .filter_map(|released_lock| {
                     let key_queue_map = wait_queues.get_mut(&released_lock.hash_for_latch)?;
                     let queue = key_queue_map.get_mut(&released_lock.key)?;
+
+                    // Lazy cleanup invalidated entries
+                    while let Some(front) = queue.peek() {
+                        if front
+                            .0
+                            .req_states
+                            .as_ref()
+                            .unwrap()
+                            .finished
+                            .load(Ordering::Acquire)
+                        {
+                            queue.pop();
+                            continue;
+                        }
+
+                        break;
+                    }
+
                     if queue.is_empty() {
                         // Unreachable, but keep it for safety.
                         key_queue_map.remove(&released_lock.key);
