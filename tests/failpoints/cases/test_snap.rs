@@ -794,8 +794,9 @@ fn test_snapshot_recover_from_raft_write_failure() {
     }
 }
 
-/// Test whether applying snapshot is resumed properly when last_index before applying snapshot
-/// is larger than the snapshot index and applying is aborted between kv write and raft write.
+/// Test whether applying snapshot is resumed properly when last_index before
+/// applying snapshot is larger than the snapshot index and applying is aborted
+/// between kv write and raft write.
 #[test]
 fn test_snapshot_recover_from_raft_write_failure_with_uncommitted_log() {
     let mut cluster = new_server_cluster(0, 3);
