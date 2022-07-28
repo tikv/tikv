@@ -34,7 +34,7 @@ use tikv_util::{
 };
 
 use super::{
-    entry_storage::last_index, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
+    metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
     SnapshotStatistics,
 };
 use crate::{
