@@ -13,12 +13,23 @@ use crate::fsm::{Fsm, FsmScheduler, FsmState};
 
 /// A basic mailbox.
 ///
-/// Every mailbox should have one and only one owner, who will receive all
-/// messages sent to this mailbox.
+/// A mailbox holds an Fsm owner, and the sending end of a channel to send
+/// messages to that owner.
 ///
-/// When a message is sent to a mailbox, its owner will be checked whether it's
-/// idle. An idle owner will be scheduled via `FsmScheduler` immediately, which
-/// will drive the fsm to poll for messages.
+/// Mailbox is designed to be shared. Multiple producers can send messages to
+/// the same mailbox concurrently.
+///
+/// The mailbox's Fsm owner needs to be scheduled to a [`Poller`] to handle its
+/// pending messages. Therefore, the producer of messages also needs to provide
+/// a channel to a poller ([`FsmScheduler`]), so that the mailbox can schedule
+/// its Fsm owner. When a message is sent to a mailbox, the mailbox will check
+/// whether its Fsm owner is idle, i.e. not already taken and scheduled. If the
+/// Fsm is idle, it will be scheduled immediately. By doing so, the mailbox
+/// temporarily transfers its ownership of the Fsm to the poller. The
+/// implementation must make sure the same Fsm is returned afterwards via the
+/// [`release`] method.
+///
+/// [`Poller`]: crate::batch::Poller
 pub struct BasicMailbox<Owner: Fsm> {
     sender: mpsc::LooseBoundedSender<Owner::Message>,
     state: Arc<FsmState<Owner>>,
@@ -103,7 +114,7 @@ impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
     }
 }
 
-/// A more high level mailbox.
+/// A more high level mailbox that is paired with a [`FsmScheduler`].
 pub struct Mailbox<Owner, Scheduler>
 where
     Owner: Fsm,

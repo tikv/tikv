@@ -48,12 +48,12 @@ impl Fsm for StoreFsm {
     }
 }
 
-pub struct StoreFsmDelegate<'a, T> {
+pub struct StoreFsmWithContext<'a, T> {
     fsm: &'a mut StoreFsm,
     store_ctx: &'a mut StoreContext<T>,
 }
 
-impl<'a, T> StoreFsmDelegate<'a, T> {
+impl<'a, T> StoreFsmWithContext<'a, T> {
     pub fn new(fsm: &'a mut StoreFsm, store_ctx: &'a mut StoreContext<T>) -> Self {
         Self { fsm, store_ctx }
     }
