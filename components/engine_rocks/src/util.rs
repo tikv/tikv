@@ -96,7 +96,7 @@ pub fn new_engine_opt(
     // We have added all missing options by iterating `existed`. If two vecs still
     // have same length, then they must have same column families dispite their
     // orders. So just open db.
-    if needed.len() == cfds.len() {
+    if needed.len() == existed.len() && needed.len() == cfds.len() {
         let db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
         return Ok(RocksEngine::new(db));
     }
@@ -333,7 +333,7 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CfOptionsExt, CF_DEFAULT};
+    use engine_traits::{CfOptionsExt, CF_DEFAULT, SyncMutable, Peekable};
     use rocksdb::DB;
     use tempfile::Builder;
 
@@ -377,11 +377,28 @@ mod tests {
         let cfs_opts = vec![
             (CF_DEFAULT, opts.clone()),
             ("cf_dynamic_level_bytes", opts.clone()),
-            ("cf1", opts),
+            ("cf1", opts.clone()),
         ];
         let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
         check_dynamic_level_bytes(&db);
+        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
+            db.put_cf(cf, b"k", b"v").unwrap();
+        }
+        drop(db);
+
+        // change order should not cause data corruption.
+        let cfs_opts = vec![
+            ("cf_dynamic_level_bytes", opts.clone()),
+            ("cf1", opts.clone()),
+            (CF_DEFAULT, opts),
+        ];
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
+        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        check_dynamic_level_bytes(&db);
+        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
+            assert_eq!(db.get_value_cf(cf, b"k").unwrap().unwrap(), b"v");
+        }
         drop(db);
 
         // drop cf1.
