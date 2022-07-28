@@ -187,13 +187,14 @@ impl Clone for ReadDelegate {
     }
 }
 
-pub trait ReadDelegateExtTrait<'a, E, D>: ReadExecutor<E>
+pub trait ReadDelegateExtTrait<'a, E>: ReadExecutor<E>
 where
     E: KvEngine,
-    D: ReadDelegateTrait,
 {
+    type Delegate: ReadDelegateTrait;
+
     fn from_read_delegate(
-        delegate: D,
+        delegate: Self::Delegate,
         kv_engine: &'a E,
         metrics: &'a mut ReadMetrics,
         read_id: &'a mut ThreadReadId,
@@ -202,36 +203,36 @@ where
 
     fn delegate(&self) -> &ReadDelegateCore;
 
-    fn take_delegate(&mut self) -> D;
+    fn take_delegate(&mut self) -> Self::Delegate;
 
     fn metrics(&mut self) -> &mut ReadMetrics;
 }
 
-pub struct ReadDelegateExt<'a, E, D>
+pub struct ReadDelegateExt<'a, E>
 where
     E: KvEngine,
-    D: ReadDelegateTrait,
 {
-    delegate: Option<D>,
+    delegate: Option<ReadDelegate>,
     kv_engine: &'a E,
     metrics: &'a mut ReadMetrics,
     read_id: &'a mut ThreadReadId,
     snap_cache: &'a mut Option<Arc<E::Snapshot>>,
 }
 
-impl<'a, E, D> ReadDelegateExtTrait<'a, E, D> for ReadDelegateExt<'a, E, D>
+impl<'a, E> ReadDelegateExtTrait<'a, E> for ReadDelegateExt<'a, E>
 where
     E: KvEngine,
-    D: ReadDelegateTrait,
 {
+    type Delegate = ReadDelegate;
+
     fn from_read_delegate(
-        delegate: D,
+        delegate: Self::Delegate,
         kv_engine: &'a E,
         metrics: &'a mut ReadMetrics,
         read_id: &'a mut ThreadReadId,
         snap_cache: &'a mut Option<Arc<E::Snapshot>>,
     ) -> Self {
-        ReadDelegateExt::<'a, _, _> {
+        ReadDelegateExt::<'a, _> {
             delegate: Some(delegate),
             kv_engine,
             metrics,
@@ -246,7 +247,7 @@ where
         self.delegate.as_ref().unwrap().delegate()
     }
 
-    fn take_delegate(&mut self) -> D {
+    fn take_delegate(&mut self) -> Self::Delegate {
         self.delegate.take().unwrap()
     }
 
@@ -558,10 +559,9 @@ where
     router: C,
 }
 
-impl<'a, E, D> ReadExecutor<E> for ReadDelegateExt<'_, E, D>
+impl<'a, E> ReadExecutor<E> for ReadDelegateExt<'_, E>
 where
     E: KvEngine,
-    D: ReadDelegateTrait,
 {
     fn get_tablet(&mut self) -> &E {
         self.kv_engine
@@ -585,7 +585,7 @@ where
     }
 }
 
-impl<'a, C, E, D, S> LocalReader<C, E, D, S>
+impl<C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
@@ -737,13 +737,13 @@ where
         }
     }
 
-    pub fn propose_raft_command<Ext>(
+    pub fn propose_raft_command<'a, Ext>(
         &'a mut self,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) where
-        Ext: ReadDelegateExtTrait<'a, E, D>,
+        Ext: ReadDelegateExtTrait<'a, E, Delegate = D>,
     {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
@@ -859,13 +859,15 @@ where
     /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
     /// by thread_id and a thread_local incremental sequence.
     #[inline]
-    pub fn read(
+    pub fn read<Ext>(
         &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
-    ) {
-        self.propose_raft_command::<ReadDelegateExt<'_, E, D>>(read_id, req, cb);
+    ) where
+        for<'a> Ext: ReadDelegateExtTrait<'a, E, Delegate = D>,
+    {
+        self.propose_raft_command::<Ext>(read_id, req, cb);
         self.metrics.maybe_flush();
     }
 

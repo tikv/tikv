@@ -16,8 +16,8 @@ use crate::{
     store::{
         fsm::{RaftRouter, StoreMeta},
         transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
-        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
-        RaftCommand, ReadDelegate, SignificantMsg, StoreMsg,
+        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand, ReadDelegate,
+        ReadDelegateExt, SignificantMsg, StoreMsg,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -256,7 +256,7 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, req, cb);
+        local_reader.read::<ReadDelegateExt<'_, EK>>(read_id, req, cb);
         Ok(())
     }
 
