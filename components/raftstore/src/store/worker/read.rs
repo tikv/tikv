@@ -545,7 +545,7 @@ where
     D: ReadDelegateTrait,
     S: DelegateStore<Delegate = D>,
 {
-    store_id: Cell<Option<u64>>,
+    pub store_id: Cell<Option<u64>>,
     store_meta: S,
     kv_engine: E,
     metrics: ReadMetrics,
@@ -643,7 +643,7 @@ where
     // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
     // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
-    fn get_delegate(&mut self, region_id: u64) -> Option<D> {
+    pub fn get_delegate(&mut self, region_id: u64) -> Option<D> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
             Some(d) if !d.delegate().track_ver.any_new() => Some(d.clone()),
@@ -669,7 +669,7 @@ where
         rd.filter(|r| !r.delegate().pending_remove)
     }
 
-    fn pre_propose_raft_command(
+    pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
     ) -> Result<Option<(D, RequestPolicy)>> {
