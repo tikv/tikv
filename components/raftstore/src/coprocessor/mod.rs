@@ -94,8 +94,15 @@ pub trait AdminObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 
-    /// Hook before exec admin request, returns whether we should skip this admin.
-    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest, _: u64, _: u64) -> bool {
+    /// Hook before exec admin request, returns whether we should skip this
+    /// admin.
+    fn pre_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
         false
     }
 
@@ -132,7 +139,8 @@ pub trait QueryObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 
-    /// Hook before exec write request, returns whether we should skip this write.
+    /// Hook before exec write request, returns whether we should skip this
+    /// write.
     fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
         false
     }

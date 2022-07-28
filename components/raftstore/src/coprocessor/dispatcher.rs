@@ -665,7 +665,13 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_exec_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminRequest, _: u64, _: u64) -> bool {
+        fn pre_exec_admin(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &AdminRequest,
+            _: u64,
+            _: u64,
+        ) -> bool {
             self.called.fetch_add(16, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
@@ -696,7 +702,13 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_exec_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
+        fn pre_exec_query(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &[Request],
+            _: u64,
+            _: u64,
+        ) -> bool {
             self.called.fetch_add(15, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
@@ -839,12 +851,12 @@ mod tests {
 
         let mut query_req = RaftCmdRequest::default();
         query_req.set_requests(vec![Request::default()].into());
-        host.pre_exec(&region, &query_req);
+        host.pre_exec(&region, &query_req, 0, 0);
         assert_all!([&ob.called], &[103]); // 15
 
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
-        host.pre_exec(&region, &admin_req);
+        host.pre_exec(&region, &admin_req, 0, 0);
         assert_all!([&ob.called], &[119]); // 16
     }
 
