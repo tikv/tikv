@@ -62,8 +62,9 @@ use self::profile::{
     read_file, start_one_cpu_profile, start_one_heap_profile,
 };
 use crate::{
-    config::{log_level_serde, ConfigController},
+    config::{ConfigController, LogLevel},
     server::Result,
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
@@ -78,8 +79,7 @@ static FAIL_POINTS_REQUEST_PATH: &str = "/fail";
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct LogLevelRequest {
-    #[serde(with = "log_level_serde")]
-    pub log_level: slog::Level,
+    pub log_level: LogLevel,
 }
 
 pub struct StatusServer<E, R> {
@@ -110,8 +110,8 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| debug!("Status server started"))
-            .on_thread_stop(|| debug!("stopping status server"))
+            .after_start_wrapper(|| debug!("Status server started"))
+            .before_stop_wrapper(|| debug!("stopping status server"))
             .build()?;
 
         let (tx, rx) = oneshot::channel::<()>();
@@ -402,7 +402,7 @@ where
 
         match log_level_request {
             Ok(req) => {
-                set_log_level(req.log_level);
+                set_log_level(req.log_level.into());
                 Ok(Response::new(Body::empty()))
             }
             Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
@@ -1463,7 +1463,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let new_log_level = slog::Level::Debug;
+        let new_log_level = slog::Level::Debug.into();
         let mut log_level_request = Request::new(Body::from(
             serde_json::to_string(&LogLevelRequest {
                 log_level: new_log_level,
@@ -1483,7 +1483,7 @@ mod tests {
                 .await
                 .map(move |res| {
                     assert_eq!(res.status(), StatusCode::OK);
-                    assert_eq!(get_log_level(), Some(new_log_level));
+                    assert_eq!(get_log_level(), Some(new_log_level.into()));
                 })
                 .unwrap()
         });

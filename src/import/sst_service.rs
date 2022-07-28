@@ -36,6 +36,7 @@ use sst_importer::{error_inc, metrics::*, sst_meta_to_path, Config, Error, Resul
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
+    sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
 };
 use txn_types::{Key, WriteRef, WriteType};
@@ -83,12 +84,12 @@ where
         let threads = ThreadPoolBuilder::new()
             .pool_size(cfg.num_threads)
             .name_prefix("sst-importer")
-            .after_start(move |_| {
+            .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
                 set_io_type(IOType::Import);
             })
-            .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
         importer.start_switch_mode_check(&threads, engine.clone());
@@ -295,7 +296,7 @@ macro_rules! impl_write {
                     Ok(resp)
                 }
                 .await;
-                crate::send_rpc_response!(res, sink, label, timer);
+                $crate::send_rpc_response!(res, sink, label, timer);
             };
 
             self.threads.spawn_ok(buf_driver);
@@ -1016,7 +1017,9 @@ fn write_needs_restore(write: &[u8]) -> bool {
         Ok(w)
             if matches!(
                 w.write_type,
-                WriteType::Put | WriteType::Delete | WriteType::Rollback
+                // We only keep the last put / delete write CF,
+                // other write type may shadow the real data and cause data loss.
+                WriteType::Put | WriteType::Delete
             ) =>
         {
             true

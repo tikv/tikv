@@ -33,6 +33,7 @@ command! {
 impl CommandExt for ResolveLockReadPhase {
     ctx!();
     tag!(resolve_lock);
+    request_type!(KvResolveLock);
     property!(readonly);
 
     fn write_bytes(&self) -> usize {

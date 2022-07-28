@@ -2,9 +2,7 @@
 
 use std::ops::Deref;
 
-use engine_traits::{
-    IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot,
-};
+use engine_traits::{IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, Snapshot};
 
 use crate::{db_vector::PanicDBVector, engine::PanicEngine};
 
@@ -36,10 +34,7 @@ impl Peekable for PanicSnapshot {
 impl Iterable for PanicSnapshot {
     type Iterator = PanicSnapshotIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         panic!()
     }
 }
@@ -47,10 +42,18 @@ impl Iterable for PanicSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

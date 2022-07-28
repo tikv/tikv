@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -76,7 +75,6 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -105,7 +103,6 @@ fn test_node_merge_rollback() {
         let state_key = keys::region_state_key(region.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -139,10 +136,10 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     let engine = cluster.get_engine(leader.get_store_id());
     let state_key = keys::region_state_key(left.get_id());
-    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Merging, "{:?}", state);
     let state_key = keys::region_state_key(right.get_id());
-    let state: RegionLocalState = engine.c().get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
     cluster.start().unwrap();
@@ -157,7 +154,6 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(left.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -165,7 +161,6 @@ fn test_node_merge_restart() {
         let state_key = keys::region_state_key(right.get_id());
         let state: RegionLocalState = cluster
             .get_engine(i)
-            .c()
             .get_msg_cf(CF_RAFT, &state_key)
             .unwrap()
             .unwrap();
@@ -1248,64 +1243,6 @@ fn test_prewrite_before_max_ts_is_synced() {
     thread::sleep(Duration::from_millis(200));
     let resp = do_prewrite(&mut cluster);
     assert!(!resp.get_region_error().has_max_timestamp_not_synced());
-}
-
-/// If term is changed in catching up logs, follower needs to update the term
-/// correctly, otherwise will leave corrupted states.
-#[test]
-fn test_merge_election_and_restart() {
-    let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    let on_raft_gc_log_tick_fp = "on_raft_gc_log_tick";
-    fail::cfg(on_raft_gc_log_tick_fp, "return()").unwrap();
-
-    cluster.run();
-
-    let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-
-    let r1 = pd_client.get_region(b"k1").unwrap();
-    let r1_on_store1 = find_peer(&r1, 1).unwrap().to_owned();
-    cluster.must_transfer_leader(r1.get_id(), r1_on_store1.clone());
-    cluster.must_put(b"k11", b"v11");
-    must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
-
-    let r1_on_store2 = find_peer(&r1, 2).unwrap().to_owned();
-    cluster.must_transfer_leader(r1.get_id(), r1_on_store2);
-    cluster.must_put(b"k12", b"v12");
-    must_get_equal(&cluster.get_engine(1), b"k12", b"v12");
-
-    cluster.add_send_filter(CloneFilterFactory(RegionPacketFilter::new(r1.get_id(), 2)));
-
-    // Wait new leader elected.
-    cluster.must_transfer_leader(r1.get_id(), r1_on_store1);
-    cluster.must_put(b"k13", b"v13");
-    must_get_equal(&cluster.get_engine(1), b"k13", b"v13");
-    must_get_none(&cluster.get_engine(2), b"k13");
-
-    // Don't actually execute commit merge
-    fail::cfg("after_handle_catch_up_logs_for_merge", "return()").unwrap();
-    // Now region 1 can still be merged into region 2 because leader has committed index cache.
-    let r2 = pd_client.get_region(b"k3").unwrap();
-    cluster.must_try_merge(r1.get_id(), r2.get_id());
-    // r1 on store 2 should be able to apply all committed logs.
-    must_get_equal(&cluster.get_engine(2), b"k13", b"v13");
-
-    cluster.shutdown();
-    cluster.clear_send_filters();
-    fail::remove("after_handle_catch_up_logs_for_merge");
-    cluster.start().unwrap();
-
-    // Wait for region elected to avoid timeout and backoff.
-    cluster.leader_of_region(r2.get_id());
-    // If merge can be resumed correctly, the put should succeed.
-    cluster.must_put(b"k14", b"v14");
-    // If logs from different term are process correctly, store 2 should have latest updates.
-    must_get_equal(&cluster.get_engine(2), b"k14", b"v14");
 }
 
 /// Testing that the source peer's read delegate should not be removed by the target peer

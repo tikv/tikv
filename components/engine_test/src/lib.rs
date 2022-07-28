@@ -74,6 +74,12 @@ pub mod raft {
 
 /// Types and constructors for the "kv" engine
 pub mod kv {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
+
+    use collections::HashMap;
     #[cfg(feature = "test-engine-kv-panic")]
     pub use engine_panic::{
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
@@ -82,27 +88,212 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
-        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
-    use engine_traits::Result;
+    use engine_traits::{
+        CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    };
+    use tikv_util::box_err;
 
-    use crate::ctor::{CFOptions, DBOptions, KvEngineConstructorExt};
+    use crate::ctor::{ColumnFamilyOptions as KvTestCFOptions, DBOptions, KvEngineConstructorExt};
 
-    pub fn new_engine(
-        path: &str,
-        db_opt: Option<DBOptions>,
-        cfs: &[&str],
-        opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<KvTestEngine> {
-        KvTestEngine::new_kv_engine(path, db_opt, cfs, opts)
+    pub fn new_engine(path: &str, cfs: &[&str]) -> Result<KvTestEngine> {
+        KvTestEngine::new_kv_engine(path, cfs)
     }
 
     pub fn new_engine_opt(
         path: &str,
         db_opt: DBOptions,
-        cfs_opts: Vec<CFOptions<'_>>,
+        cfs_opts: Vec<(&str, KvTestCFOptions)>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
+    }
+
+    const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
+
+    #[derive(Clone)]
+    pub struct TestTabletFactory {
+        root_path: String,
+        db_opt: DBOptions,
+        cf_opts: Vec<(&'static str, KvTestCFOptions)>,
+        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+    }
+
+    impl TestTabletFactory {
+        pub fn new(
+            root_path: &str,
+            db_opt: DBOptions,
+            cf_opts: Vec<(&'static str, KvTestCFOptions)>,
+        ) -> Self {
+            Self {
+                root_path: root_path.to_string(),
+                db_opt,
+                cf_opts,
+                registry: Arc::new(Mutex::new(HashMap::default())),
+            }
+        }
+    }
+
+    // Extract tablet id and tablet suffix from the path.
+    fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+        let (mut tablet_id, mut tablet_suffix) = (0, 1);
+        if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
+            let mut split = s.split('_');
+            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+        }
+        (tablet_id, tablet_suffix)
+    }
+
+    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+        fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
+            let mut reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Err(box_err!(
+                    "region {} {} already exists",
+                    id,
+                    db.as_inner().path()
+                ));
+            }
+            let tablet_path = self.tablet_path(id, suffix);
+            let tablet_path = tablet_path.to_str().unwrap();
+            let kv_engine = KvTestEngine::new_kv_engine_opt(
+                tablet_path,
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
+            )?;
+            reg.insert((id, suffix), kv_engine.clone());
+            Ok(kv_engine)
+        }
+
+        fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
+            let mut reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Ok(db.clone());
+            }
+
+            let db_path = self.tablet_path(id, suffix);
+            let db = self.open_tablet_raw(db_path.as_path(), false)?;
+            reg.insert((id, suffix), db.clone());
+            Ok(db)
+        }
+
+        fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
+            let reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Some(db.clone());
+            }
+            None
+        }
+
+        fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
+            let reg = self.registry.lock().unwrap();
+            if let Some(k) = reg.keys().find(|k| k.0 == id) {
+                return Some(reg.get(k).unwrap().clone());
+            }
+            None
+        }
+
+        fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<KvTestEngine> {
+            if !KvTestEngine::exists(path.to_str().unwrap_or_default()) {
+                return Err(box_err!(
+                    "path {} does not have db",
+                    path.to_str().unwrap_or_default()
+                ));
+            }
+            let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
+            self.create_tablet(tablet_id, tablet_suffix)
+        }
+
+        #[inline]
+        fn create_shared_db(&self) -> Result<KvTestEngine> {
+            self.create_tablet(0, 0)
+        }
+
+        #[inline]
+        fn exists_raw(&self, path: &Path) -> bool {
+            KvTestEngine::exists(path.to_str().unwrap_or_default())
+        }
+
+        #[inline]
+        fn tablets_path(&self) -> PathBuf {
+            Path::new(&self.root_path).join("tablets")
+        }
+
+        #[inline]
+        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+            Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
+        }
+
+        #[inline]
+        fn mark_tombstone(&self, region_id: u64, suffix: u64) {
+            let path = self.tablet_path(region_id, suffix).join(TOMBSTONE_MARK);
+            std::fs::File::create(&path).unwrap();
+            self.registry.lock().unwrap().remove(&(region_id, suffix));
+        }
+
+        #[inline]
+        fn is_tombstoned(&self, region_id: u64, suffix: u64) -> bool {
+            self.tablet_path(region_id, suffix)
+                .join(TOMBSTONE_MARK)
+                .exists()
+        }
+
+        #[inline]
+        fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
+            let path = self.tablet_path(id, suffix);
+            self.registry.lock().unwrap().remove(&(id, suffix));
+            let _ = std::fs::remove_dir_all(path);
+            Ok(())
+        }
+
+        #[inline]
+        fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
+            {
+                let reg = self.registry.lock().unwrap();
+                if let Some(db) = reg.get(&(id, suffix)) {
+                    return Err(box_err!(
+                        "region {} {} already exists",
+                        id,
+                        db.as_inner().path()
+                    ));
+                }
+            }
+
+            let db_path = self.tablet_path(id, suffix);
+            std::fs::rename(path, &db_path)?;
+            let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+            if new_engine.is_ok() {
+                let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+                self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+            }
+            new_engine
+        }
+
+        fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+            let reg = self.registry.lock().unwrap();
+            // pick up any tablet and set the shared block cache capacity
+            if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
+                let opt = tablet.get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+                opt.set_block_cache_capacity(capacity)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
+        #[inline]
+        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+            let reg = self.registry.lock().unwrap();
+            for ((id, suffix), tablet) in &*reg {
+                f(*id, *suffix, tablet)
+            }
+        }
+
+        // it have multi tablets.
+        fn is_single_engine(&self) -> bool {
+            false
+        }
     }
 }
 
@@ -141,12 +332,7 @@ pub mod ctor {
         ///
         /// The engine stores its data in the `path` directory.
         /// If that directory does not exist, then it is created.
-        fn new_kv_engine(
-            path: &str,
-            db_opt: Option<DBOptions>,
-            cfs: &[&str],
-            opts: Option<Vec<CFOptions<'_>>>,
-        ) -> Result<Self>;
+        fn new_kv_engine(path: &str, cfs: &[&str]) -> Result<Self>;
 
         /// Create a new engine with specified column families and options
         ///
@@ -155,7 +341,7 @@ pub mod ctor {
         fn new_kv_engine_opt(
             path: &str,
             db_opt: DBOptions,
-            cfs_opts: Vec<CFOptions<'_>>,
+            cf_opts: Vec<(&str, ColumnFamilyOptions)>,
         ) -> Result<Self>;
     }
 
@@ -169,6 +355,7 @@ pub mod ctor {
     pub struct DBOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
+        enable_multi_batch_write: bool,
     }
 
     impl DBOptions {
@@ -179,20 +366,13 @@ pub mod ctor {
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
             self.rate_limiter = rate_limiter;
         }
+
+        pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
+            self.enable_multi_batch_write = enable;
+        }
     }
 
     pub type RaftDBOptions = DBOptions;
-
-    pub struct CFOptions<'a> {
-        pub cf: &'a str,
-        pub options: ColumnFamilyOptions,
-    }
-
-    impl<'a> CFOptions<'a> {
-        pub fn new(cf: &'a str, options: ColumnFamilyOptions) -> CFOptions<'a> {
-            CFOptions { cf, options }
-        }
-    }
 
     /// Properties for a single column family
     ///
@@ -290,22 +470,19 @@ pub mod ctor {
         use engine_panic::PanicEngine;
         use engine_traits::Result;
 
-        use super::{CFOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt};
+        use super::{
+            ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt,
+        };
 
         impl KvEngineConstructorExt for engine_panic::PanicEngine {
-            fn new_kv_engine(
-                _path: &str,
-                _db_opt: Option<DBOptions>,
-                _cfs: &[&str],
-                _opts: Option<Vec<CFOptions<'_>>>,
-            ) -> Result<Self> {
+            fn new_kv_engine(_path: &str, _cfs: &[&str]) -> Result<Self> {
                 Ok(PanicEngine)
             }
 
             fn new_kv_engine_opt(
                 _path: &str,
                 _db_opt: DBOptions,
-                _cfs_opts: Vec<CFOptions<'_>>,
+                _cfs_opts: Vec<(&str, ColumnFamilyOptions)>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
@@ -322,71 +499,38 @@ pub mod ctor {
         use engine_rocks::{
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-            raw::{
-                ColumnFamilyOptions as RawRocksColumnFamilyOptions, DBOptions as RawRocksDBOptions,
-            },
-            util::{
-                new_engine as rocks_new_engine, new_engine_opt as rocks_new_engine_opt,
-                RocksCFOptions,
-            },
-            RocksColumnFamilyOptions, RocksDBOptions,
+            util::new_engine_opt as rocks_new_engine_opt,
+            RocksCfOptions, RocksDBOptions,
         };
-        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result};
+        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result, CF_DEFAULT};
 
         use super::{
-            CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions,
+            ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions,
             RaftEngineConstructorExt,
         };
 
         impl KvEngineConstructorExt for engine_rocks::RocksEngine {
-            // FIXME this is duplicating behavior from engine_rocks::raw_util in order to
+            // FIXME this is duplicating behavior from engine_rocks::util in order to
             // call set_standard_cf_opts.
-            fn new_kv_engine(
-                path: &str,
-                db_opt: Option<DBOptions>,
-                cfs: &[&str],
-                opts: Option<Vec<CFOptions<'_>>>,
-            ) -> Result<Self> {
-                let rocks_db_opts = match db_opt {
-                    Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
-                    None => None,
-                };
-                let cfs_opts = match opts {
-                    Some(opts) => opts,
-                    None => {
-                        let mut default_cfs_opts = Vec::with_capacity(cfs.len());
-                        for cf in cfs {
-                            default_cfs_opts.push(CFOptions::new(*cf, ColumnFamilyOptions::new()));
-                        }
-                        default_cfs_opts
-                    }
-                };
-                let rocks_cfs_opts = cfs_opts
+            fn new_kv_engine(path: &str, cfs: &[&str]) -> Result<Self> {
+                let rocks_db_opt = RocksDBOptions::default();
+                let default_cf_opt = ColumnFamilyOptions::new();
+                let rocks_cfs_opts = cfs
                     .iter()
-                    .map(|cf_opts| {
-                        let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
-                        set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
-                        set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
-                        RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
-                    })
+                    .map(|cf_name| (*cf_name, get_rocks_cf_opts(&default_cf_opt)))
                     .collect();
-                rocks_new_engine(path, rocks_db_opts, &[], Some(rocks_cfs_opts))
+                rocks_new_engine_opt(path, rocks_db_opt, rocks_cfs_opts)
             }
 
             fn new_kv_engine_opt(
                 path: &str,
                 db_opt: DBOptions,
-                cfs_opts: Vec<CFOptions<'_>>,
+                cfs_opts: Vec<(&str, ColumnFamilyOptions)>,
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
                     .iter()
-                    .map(|cf_opts| {
-                        let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
-                        set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
-                        set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
-                        RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)
-                    })
+                    .map(|(name, opt)| (*name, get_rocks_cf_opts(opt)))
                     .collect();
                 rocks_new_engine_opt(path, rocks_db_opts, rocks_cfs_opts)
             }
@@ -395,22 +539,17 @@ pub mod ctor {
         impl RaftEngineConstructorExt for engine_rocks::RocksEngine {
             fn new_raft_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
-                    Some(db_opt) => Some(get_rocks_db_opts(db_opt)?),
-                    None => None,
+                    Some(db_opt) => get_rocks_db_opts(db_opt)?,
+                    None => RocksDBOptions::default(),
                 };
-                let cf_opts = CFOptions::new(engine_traits::CF_DEFAULT, ColumnFamilyOptions::new());
-                let mut rocks_cf_opts = RocksColumnFamilyOptions::new();
-                set_standard_cf_opts(rocks_cf_opts.as_raw_mut(), &cf_opts.options);
-                set_cf_opts(&mut rocks_cf_opts, &cf_opts.options);
-                let default_cfs_opts = vec![RocksCFOptions::new(cf_opts.cf, rocks_cf_opts)];
-                rocks_new_engine(path, rocks_db_opts, &[], Some(default_cfs_opts))
+                let rocks_cf_opts = get_rocks_cf_opts(&ColumnFamilyOptions::new());
+                let default_cfs_opts = vec![(CF_DEFAULT, rocks_cf_opts)];
+                rocks_new_engine_opt(path, rocks_db_opts, default_cfs_opts)
             }
         }
 
-        fn set_standard_cf_opts(
-            rocks_cf_opts: &mut RawRocksColumnFamilyOptions,
-            cf_opts: &ColumnFamilyOptions,
-        ) {
+        fn get_rocks_cf_opts(cf_opts: &ColumnFamilyOptions) -> RocksCfOptions {
+            let mut rocks_cf_opts = RocksCfOptions::new();
             if !cf_opts.get_no_range_properties() {
                 rocks_cf_opts.add_table_properties_collector_factory(
                     "tikv.range-properties-collector",
@@ -423,30 +562,28 @@ pub mod ctor {
                     MvccPropertiesCollectorFactory::default(),
                 );
             }
-        }
 
-        fn set_cf_opts(
-            rocks_cf_opts: &mut RocksColumnFamilyOptions,
-            cf_opts: &ColumnFamilyOptions,
-        ) {
             if let Some(trigger) = cf_opts.get_level_zero_file_num_compaction_trigger() {
                 rocks_cf_opts.set_level_zero_file_num_compaction_trigger(trigger);
             }
             if let Some(trigger) = cf_opts.get_level_zero_slowdown_writes_trigger() {
-                rocks_cf_opts
-                    .as_raw_mut()
-                    .set_level_zero_slowdown_writes_trigger(trigger);
+                rocks_cf_opts.set_level_zero_slowdown_writes_trigger(trigger);
             }
             if cf_opts.get_disable_auto_compactions() {
                 rocks_cf_opts.set_disable_auto_compactions(true);
             }
+            rocks_cf_opts
         }
 
         fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
-            let mut rocks_db_opts = RawRocksDBOptions::new();
+            let mut rocks_db_opts = RocksDBOptions::default();
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
-            let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
+            if db_opts.enable_multi_batch_write {
+                rocks_db_opts.enable_unordered_write(false);
+                rocks_db_opts.enable_pipelined_write(false);
+                rocks_db_opts.enable_multi_batch_write(true);
+            }
             Ok(rocks_db_opts)
         }
     }
@@ -479,13 +616,7 @@ pub fn new_temp_engine(
 ) -> engine_traits::Engines<crate::kv::KvTestEngine, crate::raft::RaftTestEngine> {
     let raft_path = path.path().join(std::path::Path::new("raft"));
     engine_traits::Engines::new(
-        crate::kv::new_engine(
-            path.path().to_str().unwrap(),
-            None,
-            engine_traits::ALL_CFS,
-            None,
-        )
-        .unwrap(),
+        crate::kv::new_engine(path.path().to_str().unwrap(), engine_traits::ALL_CFS).unwrap(),
         crate::raft::new_engine(raft_path.to_str().unwrap(), None).unwrap(),
     )
 }

@@ -947,8 +947,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
         #[test]
         fn test_check_data_dir() {
             // test invalid data_path
-            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
-            assert!(ret.is_err());
+            check_data_dir("/sys/invalid", "/proc/mounts").unwrap_err();
             // get real path's fs_info
             let tmp_dir = Builder::new()
                 .prefix("test-check-data-dir")
@@ -959,13 +958,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
             // data_path may not mounted on a normal device on container
-            if !fs_info.fsname.starts_with("/dev") {
+            // /proc/mounts may contain host's device, which is not accessible in container.
+            if Path::new("/.dockerenv").exists()
+                && (!fs_info.fsname.starts_with("/dev") || !Path::new(&fs_info.fsname).exists())
+            {
                 return;
             }
 
             // test with real path
-            let ret = check_data_dir(&data_path, "/proc/mounts");
-            assert!(ret.is_ok());
+            check_data_dir(&data_path, "/proc/mounts").unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -985,8 +986,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
             create_file(&mnt_file, mninfo.as_bytes());
             // check info
-            let res = check_data_dir(&data_path, &mnt_file);
-            assert!(res.is_ok());
+            check_data_dir(&data_path, &mnt_file).unwrap();
             // check rotational info
             let get = get_rotational_info(&tmp_device).unwrap();
             assert_eq!(expect, get);
@@ -1108,13 +1108,15 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
+        let res = f(&mut self.value.write().unwrap());
+        if res.is_ok() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1966,9 +1968,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();

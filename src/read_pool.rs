@@ -2,7 +2,7 @@
 
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{mpsc::SyncSender, Arc, Mutex},
 };
 
 use file_system::{set_io_type, IOType};
@@ -292,13 +292,14 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-pub struct ReadPoolConfigManager(pub ReadPoolHandle);
+pub struct ReadPoolConfigManager(pub ReadPoolHandle, pub SyncSender<usize>);
 
 impl ConfigManager for ReadPoolConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(unified)) = change.get("unified") {
             if let Some(ConfigValue::Usize(max_thread_count)) = unified.get("max_thread_count") {
                 self.0.scale_pool_size(*max_thread_count);
+                self.1.send(*max_thread_count)?;
             }
         }
         info!(

@@ -8,7 +8,8 @@ use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
-    engine::RocksEngine, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util, RocksSstWriter,
+    engine::RocksEngine, r2e, rocks_metrics_defs::*, sst::RocksSstWriterBuilder, util,
+    RocksSstWriter,
 };
 
 pub const MAX_DELETE_COUNT_BY_KEY: usize = 2048;
@@ -54,8 +55,8 @@ impl RocksEngine {
             }
             last_end_key = Some(r.end_key.to_owned());
 
-            let mut it = self.iterator_cf_opt(cf, opts.clone())?;
-            let mut it_valid = it.seek(r.start_key.into())?;
+            let mut it = self.iterator_opt(cf, opts.clone())?;
+            let mut it_valid = it.seek(r.start_key)?;
             while it_valid {
                 if it.key() >= r.end_key {
                     break;
@@ -106,8 +107,8 @@ impl RocksEngine {
             // to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
-        let mut it = self.iterator_cf_opt(cf, opts)?;
-        let mut it_valid = it.seek(range.start_key.into())?;
+        let mut it = self.iterator_opt(cf, opts)?;
+        let mut it_valid = it.seek(range.start_key)?;
         let mut wb = self.write_batch();
         while it_valid {
             wb.delete_cf(cf, it.key())?;
@@ -127,12 +128,12 @@ impl RocksEngine {
 
 impl MiscExt for RocksEngine {
     fn flush(&self, sync: bool) -> Result<()> {
-        Ok(self.as_inner().flush(sync)?)
+        self.as_inner().flush(sync).map_err(r2e)
     }
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(self.as_inner().flush_cf(handle, sync)?)
+        self.as_inner().flush_cf(handle, sync).map_err(r2e)
     }
 
     fn delete_ranges_cf(
@@ -151,12 +152,9 @@ impl MiscExt for RocksEngine {
                     if r.start_key >= r.end_key {
                         continue;
                     }
-                    self.as_inner().delete_files_in_range_cf(
-                        handle,
-                        r.start_key,
-                        r.end_key,
-                        false,
-                    )?;
+                    self.as_inner()
+                        .delete_files_in_range_cf(handle, r.start_key, r.end_key, false)
+                        .map_err(r2e)?;
                 }
             }
             DeleteStrategy::DeleteBlobs => {
@@ -166,12 +164,9 @@ impl MiscExt for RocksEngine {
                         if r.start_key >= r.end_key {
                             continue;
                         }
-                        self.as_inner().delete_blob_files_in_range_cf(
-                            handle,
-                            r.start_key,
-                            r.end_key,
-                            false,
-                        )?;
+                        self.as_inner()
+                            .delete_blob_files_in_range_cf(handle, r.start_key, r.end_key, false)
+                            .map_err(r2e)?;
                     }
                 }
             }
@@ -207,9 +202,10 @@ impl MiscExt for RocksEngine {
         if let Some(n) = util::get_cf_num_files_at_level(self.as_inner(), handle, 0) {
             let options = self.as_inner().get_options_cf(handle);
             let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+            let compaction_trigger = options.get_level_zero_file_num_compaction_trigger() as u64;
             // Leave enough buffer to tolerate heavy write workload,
             // which may flush some memtables in a short time.
-            if n > u64::from(slowdown_trigger) / 2 {
+            if n > u64::from(slowdown_trigger) / 2 && n >= compaction_trigger {
                 return Ok(true);
             }
         }
@@ -241,7 +237,8 @@ impl MiscExt for RocksEngine {
 
         for cf in db.cf_names() {
             let handle = util::get_cf_handle(db, cf)?;
-            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)?;
+            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)
+                .map_err(r2e)?;
         }
 
         Ok(())
@@ -252,11 +249,11 @@ impl MiscExt for RocksEngine {
     }
 
     fn sync_wal(&self) -> Result<()> {
-        Ok(self.as_inner().sync_wal()?)
+        self.as_inner().sync_wal().map_err(r2e)
     }
 
     fn exists(path: &str) -> bool {
-        crate::raw_util::db_exist(path)
+        crate::util::db_exist(path)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -337,24 +334,22 @@ impl MiscExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_traits::{
-        DeleteStrategy, Iterable, Iterator, Mutable, SeekKey, SyncMutable, WriteBatchExt, ALL_CFS,
+        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
     use super::*;
     use crate::{
         engine::RocksEngine,
-        raw::{ColumnFamilyOptions, DBOptions, DB},
-        raw_util::{new_engine_opt, CFOptions},
+        util::{new_engine, new_engine_opt},
+        RocksCfOptions, RocksDBOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
         for cf in cfs {
-            let mut iter = db.iterator_cf(cf).unwrap();
-            iter.seek(SeekKey::Start).unwrap();
+            let mut iter = db.iterator(cf).unwrap();
+            iter.seek_to_first().unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());
@@ -375,13 +370,7 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
-            .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine(path_str, ALL_CFS).unwrap();
 
         let mut wb = db.write_batch();
         let ts: u8 = 12;
@@ -526,14 +515,12 @@ mod tests {
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
-                let mut cf_opts = ColumnFamilyOptions::new();
+                let mut cf_opts = RocksCfOptions::default();
                 cf_opts.set_level_zero_file_num_compaction_trigger(1);
-                CFOptions::new(cf, cf_opts)
+                (*cf, cf_opts)
             })
             .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
@@ -565,10 +552,11 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let mut opts = DBOptions::new();
+        let mut opts = RocksDBOptions::default();
         opts.create_if_missing(true);
+        opts.enable_multi_batch_write(true);
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
             .set_prefix_extractor(
@@ -579,9 +567,7 @@ mod tests {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
         let cf = "default";
-        let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
         let mut wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),

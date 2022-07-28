@@ -7,7 +7,6 @@ use std::{
 };
 
 use crossbeam::channel;
-use engine_rocks::Compat;
 use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
@@ -229,7 +228,6 @@ fn test_read_applying_snapshot() {
     let region_key = keys::region_state_key(r1);
     let region_state: RegionLocalState = cluster
         .get_engine(3)
-        .c()
         .get_msg_cf(CF_RAFT, &region_key)
         .unwrap()
         .unwrap();

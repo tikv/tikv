@@ -12,7 +12,7 @@ use std::{
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
     u64,
 };
 
@@ -73,7 +73,7 @@ use crate::{
             ExecResult,
         },
         hibernate_state::{GroupState, HibernateState},
-        local_metrics::RaftMetrics,
+        local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
@@ -523,11 +523,11 @@ where
                 }))
             };
 
-            let times: SmallVec<[TiInstant; 4]> = cbs
+            let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { request_times, .. } = cb {
-                        Some(request_times[0])
+                    if let Callback::Write { trackers, .. } = cb {
+                        Some(trackers[0])
                     } else {
                         None
                     }
@@ -546,8 +546,8 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { request_times, .. } = &mut cb {
-                *request_times = times;
+            if let Callback::Write { trackers, .. } = &mut cb {
+                *trackers = tokens;
             }
 
             return Some((req, cb));
@@ -960,11 +960,20 @@ where
             }
             CasualMessage::HalfSplitRegion {
                 region_epoch,
+                start_key,
+                end_key,
                 policy,
                 source,
                 cb,
             } => {
-                self.on_schedule_half_split_region(&region_epoch, policy, source, cb);
+                self.on_schedule_half_split_region(
+                    &region_epoch,
+                    start_key,
+                    end_key,
+                    policy,
+                    source,
+                    cb,
+                );
             }
             CasualMessage::GcSnap { snaps } => {
                 self.on_gc_snap(snaps);
@@ -1907,7 +1916,7 @@ where
         );
 
         if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_cache_metrics();
+            self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
         // When having pending snapshot, if election timeout is met, it can't pass
@@ -1974,7 +1983,7 @@ where
         }
         self.fsm.peer.post_raft_group_tick();
 
-        self.fsm.peer.mut_store().flush_cache_metrics();
+        self.fsm.peer.mut_store().flush_entry_cache_metrics();
 
         // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
@@ -2101,7 +2110,7 @@ where
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
                     res.apply_state,
-                    res.applied_index_term,
+                    res.applied_term,
                     &res.metrics,
                 );
                 // After applying, several metrics are updated, report it to pd to
@@ -2478,6 +2487,9 @@ where
             }
             ExtraMessageType::MsgHibernateResponse => {
                 self.on_hibernate_response(msg.get_from_peer());
+            }
+            ExtraMessageType::MsgRejectRaftLogCausedByMemoryUsage => {
+                unimplemented!()
             }
         }
     }
@@ -3126,6 +3138,14 @@ where
             return Some(DelayReason::UnPersistedReady);
         }
 
+        let is_initialized = self.fsm.peer.is_initialized();
+        if !is_initialized {
+            // If the peer is uninitialized, then it can't receive any logs from leader. So
+            // no need to gc. If there was a peer with same region id on the store, and it had
+            // logs written, then it must be initialized, hence its log should be gc either
+            // before it's destroyed or during node restarts.
+            self.fsm.logs_gc_flushed = true;
+        }
         if !self.fsm.logs_gc_flushed {
             let start_index = self.fsm.peer.last_compacted_idx;
             let mut end_index = start_index;
@@ -3286,7 +3306,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.perf_context,
+            &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -3540,7 +3560,7 @@ where
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
-        self.fsm.peer.mut_store().compact_to(compact_to);
+        self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
     }
 
     fn on_ready_split_region(
@@ -4766,14 +4786,11 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            if let Some(request_times) = cb.get_request_times() {
-                let now = TiInstant::now();
-                for t in request_times {
-                    self.ctx
-                        .raft_metrics
-                        .wf_batch_wait
-                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
-                }
+            let now = Instant::now();
+            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+                tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
+                    &mut t.metrics.wf_batch_wait_nanos
+                });
             }
         }
 
@@ -4883,7 +4900,7 @@ where
             // snapshot generating has already been cancelled when the role becomes follower.
             return;
         }
-        if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
+        if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
@@ -4913,21 +4930,26 @@ where
         // `alive_cache_idx` is only used to gc cache.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
+        let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
-                if alive_cache_idx > p.matched
-                    && p.matched >= truncated_idx
-                    && *last_heartbeat > cache_alive_limit
-                {
-                    alive_cache_idx = p.matched;
+                if *last_heartbeat > cache_alive_limit {
+                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                        alive_cache_idx = p.matched;
+                    } else if p.matched == 0 {
+                        // the new peer is still applying snapshot, do not compact cache now
+                        alive_cache_idx = 0;
+                    }
                 }
             }
         }
+
         // When an election happened or a new peer is added, replicated_idx can be 0.
         if replicated_idx > 0 {
             assert!(
@@ -4938,20 +4960,19 @@ where
             );
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
+
+        // leader may call `get_term()` on the latest replicated index, so compact
+        // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         self.fsm
             .peer
             .mut_store()
-            .maybe_gc_cache(alive_cache_idx, applied_idx);
+            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
-            if !self.fsm.peer.get_store().cache_is_empty() {
+            self.fsm.peer.mut_store().evict_entry_cache(true);
+            if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
         }
-
-        let mut total_gc_logs = 0;
-
-        let first_idx = self.fsm.peer.get_store().first_index();
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
@@ -4990,7 +5011,6 @@ where
                 .compact_idx_too_small += 1;
             return;
         }
-        total_gc_logs += compact_idx - first_idx;
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
@@ -5005,7 +5025,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(compact_idx - first_idx);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
@@ -5015,11 +5035,11 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
+            self.fsm.peer.mut_store().evict_entry_cache(true);
         }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().cache_is_empty()
+            && !self.fsm.peer.get_store().is_entry_cache_empty()
         {
             self.register_entry_cache_evict_tick();
         }
@@ -5484,14 +5504,18 @@ where
     fn on_schedule_half_split_region(
         &mut self,
         region_epoch: &metapb::RegionEpoch,
+        start_key: Option<Vec<u8>>,
+        end_key: Option<Vec<u8>>,
         policy: CheckPolicy,
         source: &str,
         _cb: Callback<EK::Snapshot>,
     ) {
+        let is_key_range = start_key.is_some() && end_key.is_some();
         info!(
             "on half split";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
+            "is_key_range" => is_key_range,
             "policy" => ?policy,
             "source" => source,
         );
@@ -5501,6 +5525,7 @@ where
                 "not leader, skip";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
@@ -5511,11 +5536,18 @@ where
                 "receive a stale halfsplit message";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
             );
             return;
         }
 
-        let split_check_bucket_ranges = self.gen_bucket_range_for_update();
+        // Do not check the bucket ranges if we want to split the region with a given key range,
+        // this is to avoid compatibility issues.
+        let split_check_bucket_ranges = if !is_key_range {
+            self.gen_bucket_range_for_update()
+        } else {
+            None
+        };
         #[cfg(any(test, feature = "testexport"))]
         {
             if let Callback::Test { cb } = _cb {
@@ -5526,13 +5558,20 @@ where
                 cb(peer_stat);
             }
         }
-        let task =
-            SplitCheckTask::split_check(region.clone(), false, policy, split_check_bucket_ranges);
+        let task = SplitCheckTask::split_check_key_range(
+            region.clone(),
+            start_key,
+            end_key,
+            false,
+            policy,
+            split_check_bucket_ranges,
+        );
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "is_key_range" => is_key_range,
                 "err" => %e,
             );
         }
@@ -5566,6 +5605,19 @@ where
 
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        if let Some(ForceLeaderState::ForceLeader { time, .. }) = self.fsm.peer.force_leader {
+            // Clean up the force leader state after a timeout, since the PD recovery process may
+            // have been aborted for some reasons.
+            if time.saturating_elapsed()
+                > cmp::max(
+                    self.ctx.cfg.peer_stale_state_check_interval.0,
+                    Duration::from_secs(60),
+                )
+            {
+                self.on_exit_force_leader();
+            }
         }
 
         if self.ctx.cfg.hibernate_regions {

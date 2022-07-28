@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SeekKey, SyncMutable,
-    WriteOptions,
+    IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+    TabletAccessor, WriteOptions,
 };
 
 use crate::{db_vector::PanicDBVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
@@ -20,6 +20,16 @@ impl KvEngine for PanicEngine {
         panic!()
     }
     fn bad_downcast<T: 'static>(&self) -> &T {
+        panic!()
+    }
+}
+
+impl TabletAccessor<PanicEngine> for PanicEngine {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &PanicEngine)) {
+        panic!()
+    }
+
+    fn is_single_engine(&self) -> bool {
         panic!()
     }
 }
@@ -65,10 +75,7 @@ impl SyncMutable for PanicEngine {
 impl Iterable for PanicEngine {
     type Iterator = PanicEngineIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         panic!()
     }
 }
@@ -76,10 +83,18 @@ impl Iterable for PanicEngine {
 pub struct PanicEngineIterator;
 
 impl Iterator for PanicEngineIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

@@ -47,6 +47,8 @@ mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
+mod status;
+pub use crate::status::*;
 mod table_properties;
 pub use crate::table_properties::*;
 mod write_batch;
@@ -65,11 +67,7 @@ mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
-pub mod raw_util;
 pub mod util;
-
-mod compat;
-pub use compat::*;
 
 mod compact_listener;
 pub use compact_listener::*;
@@ -113,7 +111,7 @@ pub mod raw;
 pub fn get_env(
     key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
     limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
-) -> std::result::Result<std::sync::Arc<raw::Env>, String> {
+) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
     let env = encryption::get_env(None /*base_env*/, key_manager)?;
     file_system::get_env(Some(env), limiter)
 }

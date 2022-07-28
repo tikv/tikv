@@ -1883,7 +1883,7 @@ pub mod tests {
     use encryption::{DataKeyManager, EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions},
+        ctor::{ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions},
         kv::KvTestEngine,
         raft::RaftTestEngine,
     };
@@ -1917,32 +1917,41 @@ pub mod tests {
     const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
     const BYTE_SIZE: usize = 1;
 
-    type DBBuilder<E> =
-        fn(p: &Path, db_opt: Option<DBOptions>, cf_opts: Option<Vec<CFOptions<'_>>>) -> Result<E>;
+    type DBBuilder<E> = fn(
+        p: &Path,
+        db_opt: Option<DBOptions>,
+        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+    ) -> Result<E>;
 
     pub fn open_test_empty_db<E>(
         path: &Path,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
+        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
     {
         let p = path.to_str().unwrap();
-        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db_opt = db_opt.unwrap_or_default();
+        let cf_opts = cf_opts.unwrap_or_else(|| {
+            ALL_CFS
+                .iter()
+                .map(|cf| (*cf, ColumnFamilyOptions::default()))
+                .collect()
+        });
+        let db = E::new_kv_engine_opt(p, db_opt, cf_opts).unwrap();
         Ok(db)
     }
 
     pub fn open_test_db<E>(
         path: &Path,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
+        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
     {
-        let p = path.to_str().unwrap();
-        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = open_test_empty_db::<E>(path, db_opt, cf_opts).unwrap();
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
@@ -1957,13 +1966,12 @@ pub mod tests {
     pub fn open_test_db_with_100keys<E>(
         path: &Path,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
+        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
     {
-        let p = path.to_str().unwrap();
-        let db = E::new_kv_engine(p, db_opt, ALL_CFS, cf_opts).unwrap();
+        let db = open_test_empty_db::<E>(path, db_opt, cf_opts).unwrap();
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
             let mut p = Peer::default();
@@ -1981,7 +1989,7 @@ pub mod tests {
         path: &TempDir,
         raft_db_opt: Option<RaftDBOptions>,
         kv_db_opt: Option<DBOptions>,
-        kv_cf_opts: Option<Vec<CFOptions<'_>>>,
+        kv_cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
         regions: &[u64],
     ) -> Result<Engines<KvTestEngine, RaftTestEngine>> {
         let p = path.path();
@@ -2011,7 +2019,7 @@ pub mod tests {
     pub fn get_kv_count(snap: &impl EngineSnapshot) -> usize {
         let mut kv_count = 0;
         for cf in SNAPSHOT_CFS {
-            snap.scan_cf(
+            snap.scan(
                 cf,
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),
@@ -2267,7 +2275,7 @@ pub mod tests {
         let dst_db_path = dst_db_dir.path().to_str().unwrap();
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
-        let dst_db = engine_test::kv::new_engine(dst_db_path, None, &dst_cfs, None).unwrap();
+        let dst_db = engine_test::kv::new_engine(dst_db_path, &dst_cfs).unwrap();
         let options = ApplyOptions {
             db: dst_db.clone(),
             region,
@@ -2816,7 +2824,7 @@ pub mod tests {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_no_range_properties(true);
                 cf_opts.set_no_table_properties(true);
-                CFOptions::new(cf, cf_opts)
+                (*cf, cf_opts)
             })
             .collect();
         let engine =
@@ -2862,6 +2870,8 @@ pub mod tests {
         s.write_all(&recv_remain).unwrap();
         s.save().unwrap();
 
+        let snap_size = snap_mgr.get_total_snap_size().unwrap();
+        let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
@@ -2878,9 +2888,6 @@ pub mod tests {
             )
             .unwrap();
 
-            // TODO: this size may change in different RocksDB version.
-            let snap_size = 1660;
-            let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.
             assert_eq!(

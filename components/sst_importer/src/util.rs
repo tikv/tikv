@@ -69,13 +69,12 @@ mod tests {
 
     use encryption::DataKeyManager;
     use engine_rocks::{
-        util::{new_engine, RocksCFOptions},
-        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
+        util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
         RocksTitanDBOptions,
     };
     use engine_traits::{
         CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
-        SstWriter, SstWriterBuilder, TitanDBOptions,
+        SstWriter, SstWriterBuilder, TitanDBOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -116,7 +115,7 @@ mod tests {
 
     fn check_prepare_sst_for_ingestion(
         db_opts: Option<RocksDBOptions>,
-        cf_opts: Option<Vec<RocksCFOptions<'_>>>,
+        cf_opts: Option<Vec<(&str, RocksCfOptions)>>,
         key_manager: Option<&DataKeyManager>,
         was_encrypted: bool,
     ) {
@@ -135,10 +134,11 @@ mod tests {
 
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
-        let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
+        let db_opts = db_opts.unwrap_or_default();
+        let cf_opts = cf_opts.unwrap_or_else(|| vec![(CF_DEFAULT, RocksCfOptions::default())]);
+        let db = new_engine_opt(path_str, db_opts, cf_opts).unwrap();
 
-        gen_sst_with_kvs(&db, cf_name, sst_path.to_str().unwrap(), &kvs);
+        gen_sst_with_kvs(&db, CF_DEFAULT, sst_path.to_str().unwrap(), &kvs);
 
         if was_encrypted {
             // Add the file to key_manager to simulate an encrypted file.
@@ -156,9 +156,9 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf_name, &kvs);
+        check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
         // Since we are not using key_manager in db, simulate the db deleting the file from
         // key_manager.
@@ -171,9 +171,9 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf_name, &kvs);
+        check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }
 
@@ -192,11 +192,11 @@ mod tests {
         // Force all values write out to blob files.
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);
-        let mut cf_opts = RocksColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::new();
         cf_opts.set_titandb_options(&titan_opts);
         check_prepare_sst_for_ingestion(
             Some(db_opts),
-            Some(vec![RocksCFOptions::new("default", cf_opts)]),
+            Some(vec![(CF_DEFAULT, cf_opts)]),
             None,  /*key_manager*/
             false, /*was_encrypted*/
         );

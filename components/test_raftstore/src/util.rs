@@ -4,7 +4,7 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -13,7 +13,7 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
@@ -44,7 +44,7 @@ use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
-    Result,
+    RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
@@ -55,9 +55,9 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
 
-pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get(engine: &RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;
@@ -68,7 +68,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
-    let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
@@ -81,19 +81,19 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     )
 }
 
-pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+pub fn must_get_equal(engine: &RocksEngine, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
+pub fn must_get_none(engine: &RocksEngine, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal(engine: &RocksEngine, cf: &str, key: &[u8], value: &[u8]) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none(engine: &RocksEngine, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
@@ -107,7 +107,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     for cf in ALL_CFS {
         engine
             .kv
-            .scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            .scan(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
                     id, k, v, cf
@@ -658,7 +658,9 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_filter_router(router);
+        builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(router),
+        }));
     }
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();

@@ -9,6 +9,7 @@
 extern crate test;
 
 use std::{
+    cmp,
     collections::{
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
@@ -31,6 +32,8 @@ use nix::{
     unistd::{fork, ForkResult},
 };
 use rand::rngs::ThreadRng;
+
+use crate::sys::thread::StdThreadBuildWrapper;
 
 #[macro_use]
 pub mod log;
@@ -468,7 +471,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     // Caching is slow, spawn it in another thread to speed up.
     thread::Builder::new()
         .name(thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     let data_dir = data_dir.to_string();
@@ -580,6 +583,16 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
 /// A useful hook to check if master branch is being built.
 pub fn build_on_master_branch() -> bool {
     option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+}
+
+/// Set the capacity of a vector to the given capacity.
+#[inline]
+pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
+    match cap.cmp(&v.capacity()) {
+        cmp::Ordering::Less => v.shrink_to(cap),
+        cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
+        cmp::Ordering::Equal => {}
+    }
 }
 
 #[cfg(test)]

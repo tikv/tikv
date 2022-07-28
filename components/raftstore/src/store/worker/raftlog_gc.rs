@@ -107,6 +107,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         if self.tasks.is_empty() {
             return;
         }
+        fail::fail_point!("worker_gc_raft_log_flush");
         // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
         let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
@@ -213,8 +214,7 @@ mod tests {
         let path_raft = dir.path().join("raft");
         let path_kv = dir.path().join("kv");
         let raft_db = engine_test::raft::new_engine(path_kv.to_str().unwrap(), None).unwrap();
-        let kv_db =
-            engine_test::kv::new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = engine_test::kv::new_engine(path_raft.to_str().unwrap(), ALL_CFS).unwrap();
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();

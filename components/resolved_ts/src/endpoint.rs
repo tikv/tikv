@@ -491,7 +491,7 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts);
+                    let resolved_ts = observe_region.resolver.resolve(ts).min();
                     if resolved_ts < min_ts {
                         min_ts = resolved_ts;
                     }
@@ -579,7 +579,10 @@ where
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
         let prev_advance_ts_interval = self.cfg.advance_ts_interval;
-        self.cfg.update(change);
+        if let Err(e) = self.cfg.update(change) {
+            error!("update resolved-ts config unexpectly failed"; "err" => ?e);
+            return;
+        }
         if self.cfg.advance_ts_interval != prev_advance_ts_interval {
             // Increase the `cfg_version` to reject advance event that registered before
             self.cfg_version += 1;

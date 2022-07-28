@@ -192,10 +192,10 @@ mod profiling {
         // TODO: need a test for the dump_prof(None) case, but
         // the cleanup afterward is not simple.
         #[test]
-        #[ignore]
-        fn test_profiling_memory() {
+        #[ignore = "#ifdef MALLOC_CONF"]
+        fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
-            assert!(is_profiling_on(), r#"Set MALLOC_CONF="prof:true""#);
+            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
 
             let dir = Builder::new()
                 .prefix("test_profiling_memory")

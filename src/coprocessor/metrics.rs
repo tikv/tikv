@@ -96,7 +96,7 @@ lazy_static! {
         "tikv_coprocessor_request_duration_seconds",
         "Bucketed histogram of coprocessor request duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COPR_REQ_HISTOGRAM_STATIC: CoprReqHistogram =
@@ -105,7 +105,7 @@ lazy_static! {
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COPR_REQ_HANDLE_TIME_STATIC: CoprReqHistogram =
@@ -114,7 +114,7 @@ lazy_static! {
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
         &["req", "type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COPR_REQ_WAIT_TIME_STATIC: ReqWaitHistogram =
@@ -123,7 +123,7 @@ lazy_static! {
         "tikv_coprocessor_request_handler_build_seconds",
         "Bucketed histogram of coprocessor request handler build duration",
         &["req"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COPR_REQ_HANDLER_BUILD_TIME_STATIC: CoprReqHistogram =
