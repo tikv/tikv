@@ -737,6 +737,9 @@ where
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
     /// Threshold of long uncommitted proposals.
+    ///
+    /// Note that this is a dynamically changing value. Check the
+    /// `has_long_uncommitted_proposals` method for details.
     long_uncommitted_threshold: Duration,
 
     /// If it fails to send messages to leader.
@@ -2802,30 +2805,31 @@ where
 
     /// Check long uncommitted proposals and log some info to help find why.
     pub fn check_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        if self.has_long_uncommitted_proposals(ctx) {
-            self.log_for_long_uncommitted_proposals()
-        }
-    }
-
-    /// Try to log enough info to help find why there exists long uncommitted proposals.
-    fn log_for_long_uncommitted_proposals(&mut self) {
-        let status = self.raft_group.status();
-        let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
-        if let Some(prs) = status.progress {
-            for (id, p) in prs.iter() {
-                buffer.push((*id, p.commit_group_id, p.matched));
+        // Only check long uncommitted proposals when it has uncommitted log.
+        // Otherwise, it may waste CPU since it's a little bit expensive to get current time.
+        if self.has_uncommitted_log() && self.has_long_uncommitted_proposals(ctx) {
+            let status = self.raft_group.status();
+            let mut buffer: Vec<(u64, u64, u64)> = Vec::new();
+            if let Some(prs) = status.progress {
+                for (id, p) in prs.iter() {
+                    buffer.push((*id, p.commit_group_id, p.matched));
+                }
             }
+            warn!(
+                "found long uncommitted proposals";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "progress" => ?buffer,
+                "cache_first_index" => ?self.get_store().entry_cache_first_index(),
+                "next_turn_threshold" => ?self.long_uncommitted_threshold,
+            );
         }
-        warn!(
-            "found long uncommitted proposals";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "progress" => ?buffer,
-            "cache_first_index" => ?self.get_store().get_entry_cache_first_index(),
-        );
     }
 
     /// Check if there is long uncommitted proposal.
+    ///
+    /// This will increase the threshold when a long uncommitted proposal is detected,
+    /// and reset the threshold when there is no long uncommitted proposal.
     fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         let mut has_long_uncommitted = false;
         if let Some(propose_time) = self.proposals.oldest().and_then(|p| p.propose_time) {
@@ -2837,6 +2841,7 @@ where
                 Ok(elapsed) => elapsed,
                 Err(_) => return false,
             };
+            // Increase the threshold for next turn when a long uncommitted proposal is detected.
             if elapsed >= self.long_uncommitted_threshold {
                 has_long_uncommitted = true;
                 self.long_uncommitted_threshold += LONG_UNCOMMITTED_BASE_THRESHOLD;
