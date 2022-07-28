@@ -703,7 +703,7 @@ pub trait DurationDecoder: NumberDecoder {
 
 impl<T: BufferReader> DurationDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Duration {
+impl crate::codec::data_type::AsMySqlBool for Duration {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())

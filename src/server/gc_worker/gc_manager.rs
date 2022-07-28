@@ -331,7 +331,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         }
     }
 
-    /// Sets the initial state of the `GCManger`.
+    /// Sets the initial state of the `GcManger`.
     /// The only task of initializing is to simply get the current safe point as
     /// the initial value of `safe_point`. TiKV won't do any GC
     /// automatically until the first time `safe_point` was updated to a

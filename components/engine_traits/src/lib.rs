@@ -328,7 +328,7 @@ pub use crate::range::*;
 
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask,
     RAFT_LOG_MULTI_GET_CNT,
 };
 

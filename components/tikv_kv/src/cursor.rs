@@ -577,7 +577,7 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 mod tests {
     use engine_rocks::{
         util::{new_engine_opt, new_temp_engine, FixedPrefixSliceTransform},
-        RocksCfOptions, RocksDBOptions, RocksEngine, RocksSnapshot,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
     };
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
@@ -623,7 +623,7 @@ mod tests {
             .unwrap();
         let engine = new_engine_opt(
             path.path().to_str().unwrap(),
-            RocksDBOptions::default(),
+            RocksDbOptions::default(),
             vec![(CF_DEFAULT, cf_opts)],
         )
         .unwrap();

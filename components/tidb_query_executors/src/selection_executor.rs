@@ -136,7 +136,7 @@ fn update_logical_rows_by_vector_value<'a, TT: EvaluableRef<'a>, T: 'a + ChunkRe
     eval_result_logical_rows: LogicalRows<'_>,
 ) -> tidb_query_common::error::Result<()>
 where
-    Option<TT>: AsMySQLBool,
+    Option<TT>: AsMySqlBool,
 {
     let mut err_result = Ok(());
     let mut logical_index = 0;

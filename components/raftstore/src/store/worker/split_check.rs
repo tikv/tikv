@@ -8,7 +8,7 @@ use std::{
 };
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use itertools::Itertools;
 use kvproto::{
     metapb::{Region, RegionEpoch},
@@ -639,7 +639,7 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
-        let _io_type_guard = WithIOType::new(IOType::LoadBalance);
+        let _io_type_guard = WithIoType::new(IoType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,

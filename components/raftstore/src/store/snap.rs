@@ -15,9 +15,7 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
-use encryption::{
-    create_aes_ctr_crypter, encryption_method_from_db_encryption_method, DataKeyManager, Iv,
-};
+use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, Iv};
 use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
@@ -617,7 +615,7 @@ impl Snapshot {
 
                 if let Some(mgr) = &s.mgr.encryption_key_manager {
                     let enc_info = mgr.new_file(&file_paths[idx])?;
-                    let mthd = encryption_method_from_db_encryption_method(enc_info.method);
+                    let mthd = from_engine_encryption_method(enc_info.method);
                     if mthd != EncryptionMethod::Plaintext {
                         let file_for_recving = cf_file.file_for_recving.last_mut().unwrap();
                         file_for_recving.encrypter = Some(
@@ -1887,7 +1885,7 @@ pub mod tests {
     use encryption::{DataKeyManager, EncryptionConfig, FileConfig, MasterKeyConfig};
     use encryption_export::data_key_manager_from_config;
     use engine_test::{
-        ctor::{ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions},
+        ctor::{CfOptions, DbOptions, KvEngineConstructorExt, RaftDbOptions},
         kv::KvTestEngine,
         raft::RaftTestEngine,
     };
@@ -1921,16 +1919,16 @@ pub mod tests {
     const TEST_META_FILE_BUFFER_SIZE: usize = 1000;
     const BYTE_SIZE: usize = 1;
 
-    type DBBuilder<E> = fn(
+    type DbBuilder<E> = fn(
         p: &Path,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
     ) -> Result<E>;
 
     pub fn open_test_empty_db<E>(
         path: &Path,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
@@ -1940,7 +1938,7 @@ pub mod tests {
         let cf_opts = cf_opts.unwrap_or_else(|| {
             ALL_CFS
                 .iter()
-                .map(|cf| (*cf, ColumnFamilyOptions::default()))
+                .map(|cf| (*cf, CfOptions::default()))
                 .collect()
         });
         let db = E::new_kv_engine_opt(p, db_opt, cf_opts).unwrap();
@@ -1949,8 +1947,8 @@ pub mod tests {
 
     pub fn open_test_db<E>(
         path: &Path,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
@@ -1969,8 +1967,8 @@ pub mod tests {
 
     pub fn open_test_db_with_100keys<E>(
         path: &Path,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
     ) -> Result<E>
     where
         E: KvEngine + KvEngineConstructorExt,
@@ -1991,9 +1989,9 @@ pub mod tests {
 
     pub fn get_test_db_for_regions(
         path: &TempDir,
-        raft_db_opt: Option<RaftDBOptions>,
-        kv_db_opt: Option<DBOptions>,
-        kv_cf_opts: Option<Vec<(&'static str, ColumnFamilyOptions)>>,
+        raft_db_opt: Option<RaftDbOptions>,
+        kv_db_opt: Option<DbOptions>,
+        kv_cf_opts: Option<Vec<(&'static str, CfOptions)>>,
         regions: &[u64],
     ) -> Result<Engines<KvTestEngine, RaftTestEngine>> {
         let p = path.path();
@@ -2116,9 +2114,9 @@ pub mod tests {
         (dir, key_manager.unwrap())
     }
 
-    pub fn gen_db_options_with_encryption(prefix: &str) -> (TempDir, DBOptions) {
+    pub fn gen_db_options_with_encryption(prefix: &str) -> (TempDir, DbOptions) {
         let (_enc_dir, key_manager) = create_encryption_key_manager(prefix);
-        let mut db_opts = DBOptions::default();
+        let mut db_opts = DbOptions::default();
         db_opts.set_key_manager(Some(key_manager));
         (_enc_dir, db_opts)
     }
@@ -2193,7 +2191,7 @@ pub mod tests {
         test_snap_file(open_test_db_with_100keys, 500);
     }
 
-    fn test_snap_file(get_db: DBBuilder<KvTestEngine>, max_file_size: u64) {
+    fn test_snap_file(get_db: DbBuilder<KvTestEngine>, max_file_size: u64) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = Builder::new()
@@ -2312,7 +2310,7 @@ pub mod tests {
         test_snap_validation(open_test_db_with_100keys, 500);
     }
 
-    fn test_snap_validation(get_db: DBBuilder<KvTestEngine>, max_file_size: u64) {
+    fn test_snap_validation(get_db: DbBuilder<KvTestEngine>, max_file_size: u64) {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = Builder::new()
@@ -2827,7 +2825,7 @@ pub mod tests {
         let kv_cf_opts = ALL_CFS
             .iter()
             .map(|cf| {
-                let mut cf_opts = ColumnFamilyOptions::new();
+                let mut cf_opts = CfOptions::new();
                 cf_opts.set_no_range_properties(true);
                 cf_opts.set_no_table_properties(true);
                 (*cf, cf_opts)

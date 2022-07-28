@@ -390,7 +390,7 @@ mod tests {
     use kvproto::encryptionpb::EncryptionMethod;
 
     use super::*;
-    use crate::{crypter::compat, encrypted_file::EncryptedFile, Error};
+    use crate::{encrypted_file::EncryptedFile, Error};
 
     fn test_file_dict_file_normal(enable_log: bool) {
         let tempdir = tempfile::tempdir().unwrap();
@@ -614,7 +614,7 @@ mod tests {
     fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
         FileInfo {
             key_id: id,
-            method: compat(method),
+            method,
             ..Default::default()
         }
     }

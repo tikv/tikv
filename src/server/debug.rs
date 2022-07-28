@@ -20,7 +20,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
-    debugpb::{self, Db as DBType},
+    debugpb::{self, Db as DbType},
     metapb::{PeerRole, Region},
     raft_serverpb::*,
 };
@@ -166,15 +166,15 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(regions)
     }
 
-    fn get_db_from_type(&self, db: DBType) -> Result<&RocksEngine> {
+    fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
         match db {
-            DBType::Kv => Ok(&self.engines.kv),
-            DBType::Raft => Err(box_err!("Get raft db is not allowed")),
-            _ => Err(box_err!("invalid DBType type")),
+            DbType::Kv => Ok(&self.engines.kv),
+            DbType::Raft => Err(box_err!("Get raft db is not allowed")),
+            _ => Err(box_err!("invalid DB type")),
         }
     }
 
-    pub fn get(&self, db: DBType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
+    pub fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
         validate_db_and_cf(db, cf)?;
         let db = self.get_db_from_type(db)?;
         match db.get_value_cf(cf, key) {
@@ -313,7 +313,7 @@ impl<ER: RaftEngine> Debugger<ER> {
     /// Compact the cf[start..end) in the db.
     pub fn compact(
         &self,
-        db: DBType,
+        db: DbType,
         cf: &str,
         start: &[u8],
         end: &[u8],
@@ -1309,13 +1309,13 @@ fn region_overlap(r1: &Region, r2: &Region) -> bool {
         && (start_key_2 < end_key_1 || end_key_1.is_empty())
 }
 
-fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
+fn validate_db_and_cf(db: DbType, cf: &str) -> Result<()> {
     match (db, cf) {
-        (DBType::Kv, CF_DEFAULT)
-        | (DBType::Kv, CF_WRITE)
-        | (DBType::Kv, CF_LOCK)
-        | (DBType::Kv, CF_RAFT)
-        | (DBType::Raft, CF_DEFAULT) => Ok(()),
+        (DbType::Kv, CF_DEFAULT)
+        | (DbType::Kv, CF_WRITE)
+        | (DbType::Kv, CF_LOCK)
+        | (DbType::Kv, CF_RAFT)
+        | (DbType::Raft, CF_DEFAULT) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
             "invalid cf {:?} for db {:?}",
             cf, db
@@ -1383,7 +1383,7 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksEngine};
+    use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
         kvrpcpb::ApiVersion,
@@ -1496,22 +1496,22 @@ mod tests {
     #[test]
     fn test_validate_db_and_cf() {
         let valid_cases = vec![
-            (DBType::Kv, CF_DEFAULT),
-            (DBType::Kv, CF_WRITE),
-            (DBType::Kv, CF_LOCK),
-            (DBType::Kv, CF_RAFT),
-            (DBType::Raft, CF_DEFAULT),
+            (DbType::Kv, CF_DEFAULT),
+            (DbType::Kv, CF_WRITE),
+            (DbType::Kv, CF_LOCK),
+            (DbType::Kv, CF_RAFT),
+            (DbType::Raft, CF_DEFAULT),
         ];
         for (db, cf) in valid_cases {
             validate_db_and_cf(db, cf).unwrap();
         }
 
         let invalid_cases = vec![
-            (DBType::Raft, CF_WRITE),
-            (DBType::Raft, CF_LOCK),
-            (DBType::Raft, CF_RAFT),
-            (DBType::Invalid, CF_DEFAULT),
-            (DBType::Invalid, "BAD_CF"),
+            (DbType::Raft, CF_WRITE),
+            (DbType::Raft, CF_LOCK),
+            (DbType::Raft, CF_RAFT),
+            (DbType::Invalid, CF_DEFAULT),
+            (DbType::Invalid, "BAD_CF"),
         ];
         for (db, cf) in invalid_cases {
             validate_db_and_cf(db, cf).unwrap_err();
@@ -1558,10 +1558,10 @@ mod tests {
         engine.put(k, v).unwrap();
         assert_eq!(&*engine.get_value(k).unwrap().unwrap(), v);
 
-        let got = debugger.get(DBType::Kv, CF_DEFAULT, k).unwrap();
+        let got = debugger.get(DbType::Kv, CF_DEFAULT, k).unwrap();
         assert_eq!(&got, v);
 
-        match debugger.get(DBType::Kv, CF_DEFAULT, b"foo") {
+        match debugger.get(DbType::Kv, CF_DEFAULT, b"foo") {
             Err(Error::NotFound(_)) => (),
             _ => panic!("expect Error::NotFound(_)"),
         }
@@ -2151,7 +2151,7 @@ mod tests {
             .iter()
             .map(|cf| (*cf, RocksCfOptions::default()))
             .collect();
-        let db_opt = RocksDBOptions::default();
+        let db_opt = RocksDbOptions::default();
         db_opt.enable_multi_batch_write(true);
         let db = new_engine_opt(path_str, db_opt, cfs_opts).unwrap();
         // Write initial KVs.

@@ -115,7 +115,7 @@ impl From<Error> for RaftError {
 
 #[derive(PartialEq, Debug)]
 pub enum HandleReadyResult {
-    SendIOTask,
+    SendIoTask,
     Snapshot {
         msgs: Vec<eraftpb::Message>,
         snap_region: metapb::Region,
@@ -124,7 +124,7 @@ pub enum HandleReadyResult {
         /// The first index before applying the snapshot.
         last_first_index: u64,
     },
-    NoIOTask,
+    NoIoTask,
 }
 
 pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
@@ -977,7 +977,7 @@ where
 
         let mut write_task = WriteTask::new(region_id, self.peer_id, ready.number());
 
-        let mut res = HandleReadyResult::SendIOTask;
+        let mut res = HandleReadyResult::SendIoTask;
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
             let last_first_index = self.first_index().unwrap();
@@ -1023,7 +1023,7 @@ where
         }
 
         if !write_task.has_data() {
-            res = HandleReadyResult::NoIOTask;
+            res = HandleReadyResult::NoIoTask;
         }
 
         Ok((res, write_task))

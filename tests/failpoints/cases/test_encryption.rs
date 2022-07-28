@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use encryption::{compat, FileDictionaryFile};
+use encryption::FileDictionaryFile;
 use kvproto::encryptionpb::{EncryptionMethod, FileInfo};
 
 #[test]
@@ -47,7 +47,7 @@ fn test_file_dict_file_record_corrupted() {
 fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
     FileInfo {
         key_id: id,
-        method: compat(method),
+        method,
         ..Default::default()
     }
 }

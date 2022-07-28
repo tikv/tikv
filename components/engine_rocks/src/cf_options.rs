@@ -2,19 +2,19 @@
 
 use std::ops::{Deref, DerefMut};
 
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions, Result, SstPartitionerFactory};
+use engine_traits::{CfOptions, CfOptionsExt, Result, SstPartitionerFactory};
 use rocksdb::ColumnFamilyOptions as RawCfOptions;
 use tikv_util::box_err;
 
 use crate::{
-    db_options::RocksTitanDBOptions, engine::RocksEngine, r2e,
+    db_options::RocksTitanDbOptions, engine::RocksEngine, r2e,
     sst_partitioner::RocksSstPartitionerFactory, util,
 };
 
-impl CFOptionsExt for RocksEngine {
-    type ColumnFamilyOptions = RocksCfOptions;
+impl CfOptionsExt for RocksEngine {
+    type CfOptions = RocksCfOptions;
 
-    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+    fn get_options_cf(&self, cf: &str) -> Result<Self::CfOptions> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
         Ok(RocksCfOptions::from_raw(
             self.as_inner().get_options_cf(handle),
@@ -58,8 +58,8 @@ impl DerefMut for RocksCfOptions {
     }
 }
 
-impl ColumnFamilyOptions for RocksCfOptions {
-    type TitanDBOptions = RocksTitanDBOptions;
+impl CfOptions for RocksCfOptions {
+    type TitanDbOptions = RocksTitanDbOptions;
 
     fn new() -> Self {
         RocksCfOptions::from_raw(RawCfOptions::default())
@@ -97,7 +97,7 @@ impl ColumnFamilyOptions for RocksCfOptions {
         self.0.set_block_cache_capacity(capacity).map_err(r2e)
     }
 
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
     }
 

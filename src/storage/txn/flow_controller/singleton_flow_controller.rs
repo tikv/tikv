@@ -17,7 +17,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, FlowControlFactorsExt};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt};
 use getset::{CopyGetters, Setters};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
@@ -115,7 +115,7 @@ impl EngineFlowController {
         }
     }
 
-    pub fn new<E: CFNamesExt + FlowControlFactorsExt + Send + 'static>(
+    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Send + 'static>(
         config: &FlowControlConfig,
         engine: E,
         flow_info_receiver: Receiver<FlowInfo>,
@@ -443,7 +443,7 @@ impl Default for CfFlowChecker {
 }
 
 #[derive(CopyGetters, Setters)]
-pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> {
+pub(super) struct FlowChecker<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> {
     pub soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
     memtables_threshold: u64,
@@ -473,7 +473,7 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     tablet_suffix: u64,
 }
 
-impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
+impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     pub fn new(
         config: &FlowControlConfig,
         engine: E,
@@ -994,7 +994,7 @@ pub(super) mod tests {
     use std::sync::atomic::AtomicU64;
 
     use engine_rocks::RocksCfOptions;
-    use engine_traits::{CFOptionsExt, Result};
+    use engine_traits::{CfOptionsExt, Result};
 
     use super::{super::FlowController, *};
 
@@ -1017,15 +1017,15 @@ pub(super) mod tests {
         }
     }
 
-    impl CFNamesExt for EngineStub {
+    impl CfNamesExt for EngineStub {
         fn cf_names(&self) -> Vec<&str> {
             vec!["default"]
         }
     }
 
-    impl CFOptionsExt for EngineStub {
-        type ColumnFamilyOptions = RocksCfOptions;
-        fn get_options_cf(&self, _cf: &str) -> Result<Self::ColumnFamilyOptions> {
+    impl CfOptionsExt for EngineStub {
+        type CfOptions = RocksCfOptions;
+        fn get_options_cf(&self, _cf: &str) -> Result<Self::CfOptions> {
             unimplemented!();
         }
 

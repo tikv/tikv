@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use tikv_util::yatp_pool::{Config, DefaultTicker, FuturePool, PoolTicker, YatpPoolBuilder};
 
 use crate::{
@@ -49,7 +49,7 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
                 .config(config)
                 .after_start(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
-                    set_io_type(IOType::ForegroundRead);
+                    set_io_type(IoType::ForegroundRead);
                 })
                 .before_stop(move || unsafe {
                     // Safety: we call `set_` and `destroy_` with the same engine type.
@@ -79,7 +79,7 @@ pub fn build_read_pool_for_test<E: Engine>(
                 .name_prefix(name)
                 .after_start(move || {
                     set_tls_engine(engine.lock().unwrap().clone());
-                    set_io_type(IOType::ForegroundRead);
+                    set_io_type(IoType::ForegroundRead);
                 })
                 // Safety: we call `set_` and `destroy_` with the same engine type.
                 .before_stop(|| unsafe { destroy_tls_engine::<E>() })

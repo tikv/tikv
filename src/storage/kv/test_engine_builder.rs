@@ -8,7 +8,7 @@ use std::{
 use causal_ts::tests::DummyRawTsTracker;
 use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
 
@@ -27,7 +27,7 @@ const TEMP_DIR: &str = "";
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
-    io_rate_limiter: Option<Arc<IORateLimiter>>,
+    io_rate_limiter: Option<Arc<IoRateLimiter>>,
     api_version: ApiVersion,
 }
 
@@ -62,7 +62,7 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
+    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IoRateLimiter>>) -> Self {
         self.io_rate_limiter = limiter;
         self
     }

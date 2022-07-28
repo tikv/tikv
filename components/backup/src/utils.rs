@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
-use file_system::IOType;
+use file_system::IoType;
 use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::{error, sys::thread::ThreadBuildWrapper};
@@ -94,7 +94,7 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .enable_time()
         .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
-            file_system::set_io_type(IOType::Export);
+            file_system::set_io_type(IoType::Export);
         })
         .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();

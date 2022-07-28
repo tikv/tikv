@@ -545,7 +545,7 @@ mod tests {
     use super::*;
     use crate::{
         raw::{DBEntryType, TablePropertiesCollector},
-        RocksCfOptions, RocksDBOptions,
+        RocksCfOptions, RocksDbOptions,
     };
 
     #[allow(clippy::many_single_char_names)]
@@ -715,7 +715,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = RocksDBOptions::default();
+        let db_opts = RocksDbOptions::default();
         let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.add_table_properties_collector_factory(

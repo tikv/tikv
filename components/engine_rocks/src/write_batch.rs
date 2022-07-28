@@ -227,7 +227,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::{
-        super::{util::new_engine_opt, RocksDBOptions},
+        super::{util::new_engine_opt, RocksDbOptions},
         *,
     };
     use crate::RocksCfOptions;
@@ -244,7 +244,7 @@ mod tests {
         opt.enable_multi_batch_write(false);
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
-            RocksDBOptions::from_raw(opt),
+            RocksDbOptions::from_raw(opt),
             vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();
@@ -290,7 +290,7 @@ mod tests {
         opt.enable_multi_batch_write(true);
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
-            RocksDBOptions::from_raw(opt),
+            RocksDbOptions::from_raw(opt),
             vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();

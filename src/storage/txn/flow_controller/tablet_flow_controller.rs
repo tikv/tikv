@@ -13,7 +13,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, FlowControlFactorsExt, TabletFactory};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletFactory};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
@@ -47,7 +47,7 @@ impl Drop for TabletFlowController {
 }
 
 impl TabletFlowController {
-    pub fn new<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         config: &FlowControlConfig,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         flow_info_receiver: Receiver<FlowInfo>,
@@ -86,7 +86,7 @@ impl TabletFlowController {
 struct FlowInfoDispatcher;
 
 impl FlowInfoDispatcher {
-    fn start<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    fn start<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         rx: Receiver<Msg>,
         flow_info_receiver: Receiver<FlowInfo>,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,

@@ -70,12 +70,12 @@ mod tests {
 
     use encryption::DataKeyManager;
     use engine_rocks::{
-        util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
-        RocksTitanDBOptions,
+        util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder,
+        RocksTitanDbOptions,
     };
     use engine_traits::{
-        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
-        SstWriter, SstWriterBuilder, TitanDBOptions, CF_DEFAULT,
+        CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
+        SstWriterBuilder, TitanDbOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -115,7 +115,7 @@ mod tests {
     }
 
     fn check_prepare_sst_for_ingestion(
-        db_opts: Option<RocksDBOptions>,
+        db_opts: Option<RocksDbOptions>,
         cf_opts: Option<Vec<(&str, RocksCfOptions)>>,
         key_manager: Option<&DataKeyManager>,
         was_encrypted: bool,
@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn test_prepare_sst_for_ingestion_titan() {
-        let mut db_opts = RocksDBOptions::new();
-        let mut titan_opts = RocksTitanDBOptions::new();
+        let mut db_opts = RocksDbOptions::new();
+        let mut titan_opts = RocksTitanDbOptions::new();
         // Force all values write out to blob files.
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);

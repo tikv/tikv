@@ -16,7 +16,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
+use encryption::{from_engine_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
@@ -152,7 +152,7 @@ pub fn encrypt_wrap_reader<'a>(
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
-            encryption_method_from_db_encryption_method(x.method),
+            from_engine_encryption_method(x.method),
             &x.key,
             Iv::from_slice(&x.iv)?,
         )?),

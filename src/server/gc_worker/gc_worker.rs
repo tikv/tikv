@@ -19,7 +19,7 @@ use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{Context, LockInfo},
@@ -767,7 +767,7 @@ where
 
     #[inline]
     fn run(&mut self, task: GcTask<E::Local>) {
-        let _io_type_guard = WithIOType::new(IOType::Gc);
+        let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -1293,10 +1293,10 @@ mod tests {
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a
-    /// 'z' prefix will be added to keys by raftstore layer before writing to
-    /// db. Some functionalities of `GCWorker` bypasses Raft layer, so they
-    /// needs to know how data is actually represented in db. This wrapper
-    /// allows test engines write 'z'-prefixed keys to db.
+    /// 'z' prefix will be added to keys by raftstore layer before writing
+    /// to db. Some functionalities of `GcWorker` bypasses Raft layer, so
+    /// they needs to know how data is actually represented in db. This
+    /// wrapper allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]
     struct PrefixedEngine(kv::RocksEngine);
 

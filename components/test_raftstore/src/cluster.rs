@@ -18,7 +18,7 @@ use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
@@ -160,7 +160,7 @@ pub struct Cluster<T: Simulator> {
     pub dbs: Vec<Engines<RocksEngine, RaftTestEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
-    pub io_rate_limiter: Option<Arc<IORateLimiter>>,
+    pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
     key_managers_map: HashMap<u64, Option<Arc<DataKeyManager>>>,
     pub labels: HashMap<u64, HashMap<String, String>>,

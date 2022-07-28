@@ -31,16 +31,15 @@ use engine_rocks::{
         PrepopulateBlockCache,
     },
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDBOptions, RocksEngine,
-    RocksEventListener, RocksTitanDBOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
+    RaftDbLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+    RocksEventListener, RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as _, DBOptionsExt,
-    TabletAccessor, TabletErrorCollector, TitanDBOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
-    CF_WRITE,
+    CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
+    TabletErrorCollector, TitanDbOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -179,8 +178,8 @@ impl Default for TitanCfConfig {
 }
 
 impl TitanCfConfig {
-    fn build_opts(&self) -> RocksTitanDBOptions {
-        let mut opts = RocksTitanDBOptions::new();
+    fn build_opts(&self) -> RocksTitanDbOptions {
+        let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
@@ -972,7 +971,7 @@ impl RaftCfConfig {
 #[serde(rename_all = "kebab-case")]
 // Note that Titan is still an experimental feature. Once enabled, it can't fall
 // back. Forced fallback may result in data loss.
-pub struct TitanDBConfig {
+pub struct TitanDbConfig {
     pub enabled: bool,
     pub dirname: String,
     pub disable_gc: bool,
@@ -981,7 +980,7 @@ pub struct TitanDBConfig {
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
-impl Default for TitanDBConfig {
+impl Default for TitanDbConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -993,9 +992,9 @@ impl Default for TitanDBConfig {
     }
 }
 
-impl TitanDBConfig {
-    fn build_opts(&self) -> RocksTitanDBOptions {
-        let mut opts = RocksTitanDBOptions::new();
+impl TitanDbConfig {
+    fn build_opts(&self) -> RocksTitanDbOptions {
+        let mut opts = RocksTitanDbOptions::new();
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
@@ -1082,13 +1081,13 @@ pub struct DbConfig {
     #[online_config(submodule)]
     pub raftcf: RaftCfConfig,
     #[online_config(skip)]
-    pub titan: TitanDBConfig,
+    pub titan: TitanDbConfig,
 }
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
         let bg_job_limits = get_background_job_limits(&KVDB_DEFAULT_BACKGROUND_JOB_LIMITS);
-        let titan_config = TitanDBConfig {
+        let titan_config = TitanDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
@@ -1134,8 +1133,8 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn build_opt(&self) -> RocksDBOptions {
-        let mut opts = RocksDBOptions::default();
+    pub fn build_opt(&self) -> RocksDbOptions {
+        let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1392,13 +1391,13 @@ pub struct RaftDbConfig {
     #[online_config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
     #[online_config(skip)]
-    pub titan: TitanDBConfig,
+    pub titan: TitanDbConfig,
 }
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
         let bg_job_limits = get_background_job_limits(&RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS);
-        let titan_config = TitanDBConfig {
+        let titan_config = TitanDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
@@ -1436,8 +1435,8 @@ impl Default for RaftDbConfig {
 }
 
 impl RaftDbConfig {
-    pub fn build_opt(&self) -> RocksDBOptions {
-        let mut opts = RocksDBOptions::default();
+    pub fn build_opt(&self) -> RocksDbOptions {
+        let mut opts = RocksDbOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1457,7 +1456,7 @@ impl RaftDbConfig {
         opts.set_max_log_file_size(self.info_log_max_size.0);
         opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
         opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
-        opts.set_info_log(RaftDBLogger::default());
+        opts.set_info_log(RaftDbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
@@ -1536,20 +1535,20 @@ impl RaftEngineConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum DBType {
+pub enum DbType {
     Kv,
     Raft,
 }
 
-pub struct DBConfigManger<T: TabletAccessor<RocksEngine>> {
+pub struct DbConfigManger<T: TabletAccessor<RocksEngine>> {
     tablet_accessor: Arc<T>,
-    db_type: DBType,
+    db_type: DbType,
     shared_block_cache: bool,
 }
 
-impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
-    pub fn new(tablet_accessor: Arc<T>, db_type: DBType, shared_block_cache: bool) -> Self {
-        DBConfigManger {
+impl<T: TabletAccessor<RocksEngine>> DbConfigManger<T> {
+    pub fn new(tablet_accessor: Arc<T>, db_type: DbType, shared_block_cache: bool) -> Self {
+        DbConfigManger {
             tablet_accessor,
             db_type,
             shared_block_cache,
@@ -1681,17 +1680,17 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
 
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
-            (DBType::Kv, CF_DEFAULT)
-            | (DBType::Kv, CF_WRITE)
-            | (DBType::Kv, CF_LOCK)
-            | (DBType::Kv, CF_RAFT)
-            | (DBType::Raft, CF_DEFAULT) => Ok(()),
+            (DbType::Kv, CF_DEFAULT)
+            | (DbType::Kv, CF_WRITE)
+            | (DbType::Kv, CF_LOCK)
+            | (DbType::Kv, CF_RAFT)
+            | (DbType::Raft, CF_DEFAULT) => Ok(()),
             _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
         }
     }
 }
 
-impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DBConfigManger<T> {
+impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DbConfigManger<T> {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
@@ -3556,7 +3555,7 @@ impl TiKvConfig {
     pub fn build_shared_rocks_env(
         &self,
         key_manager: Option<Arc<DataKeyManager>>,
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Arc<Env>, String> {
         let env = get_env(key_manager, limiter)?;
         if !self.raft_engine.enable {
@@ -4057,9 +4056,7 @@ mod tests {
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
-    use engine_traits::{
-        ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
-    };
+    use engine_traits::{CfOptions as _, DbOptions as _, DummyFactory};
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
     use itertools::Itertools;
@@ -4379,7 +4376,7 @@ mod tests {
         incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
-        incoming.storage.io_rate_limit.import_priority = file_system::IOPriority::High;
+        incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -4505,9 +4502,9 @@ mod tests {
         let (shared, cfg_controller) = (cfg.storage.block_cache.shared, ConfigController::new(cfg));
         cfg_controller.register(
             Module::Rocksdb,
-            Box::new(DBConfigManger::new(
+            Box::new(DbConfigManger::new(
                 Arc::new(engine.clone()),
-                DBType::Kv,
+                DbType::Kv,
                 shared,
             )),
         );

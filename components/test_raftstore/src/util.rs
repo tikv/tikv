@@ -19,7 +19,7 @@ use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
     CF_DEFAULT, CF_RAFT,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -625,7 +625,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_common::storage::{
-    IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage,
+    IntervalRange, OwnedKvPair, PointRange, Result as QeResult, Storage,
 };
 use txn_types::Key;
 
@@ -41,7 +41,7 @@ impl<S: Store> Storage for TiKvStorage<S> {
         is_backward_scan: bool,
         is_key_only: bool,
         range: IntervalRange,
-    ) -> QEResult<()> {
+    ) -> QeResult<()> {
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
             if scanner.met_newer_ts_data() == NewerTsCheckState::Met {
@@ -67,14 +67,14 @@ impl<S: Store> Storage for TiKvStorage<S> {
         Ok(())
     }
 
-    fn scan_next(&mut self) -> QEResult<Option<OwnedKvPair>> {
+    fn scan_next(&mut self) -> QeResult<Option<OwnedKvPair>> {
         // Unwrap is fine because we must have called `reset_range` before calling
         // `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
     }
 
-    fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {
+    fn get(&mut self, _is_key_only: bool, range: PointRange) -> QeResult<Option<OwnedKvPair>> {
         // TODO: Default CF does not need to be accessed if KeyOnly.
         // TODO: No need to check newer ts data if self.scanner has met newer ts data.
         let key = range.0;

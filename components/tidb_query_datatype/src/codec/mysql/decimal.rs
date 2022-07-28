@@ -1943,7 +1943,7 @@ impl Display for Decimal {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Decimal {
+impl crate::codec::data_type::AsMySqlBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())

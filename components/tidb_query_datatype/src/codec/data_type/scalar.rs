@@ -83,7 +83,7 @@ impl ScalarValue {
     }
 }
 
-impl AsMySQLBool for ScalarValue {
+impl AsMySqlBool for ScalarValue {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match_template_evaltype! {

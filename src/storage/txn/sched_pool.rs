@@ -7,7 +7,7 @@ use std::{
 };
 
 use collections::HashMap;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use kvproto::pdpb::QueryKind;
 use prometheus::local::*;
 use raftstore::store::WriteStats;
@@ -74,7 +74,7 @@ impl SchedPool {
             // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
             })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.

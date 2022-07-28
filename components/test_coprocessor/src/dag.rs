@@ -277,15 +277,15 @@ impl DAGSelect {
     }
 }
 
-pub struct DAGChunkSpliter {
+pub struct DagChunkSpliter {
     chunks: Vec<Chunk>,
     datums: Vec<Datum>,
     col_cnt: usize,
 }
 
-impl DAGChunkSpliter {
-    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
-        DAGChunkSpliter {
+impl DagChunkSpliter {
+    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DagChunkSpliter {
+        DagChunkSpliter {
             chunks,
             col_cnt,
             datums: Vec::with_capacity(0),
@@ -293,7 +293,7 @@ impl DAGChunkSpliter {
     }
 }
 
-impl Iterator for DAGChunkSpliter {
+impl Iterator for DagChunkSpliter {
     type Item = Vec<Datum>;
 
     fn next(&mut self) -> Option<Vec<Datum>> {
