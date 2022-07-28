@@ -93,8 +93,8 @@ use crate::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogFetchRunner, RaftlogFetchTask,
-            RaftlogGcRunner, RaftlogGcTask, ReadDelegateCore, RefreshConfigRunner,
-            RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
+            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+            RegionRunner, RegionTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -123,7 +123,7 @@ pub struct StoreMeta {
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
     /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegateCore>,
+    pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
@@ -1585,7 +1585,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             for (_, peer_fsm) in &region_peers {
                 let peer = peer_fsm.get_peer();
                 meta.readers
-                    .insert(peer_fsm.region_id(), ReadDelegateCore::from_peer(peer));
+                    .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
             }
         }
 
@@ -2775,10 +2775,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_some()
             || meta
                 .readers
-                .insert(
-                    region.get_id(),
-                    ReadDelegateCore::from_peer(peer.get_peer()),
-                )
+                .insert(region.get_id(), ReadDelegate::from_peer(peer.get_peer()))
                 .is_some()
             || meta
                 .region_read_progress

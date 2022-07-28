@@ -5,7 +5,7 @@ use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::KvEngine;
 use kvproto::metapb::Store;
-use raftstore::store::{Config, ReadDelegateCore};
+use raftstore::store::{Config, ReadDelegate};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{batch::StoreContext, tablet::CachedTablet, StoreMsg};
@@ -17,7 +17,7 @@ where
     /// store id
     pub store_id: Option<u64>,
     /// region_id -> reader
-    pub readers: HashMap<u64, ReadDelegateCore>,
+    pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
     pub tablet_caches: HashMap<u64, CachedTablet<E>>,
 }

@@ -6,6 +6,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Display, Formatter},
     marker::PhantomData,
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -28,9 +29,8 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        DelegateStore, ReadDelegateCore, ReadDelegateTrait, ReadExecutor, ReadMetrics,
-        ReadProgress, ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer,
-        TxnExt,
+        DelegateStore, ReadDelegate, ReadExecutor, ReadMetrics, ReadProgress, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
 };
@@ -44,30 +44,32 @@ use time::Timespec;
 
 use crate::{fsm::StoreMeta, tablet::CachedTablet};
 
-pub struct ReadDelegate<E>
+pub struct CachedReadDelegate<E>
 where
     E: KvEngine,
 {
     // The reason for this to be Arc, see the comment on get_delegate in raftstore/src/store/worker/read.rs
-    delegate: Arc<ReadDelegateCore>,
+    delegate: Arc<ReadDelegate>,
     cached_tablet: CachedTablet<E>,
 }
 
-impl<E> ReadDelegateTrait<E> for ReadDelegate<E>
+impl<E> Deref for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
-    fn delegate(&self) -> &ReadDelegateCore {
+    type Target = ReadDelegate;
+
+    fn deref(&self) -> &Self::Target {
         self.delegate.as_ref()
     }
 }
 
-impl<E> Clone for ReadDelegate<E>
+impl<E> Clone for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
     fn clone(&self) -> Self {
-        ReadDelegate {
+        CachedReadDelegate {
             delegate: Arc::clone(&self.delegate),
             cached_tablet: self.cached_tablet.clone(),
         }
@@ -97,7 +99,7 @@ where
 //     metrics: &'a mut ReadMetrics,
 // }
 
-impl<E> ReadExecutor<E> for ReadDelegate<E>
+impl<E> ReadExecutor<E> for CachedReadDelegate<E>
 where
     E: KvEngine,
 {
@@ -135,7 +137,7 @@ impl<E> DelegateStore<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    type Delegate = ReadDelegate<E>;
+    type Delegate = CachedReadDelegate<E>;
 
     fn store_id(&self) -> Option<u64> {
         self.store_meta.as_ref().lock().unwrap().store_id
@@ -149,7 +151,7 @@ where
             let cached_tablet = meta.tablet_caches.get(&region_id).cloned().unwrap();
             return (
                 meta.readers.len(),
-                Some(ReadDelegate {
+                Some(CachedReadDelegate {
                     delegate: Arc::new(reader),
                     cached_tablet,
                 }),
@@ -230,7 +232,7 @@ mod tests {
         LocalReader<
             MockRouter,
             KvTestEngine,
-            ReadDelegate<KvTestEngine>,
+            CachedReadDelegate<KvTestEngine>,
             StoreMetaDelegate<KvTestEngine>,
         >,
         Receiver<RaftCommand<KvTestSnapshot>>,
@@ -253,8 +255,8 @@ mod tests {
         peer_id: u64,
         term: u64,
         applied_index_term: u64,
-    ) -> ReadDelegateCore {
-        let mut read_delegate_core = ReadDelegateCore::mock(region.id);
+    ) -> ReadDelegate {
+        let mut read_delegate_core = ReadDelegate::mock(region.id);
         read_delegate_core.peer_id = peer_id;
         read_delegate_core.term = term;
         read_delegate_core.applied_index_term = applied_index_term;
@@ -278,7 +280,7 @@ mod tests {
         reader: &mut LocalReader<
             MockRouter,
             KvTestEngine,
-            ReadDelegate<KvTestEngine>,
+            CachedReadDelegate<KvTestEngine>,
             StoreMetaDelegate<KvTestEngine>,
         >,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
@@ -303,7 +305,7 @@ mod tests {
         reader: &mut LocalReader<
             MockRouter,
             KvTestEngine,
-            ReadDelegate<KvTestEngine>,
+            CachedReadDelegate<KvTestEngine>,
             StoreMetaDelegate<KvTestEngine>,
         >,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
