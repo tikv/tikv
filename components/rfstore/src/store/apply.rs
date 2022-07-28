@@ -230,6 +230,8 @@ pub(crate) struct Applier {
     pub(crate) role: raft::StateRole,
 
     mem_table_state: Option<MemTableState>,
+
+    last_property_term: u64,
 }
 
 impl Applier {
@@ -439,8 +441,9 @@ impl Applier {
         let engine = &ctx.engine;
         let log_index = ctx.exec_log_index;
         wb.set_sequence(log_index);
-        if ctx.exec_log_term != self.apply_state.applied_index_term {
-            wb.set_property(TERM_KEY, &ctx.exec_log_term.to_le_bytes())
+        if ctx.exec_log_term != self.last_property_term {
+            wb.set_property(TERM_KEY, &ctx.exec_log_term.to_le_bytes());
+            self.last_property_term = ctx.exec_log_term;
         }
         let timer = Instant::now();
         match cl.get_type() {
