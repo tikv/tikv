@@ -40,11 +40,13 @@ struct DelayInner {
     cancelled: bool,
 }
 
-/// `Delay` is a wrapper of `tokio_timer::Delay` which has a resolution of one millisecond.
-/// It has some extra features than `tokio_timer::Delay` used by `WaiterManager`.
+/// `Delay` is a wrapper of `tokio_timer::Delay` which has a resolution of one
+/// millisecond. It has some extra features than `tokio_timer::Delay` used by
+/// `WaiterManager`.
 ///
-/// `Delay` performs no work and completes with `true` once the specified deadline has been reached.
-/// If it has been cancelled, it will complete with `false` at arbitrary time.
+/// `Delay` performs no work and completes with `true` once the specified
+/// deadline has been reached. If it has been cancelled, it will complete with
+/// `false` at arbitrary time.
 // FIXME: Use `tokio_timer::DelayQueue` instead if https://github.com/tokio-rs/tokio/issues/1700 is fixed.
 #[derive(Clone)]
 struct Delay {
@@ -325,7 +327,8 @@ impl WaitTable {
             WAIT_TABLE_STATUS_GAUGE.txns.inc();
             None
         }
-        // Here we don't increase waiter_count because it's already updated in LockManager::wait_for()
+        // Here we don't increase waiter_count because it's already updated in
+        // LockManager::wait_for()
     }
 
     /// Removes all waiters waiting for the lock.
@@ -348,10 +351,11 @@ impl WaitTable {
         Some(waiter)
     }
 
-    /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
+    /// Removes the `Waiter` with the smallest start ts and returns it with
+    /// remaining waiters.
     ///
-    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
-    /// even if there is no remaining waiter.
+    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the
+    /// `WaitTable` even if there is no remaining waiter.
     fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<(Waiter, &mut Waiters)> {
         let waiters = self.wait_table.get_mut(&lock.hash)?;
         let oldest_idx = waiters
@@ -823,7 +827,8 @@ pub mod tests {
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
         deadlock_hash: u64,
-        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], // (waiter_ts, wait_for_ts, key, resource_group_tag)
+        expect_wait_chain: &[(u64, u64, &[u8], &[u8])], /* (waiter_ts, wait_for_ts, key,
+                                                         * resource_group_tag) */
     ) {
         match res {
             Err(StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(

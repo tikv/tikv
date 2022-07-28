@@ -162,8 +162,9 @@ where
         self.ready_cnt != self.reads.len()
     }
 
-    /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
-    /// notify the request's callback that the region is removed.
+    /// Clear all commands in the queue. if `notify_removed` contains an
+    /// `region_id`, notify the request's callback that the region is
+    /// removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
         let mut removed = 0;
         for mut read in self.reads.drain(..) {
@@ -349,7 +350,8 @@ where
         Some(res)
     }
 
-    /// Raft could have not been ready to handle the poped task. So put it back into the queue.
+    /// Raft could have not been ready to handle the poped task. So put it back
+    /// into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
@@ -491,7 +493,8 @@ mod read_index_ctx_tests {
             }
         );
 
-        // Old version TiKV should be able to parse context without lock checking fields.
+        // Old version TiKV should be able to parse context without lock checking
+        // fields.
         let bytes = ctx.to_bytes();
         assert_eq!(bytes, id.as_bytes());
     }
@@ -640,7 +643,8 @@ mod tests {
         );
         queue.push_back(req, true);
 
-        // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
+        // Advance on leader, but the peer is not ready to handle it (e.g. it's in
+        // merging).
         queue.advance_leader_reads("", vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.

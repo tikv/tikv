@@ -181,7 +181,8 @@ impl Resolver {
         self.raw_lock_ts_heap.push(Reverse(ts));
     }
 
-    // untrack all timestamps smaller than input ts, depend on the raw ts in one region is non-decreasing
+    // untrack all timestamps smaller than input ts, depend on the raw ts in one
+    // region is non-decreasing
     pub fn raw_untrack_lock(&mut self, ts: TimeStamp) {
         debug!("raw untrack ts before {}, region {}", ts, self.region_id);
         while let Some(&Reverse(min_ts)) = self.raw_lock_ts_heap.peek() {
@@ -197,7 +198,8 @@ impl Resolver {
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
     pub fn resolve(&mut self, min_ts: TimeStamp) -> ResolvedTs {
-        // The `Resolver` is stopped, not need to advance, just return the current `resolved_ts`
+        // The `Resolver` is stopped, not need to advance, just return the current
+        // `resolved_ts`
         if self.stopped {
             return self.resolved_ts;
         }

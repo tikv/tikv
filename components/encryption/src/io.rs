@@ -409,7 +409,8 @@ impl CrypterCore {
     }
 
     fn reset_buffer(&mut self, size: usize) {
-        // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
+        // OCrypter require the output buffer to have block_size extra bytes, or it will
+        // panic.
         self.buffer.resize(size + self.block_size, 0);
     }
 
@@ -436,9 +437,10 @@ impl CrypterCore {
         Ok(())
     }
 
-    /// For simplicity, the following implementation rely on the fact that OpenSSL always
-    /// return exact same size as input in CTR mode. If it is not true in the future, or we
-    /// want to support other counter modes, this code needs to be updated.
+    /// For simplicity, the following implementation rely on the fact that
+    /// OpenSSL always return exact same size as input in CTR mode. If it is
+    /// not true in the future, or we want to support other counter modes,
+    /// this code needs to be updated.
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
             self.reset_crypter(0)?;

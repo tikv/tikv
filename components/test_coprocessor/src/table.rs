@@ -88,7 +88,8 @@ impl Table {
         range
     }
 
-    /// Create a `KeyRange` which select records in the range. The end_handle_id is included.
+    /// Create a `KeyRange` which select records in the range. The end_handle_id
+    /// is included.
     pub fn get_record_range(&self, start_handle_id: i64, end_handle_id: i64) -> KeyRange {
         let mut range = KeyRange::default();
         range.set_start(table::encode_row_key(self.id, start_handle_id));
@@ -103,7 +104,8 @@ impl Table {
         self.get_record_range(handle_id, handle_id)
     }
 
-    /// Create a `KeyRange` which select all index records of a specified index in current table.
+    /// Create a `KeyRange` which select all index records of a specified index
+    /// in current table.
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
         let mut range = KeyRange::default();
         let mut buf = Vec::with_capacity(8);

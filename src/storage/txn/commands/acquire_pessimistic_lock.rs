@@ -89,8 +89,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
         } else if self.check_existence {
-            // If return_value is set, the existence status is implicitly included in the result.
-            // So check_existence only need to be explicitly handled if `return_values` is not set.
+            // If return_value is set, the existence status is implicitly included in the
+            // result. So check_existence only need to be explicitly handled if
+            // `return_values` is not set.
             Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)

@@ -8,9 +8,9 @@ use prometheus::*;
 use prometheus_static_metric::*;
 use tikv::storage::Statistics;
 
-/// Installing a new capture contains 2 phases, one for incremental scanning and one for
-/// fetching delta changes from raftstore. They can share some similar metrics, in which
-/// case we can use this tag to distinct them.
+/// Installing a new capture contains 2 phases, one for incremental scanning and
+/// one for fetching delta changes from raftstore. They can share some similar
+/// metrics, in which case we can use this tag to distinct them.
 pub const TAG_DELTA_CHANGE: &str = "delta_change";
 pub const TAG_INCREMENTAL_SCAN: &str = "incremental_scan";
 
