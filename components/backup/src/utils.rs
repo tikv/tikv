@@ -12,11 +12,13 @@ use txn_types::{Key, TimeStamp};
 
 use crate::{metrics::*, Result};
 
-// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save to V2 format.
-// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
+// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version
+// V1/V1Ttl data and save to V2 format. Use 1 other than 0 because 0 is not a
+// acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
 pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
-/// any task spawn into it would run until finish even the runtime isn't referenced.
+/// any task spawn into it would run until finish even the runtime isn't
+/// referenced.
 pub struct DaemonRuntime(Option<Runtime>);
 
 impl DaemonRuntime {
@@ -109,11 +111,12 @@ pub struct KeyValueCodec {
 }
 
 // Usage of the KeyValueCodec in backup process is as following:
-// `new` -> `check_backup_api_version`, return false if not supported or input invalid.
-// encode the backup range with `encode_backup_key`
+// `new` -> `check_backup_api_version`, return false if not supported or input
+// invalid. encode the backup range with `encode_backup_key`
 // In `backup_raw` process -> use `is_valid_raw_value` &
 // `convert_encoded_key_to_dst_version` & `convert_encoded_value_to_dst_version`
-// In BackupResponse, call `decode_backup_key` & `convert_key_range_to_dst_version`
+// In BackupResponse, call `decode_backup_key` &
+// `convert_key_range_to_dst_version`
 impl KeyValueCodec {
     pub fn new(is_raw_kv: bool, cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> Self {
         KeyValueCodec {
@@ -204,7 +207,8 @@ impl KeyValueCodec {
         })
     }
 
-    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst apiversion key.
+    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst
+    // apiversion key.
     pub fn decode_backup_key(&self, key: Option<Key>) -> Result<Vec<u8>> {
         if key.is_none() {
             return Ok(vec![]);

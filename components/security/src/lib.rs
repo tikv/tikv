@@ -41,7 +41,8 @@ pub struct SecurityConfig {
 ///
 ///  # Arguments
 ///
-///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
+///  - `tag`: only used in the error message, like "ca key", "cert key",
+///    "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);

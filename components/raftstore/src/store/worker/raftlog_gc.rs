@@ -108,7 +108,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             return;
         }
         fail::fail_point!("worker_gc_raft_log_flush");
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted
+        // to disk.
         let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
@@ -233,7 +234,7 @@ mod tests {
             e.set_index(i);
             raft_wb.append(region_id, vec![e]).unwrap();
         }
-        raft_db.consume(&mut raft_wb, false /*sync*/).unwrap();
+        raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

@@ -179,7 +179,8 @@ where
     TikvFormat::new(decorator, true)
 }
 
-/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger format.
+/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger
+/// format.
 pub fn rocks_text_format<W>(io: W, enable_timestamp: bool) -> RocksFormat<PlainDecorator<W>>
 where
     W: io::Write,
@@ -237,8 +238,8 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
     }
 }
 
-// The `to_string()` function of `slog::Level` produces values like `erro` and `trce` instead of
-// the full words. This produces the full word.
+// The `to_string()` function of `slog::Level` produces values like `erro` and
+// `trce` instead of the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
         Level::Critical => "fatal",
@@ -421,7 +422,8 @@ where
     }
 }
 
-// Filters logs with operation cost lower than threshold. Otherwise output logs to inner drainer
+// Filters logs with operation cost lower than threshold. Otherwise output logs
+// to inner drainer
 struct SlowLogFilter<D> {
     threshold: u64,
     inner: D,
@@ -686,8 +688,8 @@ mod tests {
 
     use super::*;
 
-    // Due to the requirements of `Logger::root*` on a writer with a 'static lifetime
-    // we need to make a Thread Local,
+    // Due to the requirements of `Logger::root*` on a writer with a 'static
+    // lifetime we need to make a Thread Local,
     // and implement a custom writer.
     thread_local! {
         static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
@@ -861,7 +863,8 @@ mod tests {
             BUFFER.with(|buffer| {
                 let mut buffer = buffer.borrow_mut();
                 let output = from_utf8(&*buffer).unwrap();
-                // only check the log len here as some field like timestamp, location may change.
+                // only check the log len here as some field like timestamp, location may
+                // change.
                 assert_eq!(output.len(), log.len());
                 buffer.clear();
             });
@@ -880,7 +883,8 @@ mod tests {
         check_log(expected);
     }
 
-    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to `"hello"`,
+    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels
+    /// `"(hello)"` to `"hello"`,
     fn peel(output: &str) -> &str {
         assert!(output.len() >= 2);
         &(output[1..output.len() - 1])

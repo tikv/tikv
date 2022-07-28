@@ -149,7 +149,7 @@ impl<'k> AesGcmCrypter<'k> {
             cipher,
             &self.key.0,
             Some(self.iv.as_slice()),
-            &[], /* AAD */
+            &[], // AAD
             pt,
             &mut tag.0,
         )?;
@@ -162,7 +162,7 @@ impl<'k> AesGcmCrypter<'k> {
             cipher,
             &self.key.0,
             Some(self.iv.as_slice()),
-            &[], /* AAD */
+            &[], // AAD
             ct,
             &tag.0,
         )?;

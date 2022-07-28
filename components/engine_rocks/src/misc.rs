@@ -19,8 +19,8 @@ impl RocksEngine {
         self.as_inner().is_titan()
     }
 
-    // We store all data which would be deleted in memory at first because the data of region will never be larger than
-    // max-region-size.
+    // We store all data which would be deleted in memory at first because the data
+    // of region will never be larger than max-region-size.
     fn delete_all_in_range_cf_by_ingest(
         &self,
         cf: &str,
@@ -36,8 +36,8 @@ impl RocksEngine {
         let end = KeyBuilder::from_slice(max_end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
         if self.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
+            // Titan to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
 
@@ -103,8 +103,8 @@ impl RocksEngine {
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
         if self.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
+            // Titan to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
         let mut it = self.iterator_opt(cf, opts)?;

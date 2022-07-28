@@ -68,8 +68,9 @@ pub trait KvEngine:
 
 /// TabletAccessor is the trait to access all the tablets with provided accessor
 ///
-/// For single rocksdb instance, it essentially accesses the global kvdb with the accessor
-/// For multi rocksdb instances, it accesses all the tablets with the accessor
+/// For single rocksdb instance, it essentially accesses the global kvdb with
+/// the accessor For multi rocksdb instances, it accesses all the tablets with
+/// the accessor
 pub trait TabletAccessor<EK> {
     /// Loop visit all opened tablets by the specified function.
     fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
@@ -82,9 +83,11 @@ pub trait TabletAccessor<EK> {
 /// max error count to log
 const MAX_ERROR_COUNT: u32 = 5;
 
-/// TabletErrorCollector is the facility struct to handle errors when using TabletAccessor::for_each_opened_tablet
+/// TabletErrorCollector is the facility struct to handle errors when using
+/// TabletAccessor::for_each_opened_tablet
 ///
-/// It will choose the last failed result as the final result, meanwhile logging errors up to MAX_ERROR_COUNT.
+/// It will choose the last failed result as the final result, meanwhile logging
+/// errors up to MAX_ERROR_COUNT.
 pub struct TabletErrorCollector {
     errors: Vec<u8>,
     max_error_count: u32,
@@ -151,14 +154,14 @@ impl Drop for TabletErrorCollector {
 }
 
 /// A factory trait to create new engine.
-///
-// It should be named as `EngineFactory` for consistency, but we are about to rename
-// engine to tablet, so always use tablet for new traits/types.
+// It should be named as `EngineFactory` for consistency, but we are about to
+// rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Create an tablet by id and suffix. If the tablet exists, it will fail.
-    /// The id is likely the region Id, the suffix could be the current raft log index.
-    /// They together could specify a unique path for a region's tablet.
-    /// The reason to have suffix is that we can keep more than one tablet for a region.
+    /// The id is likely the region Id, the suffix could be the current raft log
+    /// index. They together could specify a unique path for a region's
+    /// tablet. The reason to have suffix is that we can keep more than one
+    /// tablet for a region.
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<EK>;
 
     /// Open a tablet by id and suffix. If the tablet exists, it will open it.
@@ -167,7 +170,8 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
         self.open_tablet_raw(&self.tablet_path(id, suffix), false)
     }
 
-    /// Open a tablet by id and suffix from cache---that means it should already be opened.
+    /// Open a tablet by id and suffix from cache---that means it should already
+    /// be opened.
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
         if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
             return Some(engine);
@@ -204,7 +208,8 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
 
-    /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
+    /// Load the tablet from path for id and suffix--for scenarios such as
+    /// applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
     }

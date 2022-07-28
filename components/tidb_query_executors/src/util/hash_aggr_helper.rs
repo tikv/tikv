@@ -16,8 +16,9 @@ pub struct HashAggregationHelper;
 impl HashAggregationHelper {
     /// Updates states for each row.
     ///
-    /// Each row may belong to a different group. States of all groups should be passed in altogether
-    /// in a single vector and the states of each row should be specified by an offset vector.
+    /// Each row may belong to a different group. States of all groups should be
+    /// passed in altogether in a single vector and the states of each row
+    /// should be specified by an offset vector.
     pub fn update_each_row_states_by_offset<Src: BatchExecutor>(
         entities: &mut Entities<Src>,
         input_physical_columns: &mut LazyBatchColumnVec,

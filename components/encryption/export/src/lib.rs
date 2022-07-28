@@ -82,7 +82,8 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     })
 }
 
-// CloudKMS adapts the KmsProvider definition from the cloud crate to that of the encryption crate
+// CloudKMS adapts the KmsProvider definition from the cloud crate to that of
+// the encryption crate
 #[derive(Debug, Deref)]
 struct CloudKms(Box<dyn CloudKmsProvider>);
 

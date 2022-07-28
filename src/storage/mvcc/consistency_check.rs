@@ -28,8 +28,9 @@ use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
 
-// When leader broadcasts a ComputeHash command to followers, it's possible that the safe point
-// becomes stale when the command reaches followers. So use a 2 minutes window to reduce this.
+// When leader broadcasts a ComputeHash command to followers, it's possible that
+// the safe point becomes stale when the command reaches followers. So use a 2
+// minutes window to reduce this.
 fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point >>= PHYSICAL_SHIFT_BITS;
     safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.

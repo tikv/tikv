@@ -281,7 +281,8 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     copy_imp(from.as_ref(), to.as_ref(), false /* sync */)
 }
 
-/// Copies the contents and permission bits of one file to another, then synchronizes.
+/// Copies the contents and permission bits of one file to another, then
+/// synchronizes.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
     copy_imp(from.as_ref(), to.as_ref(), true /* sync */)
 }
@@ -296,8 +297,8 @@ pub fn file_exists<P: AsRef<Path>>(file: P) -> bool {
     path.exists() && path.is_file()
 }
 
-/// Deletes given path from file system. Returns `true` on success, `false` if the file doesn't exist.
-/// Otherwise the raw error will be returned.
+/// Deletes given path from file system. Returns `true` on success, `false` if
+/// the file doesn't exist. Otherwise the raw error will be returned.
 pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     match remove_file(&file) {
         Ok(_) => Ok(true),
@@ -306,8 +307,8 @@ pub fn delete_file_if_exist<P: AsRef<Path>>(file: P) -> io::Result<bool> {
     }
 }
 
-/// Deletes given path from file system. Returns `true` on success, `false` if the directory doesn't
-/// exist. Otherwise the raw error will be returned.
+/// Deletes given path from file system. Returns `true` on success, `false` if
+/// the directory doesn't exist. Otherwise the raw error will be returned.
 pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match remove_dir_all(&dir) {
         Ok(_) => Ok(true),
@@ -316,8 +317,9 @@ pub fn delete_dir_if_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Creates a new, empty directory at the provided path. Returns `true` on success,
-/// `false` if the directory already exists. Otherwise the raw error will be returned.
+/// Creates a new, empty directory at the provided path. Returns `true` on
+/// success, `false` if the directory already exists. Otherwise the raw error
+/// will be returned.
 pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     match create_dir(&dir) {
         Ok(_) => Ok(true),
