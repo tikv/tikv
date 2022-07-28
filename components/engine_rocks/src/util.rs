@@ -333,7 +333,7 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CfOptionsExt, CF_DEFAULT, SyncMutable, Peekable};
+    use engine_traits::{CfOptionsExt, Peekable, SyncMutable, CF_DEFAULT};
     use rocksdb::DB;
     use tempfile::Builder;
 
