@@ -15,7 +15,7 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-mod local_metrics;
+pub mod local_metrics;
 mod peer;
 mod peer_storage;
 mod read_queue;
@@ -68,8 +68,9 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CheckLeaderRunner, CheckLeaderTask,
-        FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, PdTask, QueryStats, ReadDelegate,
-        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, TrackVer, WriteStats,
+        FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, PdTask, QueryStats,
+        RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadStats, RefreshConfigTask,
+        RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, TrackVer,
+        WriteStats,
     },
 };
