@@ -385,14 +385,15 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
-        debug!(
-            "handle raft message";
-            "tag" => self.peer.tag(),
-            "peer_id" => self.fsm.peer_id(),
-            "message_type" => %util::MsgType(&msg),
-            "from_peer_id" => msg.get_from_peer().get_id(),
-            "to_peer_id" => msg.get_to_peer().get_id(),
-        );
+        let msg_debug = MsgDebug(&msg);
+        if msg_debug.need_log() {
+            debug!(
+                "handle raft message";
+                "tag" => self.peer.tag(),
+                "peer_id" => self.fsm.peer_id(),
+                "message" => %msg_debug,
+            );
+        }
 
         if !self.validate_raft_msg(&msg) {
             return Ok(());
@@ -1137,7 +1138,7 @@ impl<'a> PeerMsgHandler<'a> {
                     let meta_data = shard_meta.marshal();
                     info!(
                         "advance data sequence from {} to {}", persisted_log_idx, applied_idx;
-                        "region" => region_id
+                        "region" => self.peer.tag(),
                     );
                     self.ctx
                         .raft_wb
@@ -1227,5 +1228,35 @@ impl PeerMsgHandler<'_> {
         }
 
         Ok(resp)
+    }
+}
+
+pub struct MsgDebug<'a>(pub &'a RaftMessage);
+
+impl MsgDebug<'_> {
+    fn need_log(&self) -> bool {
+        match self.0.get_message().msg_type {
+            MessageType::MsgHeartbeat | MessageType::MsgHeartbeatResponse => false,
+            _ => true,
+        }
+    }
+}
+
+impl std::fmt::Display for MsgDebug<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = self.0.get_message();
+        write!(
+            f,
+            "{:?}, to: {}, from: {}, term: {}, log_term: {}, index: {}, commit: {}, reject: {}, num_entries: {}",
+            msg.msg_type,
+            msg.to,
+            msg.from,
+            msg.term,
+            msg.log_term,
+            msg.index,
+            msg.commit,
+            msg.reject,
+            msg.get_entries().len(),
+        )
     }
 }

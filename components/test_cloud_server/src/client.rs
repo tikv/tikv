@@ -255,6 +255,7 @@ impl ClusterClient {
                 for (i, peer) in region.peers.iter().enumerate() {
                     if peer.id == leader.id {
                         region.leader_idx = i;
+                        sleep(Duration::from_millis(100));
                         return true;
                     }
                 }
@@ -270,6 +271,7 @@ impl ClusterClient {
             return true;
         }
         if region_err.has_stale_command() {
+            sleep(Duration::from_millis(100));
             self.update_cache_by_id(region_id, None);
             return true;
         }

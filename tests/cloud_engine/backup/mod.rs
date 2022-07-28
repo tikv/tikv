@@ -41,7 +41,13 @@ fn assert_same_file_name(s1: String, s2: String) {
 }
 
 fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvproto::brpb::File>) {
-    assert_eq!(files1.len(), files2.len(), "files1 {:?}, files2 {:?}", &files1, &files2);
+    assert_eq!(
+        files1.len(),
+        files2.len(),
+        "files1 {:?}, files2 {:?}",
+        &files1,
+        &files2
+    );
     // Sort here by start key in case of unordered response (by pipelined write + scan)
     // `sort_by_key` couldn't be used here -- rustc would complain that `file.start_key.as_slice()`
     //       may not live long enough. (Is that a bug of rustc?)
