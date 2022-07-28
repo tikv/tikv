@@ -208,27 +208,6 @@ where
     }
 }
 
-// pub trait ReadDelegateExtTrait<'a, E>: ReadExecutor<E>
-// where
-//     E: KvEngine,
-// {
-//     type Delegate: ReadDelegateTrait<E>;
-
-//     fn from_read_delegate(
-//         delegate: Self::Delegate,
-//         kv_engine: &'a E,
-//         metrics: &'a mut ReadMetrics,
-//         read_id: &'a mut ThreadReadId,
-//         snap_cache: &'a mut Option<Arc<E::Snapshot>>,
-//     ) -> Self;
-
-//     fn delegate(&self) -> &ReadDelegateCore;
-
-//     fn take_delegate(&mut self) -> Self::Delegate;
-
-//     fn metrics(&mut self) -> &mut ReadMetrics;
-// }
-
 pub struct ReadDelegateExt<'a, E>
 where
     E: KvEngine,
@@ -237,43 +216,6 @@ where
     read_id: &'a mut ThreadReadId,
     snap_cache: &'a mut Box<Option<Arc<E::Snapshot>>>,
 }
-
-// impl<'a, E> ReadDelegateExtTrait<'a, E> for ReadDelegateExt<'a, E>
-// where
-//     E: KvEngine,
-// {
-//     type Delegate = ReadDelegate;
-
-//     fn from_read_delegate(
-//         delegate: Self::Delegate,
-//         kv_engine: &'a E,
-//         metrics: &'a mut ReadMetrics,
-//         read_id: &'a mut ThreadReadId,
-//         snap_cache: &'a mut Option<Arc<E::Snapshot>>,
-//     ) -> Self {
-//         ReadDelegateExt::<'a, _> {
-//             delegate: Some(delegate),
-//             kv_engine,
-//             metrics,
-//             read_id,
-//             snap_cache,
-//         }
-//     }
-
-//     fn delegate(&self) -> &ReadDelegateCore {
-//         // It should not be called after calling take_delegate
-//         assert!(self.delegate.is_some());
-//         self.delegate.as_ref().unwrap().delegate()
-//     }
-
-//     fn take_delegate(&mut self) -> Self::Delegate {
-//         self.delegate.take().unwrap()
-//     }
-
-//     fn metrics(&mut self) -> &mut ReadMetrics {
-//         self.metrics
-//     }
-// }
 
 impl Drop for ReadDelegateCore {
     fn drop(&mut self) {
