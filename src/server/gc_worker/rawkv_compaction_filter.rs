@@ -199,7 +199,7 @@ impl RawCompactionFilter {
 
             self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
-            // If it's the latest version, and it's deleted or expired, it needs to be sent to GCWorker to be processed asynchronously.
+            // If it's the latest version, and it's deleted or expired, it needs to be sent to GcWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {

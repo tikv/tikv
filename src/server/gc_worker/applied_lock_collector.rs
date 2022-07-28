@@ -20,7 +20,7 @@ use raftstore::coprocessor::{
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 use txn_types::Key;
 
-// TODO: Use new error type for GCWorker instead of storage::Error.
+// TODO: Use new error type for GcWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};
 use crate::storage::{
     mvcc::{ErrorInner as MvccErrorInner, Lock, TimeStamp},

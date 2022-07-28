@@ -1288,7 +1288,7 @@ mod tests {
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
-    /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
+    /// added to keys by raftstore layer before writing to db. Some functionalities of `GcWorker`
     /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
     /// wrapper allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]

@@ -7,7 +7,7 @@ mod gc_manager;
 mod gc_worker;
 mod rawkv_compaction_filter;
 
-// TODO: Use separated error type for GCWorker instead.
+// TODO: Use separated error type for GcWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
 pub use compaction_filter::test_utils::{gc_by_compact, TestGcRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;

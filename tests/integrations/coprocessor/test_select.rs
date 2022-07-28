@@ -64,7 +64,7 @@ fn test_select() {
     // for dag selection
     let req = DAGSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -99,7 +99,7 @@ fn test_batch_row_limit() {
     let req = DAGSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
     check_chunk_datum_count(resp.get_chunks(), chunk_datum_limit);
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -170,7 +170,7 @@ fn test_stream_batch_row_limit() {
         let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
         check_chunk_datum_count(&chunks, chunk_data_limit);
 
-        let spliter = DAGChunkSpliter::new(chunks, 3);
+        let spliter = DagChunkSpliter::new(chunks, 3);
         let j = cmp::min((i + 1) * stream_row_limit, data.len());
         let cur_data = &data[i * stream_row_limit..j];
         for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
@@ -204,7 +204,7 @@ fn test_select_after_lease() {
     thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
     let req = DAGSelect::from(&product).build_with(ctx, &[0]);
     let mut resp = handle_select(&endpoint, req);
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -278,7 +278,7 @@ fn test_group_by() {
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 0, Bytes);
     for (row, name) in results.iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
@@ -321,7 +321,7 @@ fn test_aggr_count() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, cnt)) in results.iter().zip(exp) {
@@ -350,7 +350,7 @@ fn test_aggr_count() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (gk_data, cnt)) in results.iter().zip(exp) {
@@ -399,7 +399,7 @@ fn test_aggr_first() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, id)) in results.iter().zip(exp) {
@@ -430,7 +430,7 @@ fn test_aggr_first() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 0, Bytes);
     for (row, (count, name)) in results.iter().zip(exp) {
@@ -482,7 +482,7 @@ fn test_aggr_avg() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 2, Bytes);
     for (row, (name, (sum, cnt))) in results.iter().zip(exp) {
@@ -525,7 +525,7 @@ fn test_aggr_sum() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, cnt)) in results.iter().zip(exp) {
@@ -593,7 +593,7 @@ fn test_aggr_extre() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 2, Bytes);
     for (row, (name, max, min)) in results.iter().zip(exp) {
@@ -671,7 +671,7 @@ fn test_aggr_bit_ops() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 4);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 4);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 3, Bytes);
     for (row, (name, bitand, bitor, bitxor)) in results.iter().zip(exp) {
@@ -715,7 +715,7 @@ fn test_order_by_column() {
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -752,7 +752,7 @@ fn test_order_by_pk_with_select_from_index() {
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -785,7 +785,7 @@ fn test_limit() {
     let req = DAGSelect::from(&product).limit(5).build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -822,7 +822,7 @@ fn test_reverse() {
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -854,7 +854,7 @@ fn test_index() {
     let req = DAGSelect::from_index(&product, &product["id"]).build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
@@ -888,7 +888,7 @@ fn test_index_reverse_limit() {
 
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, ..)) in spliter.zip(expect) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
@@ -918,7 +918,7 @@ fn test_limit_oom() {
         .build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, ..)) in spliter.zip(data) {
         let expected_encoded =
             datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
@@ -958,7 +958,7 @@ fn test_del_select() {
     let resp = handle_request(&endpoint, req);
     let mut sel_resp = SelectResponse::default();
     sel_resp.merge_from_bytes(resp.get_data()).unwrap();
-    let spliter = DAGChunkSpliter::new(sel_resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(sel_resp.take_chunks().into(), 1);
     let mut row_count = 0;
     for _ in spliter {
         row_count += 1;
@@ -991,7 +991,7 @@ fn test_index_group_by() {
     let mut resp = handle_select(&endpoint, req);
     // should only have name:0, name:2 and name:1
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 0, Bytes);
     for (row, name) in results.iter().zip(&[b"name:0", b"name:1", b"name:2"]) {
@@ -1024,7 +1024,7 @@ fn test_index_aggr_count() {
         .output_offsets(Some(vec![0]))
         .build();
     let mut resp = handle_select(&endpoint, req);
-    let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     let expected_encoded = datum::encode_value(
         &mut EvalContext::default(),
         &[Datum::U64(data.len() as u64)],
@@ -1052,7 +1052,7 @@ fn test_index_aggr_count() {
     resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, cnt)) in results.iter().zip(exp) {
@@ -1079,7 +1079,7 @@ fn test_index_aggr_count() {
     resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (gk_data, cnt)) in results.iter().zip(exp) {
@@ -1123,7 +1123,7 @@ fn test_index_aggr_first() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, id)) in results.iter().zip(exp) {
@@ -1181,7 +1181,7 @@ fn test_index_aggr_avg() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 2, Bytes);
     for (row, (name, (sum, cnt))) in results.iter().zip(exp) {
@@ -1224,7 +1224,7 @@ fn test_index_aggr_sum() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 2);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 2);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 1, Bytes);
     for (row, (name, cnt)) in results.iter().zip(exp) {
@@ -1291,7 +1291,7 @@ fn test_index_aggr_extre() {
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
     let exp_len = exp.len();
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let mut results = spliter.collect::<Vec<Vec<Datum>>>();
     sort_by!(results, 2, Bytes);
     for (row, (name, max, min)) in results.iter().zip(exp) {
@@ -1358,7 +1358,7 @@ fn test_where() {
 
     let req = DAGSelect::from(&product).where_expr(cond).build();
     let mut resp = handle_select(&endpoint, req);
-    let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let row = spliter.next().unwrap();
     let (id, name, cnt) = data[2];
     let name_datum = name.map(|s| s.as_bytes()).into();
@@ -1503,7 +1503,7 @@ fn test_handle_truncate() {
         assert!(!resp.has_error());
         assert!(!resp.get_warnings().is_empty());
         // check data
-        let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+        let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
         let row = spliter.next().unwrap();
         let (id, name, cnt) = data[2];
         let name_datum = name.map(|s| s.as_bytes()).into();
@@ -1553,7 +1553,7 @@ fn test_default_val() {
     let req = DAGSelect::from(&tbl).limit(5).build();
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 4);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 4);
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
@@ -1584,7 +1584,7 @@ fn test_output_offsets() {
         .output_offsets(Some(vec![1]))
         .build();
     let mut resp = handle_select(&endpoint, req);
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (_, name, _)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
@@ -1843,7 +1843,7 @@ fn test_copr_bypass_or_access_locks() {
 
         let mut resp = handle_select(&endpoint, req);
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(expected_data) {
             let name_datum = name.map(|s| s.as_bytes()).into();
             let expected_encoded = datum::encode_value(
@@ -1948,7 +1948,7 @@ fn test_rc_read() {
 
     let mut resp = handle_select(&endpoint, req);
     let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
+    let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(expected_data.clone()) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(

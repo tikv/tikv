@@ -586,7 +586,7 @@ where
     ///
     /// If the ingestion fails because the region is not found or the epoch does
     /// not match, the remaining files will eventually be cleaned up by
-    /// CleanupSSTWorker.
+    /// CleanupSstWorker.
     fn ingest(
         &mut self,
         ctx: RpcContext<'_>,

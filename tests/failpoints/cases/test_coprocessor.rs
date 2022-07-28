@@ -217,7 +217,7 @@ fn test_paging_scan() {
             select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
             let mut row_count = 0;
-            let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+            let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
             for (row, (id, name, cnt)) in spliter.zip(exp) {
                 let name_datum = name.unwrap().as_bytes().into();
                 let expected_encoded = datum::encode_value(
@@ -290,7 +290,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
@@ -346,7 +346,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
