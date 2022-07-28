@@ -89,9 +89,10 @@ impl SoftLimit {
 pub trait CpuStatistics {
     type Container: IntoIterator<Item = (String, u64)>;
     // ThreadInfoStatistics needs &mut self to record the thread information.
-    // RefCell(internal mutability) would make SoftLimitByCpu !Sync, hence futures contains it become !Send (WHY?)
-    // Mutex would make this function async or blocking.
-    // Anyway, &mut here is acceptable, since SoftLimitByCpu won't be shared. (Even the &mut here is a little weird...)
+    // RefCell(internal mutability) would make SoftLimitByCpu !Sync, hence futures
+    // contains it become !Send (WHY?) Mutex would make this function async or
+    // blocking. Anyway, &mut here is acceptable, since SoftLimitByCpu won't be
+    // shared. (Even the &mut here is a little weird...)
     fn get_cpu_usages(&mut self) -> Self::Container;
 }
 
@@ -119,7 +120,8 @@ impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
         self.current_idle_exclude(|_| false)
     }
 
-    /// returns the current idle processor, ignoring threads with name matches the predicate.
+    /// returns the current idle processor, ignoring threads with name matches
+    /// the predicate.
     fn current_idle_exclude(&mut self, mut exclude: impl FnMut(&str) -> bool) -> f64 {
         let usages = self.metrics.get_cpu_usages();
         let used = usages
@@ -129,15 +131,17 @@ impl<Statistics: CpuStatistics> SoftLimitByCpu<Statistics> {
         self.total_time - used
     }
 
-    /// apply the limit to the soft limit according to the current CPU remaining.
+    /// apply the limit to the soft limit according to the current CPU
+    /// remaining.
     #[cfg(test)]
     pub async fn exec_over(&mut self, limit: &SoftLimit) -> Result<()> {
         self.exec_over_with_exclude(limit, |_| false).await
     }
 
-    /// apply the limit to the soft limit according to the current CPU remaining.
-    /// when calculating the CPU usage, ignore threads with name matched by the exclude predicate.
-    /// This would keep at least one thread working.
+    /// apply the limit to the soft limit according to the current CPU
+    /// remaining. when calculating the CPU usage, ignore threads with name
+    /// matched by the exclude predicate. This would keep at least one
+    /// thread working.
     #[cfg(test)]
     pub async fn exec_over_with_exclude(
         &mut self,

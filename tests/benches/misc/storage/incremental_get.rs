@@ -47,8 +47,8 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         false,
     );
 
-    // Keys are given in order, and are far away from each other to simulate a normal table lookup
-    // scenario.
+    // Keys are given in order, and are far away from each other to simulate a
+    // normal table lookup scenario.
     let mut get_keys = Vec::new();
     for i in (0..30000).step_by(30) {
         get_keys.push(Key::from_raw(&table::encode_row_key(5, i)));

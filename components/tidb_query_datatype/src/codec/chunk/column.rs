@@ -402,7 +402,8 @@ impl Column {
         self.null_cnt = 0;
         self.null_bitmap.clear();
         if !self.var_offsets.is_empty() {
-            // The first offset is always 0, it makes slicing the data easier, we need to keep it.
+            // The first offset is always 0, it makes slicing the data easier, we need to
+            // keep it.
             self.var_offsets.truncate(1);
         }
         self.data.clear();
@@ -1006,7 +1007,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         }
         // offsets
         if !col.is_fixed() {
-            //let length = (col.length+1)*4;
+            // let length = (col.length+1)*4;
             for v in &col.var_offsets {
                 self.write_i64_le(*v as i64)?;
             }

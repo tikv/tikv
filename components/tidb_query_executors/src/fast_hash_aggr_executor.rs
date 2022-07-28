@@ -32,8 +32,8 @@ macro_rules! match_template_hashable {
     }}
 }
 
-/// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
-/// group by column.
+/// Fast Hash Aggregation Executor uses hash when comparing group key. It only
+/// supports one group by column.
 pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, FastHashAggregationImpl>,
 );
@@ -72,8 +72,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src>
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -198,8 +198,8 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
 /// All groups.
 enum Groups {
     // The value of each hash table is the start index in `FastHashAggregationImpl::states`
-    // field. When there are new groups (i.e. new entry in the hash table), the states of the groups
-    // will be appended to `states`.
+    // field. When there are new groups (i.e. new entry in the hash table), the states of the
+    // groups will be appended to `states`.
     Int(HashMap<Option<Int>, usize>),
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
@@ -388,7 +388,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         Ok(vec![group_by_column])
     }
 
-    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    /// Fast hash aggregation can output aggregate results only if the source is
+    /// drained.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         false
@@ -481,7 +482,8 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
         // - AVG(col_0)
@@ -548,18 +550,20 @@ mod tests {
             assert!(!r.is_drained.unwrap());
 
             let mut r = exec.next_batch(1);
-            // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
+            // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three
+            // groups.
             assert_eq!(&r.logical_rows, &[0, 1, 2]);
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 5); // 4 result column, 1 group by column
 
-            // Let's check group by column first. Group by column is decoded in fast hash agg,
-            // but not decoded in slow hash agg. So decode it anyway.
+            // Let's check group by column first. Group by column is decoded in fast hash
+            // agg, but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[4]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[4])
                 .unwrap();
 
-            // The row order is not defined. Let's sort it by the group by column before asserting.
+            // The row order is not defined. Let's sort it by the group by column before
+            // asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[4]
                 .decoded()
                 .to_real_vec()
@@ -611,7 +615,8 @@ mod tests {
 
     #[test]
     fn test_group_by_a_constant() {
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - COUNT(col_1 + 5.0)
         // - AVG(col_0)
@@ -707,7 +712,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(col_0)
         // - AVG(col_1)
         // And group by:
@@ -769,13 +775,14 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 4); // 3 result column, 1 group by column
 
-            // Let's check group by column first. Group by column is decoded in fast hash agg,
-            // but not decoded in slow hash agg. So decode it anyway.
+            // Let's check group by column first. Group by column is decoded in fast hash
+            // agg, but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[3]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &exec.schema()[3])
                 .unwrap();
 
-            // The row order is not defined. Let's sort it by the group by column before asserting.
+            // The row order is not defined. Let's sort it by the group by column before
+            // asserting.
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[3]
                 .decoded()
                 .to_bytes_vec()
@@ -1079,7 +1086,8 @@ mod tests {
 
     #[test]
     fn test_group_by_enum_column() {
-        // This test creates a hash aggregation executor with the following aggregate functions:
+        // This test creates a hash aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // And group by:
         // - col_0(enum_type)

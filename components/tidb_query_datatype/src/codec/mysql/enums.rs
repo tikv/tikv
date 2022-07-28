@@ -84,7 +84,7 @@ impl PartialOrd for Enum {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Enum {
+impl crate::codec::data_type::AsMySqlBool for Enum {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value != 0)
