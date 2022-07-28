@@ -366,7 +366,7 @@ enum RestoreData<'a> {
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum DecodePartitionIdOp<'a> {
     Nop,
-    PID(&'a [u8]),
+    Pid(&'a [u8]),
 }
 
 impl IndexScanExecutorImpl {
@@ -647,7 +647,7 @@ impl IndexScanExecutorImpl {
             } else if partition_id_bytes.is_empty() {
                 DecodePartitionIdOp::Nop
             } else {
-                DecodePartitionIdOp::PID(partition_id_bytes)
+                DecodePartitionIdOp::Pid(partition_id_bytes)
             }
         };
 
@@ -786,7 +786,7 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}
-            DecodePartitionIdOp::PID(pid) => {
+            DecodePartitionIdOp::Pid(pid) => {
                 // If need partition id, append partition id to the last column
                 // before physical table id column if exists.
                 let pid = NumberCodec::decode_i64(pid);
