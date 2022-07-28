@@ -1341,4 +1341,89 @@ mod tests {
             assert_eq!(buffer, content);
         }
     }
+
+    fn generate_encryption_file_name(method: EncryptionMethod) -> String {
+        format!("{:?}", method)
+    }
+
+    fn generate_encrypted_file_content(method: EncryptionMethod) -> String {
+        format!("Encrypted with {:?}", method)
+    }
+
+    fn generate_encrypted_file<P: AsRef<Path>>(
+        manager: &DataKeyManager,
+        path: P,
+        content: &String,
+    ) {
+        use std::io::Write;
+
+        let raw = File::create(&path).unwrap();
+        let mut f = manager
+            .open_file_with_writer(&path, raw, false /* create */)
+            .unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+    }
+
+    fn check_encrypted_file_content<P: AsRef<Path>>(
+        manager: &DataKeyManager,
+        path: P,
+        expected: &String,
+    ) {
+        use std::io::Read;
+
+        let mut buffer = String::new();
+        let mut f = manager.open_file_for_read(&path).unwrap();
+        assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+        assert_eq!(buffer, expected.to_string());
+    }
+
+    fn test_change_method(from: EncryptionMethod, to: EncryptionMethod) {
+        if from == to {
+            return;
+        }
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
+        let path_to_file1 = tmp_dir.path().join(generate_encryption_file_name(from));
+
+        let content1 = generate_encrypted_file_content(from);
+        generate_encrypted_file(&manager, &path_to_file1, &content1);
+        check_encrypted_file_content(&manager, &path_to_file1, &content1);
+
+        // Close and re-open with new encryption algorithm.
+        drop(manager);
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, Some(to), master_key_backend, previous).unwrap();
+        let path_to_file2 = tmp_dir.path().join(generate_encryption_file_name(to));
+
+        let content2 = generate_encrypted_file_content(to);
+        generate_encrypted_file(&manager, &path_to_file2, &content2);
+        check_encrypted_file_content(&manager, &path_to_file2, &content2);
+        // check old file content
+        check_encrypted_file_content(&manager, &path_to_file1, &content1);
+    }
+
+    #[test]
+    fn test_encryption_algorithm_switch() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+
+        let method_list = [
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
+        ];
+        for from in method_list {
+            for to in method_list {
+                test_change_method(from, to)
+            }
+        }
+    }
 }
