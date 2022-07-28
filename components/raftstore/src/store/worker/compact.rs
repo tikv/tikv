@@ -247,7 +247,7 @@ mod tests {
     use std::{thread::sleep, time::Duration};
 
     use engine_test::{
-        ctor::{ColumnFamilyOptions, DBOptions},
+        ctor::{CfOptions, DbOptions},
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
@@ -319,13 +319,13 @@ mod tests {
     }
 
     fn open_db(path: &str) -> KvTestEngine {
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let cfs_opts = vec![
-            (CF_DEFAULT, ColumnFamilyOptions::new()),
-            (CF_RAFT, ColumnFamilyOptions::new()),
-            (CF_LOCK, ColumnFamilyOptions::new()),
+            (CF_DEFAULT, CfOptions::new()),
+            (CF_RAFT, CfOptions::new()),
+            (CF_LOCK, CfOptions::new()),
             (CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()

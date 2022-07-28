@@ -69,7 +69,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::{util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksSstWriterBuilder};
+    use crate::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksSstWriterBuilder};
 
     #[test]
     fn test_ingest_multiple_file() {
@@ -89,7 +89,7 @@ mod tests {
                 (*cf, opt)
             })
             .collect();
-        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
         let mut wb = db.write_batch();
         for i in 1000..5000 {
             let v = i.to_string();

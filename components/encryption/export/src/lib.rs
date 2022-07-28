@@ -14,8 +14,8 @@ use derive_more::Deref;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
-    encryption_method_from_db_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs,
-    DecrypterReader, EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+    from_engine_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
+    EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{
     DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,

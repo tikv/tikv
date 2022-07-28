@@ -175,13 +175,13 @@ impl<S> Peekable for RegionSnapshot<S>
 where
     S: Snapshot,
 {
-    type DBVector = <S as Peekable>::DBVector;
+    type DbVector = <S as Peekable>::DbVector;
 
     fn get_value_opt(
         &self,
         opts: &ReadOptions,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -200,7 +200,7 @@ where
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),

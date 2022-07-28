@@ -48,7 +48,7 @@ impl<P: RegionInfoProvider> CompactionGuardGeneratorFactory<P> {
 }
 
 // Update to implement engine_traits::SstPartitionerFactory instead once we move to use abstracted
-// ColumnFamilyOptions in src/config.rs.
+// CfOptions in src/config.rs.
 impl<P: RegionInfoProvider + Clone + 'static> SstPartitionerFactory
     for CompactionGuardGeneratorFactory<P>
 {
@@ -200,7 +200,7 @@ mod tests {
     use engine_rocks::{
         raw::{BlockBasedOptions, DBCompressionType},
         util::new_engine_opt,
-        RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
+        RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
     use engine_traits::{CompactExt, Iterator, MiscExt, SstReader, SyncMutable, CF_DEFAULT};
     use keys::DATA_PREFIX_KEY;
@@ -391,7 +391,7 @@ mod tests {
 
         let db = new_engine_opt(
             temp_dir.path().to_str().unwrap(),
-            RocksDBOptions::default(),
+            RocksDbOptions::default(),
             vec![(CF_DEFAULT, cf_opts)],
         )
         .unwrap();

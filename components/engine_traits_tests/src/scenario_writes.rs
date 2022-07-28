@@ -105,7 +105,7 @@ impl WriteScenarioEngine {
         }
     }
 
-    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DBVector>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DbVector>> {
         use WriteScenario::*;
         match self.scenario {
             NoCf | DefaultCf | WriteBatchNoCf | WriteBatchDefaultCf => {

@@ -10,7 +10,7 @@ use rocksdb::{
 use slog_global::warn;
 
 use crate::{
-    cf_options::RocksCfOptions, db_options::RocksDBOptions, engine::RocksEngine, r2e,
+    cf_options::RocksCfOptions, db_options::RocksDbOptions, engine::RocksEngine, r2e,
     rocks_metrics_defs::*,
 };
 
@@ -27,7 +27,7 @@ pub fn new_default_engine(path: &str) -> Result<RocksEngine> {
 }
 
 pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
-    let mut db_opts = RocksDBOptions::default();
+    let mut db_opts = RocksDbOptions::default();
     db_opts.enable_statistics(true);
     let cf_opts = cfs.iter().map(|name| (*name, Default::default())).collect();
     new_engine_opt(path, db_opts, cf_opts)
@@ -35,7 +35,7 @@ pub fn new_engine(path: &str, cfs: &[&str]) -> Result<RocksEngine> {
 
 pub fn new_engine_opt(
     path: &str,
-    db_opt: RocksDBOptions,
+    db_opt: RocksDbOptions,
     cf_opts: Vec<(&str, RocksCfOptions)>,
 ) -> Result<RocksEngine> {
     let mut db_opt = db_opt.into_raw();
@@ -92,24 +92,24 @@ pub fn new_engine_opt(
         adjust_dynamic_level_bytes(&cf_descs, name, opt);
     }
 
-    // If all column families exist, just open db.
-    if existed == needed {
-        let db = DB::open_cf(db_opt, path, cf_opts.into_iter().collect()).map_err(r2e)?;
+    let cfds: Vec<_> = cf_opts.into_iter().collect();
+    // We have added all missing options by iterating `existed`. If two vecs still
+    // have same length, then they must have same column families dispite their
+    // orders. So just open db.
+    if needed.len() == cfds.len() {
+        let db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
         return Ok(RocksEngine::new(db));
     }
 
     // Opens db.
-    let cfds = cf_opts.into_iter().collect();
     db_opt.create_missing_column_families(true);
     let mut db = DB::open_cf(db_opt, path, cfds).map_err(r2e)?;
 
     // Drops discarded column families.
-    //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {
     for cf in cfs_diff(&existed, &needed) {
-        // Never drop default column families.
-        if cf != CF_DEFAULT {
-            db.drop_cf(cf).map_err(r2e)?;
-        }
+        // We have checked it at the very beginning, so it must be needed.
+        assert_ne!(cf, CF_DEFAULT);
+        db.drop_cf(cf).map_err(r2e)?;
     }
 
     Ok(RocksEngine::new(db))
@@ -332,7 +332,7 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CFOptionsExt, CF_DEFAULT};
+    use engine_traits::{CfOptionsExt, CF_DEFAULT};
     use rocksdb::DB;
     use tempfile::Builder;
 
@@ -367,7 +367,7 @@ mod tests {
         let mut opts = RocksCfOptions::default();
         opts.set_level_compaction_dynamic_level_bytes(true);
         cfs_opts.push(("cf_dynamic_level_bytes", opts.clone()));
-        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
         check_dynamic_level_bytes(&db);
         drop(db);
@@ -378,7 +378,7 @@ mod tests {
             ("cf_dynamic_level_bytes", opts.clone()),
             ("cf1", opts),
         ];
-        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
         check_dynamic_level_bytes(&db);
         drop(db);
@@ -400,7 +400,7 @@ mod tests {
     }
 
     fn column_families_must_eq(path: &str, excepted: Vec<&str>) {
-        let opts = RocksDBOptions::default();
+        let opts = RocksDbOptions::default();
         let cfs_list = DB::list_column_families(&opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();

@@ -11,7 +11,7 @@ use std::{
 
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, RocksCfOptions, RocksDBOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
+    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
@@ -88,7 +88,7 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn new(
         path: &str,
-        db_opts: Option<RocksDBOptions>,
+        db_opts: Option<RocksDbOptions>,
         cfs_opts: Vec<(CfName, RocksCfOptions)>,
         shared_block_cache: bool,
         io_rate_limiter: Option<Arc<IORateLimiter>>,

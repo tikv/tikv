@@ -11,8 +11,8 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, CompactionJobInfo, Result, TabletAccessor, TabletFactory,
-    CF_DEFAULT, CF_WRITE,
+    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;

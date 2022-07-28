@@ -13,7 +13,7 @@ use std::{
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as DBEncryptionMethod, FileEncryptionInfo,
+    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
 };
 use fail::fail_point;
 use file_system::File;
@@ -23,7 +23,7 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, compat, Iv},
+    crypter::{self, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -198,7 +198,7 @@ impl Dicts {
         let file = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
-            method: compat(method),
+            method,
             ..Default::default()
         };
         let file_num = {
@@ -243,7 +243,7 @@ impl Dicts {
 
         file_dict_file.remove(fname)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-        if file.method != compat(EncryptionMethod::Plaintext) {
+        if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
         } else {
             debug!("delete plaintext file"; "fname" => fname);
@@ -275,7 +275,7 @@ impl Dicts {
         file_dict_file.insert(dst_fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
-        if method != compat(EncryptionMethod::Plaintext) {
+        if method != EncryptionMethod::Plaintext {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
             info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
@@ -312,7 +312,7 @@ impl Dicts {
             // Generate a new data key if
             //   1. encryption method is not the same, or
             //   2. the current data key was exposed and the new master key is secure.
-            if compat(method) == key.method && !(key.was_exposed && master_key.is_secure()) {
+            if method == key.method && !(key.was_exposed && master_key.is_secure()) {
                 let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
                 match now.duration_since(creation_time) {
                     Ok(duration) => {
@@ -336,7 +336,7 @@ impl Dicts {
         let (key_id, key) = generate_data_key(method);
         let data_key = DataKey {
             key,
-            method: compat(method),
+            method,
             creation_time,
             was_exposed: false,
             ..Default::default()
@@ -614,9 +614,9 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
-            crypter::encryption_method_from_db_encryption_method(file.method),
+            crypter::from_engine_encryption_method(file.method),
             &file.key,
-            if file.method == DBEncryptionMethod::Plaintext {
+            if file.method == EtEncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -644,9 +644,9 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
-            crypter::encryption_method_from_db_encryption_method(file.method),
+            crypter::from_engine_encryption_method(file.method),
             &file.key,
-            if file.method == DBEncryptionMethod::Plaintext {
+            if file.method == EtEncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -722,7 +722,7 @@ impl DataKeyManager {
         };
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::encryption_method_to_db_encryption_method(method),
+            method: crypter::to_engine_encryption_method(method),
             iv,
         };
         Ok(Some(encrypted_file))
@@ -749,10 +749,10 @@ impl EncryptionKeyManager for DataKeyManager {
                 // Return Plaintext if file is not found
                 // RocksDB requires this
                 let file = FileInfo::default();
-                let method = compat(EncryptionMethod::Plaintext);
+                let method = EncryptionMethod::Plaintext;
                 Ok(FileEncryptionInfo {
                     key: vec![],
-                    method: crypter::encryption_method_to_db_encryption_method(method),
+                    method: crypter::to_engine_encryption_method(method),
                     iv: file.iv,
                 })
             }
@@ -766,7 +766,7 @@ impl EncryptionKeyManager for DataKeyManager {
         let file = self.dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::encryption_method_to_db_encryption_method(file.method),
+            method: crypter::to_engine_encryption_method(file.method),
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
@@ -788,7 +788,7 @@ impl EncryptionKeyManager for DataKeyManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as DBEncryptionMethod;
+    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
     use tempfile::TempDir;
@@ -911,7 +911,7 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
-        assert_eq!(bar.method, DBEncryptionMethod::Plaintext);
+        assert_eq!(bar.method, EtEncryptionMethod::Plaintext);
     }
 
     // When enabling encryption, using insecure master key is not allowed.

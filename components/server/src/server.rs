@@ -42,8 +42,8 @@ use engine_rocks::{
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
-    RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
+    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -81,7 +81,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DBConfigManger, DBType, LogConfigManager, TiKvConfig},
+    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TiKvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -1575,9 +1575,9 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController, share_cache: bool) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DBConfigManger::new(
+            Box::new(DbConfigManger::new(
                 Arc::new(self.clone()),
-                DBType::Raft,
+                DbType::Raft,
                 share_cache,
             )),
         );
@@ -1662,9 +1662,9 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
             tikv::config::Module::Rocksdb,
-            Box::new(DBConfigManger::new(
+            Box::new(DbConfigManger::new(
                 factory.clone(),
-                DBType::Kv,
+                DbType::Kv,
                 self.config.storage.block_cache.shared,
             )),
         );

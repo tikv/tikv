@@ -142,7 +142,7 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    type DBVector = RocksDBVector;
+    type DbVector = RocksDBVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();

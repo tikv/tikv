@@ -7,9 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
-};
+use engine_traits::{CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT};
 
 use crate::server::engine_factory::KvEngineFactory;
 

@@ -23,8 +23,8 @@ use std::{
 };
 
 use encryption_export::{
-    create_backend, data_key_manager_from_config, encryption_method_from_db_encryption_method,
-    DataKeyManager, DecrypterReader, Iv,
+    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
+    DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
 use engine_traits::EncryptionKeyManager;
@@ -33,7 +33,7 @@ use futures::executor::block_on;
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{Db as DBType, *},
+    debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::SnapshotMeta,
@@ -151,7 +151,7 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
-            let mthd = encryption_method_from_db_encryption_method(file_info.method);
+            let mthd = from_engine_encryption_method(file_info.method);
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",
@@ -218,7 +218,7 @@ fn main() {
             bottommost,
         } => {
             let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
-            let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+            let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
             let cfs = cf.iter().map(|s| s.as_ref()).collect();
             let from_key = from.map(|k| unescape(&k));
             let to_key = to.map(|k| unescape(&k));
@@ -347,7 +347,7 @@ fn main() {
                     threads,
                     bottommost,
                 } => {
-                    let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
+                    let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
                     let from_key = from.map(|k| unescape(&k));
                     let to_key = to.map(|k| unescape(&k));
                     let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
@@ -610,7 +610,7 @@ fn compact_whole_cluster(
     pd_client: &RpcClient,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
-    db_type: DBType,
+    db_type: DbType,
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
     to: Option<Vec<u8>>,

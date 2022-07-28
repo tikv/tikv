@@ -261,7 +261,7 @@ fn test_serde_custom_tikv_config() {
         max_sorted_runs: 100,
         gc_merge_rewrite: false,
     };
-    let titan_db_config = TitanDBConfig {
+    let titan_db_config = TitanDbConfig {
         enabled: true,
         dirname: "bar".to_owned(),
         disable_gc: false,

@@ -4,7 +4,7 @@
 
 use std::{convert::TryInto, sync::Arc};
 
-use engine_traits::{CFNamesExt, CFOptionsExt, TabletFactory, CF_DEFAULT};
+use engine_traits::{CfNamesExt, CfOptionsExt, TabletFactory, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IOPriority, IOType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use strum::IntoEnumIterator;

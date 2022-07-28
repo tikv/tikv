@@ -50,12 +50,12 @@ mod tests {
     use super::*;
     use crate::{
         event_listener::RocksEventListener, raw::DBCompressionType, util::new_engine_opt,
-        RocksCfOptions, RocksDBOptions, RocksEngine,
+        RocksCfOptions, RocksDbOptions, RocksEngine,
     };
 
     fn new_test_db(dir: &str) -> (RocksEngine, Arc<IORateLimiterStatistics>) {
         let limiter = Arc::new(IORateLimiter::new_for_test());
-        let mut db_opts = RocksDBOptions::default();
+        let mut db_opts = RocksDbOptions::default();
         db_opts.add_event_listener(RocksEventListener::new("test_db", None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);

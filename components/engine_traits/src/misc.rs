@@ -6,7 +6,7 @@
 //! FIXME: Things here need to be moved elsewhere.
 
 use crate::{
-    cf_names::CFNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
 };
 
 #[derive(Clone, Debug)]
@@ -25,7 +25,7 @@ pub enum DeleteStrategy {
     DeleteByWriter { sst_path: String },
 }
 
-pub trait MiscExt: CFNamesExt + FlowControlFactorsExt {
+pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn flush(&self, sync: bool) -> Result<()>;
 
     fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;

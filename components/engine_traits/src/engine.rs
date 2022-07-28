@@ -23,9 +23,9 @@ pub trait KvEngine:
     + SyncMutable
     + Iterable
     + WriteBatchExt
-    + DBOptionsExt
-    + CFNamesExt
-    + CFOptionsExt
+    + DbOptionsExt
+    + CfNamesExt
+    + CfOptionsExt
     + ImportExt
     + SstExt
     + CompactExt
@@ -224,7 +224,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
 
 pub struct DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     pub engine: Option<EK>,
     pub root_path: String,
@@ -232,7 +232,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
@@ -268,7 +268,7 @@ where
 }
 impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
@@ -283,14 +283,14 @@ where
 
 impl<EK> DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
         DummyFactory { engine, root_path }
     }
 }
 
-impl<EK: CFOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
+impl<EK: CfOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
         Self::new(None, "/tmp".to_string())
     }

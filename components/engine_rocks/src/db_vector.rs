@@ -5,7 +5,7 @@ use std::{
     ops::Deref,
 };
 
-use engine_traits::DBVector;
+use engine_traits::DbVector;
 use rocksdb::DBVector as RawDBVector;
 
 pub struct RocksDBVector(RawDBVector);
@@ -16,7 +16,7 @@ impl RocksDBVector {
     }
 }
 
-impl DBVector for RocksDBVector {}
+impl DbVector for RocksDBVector {}
 
 impl Deref for RocksDBVector {
     type Target = [u8];

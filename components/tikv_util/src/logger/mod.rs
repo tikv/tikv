@@ -1010,8 +1010,8 @@ mod tests {
         }
     }
 
-    struct RaftDBWriter;
-    impl Write for RaftDBWriter {
+    struct RaftDbWriter;
+    impl Write for RaftDbWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }
@@ -1025,7 +1025,7 @@ mod tests {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter), true);
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter), true);
         let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter), true);
-        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter), true);
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDbWriter), true);
         let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,

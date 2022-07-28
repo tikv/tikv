@@ -3116,7 +3116,7 @@ mod tests {
         *,
     };
     use crate::{
-        config::TitanDBConfig,
+        config::TitanDbConfig,
         coprocessor::checksum_crc64_xor,
         storage::{
             config::BlockCacheConfig,
@@ -3632,7 +3632,7 @@ mod tests {
     #[test]
     fn test_scan_with_key_only() {
         let db_config = crate::config::DbConfig {
-            titan: TitanDBConfig {
+            titan: TitanDbConfig {
                 enabled: true,
                 ..Default::default()
             },

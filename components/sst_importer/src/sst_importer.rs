@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
+use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
@@ -33,7 +33,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     import_file::{ImportDir, ImportFile},
-    import_mode::{ImportModeSwitcher, RocksDBMetricsFn},
+    import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     Config, Error, Result,
@@ -211,11 +211,11 @@ impl SstImporter {
         }
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
 
-    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_import_mode(&db, mf)
     }
 
@@ -486,7 +486,7 @@ impl SstImporter {
         let path = self.dir.join(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: encryption_method_to_db_encryption_method(c.cipher_type),
+            method: to_engine_encryption_method(c.cipher_type),
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });

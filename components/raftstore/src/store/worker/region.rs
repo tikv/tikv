@@ -813,7 +813,7 @@ mod tests {
     };
 
     use engine_test::{
-        ctor::ColumnFamilyOptions,
+        ctor::CfOptions,
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
@@ -982,7 +982,7 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
