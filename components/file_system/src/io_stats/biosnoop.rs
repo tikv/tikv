@@ -29,9 +29,9 @@ use crate::{metrics::*, IOBytes, IOType};
 /// by address, then all the IO requests for that thread will be recorded in
 /// corresponding type's map in BCC.
 ///
-/// With that information, every time calling `IOContext` it get the stored stats
-/// from corresponding type's map in BCC. Thus it enables TiKV to get the latency and
-/// bytes of read/write request per IO-type.
+/// With that information, every time calling `IOContext` it get the stored
+/// stats from corresponding type's map in BCC. Thus it enables TiKV to get the
+/// latency and bytes of read/write request per IO-type.
 
 const MAX_THREAD_IDX: usize = 192;
 
@@ -291,8 +291,8 @@ mod tests {
     #[test]
     fn test_biosnoop() {
         init().unwrap();
-        // Test cases are running in parallel, while they depend on the same global variables.
-        // To make them not affect each other, run them in sequence.
+        // Test cases are running in parallel, while they depend on the same global
+        // variables. To make them not affect each other, run them in sequence.
         test_thread_idx_allocation();
         test_io_context();
         unsafe {

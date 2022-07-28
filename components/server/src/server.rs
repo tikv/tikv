@@ -2,13 +2,14 @@
 
 //! This module startups all the components of a TiKV server.
 //!
-//! It is responsible for reading from configs, starting up the various server components,
-//! and handling errors (mostly by aborting and reporting to the user).
+//! It is responsible for reading from configs, starting up the various server
+//! components, and handling errors (mostly by aborting and reporting to the
+//! user).
 //!
 //! The entry point is `run_tikv`.
 //!
-//! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKvServer` struct.
+//! Components are often used to initialize other components, and/or must be
+//! explicitly stopped. We keep these components in the `TiKvServer` struct.
 
 use std::{
     cmp,
@@ -363,7 +364,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     ///
     /// #  Fatal errors
     ///
-    /// - If `dynamic config` feature is enabled and failed to register config to PD
+    /// - If `dynamic config` feature is enabled and failed to register config
+    ///   to PD
     /// - If some critical configs (like data dir) are differrent from last run
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
@@ -488,9 +490,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             );
         }
 
-        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have enough space
-        // to do compaction and region migration when TiKV recover. This file is created in
-        // data_dir rather than db_path, because we must not increase store size of db_path.
+        // We truncate a big file to make sure that both raftdb and kvdb of TiKV have
+        // enough space to do compaction and region migration when TiKV recover.
+        // This file is created in data_dir rather than db_path, because we must not
+        // increase store size of db_path.
         let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
         let mut capacity = disk_stats.total_space();
         if self.config.raft_store.capacity.0 > 0 {
@@ -649,7 +652,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         if let Some(sst_worker) = &mut self.sst_worker {
             let sst_runner = RecoveryRunner::new(
-                engines.engines.kv.get_sync_db(),
+                engines.engines.kv.clone(),
                 engines.store_meta.clone(),
                 self.config.storage.background_error_recovery_window.into(),
                 DEFAULT_CHECK_INTERVAL,
@@ -1017,7 +1020,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
-        // Start auto gc. Must after `Node::start` because `node_id` is initialized there.
+        // Start auto gc. Must after `Node::start` because `node_id` is initialized
+        // there.
         assert!(node.id() > 0); // Node id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
@@ -1186,7 +1190,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             servers.node.id(),
             engines.engine.clone(),
             self.region_info_accessor.clone(),
-            engines.engines.kv.as_inner().clone(),
+            engines.engines.kv.clone(),
             self.config.backup.clone(),
             self.concurrency_manager.clone(),
             self.config.storage.api_version(),
@@ -1242,15 +1246,15 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.config
                 .storage
                 .io_rate_limit
-                .build(!stats_collector_enabled /*enable_statistics*/),
+                .build(!stats_collector_enabled /* enable_statistics */),
         );
         let fetcher = if stats_collector_enabled {
             BytesFetcher::FromIOStatsCollector()
         } else {
             BytesFetcher::FromRateLimiter(limiter.statistics().unwrap())
         };
-        // Set up IO limiter even when rate limit is disabled, so that rate limits can be
-        // dynamically applied later on.
+        // Set up IO limiter even when rate limit is disabled, so that rate limits can
+        // be dynamically applied later on.
         set_io_rate_limiter(Some(limiter));
         fetcher
     }
@@ -1286,7 +1290,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             });
     }
 
-    // Only background cpu quota tuning is implemented at present. iops and frontend quota tuning is on the way
+    // Only background cpu quota tuning is implemented at present. iops and frontend
+    // quota tuning is on the way
     fn init_quota_tuning_task(&self, quota_limiter: Arc<QuotaLimiter>) {
         // No need to do auto tune when capacity is really low
         if SysQuota::cpu_cores_quota() * BACKGROUND_REQUEST_CORE_MAX_RATIO
@@ -1335,9 +1340,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                     };
                     // Try tuning quota when cpu_usage is correctly collected.
                     // rule based tuning:
-                    //      1) if instance is busy, shrink cpu quota for analyze by one quota pace until lower bound is hit;
-                    //      2) if instance cpu usage is healthy, no op;
-                    //      3) if instance is idle, increase cpu quota by one quota pace  until upper bound is hit.
+                    // - if instance is busy, shrink cpu quota for analyze by one quota pace until
+                    //   lower bound is hit;
+                    // - if instance cpu usage is healthy, no op;
+                    // - if instance is idle, increase cpu quota by one quota pace  until upper
+                    //   bound is hit.
                     if cpu_usage > 0.0f64 {
                         let mut target_quota = old_quota;
 
@@ -1551,17 +1558,16 @@ impl ConfiguredRaftEngine for RocksEngine {
         let mut raft_db_opts = config_raftdb.build_opt();
         raft_db_opts.set_env(env.clone());
         let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-        let raftdb =
-            engine_rocks::raw_util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
+        let mut raftdb =
+            engine_rocks::util::new_engine_opt(raft_db_path, raft_db_opts, raft_cf_opts)
                 .expect("failed to open raftdb");
-        let mut raftdb = RocksEngine::from_db(Arc::new(raftdb));
         raftdb.set_shared_block_cache(block_cache.is_some());
 
         if should_dump {
             let raft_engine =
                 RaftLogEngine::new(config.raft_engine.config(), key_manager.clone(), None)
                     .expect("failed to open raft engine for migration");
-            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /*threads*/);
+            dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 8 /* threads */);
             raft_engine.stop();
             drop(raft_engine);
             raft_data_state_machine.after_dump_data();
@@ -1609,14 +1615,13 @@ impl ConfiguredRaftEngine for RaftLogEngine {
             let mut raft_db_opts = config_raftdb.build_opt();
             raft_db_opts.set_env(env.clone());
             let raft_cf_opts = config_raftdb.build_cf_opts(block_cache);
-            let raftdb = engine_rocks::raw_util::new_engine_opt(
+            let raftdb = engine_rocks::util::new_engine_opt(
                 &config.raft_store.raftdb_path,
                 raft_db_opts,
                 raft_cf_opts,
             )
             .expect("failed to open raftdb for migration");
-            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
-            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /*threads*/);
+            dump_raftdb_to_raft_engine(&raftdb, &raft_engine, 8 /* threads */);
             raftdb.stop();
             drop(raftdb);
             raft_data_state_machine.after_dump_data();
@@ -1676,7 +1681,7 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, /*max_samples_to_preserve*/
+            &engines, 180, // max_samples_to_preserve
         ));
 
         (engines, engines_info)

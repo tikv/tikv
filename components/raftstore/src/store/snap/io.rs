@@ -193,8 +193,8 @@ where
     Ok(stats)
 }
 
-/// Apply the given snapshot file into a column family. `callback` will be invoked after each batch of
-/// key value pairs written to db.
+/// Apply the given snapshot file into a column family. `callback` will be
+/// invoked after each batch of key value pairs written to db.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
     key_mgr: Option<&Arc<DataKeyManager>>,
@@ -226,7 +226,8 @@ where
         Ok(())
     };
 
-    // Collect keys to a vec rather than wb so that we can invoke the callback less times.
+    // Collect keys to a vec rather than wb so that we can invoke the callback less
+    // times.
     let mut batch = Vec::with_capacity(1024);
     let mut batch_data_size = 0;
 

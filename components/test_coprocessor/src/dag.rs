@@ -112,7 +112,8 @@ impl DAGSelect {
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
         let mut expr_ft = col.as_field_type();
-        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a
+        // `Decimal`
         if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
             expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
         }

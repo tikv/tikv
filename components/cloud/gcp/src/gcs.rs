@@ -424,8 +424,8 @@ impl BlobStorage for GCSStorage {
             ..Default::default()
         };
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into memory
-        // in order to retry.
+        // FIXME: Switch to upload() API so we don't need to read the entire data into
+        // memory in order to retry.
         let mut data = Vec::with_capacity(content_length as usize);
         reader.read_to_end(&mut data).await?;
         retry(|| async {
@@ -456,7 +456,7 @@ impl BlobStorage for GCSStorage {
             Ok(oid) => oid,
             Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
         };
-        let request = match Object::download(&oid, None /*optional*/) {
+        let request = match Object::download(&oid, None /* optional */) {
             Ok(request) => request.map(|_: io::Empty| Body::empty()),
             Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
         };

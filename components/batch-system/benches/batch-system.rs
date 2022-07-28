@@ -85,8 +85,8 @@ fn bench_imbalance(c: &mut Criterion) {
     system.shutdown();
 }
 
-/// Bench how it performs when scheduling a lot of quick tasks during an long-polling
-/// tasks.
+/// Bench how it performs when scheduling a lot of quick tasks during an
+/// long-polling tasks.
 ///
 /// A good scheduling algorithm should not starve the quick tasks.
 fn bench_fairness(c: &mut Criterion) {

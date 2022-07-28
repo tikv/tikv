@@ -28,8 +28,9 @@ use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
 
-// When leader broadcasts a ComputeHash command to followers, it's possible that the safe point
-// becomes stale when the command reaches followers. So use a 2 minutes window to reduce this.
+// When leader broadcasts a ComputeHash command to followers, it's possible that
+// the safe point becomes stale when the command reaches followers. So use a 2
+// minutes window to reduce this.
 fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point >>= PHYSICAL_SHIFT_BITS;
     safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.
@@ -480,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -495,10 +496,10 @@ mod tests {
             path,
             DBOptions::default(),
             vec![
-                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, ColumnFamilyOptions::new()),
+                (CF_WRITE, ColumnFamilyOptions::new()),
+                (CF_LOCK, ColumnFamilyOptions::new()),
+                (CF_RAFT, ColumnFamilyOptions::new()),
             ],
         )
         .unwrap();

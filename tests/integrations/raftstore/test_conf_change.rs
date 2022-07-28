@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::{
@@ -176,7 +175,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_2 = cluster.get_engine(peer2.get_store_id());
     assert!(
         engine_2
-            .c()
             .get_value(&keys::data_key(b"k1"))
             .unwrap()
             .is_none()
@@ -402,7 +400,6 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     for _ in 0..250 {
         let region: RegionLocalState = engine1
-            .c()
             .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
             .unwrap()
             .unwrap();
@@ -412,7 +409,6 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         sleep_ms(20);
     }
     let region: RegionLocalState = engine1
-        .c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
         .unwrap()
         .unwrap();
@@ -578,8 +574,8 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k3", b"v3");
 
     // Ensure the conf change is safe:
-    // The "RemoveNode" request which asks to remove one healthy node will be rejected
-    // if there are only 2 healthy nodes in a cluster of 3 nodes.
+    // The "RemoveNode" request which asks to remove one healthy node will be
+    // rejected if there are only 2 healthy nodes in a cluster of 3 nodes.
     pd_client.remove_peer(region_id, new_peer(2, 2));
     cluster.must_put(b"k4", b"v4");
     pd_client.must_have_peer(region_id, new_peer(2, 2));
@@ -587,7 +583,8 @@ fn test_conf_change_safe<T: Simulator>(cluster: &mut Cluster<T>) {
     // In this case, it's fine to remove one unhealthy node.
     pd_client.must_remove_peer(region_id, new_peer(1, 1));
 
-    // Ensure it works to remove one node from the cluster that has only two healthy nodes.
+    // Ensure it works to remove one node from the cluster that has only two healthy
+    // nodes.
     pd_client.must_remove_peer(region_id, new_peer(2, 2));
 }
 
@@ -917,16 +914,17 @@ where
 #[test]
 fn test_conf_change_fast() {
     let mut cluster = new_server_cluster(0, 3);
-    // Sets heartbeat timeout to more than 5 seconds. It also changes the election timeout,
-    // but it's OK as the cluster starts with only one peer, it will campaigns immediately.
+    // Sets heartbeat timeout to more than 5 seconds. It also changes the election
+    // timeout, but it's OK as the cluster starts with only one peer, it will
+    // campaigns immediately.
     configure_for_lease_read(&mut cluster, Some(5000), None);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
     let timer = Instant::now();
-    // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
-    // hence it must timeout.
+    // If conf change relies on heartbeat, it will take more than 5 seconds to
+    // finish, hence it must timeout.
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");

@@ -15,7 +15,8 @@ use fs2::FileExt;
 
 use super::{get_io_rate_limiter, get_io_type, IOOp, IORateLimiter};
 
-/// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
+/// A wrapper around `std::fs::File` with capability to track and regulate IO
+/// flow.
 pub struct File {
     inner: fs::File,
     limiter: Option<Arc<IORateLimiter>>,

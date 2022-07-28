@@ -35,7 +35,8 @@ fn test_deadline() {
 
 #[test]
 fn test_deadline_2() {
-    // It should not even take any snapshots when request is outdated from the beginning.
+    // It should not even take any snapshots when request is outdated from the
+    // beginning.
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -198,7 +199,8 @@ fn test_paging_scan() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
     for desc in [false, true] {
@@ -263,7 +265,8 @@ fn test_paging_scan_multi_ranges() {
     ];
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
 

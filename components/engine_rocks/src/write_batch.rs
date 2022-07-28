@@ -29,12 +29,14 @@ impl WriteBatchExt for RocksEngine {
     }
 }
 
-/// `RocksWriteBatchVec` is for method `MultiBatchWrite` of RocksDB, which splits a large WriteBatch
-/// into many smaller ones and then any thread could help to deal with these small WriteBatch when it
-/// is calling `MultiBatchCommit` and wait the front writer to finish writing. `MultiBatchWrite` will
-/// perform much better than traditional `pipelined_write` when TiKV writes very large data into RocksDB.
-/// We will remove this feature when `unordered_write` of RocksDB becomes more stable and becomes compatible
-/// with Titan.
+/// `RocksWriteBatchVec` is for method `MultiBatchWrite` of RocksDB, which
+/// splits a large WriteBatch into many smaller ones and then any thread could
+/// help to deal with these small WriteBatch when it is calling
+/// `MultiBatchCommit` and wait the front writer to finish writing.
+/// `MultiBatchWrite` will perform much better than traditional
+/// `pipelined_write` when TiKV writes very large data into RocksDB.
+/// We will remove this feature when `unordered_write` of RocksDB becomes more
+/// stable and becomes compatible with Titan.
 pub struct RocksWriteBatchVec {
     db: Arc<DB>,
     wbs: Vec<RawWriteBatch>,
@@ -79,8 +81,9 @@ impl RocksWriteBatchVec {
         self.db.as_ref()
     }
 
-    /// `check_switch_batch` will split a large WriteBatch into many smaller ones. This is to avoid
-    /// a large WriteBatch blocking write_thread too long.
+    /// `check_switch_batch` will split a large WriteBatch into many smaller
+    /// ones. This is to avoid a large WriteBatch blocking write_thread too
+    /// long.
     #[inline(always)]
     fn check_switch_batch(&mut self) {
         if self.support_write_batch_vec
@@ -219,7 +222,7 @@ impl Mutable for RocksWriteBatchVec {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Peekable, WriteBatch};
+    use engine_traits::{Peekable, WriteBatch, CF_DEFAULT};
     use rocksdb::DBOptions as RawDBOptions;
     use tempfile::Builder;
 
@@ -227,6 +230,7 @@ mod tests {
         super::{util::new_engine_opt, RocksDBOptions},
         *,
     };
+    use crate::RocksCfOptions;
 
     #[test]
     fn test_should_write_to_engine_with_pipeline_write_mode() {
@@ -241,7 +245,7 @@ mod tests {
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
             RocksDBOptions::from_raw(opt),
-            vec![],
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();
         assert!(
@@ -287,7 +291,7 @@ mod tests {
         let engine = new_engine_opt(
             path.path().join("db").to_str().unwrap(),
             RocksDBOptions::from_raw(opt),
-            vec![],
+            vec![(CF_DEFAULT, RocksCfOptions::default())],
         )
         .unwrap();
         assert!(

@@ -73,9 +73,9 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
 /// assert_eq!([2019, 12, 2, 0, 0, 0, 0], parts);
 /// ```
 /// When year, month or day is zero, there can not have a carry.
-/// e.g.: `"1998-11-00 23:59:59.999" (fsp = 2, round = true)`, in `hms` it contains a carry,
-/// however, the `day` is 0, which is invalid in `MySQL`. When thoese cases encountered, return
-/// None.
+/// e.g.: `"1998-11-00 23:59:59.999" (fsp = 2, round = true)`, in `hms` it
+/// contains a carry, however, the `day` is 0, which is invalid in `MySQL`. When
+/// thoese cases encountered, return None.
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
@@ -113,9 +113,10 @@ fn chrono_datetime<T: TimeZone>(
     second: u32,
     micro: u32,
 ) -> Result<DateTime<T>> {
-    // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due to
-    // chronotope/chrono-tz #23.
-    // As a workaround, we first build a NaiveDate, then attach time zone information to it.
+    // NOTE: We are not using `tz::from_ymd_opt` as suggested in chrono's README due
+    // to chronotope/chrono-tz #23.
+    // As a workaround, we first build a NaiveDate, then attach time zone
+    // information to it.
     NaiveDate::from_ymd_opt(year as i32, month, day)
         .and_then(|date| date.and_hms_opt(hour, minute, second))
         .and_then(|t| t.checked_add_signed(chrono::Duration::microseconds(i64::from(micro))))
@@ -344,7 +345,8 @@ mod parser {
     /// ```ignore
     ///  split_components_with_tz(b"2020-12-24T15:37:50+0800")?.1 == Some(480*60)
     /// ```
-    /// the second value if not None indicates the offset in seconds of the timezone parsed
+    /// the second value if not None indicates the offset in seconds of the
+    /// timezone parsed
     fn split_components_with_tz(input: &str) -> Option<(Vec<&[u8]>, Option<i32>)> {
         let mut buffer = input.as_bytes();
 
@@ -508,8 +510,9 @@ mod parser {
         }
     }
 
-    /// Try to parse a datetime string `input` without fractional part and separators.
-    /// return an array that stores `[year, month, day, hour, minute, second, 0]`
+    /// Try to parse a datetime string `input` without fractional part and
+    /// separators. return an array that stores `[year, month, day, hour,
+    /// minute, second, 0]`
     fn parse_whole(input: &[u8]) -> Option<[u32; 7]> {
         let mut parts = [0u32; 7];
 
@@ -535,8 +538,8 @@ mod parser {
         Some(parts)
     }
 
-    /// Try to parse a fractional part from `input` with `fsp`, round the result if `round` is
-    /// true.
+    /// Try to parse a fractional part from `input` with `fsp`, round the result
+    /// if `round` is true.
     /// NOTE: This function assumes that `fsp` is in range: [0, 6].
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
         debug_assert!(fsp < 7);
@@ -568,8 +571,8 @@ mod parser {
         let trimmed = input.trim();
         (!trimmed.is_empty()).as_option()?;
 
-        // to support ISO8601 and MySQL's time zone support, we further parse the following formats
-        // 2020-12-17T11:55:55Z
+        // to support ISO8601 and MySQL's time zone support, we further parse the
+        // following formats 2020-12-17T11:55:55Z
         // 2020-12-17T11:55:55+0800
         // 2020-12-17T11:55:55-08
         // 2020-12-17T11:55:55+02:00
@@ -835,8 +838,8 @@ fn handle_invalid_date(ctx: &mut EvalContext, mut args: TimeArgs) -> Result<Opti
 /// NOTE: It's inappropriate to construct `Time` first and then verify it.
 /// Because `Time` uses `bitfield`, the range of each field is quite narrow.
 /// For example, the size of `month` field is 5 bits. If we get a value 16 for
-/// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is definitely
-/// an invalid value. So we need a larger range for validation.
+/// `month` and set it, we will got 0 (16 % 16 == 0) instead 16 which is
+/// definitely an invalid value. So we need a larger range for validation.
 #[derive(Debug, Clone)]
 pub struct TimeArgs {
     year: u32,
@@ -1800,8 +1803,8 @@ impl ConvertTo<Duration> for Time {
             return Ok(Duration::zero());
         }
         let seconds = i64::from(self.hour() * 3600 + self.minute() * 60 + self.second());
-        // `microsecond` returns the number of microseconds since the whole non-leap second.
-        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // `microsecond` returns the number of microseconds since the whole non-leap
+        // second. Such as for 2019-09-22 07:21:22.670936103 UTC,
         // it will return 670936103.
         let microsecond = i64::from(self.micro());
         Duration::from_micros(seconds * 1_000_000 + microsecond, self.fsp() as i8)
@@ -2606,7 +2609,8 @@ mod tests {
 
         for case in cases {
             // Enable NO_ZERO_DATE, STRICT_MODE and ALLOW_INVALID_DATE.
-            // If an invalid date (converted to zero-date) is encountered, an error is returned.
+            // If an invalid date (converted to zero-date) is encountered, an error is
+            // returned.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_date: true,
                 strict_mode: true,
@@ -2623,7 +2627,8 @@ mod tests {
         let cases = vec!["2019-01-00", "2019-00-01"];
 
         for &case in cases.iter() {
-            // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is produced.
+            // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is
+            // produced.
             let mut ctx = EvalContext::from(TimeEnv {
                 no_zero_in_date: true,
                 ..TimeEnv::default()

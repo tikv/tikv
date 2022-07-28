@@ -58,7 +58,8 @@ where
         if self.current_size > self.split_size && !over_limit {
             self.split_keys.push(keys::origin_key(entry.key()).to_vec());
             // if for previous on_kv() self.current_size == self.split_size,
-            // the split key would be pushed this time, but the entry size for this time should not be ignored.
+            // the split key would be pushed this time, but the entry size for this time
+            // should not be ignored.
             self.current_size = if self.current_size - size == self.split_size {
                 size
             } else {
@@ -259,7 +260,7 @@ pub mod tests {
 
     use collections::HashSet;
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        ctor::{ColumnFamilyOptions, DBOptions},
         kv::KvTestEngine,
     };
     use engine_traits::{
@@ -446,9 +447,9 @@ pub mod tests {
             .iter()
             .map(|cf| {
                 if cfs_with_range_prop.contains(cf) {
-                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                    (*cf, ColumnFamilyOptions::new())
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -576,9 +577,9 @@ pub mod tests {
                 if cfs_with_range_prop.contains(cf) {
                     let mut opt = ColumnFamilyOptions::new();
                     opt.set_disable_auto_compactions(true);
-                    CFOptions::new(cf, opt)
+                    (*cf, opt)
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -615,8 +616,9 @@ pub mod tests {
         let cop_host = CoprocessorHost::new(tx.clone(), cfg);
         let mut runnable = SplitCheckRunner::new(engine.clone(), tx, cop_host.clone());
         for i in 0..2000 {
-            // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
-            // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
+            // if not mvcc, kv size is (6+1)*2 = 14, given bucket size is 3000, expect each
+            // bucket has about 210 keys if mvcc, kv size is about 18*2 = 36, expect each
+            // bucket has about 80 keys
             let s = key_gen(format!("{:04}00", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 && i > 0 {
@@ -645,8 +647,9 @@ pub mod tests {
 
         // insert keys into 0000 ~ 0020 with 000000 ~ 002000
         for i in 0..2000 {
-            // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has about 210 keys
-            // if mvcc, kv size is about 18*2 = 36, expect each bucket has about 80 keys
+            // kv size is (6+1)*2 = 14, given bucket size is 3000, expect each bucket has
+            // about 210 keys if mvcc, kv size is about 18*2 = 36, expect each bucket has
+            // about 80 keys
             let s = key_gen(format!("{:06}", i).as_bytes(), mvcc, i.into());
             engine.put_cf(data_cf, &s, &s).unwrap();
             if i % 10 == 0 {
@@ -713,9 +716,9 @@ pub mod tests {
                 if cfs_with_range_prop.contains(cf) {
                     let mut opt = ColumnFamilyOptions::new();
                     opt.set_disable_auto_compactions(true);
-                    CFOptions::new(cf, opt)
+                    (*cf, opt)
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -768,9 +771,9 @@ pub mod tests {
             .iter()
             .map(|cf| {
                 if cf != &CF_LOCK {
-                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                    (*cf, ColumnFamilyOptions::new())
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -829,7 +832,7 @@ pub mod tests {
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_no_range_properties(true);
-                CFOptions::new(cf, cf_opts)
+                (*cf, cf_opts)
             })
             .collect();
         let engine =
@@ -911,10 +914,7 @@ pub mod tests {
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.set_no_range_properties(true);
 
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let region = make_region(1, vec![], vec![]);
@@ -947,10 +947,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
@@ -1062,10 +1059,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
@@ -1095,10 +1089,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
@@ -1133,10 +1124,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;

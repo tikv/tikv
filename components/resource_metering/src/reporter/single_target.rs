@@ -41,8 +41,8 @@ impl Runnable for SingleTargetDataSink {
     }
 }
 
-/// `SingleTargetDataSink` is the default implementation of [DataSink], which uses gRPC
-/// to report data to the remote end.
+/// `SingleTargetDataSink` is the default implementation of [DataSink], which
+/// uses gRPC to report data to the remote end.
 pub struct SingleTargetDataSink {
     scheduler: Scheduler<Task>,
     data_sink_reg: DataSinkRegHandle,
@@ -246,8 +246,8 @@ impl Drop for Guard {
     }
 }
 
-/// Constructs a default [SingleTargetDataSink], start it and return the corresponding [AddressChangeNotifier]
-/// and [LazyWorker].
+/// Constructs a default [SingleTargetDataSink], start it and return the
+/// corresponding [AddressChangeNotifier] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_single_target(

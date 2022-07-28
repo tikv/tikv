@@ -12,7 +12,8 @@ use crate::{
 };
 
 pub enum BytesFetcher {
-    /// Fetch IO statistics from IO rate limiter, which records passed-through IOs in atomic counters.
+    /// Fetch IO statistics from IO rate limiter, which records passed-through
+    /// IOs in atomic counters.
     FromRateLimiter(Arc<IORateLimiterStatistics>),
     /// Fetch IO statistics from OS I/O stats collector.
     FromIOStatsCollector(),

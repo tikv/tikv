@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This is the core implementation of a batch system. Generally there will be two
-//! different kind of Fsm-s in TiKV's Fsm system. One is normal Fsm, which usually
-//! represents a peer, the other is control Fsm, which usually represents something
-//! that controls how the former is created or metrics are collected.
+//! This is the core implementation of a batch system. Generally there will be
+//! two different kind of Fsm-s in TiKV's Fsm system. One is normal Fsm, which
+//! usually represents a peer, the other is control Fsm, which usually
+//! represents something that controls how the former is created or metrics are
+//! collected.
 
 // #[PerformanceCriticalPath]
 use std::{
@@ -39,7 +40,7 @@ pub enum FsmTypes<N, C> {
 
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
-    ($name:ident, $ty:path, Fsm = $fsm:tt) => {
+    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
             low_sender: channel::Sender<FsmTypes<N, C>>,
@@ -384,7 +385,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         !batch.is_empty()
     }
 
-    /// Polls for readiness and forwards them to handler. Removes stale peers if necessary.
+    /// Polls for readiness and forwards them to handler. Removes stale peers if
+    /// necessary.
     pub fn poll(&mut self) {
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
@@ -392,13 +394,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut to_skip_end = Vec::with_capacity(self.max_batch_size);
 
         // Fetch batch after every round is finished. It's helpful to protect regions
-        // from becoming hungry if some regions are hot points. Since we fetch new Fsm every time
-        // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
+        // from becoming hungry if some regions are hot points. Since we fetch new Fsm
+        // every time calling `poll`, we do not need to configure a large value
+        // for `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has overhead
-            // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
+            // If there is some region wait to be deal, we must deal with it even if it has
+            // overhead max size of batch. It's helpful to protect regions from becoming
+            // hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // Update some online config if needed.
             {
@@ -457,9 +460,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
-                // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
-                // may change state of the handler, we shall deal with it immediately after
-                // calling `begin` of `Handler`.
+                // If we receive a ControlFsm, break this cycle and call `end`. Because
+                // ControlFsm may change state of the handler, we shall deal with it immediately
+                // after calling `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
@@ -479,7 +482,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             self.handler.light_end(&mut batch.normals);
             for offset in &to_skip_end {
-                batch.schedule(&self.router, *offset, true /*inplace*/);
+                batch.schedule(&self.router, *offset, true /* inplace */);
             }
             to_skip_end.clear();
             self.handler.end(&mut batch.normals);
@@ -487,7 +490,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct Fsm.
             while let Some(r) = reschedule_fsms.pop() {
-                batch.schedule(&self.router, r, false /*inplace*/);
+                batch.schedule(&self.router, r, false /* inplace */);
             }
         }
         if let Some(fsm) = batch.control.take() {
@@ -524,7 +527,6 @@ pub trait HandlerBuilder<N, C> {
 /// To use the system, two type of Fsm-s and their PollHandlers need to be
 /// defined: Normal and Control. Normal Fsm handles the general task while
 /// Control Fsm creates normal Fsm instances.
-///
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,

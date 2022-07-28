@@ -30,19 +30,16 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
+    pub(crate) fn new(db: DB) -> RocksEngine {
+        RocksEngine::from_db(Arc::new(db))
+    }
+
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
         }
-    }
-
-    // Notice: After obtaining RocksEngine through this method, please make sure
-    // it has been initialized with db, otherwise do not call its member methods,
-    // as it'll contain garbage members.
-    pub fn from_ref(db: &Arc<DB>) -> &Self {
-        unsafe { &*(db as *const Arc<DB> as *const RocksEngine) }
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
@@ -59,9 +56,9 @@ impl RocksEngine {
             return false;
         }
 
-        // If path is not an empty directory, we say db exists. If path is not an empty directory
-        // but db has not been created, `DB::list_column_families` fails and we can clean up
-        // the directory by this indication.
+        // If path is not an empty directory, we say db exists. If path is not an empty
+        // directory but db has not been created, `DB::list_column_families` fails and
+        // we can clean up the directory by this indication.
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
@@ -202,21 +199,17 @@ impl SyncMutable for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
     use tempfile::Builder;
 
-    use crate::{raw_util, RocksEngine, RocksSnapshot};
+    use crate::{util, RocksSnapshot};
 
     #[test]
     fn test_base() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         let mut r = Region::default();
         r.set_id(10);
@@ -251,9 +244,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         engine.put_cf(cf, b"k1", b"v2").unwrap();
@@ -267,9 +258,7 @@ mod tests {
     fn test_scan() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();

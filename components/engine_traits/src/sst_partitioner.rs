@@ -30,8 +30,8 @@ pub trait SstPartitioner {
 }
 
 pub trait SstPartitionerFactory: Sync + Send {
-    // Lifetime of the partitioner can be changed to be bounded by the factory's lifetime once
-    // generic associated types is supported.
+    // Lifetime of the partitioner can be changed to be bounded by the factory's
+    // lifetime once generic associated types is supported.
     // https://github.com/rust-lang/rfcs/blob/master/text/1598-generic_associated_types.md
     type Partitioner: SstPartitioner + 'static;
 

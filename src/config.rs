@@ -26,19 +26,19 @@ use engine_rocks::{
     get_env,
     properties::MvccPropertiesCollectorFactory,
     raw::{
-        BlockBasedOptions, Cache, ChecksumType, ColumnFamilyOptions, CompactionPriority,
-        DBCompactionStyle, DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, Env,
-        LRUCacheOptions, PrepopulateBlockCache, TitanDBOptions,
+        BlockBasedOptions, Cache, ChecksumType, CompactionPriority, DBCompactionStyle,
+        DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env, LRUCacheOptions,
+        PrepopulateBlockCache,
     },
-    raw_util::CFOptions,
     util::{FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform},
-    RaftDBLogger, RangePropertiesCollectorFactory, RocksEngine, RocksEventListener,
-    RocksSstPartitionerFactory, RocksdbLogger, TtlPropertiesCollectorFactory,
+    RaftDBLogger, RangePropertiesCollectorFactory, RocksCfOptions, RocksDBOptions, RocksEngine,
+    RocksEventListener, RocksTitanDBOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as _, DBOptionsExt,
-    TabletAccessor, TabletErrorCollector, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    TabletAccessor, TabletErrorCollector, TitanDBOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
 use file_system::IORateLimiter;
 use keys::region_raft_prefix_len;
@@ -88,7 +88,8 @@ pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
-/// Min block cache shard's size. If a shard is too small, the index/filter data may not fit one shard
+/// Min block cache shard's size. If a shard is too small, the index/filter data
+/// may not fit one shard
 pub const MIN_BLOCK_CACHE_SHARD_SIZE: usize = 128 * MIB as usize;
 
 /// Maximum of 15% of system memory can be used by Raft Engine. Normally its
@@ -178,8 +179,8 @@ impl Default for TitanCfConfig {
 }
 
 impl TitanCfConfig {
-    fn build_opts(&self) -> TitanDBOptions {
-        let mut opts = TitanDBOptions::new();
+    fn build_opts(&self) -> RocksTitanDBOptions {
+        let mut opts = RocksTitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0 as u64);
         opts.set_blob_file_compression(self.blob_file_compression.into());
         opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
@@ -240,11 +241,12 @@ fn get_background_job_limits_impl(
     cpu_num: u32,
     defaults: &BackgroundJobLimits,
 ) -> BackgroundJobLimits {
-    // At the minimum, we should have two background jobs: one for flush and one for compaction.
-    // Otherwise, the number of background jobs should not exceed cpu_num - 1.
+    // At the minimum, we should have two background jobs: one for flush and one for
+    // compaction. Otherwise, the number of background jobs should not exceed
+    // cpu_num - 1.
     let max_background_jobs = cmp::max(2, cmp::min(defaults.max_background_jobs, cpu_num - 1));
-    // Scale flush threads proportionally to cpu cores. Also make sure the number of flush
-    // threads doesn't exceed total jobs.
+    // Scale flush threads proportionally to cpu cores. Also make sure the number of
+    // flush threads doesn't exceed total jobs.
     let max_background_flushes = cmp::min(
         (max_background_jobs + 3) / 4,
         defaults.max_background_flushes,
@@ -533,22 +535,23 @@ macro_rules! build_cf_opt {
         block_base_opts.set_prepopulate_block_cache($opt.prepopulate_block_cache);
         block_base_opts.set_format_version($opt.format_version);
         block_base_opts.set_checksum($opt.checksum);
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_block_based_table_factory(&block_base_opts);
         cf_opts.set_num_levels($opt.num_levels);
         assert!($opt.compression_per_level.len() >= $opt.num_levels as usize);
         let compression_per_level = $opt.compression_per_level[..$opt.num_levels as usize].to_vec();
         cf_opts.compression_per_level(compression_per_level.as_slice());
         cf_opts.bottommost_compression($opt.bottommost_level_compression);
-        // To set for bottommost level sst compression. The first 3 parameters refer to the
-        // default value in `CompressionOptions` in `rocksdb/include/rocksdb/advanced_options.h`.
+        // To set for bottommost level sst compression. The first 3 parameters refer to
+        // the default value in `CompressionOptions` in
+        // `rocksdb/include/rocksdb/advanced_options.h`.
         cf_opts.set_bottommost_level_compression_options(
-            -14,   /* window_bits */
-            32767, /* level */
-            0,     /* strategy */
+            -14,   // window_bits
+            32767, // level
+            0,     // strategy
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
-            1, /* parallel_threads */
+            1, // parallel_threads
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -592,7 +595,7 @@ macro_rules! build_cf_opt {
                     $opt.compaction_guard_min_output_file_size.0,
                 )
                 .unwrap();
-                cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(factory));
+                cf_opts.set_sst_partitioner_factory(factory);
                 cf_opts.set_target_file_size_base($opt.compaction_guard_max_output_file_size.0);
             } else {
                 warn!("compaction guard is disabled due to region info provider not available")
@@ -671,7 +674,7 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-    ) -> ColumnFamilyOptions {
+    ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
@@ -782,7 +785,7 @@ impl WriteCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-    ) -> ColumnFamilyOptions {
+    ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
@@ -876,7 +879,7 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_LOCK, cache, no_region_info_accessor);
         cf_opts
@@ -952,7 +955,7 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_RAFT, cache, no_region_info_accessor);
         cf_opts
@@ -967,8 +970,8 @@ impl RaftCfConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-// Note that Titan is still an experimental feature. Once enabled, it can't fall back.
-// Forced fallback may result in data loss.
+// Note that Titan is still an experimental feature. Once enabled, it can't fall
+// back. Forced fallback may result in data loss.
 pub struct TitanDBConfig {
     pub enabled: bool,
     pub dirname: String,
@@ -991,8 +994,8 @@ impl Default for TitanDBConfig {
 }
 
 impl TitanDBConfig {
-    fn build_opts(&self) -> TitanDBOptions {
-        let mut opts = TitanDBOptions::new();
+    fn build_opts(&self) -> RocksTitanDBOptions {
+        let mut opts = RocksTitanDBOptions::new();
         opts.set_dirname(&self.dirname);
         opts.set_disable_background_gc(self.disable_gc);
         opts.set_max_background_gc(self.max_background_gc);
@@ -1063,8 +1066,8 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub enable_pipelined_write: bool,
     // deprecated. TiKV will use a new write mode when set `enable_pipelined_write` false and fall
-    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of multi-batch-write
-    // in RocksDB has been removed.
+    // back to write mode in 3.0 when set `enable_pipelined_write` true. The code of
+    // multi-batch-write in RocksDB has been removed.
     #[online_config(skip)]
     #[serde(skip_serializing)]
     pub enable_multi_batch_write: bool,
@@ -1131,8 +1134,8 @@ impl Default for DbConfig {
 }
 
 impl DbConfig {
-    pub fn build_opt(&self) -> DBOptions {
-        let mut opts = DBOptions::new();
+    pub fn build_opt(&self) -> RocksDBOptions {
+        let mut opts = RocksDBOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1195,20 +1198,20 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-    ) -> Vec<CFOptions<'_>> {
+    ) -> Vec<(&'static str, RocksCfOptions)> {
         vec![
-            CFOptions::new(
+            (
                 CF_DEFAULT,
                 self.defaultcf
                     .build_opt(cache, region_info_accessor, api_version),
             ),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
-            CFOptions::new(
+            (CF_LOCK, self.lockcf.build_opt(cache)),
+            (
                 CF_WRITE,
                 self.writecf.build_opt(cache, region_info_accessor),
             ),
             // TODO: remove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
+            (CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
@@ -1319,7 +1322,7 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+    pub fn build_opt(&self, cache: &Option<Cache>) -> RocksCfOptions {
         let no_region_info_accessor: Option<&RegionInfoAccessor> = None;
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, no_region_info_accessor);
         let f = FixedPrefixSliceTransform::new(region_raft_prefix_len());
@@ -1331,10 +1334,12 @@ impl RaftDefaultCfConfig {
     }
 }
 
-// RocksDB Env associate thread pools of multiple instances from the same process.
-// When construct Options, options.env is set to same singleton Env::Default() object.
-// So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
-// But each instance will limit their background jobs according to their own max_background_jobs
+// RocksDB Env associate thread pools of multiple instances from the same
+// process. When construct Options, options.env is set to same singleton
+// Env::Default() object. So total max_background_jobs =
+// max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
+// But each instance will limit their background jobs according to their own
+// max_background_jobs
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -1431,8 +1436,8 @@ impl Default for RaftDbConfig {
 }
 
 impl RaftDbConfig {
-    pub fn build_opt(&self) -> DBOptions {
-        let mut opts = DBOptions::new();
+    pub fn build_opt(&self) -> RocksDBOptions {
+        let mut opts = RocksDBOptions::default();
         opts.set_wal_recovery_mode(self.wal_recovery_mode);
         if !self.wal_dir.is_empty() {
             opts.set_wal_dir(&self.wal_dir);
@@ -1473,8 +1478,8 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<(&'static str, RocksCfOptions)> {
+        vec![(CF_DEFAULT, self.defaultcf.build_opt(cache))]
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
@@ -1592,7 +1597,8 @@ impl<T: TabletAccessor<RocksEngine>> DBConfigManger<T> {
                  block-cache.capacity in storage module instead"
                 .into());
         }
-        // for multi-rocks, shared block cache has to be enabled and thus should shortcut in the above if statement.
+        // for multi-rocks, shared block cache has to be enabled and thus should
+        // shortcut in the above if statement.
         assert!(self.tablet_accessor.is_single_engine());
         let mut error_collector = TabletErrorCollector::new();
         self.tablet_accessor
@@ -1764,7 +1770,8 @@ fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-// Convert `ConfigValue` to formatted String that can pass to `DB::set_db_options`
+// Convert `ConfigValue` to formatted String that can pass to
+// `DB::set_db_options`
 fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
     config_change
         .into_iter()
@@ -2130,10 +2137,10 @@ macro_rules! readpool_config {
 const DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY: usize = 4;
 const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 
-// Assume a request can be finished in 1ms, a request at position x will wait about
-// 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
-// backoff. So when it needs to wait for more than 2 seconds, return error won't causse
-// larger latency.
+// Assume a request can be finished in 1ms, a request at position x will wait
+// about 0.001 * x secs to be actual started. A server-is-busy error will
+// trigger 2 seconds backoff. So when it needs to wait for more than 2 seconds,
+// return error won't causse larger latency.
 const DEFAULT_READPOOL_MAX_TASKS_PER_WORKER: usize = 2 * 1000;
 
 const MIN_READPOOL_STACK_SIZE_MB: u64 = 2;
@@ -2511,17 +2518,19 @@ pub struct CdcConfig {
     pub incremental_scan_threads: usize,
     pub incremental_scan_concurrency: usize,
     pub incremental_scan_speed_limit: ReadableSize,
-    /// `TsFilter` can increase speed and decrease resource usage when incremental content is much
-    /// less than total content. However in other cases, `TsFilter` can make performance worse
-    /// because it needs to re-fetch old row values if they are required.
+    /// `TsFilter` can increase speed and decrease resource usage when
+    /// incremental content is much less than total content. However in
+    /// other cases, `TsFilter` can make performance worse because it needs
+    /// to re-fetch old row values if they are required.
     ///
-    /// `TsFilter` will be enabled if `incremental/total <= incremental_scan_ts_filter_ratio`.
+    /// `TsFilter` will be enabled if `incremental/total <=
+    /// incremental_scan_ts_filter_ratio`.
     /// Set `incremental_scan_ts_filter_ratio` to 0 will disable it.
     pub incremental_scan_ts_filter_ratio: f64,
 
-    /// Count of threads to confirm Region leadership in TiKV instances, 1 by default.
-    /// Please consider to increase it if count of regions on one TiKV instance is
-    /// greater than 20k.
+    /// Count of threads to confirm Region leadership in TiKV instances, 1 by
+    /// default. Please consider to increase it if count of regions on one
+    /// TiKV instance is greater than 20k.
     #[online_config(skip)]
     pub tso_worker_threads: usize,
 
@@ -3254,8 +3263,8 @@ impl TiKvConfig {
         Ok(())
     }
 
-    // As the init of `logger` is very early, this adjust needs to be separated and called
-    // immediately after parsing the command line.
+    // As the init of `logger` is very early, this adjust needs to be separated and
+    // called immediately after parsing the command line.
     pub fn logger_compatible_adjust(&mut self) {
         let default_tikv_cfg = TiKvConfig::default();
         let default_log_cfg = LogConfig::default();
@@ -3373,8 +3382,8 @@ impl TiKvConfig {
                 "server.end-point-max-tasks", "readpool.coprocessor.max-tasks-per-worker-xxx",
             );
             // Note:
-            // Our `end_point_max_tasks` is mostly mistakenly configured, so we don't override
-            // new configuration using old values.
+            // Our `end_point_max_tasks` is mostly mistakenly configured, so we don't
+            // override new configuration using old values.
             self.server.end_point_max_tasks = None;
         }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
@@ -3390,9 +3399,9 @@ impl TiKvConfig {
             );
             self.rocksdb.auto_tuned = None;
         }
-        // When shared block cache is enabled, if its capacity is set, it overrides individual
-        // block cache sizes. Otherwise use the sum of block cache size of all column families
-        // as the shared cache size.
+        // When shared block cache is enabled, if its capacity is set, it overrides
+        // individual block cache sizes. Otherwise use the sum of block cache
+        // size of all column families as the shared cache size.
         let cache_cfg = &mut self.storage.block_cache;
         if cache_cfg.shared && cache_cfg.capacity.is_none() {
             cache_cfg.capacity = Some(ReadableSize(
@@ -3679,7 +3688,8 @@ pub fn to_flatten_config_info(cfg: &TiKvConfig) -> Vec<Value> {
         Value::Object(res)
     }
 
-    // configs that should not be flatten because the config type is HashMap instead of submodule.
+    // configs that should not be flatten because the config type is HashMap instead
+    // of submodule.
     lazy_static! {
         static ref NO_FLATTEN_CFGS: HashSet<&'static str> = {
             let mut set = HashSet::new();
@@ -3989,7 +3999,8 @@ impl ConfigController {
                     // dispatched to corresponding config manager, to avoid dispatch change twice
                     if let Some(mgr) = inner.config_mgrs.get_mut(&Module::from(name.as_str())) {
                         if let Err(e) = mgr.dispatch(change.clone()) {
-                            // we already verified the correctness at the beginning of this function.
+                            // we already verified the correctness at the beginning of this
+                            // function.
                             inner.current.update(to_update).unwrap();
                             return Err(e);
                         }
@@ -4048,7 +4059,6 @@ mod tests {
     use case_macros::*;
     use engine_traits::{
         ColumnFamilyOptions as ColumnFamilyOptionsTrait, DBOptions as DBOptionsTrait, DummyFactory,
-        ALL_CFS,
     };
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
@@ -4469,15 +4479,14 @@ mod tests {
         assert_eq!(F::TAG, cfg.storage.api_version());
         let engine = RocksDBEngine::new(
             &cfg.storage.data_dir,
-            ALL_CFS,
-            Some(cfg.rocksdb.build_cf_opts(
+            Some(cfg.rocksdb.build_opt()),
+            cfg.rocksdb.build_cf_opts(
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
-            )),
+            ),
             true,
             None,
-            Some(cfg.rocksdb.build_opt()),
         )
         .unwrap();
         let storage =
@@ -5131,7 +5140,7 @@ mod tests {
                 ..Default::default()
             };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -5145,7 +5154,7 @@ mod tests {
                 ..Default::default()
             };
             let provider: Option<MockRegionInfoProvider> = None;
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.target_file_size_base.0,
                 cf_opts.get_target_file_size_base()
@@ -5161,7 +5170,7 @@ mod tests {
                 ..Default::default()
             };
             let provider = Some(MockRegionInfoProvider::new(vec![]));
-            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /*cache*/, provider);
+            let cf_opts = build_cf_opt!(config, CF_DEFAULT, None /* cache */, provider);
             assert_eq!(
                 config.compaction_guard_max_output_file_size.0,
                 cf_opts.get_target_file_size_base()
@@ -5192,7 +5201,8 @@ mod tests {
         assert!(cfg.validate().is_ok());
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
 
-        // Test memory_usage_limit will fallback to system memory capacity with huge block cache.
+        // Test memory_usage_limit will fallback to system memory capacity with huge
+        // block cache.
         cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
@@ -5265,7 +5275,10 @@ mod tests {
     fn test_background_job_limits() {
         // cpu num = 1
         assert_eq!(
-            get_background_job_limits_impl(1 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                1, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
@@ -5275,7 +5288,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                1, /*cpu_num*/
+                1, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5287,7 +5300,10 @@ mod tests {
         );
         // cpu num = 2
         assert_eq!(
-            get_background_job_limits_impl(2 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                2, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 2,
                 max_background_flushes: 1,
@@ -5297,7 +5313,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                2, /*cpu_num*/
+                2, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5309,7 +5325,10 @@ mod tests {
         );
         // cpu num = 4
         assert_eq!(
-            get_background_job_limits_impl(4 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                4, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 3,
                 max_background_flushes: 1,
@@ -5319,7 +5338,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                4, /*cpu_num*/
+                4, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             BackgroundJobLimits {
@@ -5331,7 +5350,10 @@ mod tests {
         );
         // cpu num = 8
         assert_eq!(
-            get_background_job_limits_impl(8 /*cpu_num*/, &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS),
+            get_background_job_limits_impl(
+                8, // cpu_num
+                &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
+            ),
             BackgroundJobLimits {
                 max_background_jobs: 7,
                 max_background_flushes: 2,
@@ -5341,7 +5363,7 @@ mod tests {
         );
         assert_eq!(
             get_background_job_limits_impl(
-                8, /*cpu_num*/
+                8, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
@@ -5349,14 +5371,14 @@ mod tests {
         // cpu num = 16
         assert_eq!(
             get_background_job_limits_impl(
-                16, /*cpu_num*/
+                16, // cpu_num
                 &KVDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             KVDB_DEFAULT_BACKGROUND_JOB_LIMITS,
         );
         assert_eq!(
             get_background_job_limits_impl(
-                16, /*cpu_num*/
+                16, // cpu_num
                 &RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS
             ),
             RAFTDB_DEFAULT_BACKGROUND_JOB_LIMITS,
@@ -5403,8 +5425,8 @@ mod tests {
         let mut default_cfg = TiKvConfig::default();
 
         // Some default values are computed based on the environment.
-        // Because we can't set config values for these in `config-template.toml`, we will handle
-        // them manually.
+        // Because we can't set config values for these in `config-template.toml`, we
+        // will handle them manually.
         cfg.readpool.unified.max_thread_count = default_cfg.readpool.unified.max_thread_count;
         cfg.readpool.storage.high_concurrency = default_cfg.readpool.storage.high_concurrency;
         cfg.readpool.storage.normal_concurrency = default_cfg.readpool.storage.normal_concurrency;
@@ -5430,7 +5452,8 @@ mod tests {
         cfg.backup_stream.num_threads = default_cfg.backup_stream.num_threads;
 
         // There is another set of config values that we can't directly compare:
-        // When the default values are `None`, but are then resolved to `Some(_)` later on.
+        // When the default values are `None`, but are then resolved to `Some(_)` later
+        // on.
         default_cfg.readpool.storage.adjust_use_unified_pool();
         default_cfg.readpool.coprocessor.adjust_use_unified_pool();
         default_cfg.security.redact_info_log = Some(false);
