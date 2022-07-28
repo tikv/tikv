@@ -628,18 +628,16 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{ops::Bound, sync::Arc, u64};
+    use std::{ops::Bound, u64};
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        properties::MvccPropertiesCollectorFactory,
-        raw::{ColumnFamilyOptions, DBOptions, DB},
-        raw_util::CFOptions,
-        Compat, RocksSnapshot,
+        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDBOptions, RocksEngine,
+        RocksSnapshot,
     };
     use engine_traits::{
-        IterOptions, Mutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        CompactExt, IterOptions, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS,
+        CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
         kvrpcpb::{AssertionLevel, Context},
@@ -660,20 +658,20 @@ pub mod tests {
     };
 
     pub struct RegionEngine {
-        db: Arc<DB>,
+        db: RocksEngine,
         region: Region,
     }
 
     impl RegionEngine {
-        pub fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
+        pub fn new(db: &RocksEngine, region: &Region) -> RegionEngine {
             RegionEngine {
-                db: Arc::clone(db),
+                db: db.clone(),
                 region: region.clone(),
             }
         }
 
         pub fn snapshot(&self) -> RegionSnapshot<RocksSnapshot> {
-            let db = self.db.c().clone();
+            let db = self.db.clone();
             RegionSnapshot::<RocksSnapshot>::from_raw(db, self.region.clone())
         }
 
@@ -860,7 +858,7 @@ pub mod tests {
 
         pub fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let mut wb = db.c().write_batch();
+            let mut wb = db.write_batch();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {
@@ -890,22 +888,20 @@ pub mod tests {
 
         pub fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         pub fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = engine_rocks::util::get_cf_handle(&self.db, cf).unwrap();
-                self.db.compact_range_cf(cf, None, None);
+                self.db.compact_range(cf, None, None, false, 1).unwrap();
             }
         }
     }
 
-    pub fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+    pub fn open_db(path: &str, with_properties: bool) -> RocksEngine {
+        let db_opt = RocksDBOptions::default();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
             cf_opts.add_table_properties_collector_factory(
@@ -914,12 +910,12 @@ pub mod tests {
             );
         }
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_WRITE, cf_opts),
+            (CF_DEFAULT, RocksCfOptions::default()),
+            (CF_RAFT, RocksCfOptions::default()),
+            (CF_LOCK, RocksCfOptions::default()),
+            (CF_WRITE, cf_opts),
         ];
-        Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        engine_rocks::util::new_engine_opt(path, db_opt, cfs_opts).unwrap()
     }
 
     pub fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
@@ -956,7 +952,7 @@ pub mod tests {
         engine.put(&[12], 11, 12);
         engine.flush();
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
 
         let tests = vec![
             // set nothing.
@@ -1030,7 +1026,7 @@ pub mod tests {
         iopt.set_hint_min_ts(Bound::Included(1));
         iopt.set_hint_max_ts(Bound::Included(6));
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut iter = snap.iter(CF_WRITE, iopt).unwrap();
 
         // Must not omit the latest deletion of key1 to prevent seeing outdated record.
@@ -1080,7 +1076,7 @@ pub mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and
@@ -1192,7 +1188,7 @@ pub mod tests {
         engine.prewrite_pessimistic_lock(m, k, 1);
         engine.commit(k, 1, 4);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
         let (commit_ts, write_type) = reader
@@ -1254,7 +1250,7 @@ pub mod tests {
         // ts is 2.
         // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3
         // Rollback].
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
         let mut reader = MvccReader::new(snap, None, false);
 
         let k = Key::from_raw(k);
@@ -1325,7 +1321,7 @@ pub mod tests {
         engine.prewrite(m2, k2, 1);
         engine.commit(k2, 1, 2);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region);
         let mut reader = MvccReader::new(snap, None, false);
 
         let (commit_ts, write) = reader
@@ -1347,7 +1343,7 @@ pub mod tests {
 
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region1);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region1);
         let mut reader = MvccReader::new(snap, None, false);
 
         assert!(reader.seek_write(&k, 2.into()).unwrap().is_none());
@@ -1397,7 +1393,7 @@ pub mod tests {
         let m = Mutation::make_put(Key::from_raw(k), v.to_vec());
         engine.prewrite(m, k, 24);
 
-        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region);
+        let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit
@@ -1537,7 +1533,7 @@ pub mod tests {
                                limit,
                                expect_res: &[_],
                                expect_is_remain| {
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false);
             let res = reader
                 .scan_locks(
@@ -1704,7 +1700,7 @@ pub mod tests {
 
         for case in cases {
             engine.write(case.modifies);
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, case.scan_mode, false);
             let result = reader.load_data(&case.key, case.write);
             assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
@@ -1792,7 +1788,7 @@ pub mod tests {
 
         for case in cases {
             engine.write(case.modifies);
-            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.c().clone(), region.clone());
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, None, false);
             let result = reader.get(&case.key, case.ts, case.gc_fence_limit);
             assert_eq!(format!("{:?}", result), format!("{:?}", case.expected));
@@ -1986,8 +1982,7 @@ pub mod tests {
     fn test_reader_prefix_seek() {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let db = builder.build().unwrap().kv_engine().get_sync_db();
-        let cf = engine_rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+        let db = builder.build().unwrap().kv_engine();
 
         let region = make_region(1, vec![], vec![]);
         let mut engine = RegionEngine::new(&db, &region);
@@ -1997,24 +1992,22 @@ pub mod tests {
             let commit_ts = (i * 2 + 1).into();
             let mut k = vec![b'z'];
             k.extend_from_slice(Key::from_raw(b"k1").append_ts(commit_ts).as_encoded());
-            use engine_rocks::raw::Writable;
-            engine.db.delete_cf(cf, &k).unwrap();
+            engine.db.delete_cf(CF_WRITE, &k).unwrap();
         }
         engine.flush();
 
-        #[allow(clippy::useless_vec)]
-        for (k, scan_mode, tombstones) in vec![
-            (b"k0", Some(ScanMode::Forward), 99),
+        for (k, scan_mode, tombstones) in &[
+            (b"k0" as &[u8], Some(ScanMode::Forward), 99),
             (b"k0", None, 0),
             (b"k1", Some(ScanMode::Forward), 99),
             (b"k1", None, 99),
             (b"k2", Some(ScanMode::Forward), 0),
             (b"k2", None, 0),
         ] {
-            let mut reader = MvccReader::new(engine.snapshot(), scan_mode, false);
+            let mut reader = MvccReader::new(engine.snapshot(), *scan_mode, false);
             let (k, ts) = (Key::from_raw(k), 199.into());
             reader.seek_write(&k, ts).unwrap();
-            assert_eq!(reader.statistics.write.seek_tombstone, tombstones);
+            assert_eq!(reader.statistics.write.seek_tombstone, *tombstones);
         }
     }
 }

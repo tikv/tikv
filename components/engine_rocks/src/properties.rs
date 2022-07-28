@@ -536,9 +536,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use engine_traits::{CF_WRITE, LARGE_CFS};
+    use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
     use test::Bencher;
@@ -546,9 +544,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        compat::Compat,
-        raw::{ColumnFamilyOptions, DBEntryType, DBOptions, TablePropertiesCollector, Writable},
-        raw_util::CFOptions,
+        raw::{DBEntryType, TablePropertiesCollector},
+        RocksCfOptions, RocksDBOptions,
     };
 
     #[allow(clippy::many_single_char_names)]
@@ -718,18 +715,15 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::new();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = RocksDBOptions::default();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.add_table_properties_collector_factory(
             "tikv.mvcc-properties-collector",
             MvccPropertiesCollectorFactory::default(),
         );
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let db = Arc::new(crate::raw_util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap());
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
+        let db = crate::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
@@ -738,22 +732,21 @@ mod tests {
                     .append_ts(2.into())
                     .as_encoded(),
             );
-            let write_cf = db.cf_handle(CF_WRITE).unwrap();
-            db.put_cf(write_cf, &k1, b"v1").unwrap();
-            db.delete_cf(write_cf, &k1).unwrap();
+            db.put_cf(CF_WRITE, &k1, b"v1").unwrap();
+            db.delete_cf(CF_WRITE, &k1).unwrap();
             let key = keys::data_key(
                 Key::from_raw(key.as_bytes())
                     .append_ts(3.into())
                     .as_encoded(),
             );
-            db.put_cf(write_cf, &key, b"v2").unwrap();
-            db.flush_cf(write_cf, true).unwrap();
+            db.put_cf(CF_WRITE, &key, b"v2").unwrap();
+            db.flush_cf(CF_WRITE, true).unwrap();
         }
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
         let (entries, versions) =
-            get_range_entries_and_versions(db.c(), CF_WRITE, &start_keys, &end_keys).unwrap();
+            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
         assert_eq!(entries, (cases.len() * 2) as u64);
         assert_eq!(versions, cases.len() as u64);
     }

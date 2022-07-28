@@ -240,10 +240,6 @@
 //!   it in engine_traits and engine_rocks, replacing all the callers with calls
 //!   into the traits, then delete the versions in the `engine` crate.
 //!
-//! - Use the .c() method from engine_rocks::compat::Compat to get a KvEngine
-//!   reference from Arc<DB> in the fewest characters. It also works on
-//!   Snapshot, and can be adapted to other types.
-//!
 //! - Use `IntoOther` to adapt between error types of dependencies that are not
 //!   themselves interdependent. E.g. raft::Error can be created from
 //!   engine_traits::Error even though neither `raft` tor `engine_traits` know

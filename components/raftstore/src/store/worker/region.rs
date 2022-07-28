@@ -821,12 +821,12 @@ mod tests {
     };
 
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions},
+        ctor::ColumnFamilyOptions,
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
         CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
-        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -994,10 +994,10 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("write", cf_opts.clone()),
-            CFOptions::new("lock", cf_opts.clone()),
-            CFOptions::new("raft", cf_opts.clone()),
+            (CF_DEFAULT, cf_opts.clone()),
+            (CF_WRITE, cf_opts.clone()),
+            (CF_LOCK, cf_opts.clone()),
+            (CF_RAFT, cf_opts.clone()),
         ];
         let engine = get_test_db_for_regions(
             &temp_dir,

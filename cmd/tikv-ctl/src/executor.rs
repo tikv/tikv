@@ -6,10 +6,7 @@ use std::{
 };
 
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::{
-    raw_util::{db_exist, new_engine_opt},
-    RocksEngine,
-};
+use engine_rocks::util::{db_exist, new_engine_opt};
 use engine_traits::{
     Engines, Error as EngineError, RaftEngine, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
@@ -78,11 +75,10 @@ pub fn new_debug_executor(
         .build_cf_opts(&cache, None, cfg.storage.api_version());
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
-    let kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
+    let mut kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {
         Ok(db) => db,
         Err(e) => handle_engine_error(e),
     };
-    let mut kv_db = RocksEngine::from_db(Arc::new(kv_db));
     kv_db.set_shared_block_cache(shared_block_cache);
 
     let cfg_controller = ConfigController::default();
@@ -95,11 +91,10 @@ pub fn new_debug_executor(
             error!("raft db not exists: {}", raft_path);
             tikv_util::logger::exit_process_gracefully(-1);
         }
-        let raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
+        let mut raft_db = match new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts) {
             Ok(db) => db,
             Err(e) => handle_engine_error(e),
         };
-        let mut raft_db = RocksEngine::from_db(Arc::new(raft_db));
         raft_db.set_shared_block_cache(shared_block_cache);
         let debugger = Debugger::new(Engines::new(kv_db, raft_db), cfg_controller);
         Box::new(debugger) as Box<dyn DebugExecutor>

@@ -11,7 +11,7 @@ use std::{
 use async_channel::SendError;
 use causal_ts::CausalTsProvider;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::raw::DB;
+use engine_rocks::RocksEngine;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, SstCompressionType};
 use external_storage::{BackendConfig, HdfsConfig};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -505,7 +505,7 @@ impl BackupRange {
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
         engine: E,
-        db: Arc<DB>,
+        db: RocksEngine,
         limiter: &Limiter,
         file_name: String,
         cf: CfNameWrap,
@@ -659,7 +659,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
     pool: RefCell<ControlThreadPool>,
     io_pool: Runtime,
-    db: Arc<DB>,
+    db: RocksEngine,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
     softlimit: SoftLimitKeeper,
@@ -782,7 +782,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         store_id: u64,
         engine: E,
         region_info: R,
-        db: Arc<DB>,
+        db: RocksEngine,
         config: BackupConfig,
         concurrency_manager: ConcurrencyManager,
         api_version: ApiVersion,
@@ -1284,7 +1284,7 @@ pub mod tests {
             .unwrap();
         let concurrency_manager = ConcurrencyManager::new(1.into());
         let need_encode_key = !is_raw_kv || api_version == ApiVersion::V2;
-        let db = rocks.get_rocksdb().get_sync_db();
+        let db = rocks.get_rocksdb();
         (
             temp,
             Endpoint::new(

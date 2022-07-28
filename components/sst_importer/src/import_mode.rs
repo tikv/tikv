@@ -242,7 +242,7 @@ impl ImportModeCFOptions {
 mod tests {
     use std::thread;
 
-    use engine_traits::KvEngine;
+    use engine_traits::{KvEngine, CF_DEFAULT};
     use futures::executor::ThreadPoolBuilder;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
@@ -290,7 +290,7 @@ mod tests {
             .prefix("test_import_mode_switcher")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
         let normal_db_options = ImportModeDBOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();
@@ -331,7 +331,7 @@ mod tests {
             .prefix("test_import_mode_timeout")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
         let normal_db_options = ImportModeDBOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();

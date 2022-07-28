@@ -4,7 +4,6 @@
 
 use std::{sync::Arc, thread, time::*};
 
-use engine_rocks::Compat;
 use engine_traits::{Peekable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
@@ -82,11 +81,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
     let state_key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_2
-        .c()
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine_2.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }
 
@@ -174,11 +169,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
     // So we could check the tombstone mark to make sure peer 4 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
-    let state: RegionLocalState = engine3
-        .c()
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.
@@ -261,11 +252,7 @@ fn test_stale_learner() {
     // Check not leader should fail, all data should be removed.
     must_get_none(&engine3, b"k1");
     let state_key = keys::region_state_key(r1);
-    let state: RegionLocalState = engine3
-        .c()
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }
 
@@ -320,10 +307,6 @@ fn test_stale_learner_with_read_index() {
     // Stale learner should be destroyed due to interaction between leader
     must_get_none(&engine3, b"k1");
     let state_key = keys::region_state_key(r1);
-    let state: RegionLocalState = engine3
-        .c()
-        .get_msg_cf(CF_RAFT, &state_key)
-        .unwrap()
-        .unwrap();
+    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }

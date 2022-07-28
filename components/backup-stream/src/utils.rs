@@ -599,7 +599,6 @@ mod test {
         time::Duration,
     };
 
-    use engine_rocks::raw::DBOptions;
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
 
@@ -744,15 +743,12 @@ mod test {
 
     #[test]
     fn test_recorder() {
-        use engine_rocks::{raw::DB, RocksEngine};
         use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
         use tempdir::TempDir;
 
         let p = TempDir::new("test_db").unwrap();
-        let mut opt = DBOptions::default();
-        opt.create_if_missing(true);
-        let db = DB::open(opt.clone(), p.path().as_os_str().to_str().unwrap()).unwrap();
-        let engine = RocksEngine::from_db(Arc::new(db));
+        let engine =
+            engine_rocks::util::new_engine(p.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let mut wb = engine.write_batch();
         for i in 0..100 {
             wb.put_cf(CF_DEFAULT, format!("hello{}", i).as_bytes(), b"world")

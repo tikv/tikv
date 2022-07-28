@@ -144,19 +144,18 @@ impl KvEngineFactory {
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+        let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
             kv_cfs_opts,
         );
-        let kv_engine = match kv_engine {
+        let mut kv_engine = match kv_engine {
             Ok(e) => e,
             Err(e) => {
                 error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
                 return Err(e);
             }
         };
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         Ok(kv_engine)
@@ -183,7 +182,7 @@ impl KvEngineFactory {
             self.inner.api_version,
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
-        // engine_rocks::raw_util::destroy_engine(
+        // engine_rocks::util::destroy_engine(
         //   tablet_path.to_str().unwrap(),
         //   kv_db_opts,
         //   kv_cfs_opts,

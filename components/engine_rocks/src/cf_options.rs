@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::{Deref, DerefMut};
+
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, Result, SstPartitionerFactory};
-use rocksdb::ColumnFamilyOptions as RawCFOptions;
+use rocksdb::ColumnFamilyOptions as RawCfOptions;
 use tikv_util::box_err;
 
 use crate::{
@@ -10,11 +12,11 @@ use crate::{
 };
 
 impl CFOptionsExt for RocksEngine {
-    type ColumnFamilyOptions = RocksColumnFamilyOptions;
+    type ColumnFamilyOptions = RocksCfOptions;
 
     fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        Ok(RocksColumnFamilyOptions::from_raw(
+        Ok(RocksCfOptions::from_raw(
             self.as_inner().get_options_cf(handle),
         ))
     }
@@ -27,28 +29,40 @@ impl CFOptionsExt for RocksEngine {
     }
 }
 
-#[derive(Clone)]
-pub struct RocksColumnFamilyOptions(RawCFOptions);
+#[derive(Default, Clone)]
+pub struct RocksCfOptions(RawCfOptions);
 
-impl RocksColumnFamilyOptions {
-    pub fn from_raw(raw: RawCFOptions) -> RocksColumnFamilyOptions {
-        RocksColumnFamilyOptions(raw)
+impl RocksCfOptions {
+    pub fn from_raw(raw: RawCfOptions) -> RocksCfOptions {
+        RocksCfOptions(raw)
     }
 
-    pub fn into_raw(self) -> RawCFOptions {
+    pub fn into_raw(self) -> RawCfOptions {
         self.0
     }
+}
 
-    pub fn as_raw_mut(&mut self) -> &mut RawCFOptions {
+impl Deref for RocksCfOptions {
+    type Target = RawCfOptions;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RocksCfOptions {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl ColumnFamilyOptions for RocksColumnFamilyOptions {
+impl ColumnFamilyOptions for RocksCfOptions {
     type TitanDBOptions = RocksTitanDBOptions;
 
     fn new() -> Self {
-        RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
+        RocksCfOptions::from_raw(RawCfOptions::default())
     }
 
     fn get_max_write_buffer_number(&self) -> u32 {

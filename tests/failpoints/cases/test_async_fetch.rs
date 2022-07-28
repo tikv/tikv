@@ -32,7 +32,7 @@ fn test_node_async_fetch() {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = engines
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
@@ -88,7 +88,7 @@ fn test_node_async_fetch() {
     for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
+        must_get_equal(&cluster.engines[&1].kv, &k, &v);
     }
 
     for i in 60..500u32 {

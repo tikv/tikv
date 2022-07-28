@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
 use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
@@ -295,7 +294,7 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             // Note that a follower can still commit the log by an empty MsgAppend
             // when bcast commit is disabled. A heartbeat response comes to leader
             // before MsgAppendResponse will trigger MsgAppend.
-            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+            match engine.get_value(&keys::data_key(k)).unwrap() {
                 Some(res) => assert_eq!(v, &res[..]),
                 None => missing_count += 1,
             }

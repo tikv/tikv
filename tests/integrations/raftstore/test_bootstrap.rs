@@ -5,8 +5,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
+use engine_traits::{Engines, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -45,19 +44,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
-    let engine = Arc::new(
-        engine_rocks::raw_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap(),
-    );
+    let engine =
+        engine_rocks::util::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS).unwrap();
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
-        engine_rocks::raw_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None)
-            .unwrap(),
-    );
-    let engines = Engines::new(
-        RocksEngine::from_db(Arc::clone(&engine)),
-        RocksEngine::from_db(Arc::clone(&raft_engine)),
-    );
+    let raft_engine =
+        engine_rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+    let engines = Engines::new(engine.clone(), raft_engine);
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
     let mut node = Node::new(
@@ -83,7 +75,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(
         engine
-            .c()
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_some()
@@ -91,7 +82,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let region_state_key = keys::region_state_key(region.get_id());
     assert!(
         engine
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .is_some()
@@ -123,15 +113,13 @@ fn test_node_bootstrap_with_prepared_data() {
     )
     .unwrap();
     assert!(
-        Arc::clone(&engine)
-            .c()
+        engine
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none()
     );
     assert!(
         engine
-            .c()
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .is_none()

@@ -253,7 +253,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn exists(path: &str) -> bool {
-        crate::raw_util::db_exist(path)
+        crate::util::db_exist(path)
     }
 
     fn dump_stats(&self) -> Result<String> {
@@ -334,8 +334,6 @@ impl MiscExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_traits::{
         DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
     };
@@ -344,8 +342,8 @@ mod tests {
     use super::*;
     use crate::{
         engine::RocksEngine,
-        raw::{ColumnFamilyOptions, DBOptions, DB},
-        raw_util::{new_engine_opt, CFOptions},
+        util::{new_engine, new_engine_opt},
+        RocksCfOptions, RocksDBOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
@@ -372,13 +370,7 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, ColumnFamilyOptions::new()))
-            .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine(path_str, ALL_CFS).unwrap();
 
         let mut wb = db.write_batch();
         let ts: u8 = 12;
@@ -523,14 +515,12 @@ mod tests {
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
-                let mut cf_opts = ColumnFamilyOptions::new();
+                let mut cf_opts = RocksCfOptions::default();
                 cf_opts.set_level_zero_file_num_compaction_trigger(1);
-                CFOptions::new(cf, cf_opts)
+                (*cf, cf_opts)
             })
             .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
@@ -562,11 +552,11 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let mut opts = DBOptions::new();
+        let mut opts = RocksDBOptions::default();
         opts.create_if_missing(true);
         opts.enable_multi_batch_write(true);
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         // Prefix extractor(trim the timestamp at tail) for write cf.
         cf_opts
             .set_prefix_extractor(
@@ -577,9 +567,7 @@ mod tests {
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
         let cf = "default";
-        let db = DB::open_cf(opts, path_str, vec![(cf, cf_opts)]).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
         let mut wb = db.write_batch();
         let kvs: Vec<(&[u8], &[u8])> = vec![
             (b"kabcdefg1", b"v1"),

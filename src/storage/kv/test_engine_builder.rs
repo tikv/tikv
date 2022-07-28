@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::tests::DummyRawTsTracker;
-use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
+use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IORateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
@@ -113,24 +113,18 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(
+                CF_DEFAULT => (
                     CF_DEFAULT,
                     cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
                 ),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
-                _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
+                CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let mut engine = RocksEngine::new(
-            &path,
-            &cfs,
-            Some(cfs_opts),
-            cache.is_some(),
-            self.io_rate_limiter,
-            None, // CFOptions
-        )?;
+        let mut engine =
+            RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
 
         if let ApiVersion::V2 = api_version {
             Self::register_causal_observer(&mut engine);

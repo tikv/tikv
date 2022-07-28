@@ -63,8 +63,7 @@ fn test_compact_after_delete<T: Simulator>(cluster: &mut Cluster<T>) {
         cluster.must_delete_cf(CF_WRITE, &k);
     }
     for engines in cluster.engines.values() {
-        let cf = get_cf_handle(engines.kv.as_inner(), CF_WRITE).unwrap();
-        engines.kv.as_inner().flush_cf(cf, true).unwrap();
+        engines.kv.flush_cf(CF_WRITE, true).unwrap();
     }
 
     // wait for compaction.

@@ -253,7 +253,7 @@ mod tests {
     use std::{thread::sleep, time::Duration};
 
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        ctor::{ColumnFamilyOptions, DBOptions},
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
@@ -272,7 +272,7 @@ mod tests {
             .prefix("compact-range-test")
             .tempdir()
             .unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
         let mut runner = Runner::new(db.clone());
 
@@ -329,10 +329,10 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_WRITE, cf_opts),
+            (CF_DEFAULT, ColumnFamilyOptions::new()),
+            (CF_RAFT, ColumnFamilyOptions::new()),
+            (CF_LOCK, ColumnFamilyOptions::new()),
+            (CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()
     }

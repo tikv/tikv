@@ -1618,8 +1618,7 @@ mod tests {
     #[test]
     fn test_flush() {
         let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
-        let engine =
-            crate::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = crate::util::new_engine(dir.path().to_str().unwrap(), ALL_CFS).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "kv");
         }

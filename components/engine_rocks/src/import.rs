@@ -63,8 +63,6 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use engine_traits::{
         FlowControlFactorsExt, MiscExt, Mutable, SstWriter, SstWriterBuilder, WriteBatch,
         WriteBatchExt, ALL_CFS, CF_DEFAULT,
@@ -72,12 +70,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::{
-        engine::RocksEngine,
-        raw::{ColumnFamilyOptions, DBOptions},
-        raw_util::{new_engine_opt, CFOptions},
-        RocksSstWriterBuilder,
-    };
+    use crate::{util::new_engine_opt, RocksCfOptions, RocksDBOptions, RocksSstWriterBuilder};
 
     #[test]
     fn test_ingest_multiple_file() {
@@ -92,14 +85,12 @@ mod tests {
         let cfs_opts = ALL_CFS
             .iter()
             .map(|cf| {
-                let mut opt = ColumnFamilyOptions::new();
+                let mut opt = RocksCfOptions::default();
                 opt.set_force_consistency_checks(true);
-                CFOptions::new(cf, opt)
+                (*cf, opt)
             })
             .collect();
-        let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
-        let db = Arc::new(db);
-        let db = RocksEngine::from_db(db);
+        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
         let mut wb = db.write_batch();
         for i in 1000..5000 {
             let v = i.to_string();

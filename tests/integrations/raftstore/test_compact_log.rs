@@ -53,7 +53,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
@@ -119,7 +119,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
@@ -190,7 +190,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         if id == 1 {
             continue;
         }
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = get_raft_msg_or_default(engines, &keys::apply_state_key(1));
         let state = state.take_truncated_state();
         // compact should not start
@@ -263,7 +263,7 @@ fn test_compact_reserve_max_ticks<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let mut before_states = HashMap::default();
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = get_raft_msg_or_default(engines, &apply_key);
         let state = state.take_truncated_state();
         // compact should not start

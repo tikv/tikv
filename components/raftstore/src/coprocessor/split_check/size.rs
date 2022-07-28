@@ -260,7 +260,7 @@ pub mod tests {
 
     use collections::HashSet;
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        ctor::{ColumnFamilyOptions, DBOptions},
         kv::KvTestEngine,
     };
     use engine_traits::{
@@ -447,9 +447,9 @@ pub mod tests {
             .iter()
             .map(|cf| {
                 if cfs_with_range_prop.contains(cf) {
-                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                    (*cf, ColumnFamilyOptions::new())
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -577,9 +577,9 @@ pub mod tests {
                 if cfs_with_range_prop.contains(cf) {
                     let mut opt = ColumnFamilyOptions::new();
                     opt.set_disable_auto_compactions(true);
-                    CFOptions::new(cf, opt)
+                    (*cf, opt)
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -716,9 +716,9 @@ pub mod tests {
                 if cfs_with_range_prop.contains(cf) {
                     let mut opt = ColumnFamilyOptions::new();
                     opt.set_disable_auto_compactions(true);
-                    CFOptions::new(cf, opt)
+                    (*cf, opt)
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -771,9 +771,9 @@ pub mod tests {
             .iter()
             .map(|cf| {
                 if cf != &CF_LOCK {
-                    CFOptions::new(cf, ColumnFamilyOptions::new())
+                    (*cf, ColumnFamilyOptions::new())
                 } else {
-                    CFOptions::new(cf, cf_opt.clone())
+                    (*cf, cf_opt.clone())
                 }
             })
             .collect();
@@ -832,7 +832,7 @@ pub mod tests {
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
                 cf_opts.set_no_range_properties(true);
-                CFOptions::new(cf, cf_opts)
+                (*cf, cf_opts)
             })
             .collect();
         let engine =
@@ -914,10 +914,7 @@ pub mod tests {
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         cf_opts.set_no_range_properties(true);
 
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let region = make_region(1, vec![], vec![]);
@@ -950,10 +947,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();
 
         let mut big_value = Vec::with_capacity(256);
@@ -1065,10 +1059,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
@@ -1098,10 +1089,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;
@@ -1136,10 +1124,7 @@ pub mod tests {
         let db_opts = DBOptions::default();
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let mut cf_size = 0;

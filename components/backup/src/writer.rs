@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, io::Read, sync::Arc};
+use std::{fmt::Display, io::Read};
 
 use encryption::{EncrypterReader, Iv};
-use engine_rocks::{raw::DB, RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstWriter, SstWriterBuilder, CF_DEFAULT,
     CF_WRITE,
@@ -167,7 +167,7 @@ pub struct BackupWriterBuilder {
     store_id: u64,
     limiter: Limiter,
     region: Region,
-    db: Arc<DB>,
+    db: RocksEngine,
     compression_type: Option<SstCompressionType>,
     compression_level: i32,
     sst_max_size: u64,
@@ -179,7 +179,7 @@ impl BackupWriterBuilder {
         store_id: u64,
         limiter: Limiter,
         region: Region,
-        db: Arc<DB>,
+        db: RocksEngine,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         sst_max_size: u64,
@@ -226,7 +226,7 @@ pub struct BackupWriter {
 impl BackupWriter {
     /// Create a new BackupWriter.
     pub fn new(
-        db: Arc<DB>,
+        db: RocksEngine,
         name: &str,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
@@ -237,14 +237,14 @@ impl BackupWriter {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
-            .set_db(RocksEngine::from_ref(&db))
+            .set_db(&db)
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
         let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
-            .set_db(RocksEngine::from_ref(&db))
+            .set_db(&db)
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
@@ -350,7 +350,7 @@ pub struct BackupRawKvWriter {
 impl BackupRawKvWriter {
     /// Create a new BackupRawKvWriter.
     pub fn new(
-        db: Arc<DB>,
+        db: RocksEngine,
         name: &str,
         cf: CfNameWrap,
         limiter: Limiter,
@@ -362,7 +362,7 @@ impl BackupRawKvWriter {
         let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(cf.into())
-            .set_db(RocksEngine::from_ref(&db))
+            .set_db(&db)
             .set_compression_type(compression_type)
             .set_compression_level(compression_level)
             .build(name)?;
@@ -497,7 +497,7 @@ mod tests {
         r.set_id(1);
         r.mut_peers().push(new_peer(1, 1));
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db.clone(),
             "foo",
             None,
             0,
@@ -515,7 +515,7 @@ mod tests {
 
         // Test write only txn.
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db.clone(),
             "foo1",
             None,
             0,
@@ -554,7 +554,7 @@ mod tests {
 
         // Test write and default.
         let mut writer = BackupWriter::new(
-            db.get_sync_db(),
+            db,
             "foo2",
             None,
             0,

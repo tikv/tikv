@@ -257,7 +257,7 @@ mod tests {
             .prefix("test_last_key_of_region")
             .tempdir()
             .unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -310,7 +310,7 @@ mod tests {
             .prefix("test_table_check_observer")
             .tempdir()
             .unwrap();
-        let engine = new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
