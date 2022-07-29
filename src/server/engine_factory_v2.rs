@@ -30,6 +30,16 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
     (tablet_id, tablet_suffix)
 }
 
+impl KvEngineFactoryV2 {
+    fn create_tablet_helper(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
+        let tablet_path = self.tablet_path(id, suffix);
+        let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
+        debug!("inserting tablet"; "key" => ?(id, suffix));
+        self.inner.on_tablet_created(id, suffix);
+        Ok(kv_engine)
+    }
+}
+
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
@@ -40,25 +50,23 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                 db.as_inner().path()
             ));
         }
-        let tablet_path = self.tablet_path(id, suffix);
-        let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
-        debug!("inserting tablet"; "key" => ?(id, suffix));
+
+        let kv_engine = self.create_tablet_helper(id, suffix)?;
         reg.insert((id, suffix), kv_engine.clone());
-        self.inner.on_tablet_created(id, suffix);
+
         Ok(kv_engine)
     }
 
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Ok(db.clone());
-            }
+        let mut reg = self.registry.lock().unwrap();
+        if let Some(db) = reg.get(&(id, suffix)) {
+            return Ok(db.clone());
         }
 
         let db_path = self.tablet_path(id, suffix);
         let db = self.open_tablet_raw(db_path.as_path(), false)?;
         debug!("open tablet"; "key" => ?(id, suffix));
+        reg.insert((id, suffix), db.clone());
         Ok(db)
     }
 
@@ -87,7 +95,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             ));
         }
         let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
-        self.create_tablet(tablet_id, tablet_suffix)
+        self.create_tablet_helper(tablet_id, tablet_suffix)
     }
 
     #[inline]
@@ -138,15 +146,13 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
     #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
-        {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Err(box_err!(
-                    "region {} {} already exists",
-                    id,
-                    db.as_inner().path()
-                ));
-            }
+        let mut reg = self.registry.lock().unwrap();
+        if let Some(db) = reg.get(&(id, suffix)) {
+            return Err(box_err!(
+                "region {} {} already exists",
+                id,
+                db.as_inner().path()
+            ));
         }
 
         let db_path = self.tablet_path(id, suffix);
@@ -154,7 +160,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let new_engine = self.open_tablet_raw(db_path.as_path(), false);
         if new_engine.is_ok() {
             let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
-            self.registry.lock().unwrap().remove(&(old_id, old_suffix));
+            reg.remove(&(old_id, old_suffix));
+            reg.insert((id, suffix), new_engine.as_ref().unwrap().clone());
         }
         new_engine
     }
