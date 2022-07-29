@@ -12,10 +12,14 @@ pub mod batch;
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
+<<<<<<< HEAD
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+=======
+use fail::fail_point;
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
 
 struct State {
     sender_cnt: AtomicIsize,
@@ -234,7 +238,11 @@ impl<T> LooseBoundedSender<T> {
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         let cnt = self.tried_cnt.get();
-        if cnt < CHECK_INTERVAL {
+        let check_interval = || {
+            fail_point!("loose_bounded_sender_check_interval", |_| 0);
+            CHECK_INTERVAL
+        };
+        if cnt < check_interval() {
             self.tried_cnt.set(cnt + 1);
         } else if self.len() < self.limit {
             self.tried_cnt.set(1);
