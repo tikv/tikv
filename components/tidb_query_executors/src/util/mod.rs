@@ -25,8 +25,8 @@ pub fn ensure_columns_decoded(
     Ok(())
 }
 
-/// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
-/// are erased.
+/// Evaluates expressions and outputs the result into the given Vec. Lifetime of
+/// the expressions are erased.
 pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
     ctx: &mut EvalContext,
     exprs: &[RpnExpression],

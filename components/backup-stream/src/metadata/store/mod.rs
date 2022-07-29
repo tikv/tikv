@@ -48,7 +48,8 @@ impl Condition {
 }
 
 /// A conditional transaction.
-/// This would atomicly evalute the condition, and execute corresponding transaction.
+/// This would atomically evaluate the condition, and execute corresponding
+/// transaction.
 #[derive(Debug)]
 pub struct CondTransaction {
     cond: Condition,

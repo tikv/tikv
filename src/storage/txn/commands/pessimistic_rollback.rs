@@ -45,7 +45,8 @@ impl CommandExt for PessimisticRollback {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
+    /// Delete any pessimistic lock with small for_update_ts belongs to this
+    /// transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(

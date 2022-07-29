@@ -11,7 +11,7 @@ use engine_rocks::{
     RocksSstWriterBuilder,
 };
 use engine_traits::{
-    CFOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
+    CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
     SstWriterBuilder, SyncMutable, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;
@@ -40,25 +40,21 @@ fn test_turnoff_titan() {
 
     let size = 5;
     for i in 0..size {
-        assert!(
-            cluster
-                .put(
-                    format!("k{:02}0", i).as_bytes(),
-                    format!("v{}", i).as_bytes(),
-                )
-                .is_ok()
-        );
+        cluster
+            .put(
+                format!("k{:02}0", i).as_bytes(),
+                format!("v{}", i).as_bytes(),
+            )
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in 0..size {
-        assert!(
-            cluster
-                .put(
-                    format!("k{:02}1", i).as_bytes(),
-                    format!("v{}", i).as_bytes(),
-                )
-                .is_ok()
-        );
+        cluster
+            .put(
+                format!("k{:02}1", i).as_bytes(),
+                format!("v{}", i).as_bytes(),
+            )
+            .unwrap();
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
@@ -96,7 +92,7 @@ fn test_turnoff_titan() {
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let opt = vec![("blob_run_mode", "kFallback")];
-        assert!(db.set_options_cf(CF_DEFAULT, &opt).is_ok());
+        db.set_options_cf(CF_DEFAULT, &opt).unwrap();
     }
     cluster.compact_data();
     let mut all_check_pass = true;

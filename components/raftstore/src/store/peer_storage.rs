@@ -115,7 +115,7 @@ impl From<Error> for RaftError {
 
 #[derive(PartialEq, Debug)]
 pub enum HandleReadyResult {
-    SendIOTask,
+    SendIoTask,
     Snapshot {
         msgs: Vec<eraftpb::Message>,
         snap_region: metapb::Region,
@@ -124,7 +124,7 @@ pub enum HandleReadyResult {
         /// The first index before applying the snapshot.
         last_first_index: u64,
     },
-    NoIOTask,
+    NoIoTask,
 }
 
 pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
@@ -147,17 +147,18 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-    // if we recv append log when applying snapshot, last_index in raft_local_state will
-    // larger than snapshot_index. since raft_local_state is written to raft engine, and
-    // raft write_batch is written after kv write_batch, raft_local_state may wrong if
-    // restart happen between the two write. so we copy raft_local_state to kv engine
-    // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
-    // after restart, we need check last_index.
+    // if we recv append log when applying snapshot, last_index in raft_local_state
+    // will larger than snapshot_index. since raft_local_state is written to
+    // raft engine, and raft write_batch is written after kv write_batch,
+    // raft_local_state may wrong if restart happen between the two write. so we
+    // copy raft_local_state to kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.last_index = snapshot_index. after restart, we need
+    // check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
-            .clean(region_id, 0 /*first_index*/, &raft_state, raft_wb)?;
+            .clean(region_id, 0 /* first_index */, &raft_state, raft_wb)?;
         raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
     }
     Ok(())
@@ -303,8 +304,9 @@ fn validate_states<EK: KvEngine, ER: RaftEngine>(
             state_str()
         ));
     }
-    // Since the entries must be persisted before applying, the term of raft state should also
-    // be persisted. So it should be greater than the commit term of apply state.
+    // Since the entries must be persisted before applying, the term of raft state
+    // should also be persisted. So it should be greater than the commit term of
+    // apply state.
     if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
         return Err(box_err!(
             "term of raft state < commit term of apply state, {}",
@@ -552,8 +554,8 @@ where
         true
     }
 
-    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
-    /// snapshot.
+    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
+    /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
@@ -703,14 +705,14 @@ where
             let first_index = self.entry_storage.first_index();
             // It's possible that logs between `last_compacted_idx` and `first_index` are
             // being deleted in raftlog_gc worker. But it's OK as:
-            // 1. If the peer accepts a new snapshot, it must start with an index larger than
-            //    this `first_index`;
-            // 2. If the peer accepts new entries after this snapshot or new snapshot, it must
-            //    start with the new applied index, which is larger than `first_index`.
+            // - If the peer accepts a new snapshot, it must start with an index larger than
+            //   this `first_index`;
+            // - If the peer accepts new entries after this snapshot or new snapshot, it
+            //   must start with the new applied index, which is larger than `first_index`.
             // So new logs won't be deleted by on going raftlog_gc task accidentally.
             // It's possible that there will be some logs between `last_compacted_idx` and
-            // `first_index` are not deleted. So a cleanup task for the range should be triggered
-            // after applying the snapshot.
+            // `first_index` are not deleted. So a cleanup task for the range should be
+            // triggered after applying the snapshot.
             self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
@@ -740,10 +742,10 @@ where
         // Although there is an interval that other metadata are updated while `region`
         // is not after handing snapshot from ready, at the time of writing, it's no
         // problem for now.
-        // The reason why the update of `region` is delayed is that we expect `region` stays
-        // consistent with the one in `StoreMeta::regions` which should be updated after
-        // persisting due to atomic snapshot and peer create process. So if we can fix
-        // these issues in future(maybe not?), the `region` and `StoreMeta::regions`
+        // The reason why the update of `region` is delayed is that we expect `region`
+        // stays consistent with the one in `StoreMeta::regions` which should be updated
+        // after persisting due to atomic snapshot and peer create process. So if we can
+        // fix these issues in future(maybe not?), the `region` and `StoreMeta::regions`
         // can updated here immediately.
 
         info!(
@@ -865,7 +867,8 @@ where
         res
     }
 
-    /// Cancel applying snapshot, return true if the job can be considered not be run again.
+    /// Cancel applying snapshot, return true if the job can be considered not
+    /// be run again.
     pub fn cancel_applying_snap(&mut self) -> bool {
         let is_canceled = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
@@ -974,7 +977,7 @@ where
 
         let mut write_task = WriteTask::new(region_id, self.peer_id, ready.number());
 
-        let mut res = HandleReadyResult::SendIOTask;
+        let mut res = HandleReadyResult::SendIoTask;
         if !ready.snapshot().is_empty() {
             fail_point!("raft_before_apply_snap");
             let last_first_index = self.first_index().unwrap();
@@ -1020,7 +1023,7 @@ where
         }
 
         if !write_task.has_data() {
-            res = HandleReadyResult::NoIOTask;
+            res = HandleReadyResult::NoIoTask;
         }
 
         Ok((res, write_task))
@@ -1042,14 +1045,15 @@ where
             }
         }
 
-        // Note that the correctness depends on the fact that these source regions MUST NOT
-        // serve read request otherwise a corrupt data may be returned.
+        // Note that the correctness depends on the fact that these source regions MUST
+        // NOT serve read request otherwise a corrupt data may be returned.
         // For now, it is ensured by
-        // 1. After `PrepareMerge` log is committed, the source region leader's lease will be
-        //    suspected immediately which makes the local reader not serve read request.
-        // 2. No read request can be responsed in peer fsm during merging.
-        // These conditions are used to prevent reading **stale** data in the past.
-        // At present, they are also used to prevent reading **corrupt** data.
+        // - After `PrepareMerge` log is committed, the source region leader's lease
+        //   will be suspected immediately which makes the local reader not serve read
+        //   request.
+        // - No read request can be responsed in peer fsm during merging. These
+        //   conditions are used to prevent reading **stale** data in the past. At
+        //   present, they are also used to prevent reading **corrupt** data.
         for r in &res.destroy_regions {
             if let Err(e) = self.clear_extra_data(r, &res.region) {
                 error!(?e;
@@ -1061,8 +1065,8 @@ where
 
         self.schedule_applying_snapshot();
 
-        // The `region` is updated after persisting in order to stay consistent with the one
-        // in `StoreMeta::regions` (will be updated soon).
+        // The `region` is updated after persisting in order to stay consistent with the
+        // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
         self.set_region(res.region.clone());
     }
@@ -1189,7 +1193,8 @@ where
     Ok(snapshot)
 }
 
-// When we bootstrap the region we must call this to initialize region local state first.
+// When we bootstrap the region we must call this to initialize region local
+// state first.
 pub fn write_initial_raft_state<W: RaftLogBatch>(raft_wb: &mut W, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState {
         last_index: RAFT_INIT_LOG_INDEX,
@@ -1493,7 +1498,7 @@ pub mod tests {
             store
                 .engines
                 .raft
-                .consume(&mut raft_wb, false /*sync*/)
+                .consume(&mut raft_wb, false /* sync */)
                 .unwrap();
 
             assert_eq!(left, get_meta_key_count(&store));
@@ -1520,7 +1525,8 @@ pub mod tests {
     where
         EK: KvEngine,
     {
-        /// Sends a significant message. We should guarantee that the message can't be dropped.
+        /// Sends a significant message. We should guarantee that the message
+        /// can't be dropped.
         fn significant_send(
             &self,
             _: u64,

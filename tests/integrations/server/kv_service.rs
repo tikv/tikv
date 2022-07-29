@@ -1345,7 +1345,7 @@ fn test_prewrite_check_max_commit_ts() {
     }
 
     // There shouldn't be locks remaining in the lock table.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
 #[test]
@@ -1444,7 +1444,7 @@ macro_rules! test_func {
 
 macro_rules! test_func_init {
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
             req.set_keys(vec![b"key".to_vec()].into());
@@ -1664,7 +1664,8 @@ fn test_tikv_forwarding() {
     }
 }
 
-/// Test if forwarding works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and
+/// restarted.
 #[test]
 fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
@@ -1753,7 +1754,8 @@ fn test_get_lock_wait_info_api() {
 // Test API version verification for transaction requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
@@ -1831,7 +1833,7 @@ fn test_txn_api_version() {
                 let expect_prefix = format!("Error({}", errcode);
                 assert!(!errs.is_empty(), "case {}", i);
                 assert!(
-                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    errs[0].get_abort().starts_with(&expect_prefix), /* e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 }) */
                     "case {}: errs[0]: {:?}, expected: {}",
                     i,
                     errs[0],
@@ -1956,7 +1958,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will
+        // trigger the limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),

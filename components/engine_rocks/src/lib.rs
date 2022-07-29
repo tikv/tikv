@@ -10,7 +10,8 @@
 //! Because there are so many similarly named types across the TiKV codebase,
 //! and so much "import renaming", this crate consistently explicitly names type
 //! that implement a trait as `RocksTraitname`, to avoid the need for import
-//! renaming and make it obvious what type any particular module is working with.
+//! renaming and make it obvious what type any particular module is working
+//! with.
 //!
 //! Please read the engine_trait crate docs before hacking.
 
@@ -110,8 +111,8 @@ pub mod raw;
 
 pub fn get_env(
     key_manager: Option<std::sync::Arc<::encryption::DataKeyManager>>,
-    limiter: Option<std::sync::Arc<::file_system::IORateLimiter>>,
+    limiter: Option<std::sync::Arc<::file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<std::sync::Arc<raw::Env>> {
-    let env = encryption::get_env(None /*base_env*/, key_manager)?;
+    let env = encryption::get_env(None /* base_env */, key_manager)?;
     file_system::get_env(Some(env), limiter)
 }
