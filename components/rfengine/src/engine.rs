@@ -146,7 +146,11 @@ impl RfEngine {
             let region_data = self.get_or_init_region_data(region_id);
             let mut region_data = region_data.write().unwrap();
             let truncated = region_data.apply(batch_data);
-            let truncated_index = region_data.truncated_idx;
+            let truncated_index = if batch_data.truncated_idx == TRUNCATE_ALL_INDEX {
+                TRUNCATE_ALL_INDEX
+            } else {
+                region_data.truncated_idx
+            };
             let truncated_term = region_data.truncated_term;
             drop(region_data);
             if !truncated.is_empty() {
@@ -366,6 +370,19 @@ impl RfEngine {
             .map(|data| data.read().unwrap().get_stats())
             .unwrap_or_default()
     }
+
+    /// Returns the index that truncating to the given index can limit the memory usage to size.
+    pub fn index_to_truncate_to_size(&self, region_id: u64, size: usize) -> u64 {
+        self.regions
+            .get(&region_id)
+            .map(|data| {
+                data.read()
+                    .unwrap()
+                    .raft_logs
+                    .index_to_truncate_to_size(size)
+            })
+            .unwrap_or_default()
+    }
 }
 
 pub(crate) fn maybe_create_recycle_dir(dir: &Path) -> Result<()> {
@@ -420,14 +437,10 @@ impl RegionData {
             truncated_blocks = self.raft_logs.truncate(TRUNCATE_ALL_INDEX);
             self.truncated_idx = 0;
             self.truncated_term = 0;
-        } else {
-            if self.truncated_idx < batch.truncated_idx {
-                self.truncated_idx = batch.truncated_idx;
-                self.truncated_term = batch.truncated_term;
-            }
-            if self.need_truncate() {
-                truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
-            }
+        } else if self.can_truncate() && self.truncated_idx < batch.truncated_idx {
+            self.truncated_idx = batch.truncated_idx;
+            self.truncated_term = batch.truncated_term;
+            truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
         }
         for (key, val) in &batch.states {
             if val.is_empty() {
@@ -445,9 +458,8 @@ impl RegionData {
         truncated_blocks
     }
 
-    pub(crate) fn need_truncate(&self) -> bool {
-        let first = self.raft_logs.first_index();
-        self.dependents.is_empty() && first > 0 && self.truncated_idx >= first
+    pub(crate) fn can_truncate(&self) -> bool {
+        self.dependents.is_empty()
     }
 
     pub(crate) fn get_stats(&self) -> RegionStats {
@@ -986,5 +998,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_truncate_all_logs() {
+        init_logger();
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let wal_size = 4096 * 10;
+        let engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
+        for i in 1..=50 {
+            let mut wb = WriteBatch::new();
+            wb.append_raft_log(1, &make_log_data(i, 128));
+            engine.write(wb).unwrap();
+        }
+        let mut wb = WriteBatch::new();
+        wb.truncate_raft_log(1, TRUNCATE_ALL_INDEX, 1);
+        engine.write(wb).unwrap();
+        // Trigger WAL rotation twice to compact older WALs.
+        let mut wb = WriteBatch::new();
+        wb.append_raft_log(2, &make_log_data(1, wal_size));
+        wb.append_raft_log(2, &make_log_data(2, wal_size));
+        engine.write(wb).unwrap();
+        // Waiting for compacting WAL.
+        for _ in 0..10 {
+            let wal_cnt = engine
+                .dir
+                .read_dir()
+                .unwrap()
+                .filter(|p| {
+                    p.as_ref()
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .map_or(false, |e| e == "wal")
+                })
+                .count();
+            if wal_cnt <= 2 {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_secs(1));
+        }
+        // Check no file of region 1 left.
+        assert_eq!(
+            engine
+                .dir
+                .read_dir()
+                .unwrap()
+                .filter(|p| {
+                    let path = p.as_ref().unwrap().path().to_str().unwrap().to_owned();
+                    let parts: Vec<_> = path.split('_').collect();
+                    parts.len() == 4 && parts[1] == format!("{:016x}", 1)
+                })
+                .count(),
+            0
+        );
     }
 }

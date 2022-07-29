@@ -1086,6 +1086,7 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
 
+        let region_id = self.region_id();
         let last_idx = self.peer.get_store().last_index();
         let replicated_idx = if self.peer.is_leader() {
             self.peer
@@ -1105,25 +1106,23 @@ impl<'a> PeerMsgHandler<'a> {
             // One solution is that leader propagates truncated index to followers.
             last_idx
         };
-        assert!(
-            replicated_idx <= last_idx,
-            "expect replicated index {} <= last index {}",
-            replicated_idx,
-            last_idx
-        );
 
-        let region_id = self.region_id();
+        let engines = &self.ctx.global.engines;
+        let size_limit_index = engines.raft.index_to_truncate_to_size(
+            self.region_id(),
+            self.ctx.cfg.raft_log_gc_size_limit.unwrap().0 as usize,
+        );
+        // If raft logs occupies too much memory, truncates them regardless of lagged replicas to avoid OOM.
+        let mut to_truncate_idx = cmp::max(size_limit_index, replicated_idx);
+
+        // persisted_log_idx is the upper limit of truncated_idx.
         let mut persisted_log_idx = self.peer.get_store().data_persisted_log_index().unwrap();
-        let to_truncate_idx = if replicated_idx <= persisted_log_idx {
-            replicated_idx
-        } else {
+        if to_truncate_idx > persisted_log_idx {
             let applied_idx = self.peer.get_store().applied_index();
             let applied_term = self.peer.get_store().applied_index_term();
+            // Try to advance applied_idx.
             if persisted_log_idx < applied_idx {
-                let shard_data_all_persisted = self
-                    .ctx
-                    .global
-                    .engines
+                let shard_data_all_persisted = engines
                     .kv
                     .get_shard(region_id)
                     .unwrap()
@@ -1146,7 +1145,7 @@ impl<'a> PeerMsgHandler<'a> {
                     persisted_log_idx = applied_idx;
                 }
             }
-            std::cmp::min(replicated_idx, persisted_log_idx)
+            to_truncate_idx = cmp::min(to_truncate_idx, persisted_log_idx);
         };
 
         let truncated_idx = self.peer.get_store().truncated_index();

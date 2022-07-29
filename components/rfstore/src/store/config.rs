@@ -62,6 +62,10 @@ pub struct Config {
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: ReadableDuration,
 
+    // When the approximate size of raft log entries exceed this value,
+    // gc will be forced trigger.
+    pub raft_log_gc_size_limit: Option<ReadableSize>,
+
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
 
@@ -110,7 +114,8 @@ impl Default for Config {
             raft_store_max_leader_lease: ReadableDuration::secs(9),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             allow_remove_leader: false,
-            raft_log_gc_tick_interval: ReadableDuration::secs(10),
+            raft_log_gc_tick_interval: ReadableDuration::secs(3),
+            raft_log_gc_size_limit: Some(ReadableSize::mb(32)),
             split_region_check_tick_interval: ReadableDuration::secs(3),
             switch_mem_table_check_tick_interval: ReadableDuration::minutes(1),
             region_split_size: ReadableSize::mb(256),
@@ -171,6 +176,9 @@ impl Config {
         cfg.peer_stale_state_check_interval = old.peer_stale_state_check_interval;
         cfg.leader_transfer_max_log_lag = old.leader_transfer_max_log_lag;
         cfg.raft_log_gc_tick_interval = old.raft_log_gc_tick_interval;
+        if old.raft_log_gc_size_limit.is_some() {
+            cfg.raft_log_gc_size_limit = old.raft_log_gc_size_limit;
+        }
 
         cfg.region_split_size = old_cop.region_split_size;
         cfg.apply_pool_size = old.apply_batch_system.pool_size;

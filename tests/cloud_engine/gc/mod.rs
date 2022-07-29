@@ -6,7 +6,7 @@ use collections::HashSet;
 use kvengine::{new_tmp_filename, table::sstable::new_filename, ShardStats};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use rfstore::store::rlog::*;
-use test_cloud_server::ServerCluster;
+use test_cloud_server::{must_wait, ServerCluster};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
 use crate::alloc_node_id;
@@ -216,6 +216,45 @@ fn test_raft_log_gc() {
         "{:?} {:?}",
         truncated_stat,
         curr_stats[0]
+    );
+    cluster.stop();
+}
+
+#[test]
+fn test_raft_log_gc_size_limit() {
+    test_util::init_log_for_test();
+    let node_ids = (0..3).map(|_| alloc_node_id()).collect::<Vec<_>>();
+    let mut cluster = ServerCluster::new(node_ids.clone(), |_, cfg| {
+        cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(100);
+        cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(50);
+        cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
+        cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+        cfg.rocksdb.writecf.write_buffer_size = ReadableSize::kb(16);
+        cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::kb(1));
+    });
+    cluster.wait_region_replicated(&[], 3);
+    cluster.stop_node(node_ids[2]);
+
+    let mut client = cluster.new_client();
+    let region_id = client.get_region_id(&[]);
+    std::thread::sleep(Duration::from_millis(300));
+    let prev_state = cluster
+        .get_rfengine(node_ids[0])
+        .get_truncated_state(region_id)
+        .unwrap();
+    for i in 0..50 {
+        client.put_kv(i * 20..(i + 1) * 20, gen_key, gen_val);
+    }
+    must_wait(
+        || {
+            let curr_state = cluster
+                .get_rfengine(node_ids[0])
+                .get_truncated_state(region_id)
+                .unwrap();
+            curr_state.0 > prev_state.0 && curr_state.0 > 40
+        },
+        3,
+        "raft log size limit doesn't take effect",
     );
     cluster.stop();
 }

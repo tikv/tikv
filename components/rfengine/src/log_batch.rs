@@ -237,6 +237,17 @@ impl RaftLogs {
         };
         Some(self.blocks[block_idx].get(index).to_entry())
     }
+
+    pub(crate) fn index_to_truncate_to_size(&self, mut size: usize) -> u64 {
+        self.blocks
+            .iter()
+            .rposition(|b| {
+                size = size.saturating_sub(b.size);
+                size == 0
+            })
+            .map(|i| self.blocks[i].last_index())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
@@ -457,5 +468,30 @@ mod tests {
 
         // Get a truncated log.
         assert!(raft_logs.get(1).is_none());
+
+        let mut raft_logs = RaftLogs::default();
+        assert_eq!(raft_logs.index_to_truncate_to_size(100), 0);
+        for i in 1..=RAFT_LOG_BLOCK_CAP * 4 {
+            let log = RaftLogOp::new(&new_raft_entry(
+                EntryType::EntryNormal,
+                1,
+                i as u64,
+                b"data",
+                0,
+            ));
+            raft_logs.append(log);
+        }
+        assert!(raft_logs.blocks.len() > 0);
+        assert_eq!(
+            raft_logs.index_to_truncate_to_size(0),
+            raft_logs.last_index()
+        );
+        raft_logs.blocks.iter().rev().fold(0, |acc, b| {
+            for i in 1..=b.size {
+                assert_eq!(raft_logs.index_to_truncate_to_size(acc + i), b.last_index());
+            }
+            acc + b.size
+        });
+        assert_eq!(raft_logs.index_to_truncate_to_size(usize::MAX), 0);
     }
 }

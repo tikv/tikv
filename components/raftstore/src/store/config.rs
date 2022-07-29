@@ -302,7 +302,7 @@ impl Default for Config {
             raft_log_gc_tick_interval: ReadableDuration::secs(3),
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
-            raft_log_gc_size_limit: None,
+            raft_log_gc_size_limit: Some(ReadableSize::mb(32)),
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
