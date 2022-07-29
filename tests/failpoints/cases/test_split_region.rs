@@ -9,11 +9,18 @@ use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftMessage;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
+<<<<<<< HEAD
 use raftstore::store::util::is_vote_msg;
 use raftstore::Result;
 use tikv_util::HandyRwLock;
 
 use collections::HashMap;
+=======
+use raftstore::{
+    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
+    Result,
+};
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
 use test_raftstore::*;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -659,3 +666,338 @@ fn test_split_duplicated_batch() {
     rx2.recv_timeout(Duration::from_secs(3)).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
+<<<<<<< HEAD
+=======
+
+/// We depend on split-check task to update approximate size of region even if
+/// this region does not need to split.
+#[test]
+fn test_report_approximate_size_after_split_check() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store = RaftstoreConfig::default();
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize::kb(64));
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(300);
+    cluster.run();
+    cluster.must_put_cf("write", b"k0", b"k1");
+    let region_id = cluster.get_region_id(b"k0");
+    let approximate_size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    let approximate_keys = cluster
+        .pd_client
+        .get_region_approximate_keys(region_id)
+        .unwrap_or_default();
+    // It's either 0 for uninialized or 1 for 0.
+    assert!(
+        approximate_size <= 1 && approximate_keys <= 1,
+        "{} {}",
+        approximate_size,
+        approximate_keys,
+    );
+    let (tx, rx) = mpsc::channel();
+    let tx = Arc::new(Mutex::new(tx));
+
+    fail::cfg_callback("on_split_region_check_tick", move || {
+        // notify split region tick
+        let _ = tx.lock().unwrap().send(());
+        let tx1 = tx.clone();
+        fail::cfg_callback("on_approximate_region_size", move || {
+            // notify split check finished
+            let _ = tx1.lock().unwrap().send(());
+            let tx2 = tx1.clone();
+            fail::cfg_callback("test_raftstore::pd::region_heartbeat", move || {
+                // notify heartbeat region
+                let _ = tx2.lock().unwrap().send(());
+            })
+            .unwrap();
+        })
+        .unwrap();
+    })
+    .unwrap();
+    let value = vec![1_u8; 8096];
+    for i in 0..10 {
+        let mut reqs = vec![];
+        for j in 0..10 {
+            let k = format!("k{}", i * 10 + j);
+            reqs.push(new_put_cf_cmd("write", k.as_bytes(), &value));
+        }
+        cluster.batch_put("k100".as_bytes(), reqs).unwrap();
+    }
+    rx.recv().unwrap();
+    fail::remove("on_split_region_check_tick");
+    rx.recv().unwrap();
+    fail::remove("on_approximate_region_size");
+    rx.recv().unwrap();
+    fail::remove("test_raftstore::pd::region_heartbeat");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region_id)
+        .unwrap_or_default();
+    // The region does not split, but it still refreshes the approximate_size.
+    let region_number = cluster.pd_client.get_regions_number();
+    assert_eq!(region_number, 1);
+    assert!(size > approximate_size);
+}
+
+#[test]
+fn test_split_with_concurrent_pessimistic_locking() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = b"key".to_vec();
+    let mut req = PessimisticLockRequest::default();
+    req.set_context(cluster.get_ctx(b"key"));
+    req.set_mutations(vec![mutation].into());
+    req.set_start_version(10);
+    req.set_for_update_ts(10);
+    req.set_primary_lock(b"key".to_vec());
+
+    // 1. Locking happens when split invalidates in-memory pessimistic locks.
+    // The pessimistic lock request has to fallback to propose locks. It should find
+    // that the epoch has changed.
+    fail::cfg("on_split_invalidate_locks", "pause").unwrap();
+    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    let client2 = client.clone();
+    let req2 = req.clone();
+    let res = thread::spawn(move || client2.kv_pessimistic_lock(&req2).unwrap());
+    thread::sleep(Duration::from_millis(200));
+    fail::remove("on_split_invalidate_locks");
+    let resp = res.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+
+    // 2. Locking happens when split has finished
+    // It needs to be rejected due to incorrect epoch, otherwise the lock may be
+    // written to the wrong region.
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    req.set_context(cluster.get_ctx(b"key"));
+    let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
+    thread::sleep(Duration::from_millis(200));
+
+    cluster.split_region(&cluster.get_region(b"key"), b"b", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    fail::remove("txn_before_process_write");
+    let resp = res.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+}
+
+#[test]
+fn test_split_pessimistic_locks_with_concurrent_prewrite() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.pessimistic_txn.pipelined = true;
+    cluster.cfg.pessimistic_txn.in_memory = true;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let addr = cluster.sim.rl().get_addr(1);
+    let env = Arc::new(Environment::new(1));
+    let channel = ChannelBuilder::new(env).connect(&addr);
+    let client = TikvClient::new(channel);
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"a".to_vec());
+    mutation.set_value(b"v".to_vec());
+    let mut req = PrewriteRequest::default();
+    req.set_context(cluster.get_ctx(b"a"));
+    req.set_mutations(vec![mutation].into());
+    req.set_try_one_pc(true);
+    req.set_start_version(20);
+    req.set_primary_lock(b"a".to_vec());
+    let resp = client.kv_prewrite(&req).unwrap();
+    let commit_ts = resp.one_pc_commit_ts;
+
+    let txn_ext = cluster
+        .must_get_snapshot_of_region(1)
+        .ext()
+        .get_txn_ext()
+        .unwrap()
+        .clone();
+    let lock_a = PessimisticLock {
+        primary: b"a".to_vec().into_boxed_slice(),
+        start_ts: 10.into(),
+        ttl: 3000,
+        for_update_ts: (commit_ts + 10).into(),
+        min_commit_ts: (commit_ts + 10).into(),
+    };
+    let lock_c = PessimisticLock {
+        primary: b"c".to_vec().into_boxed_slice(),
+        start_ts: 15.into(),
+        ttl: 3000,
+        for_update_ts: (commit_ts + 10).into(),
+        min_commit_ts: (commit_ts + 10).into(),
+    };
+    {
+        let mut locks = txn_ext.pessimistic_locks.write();
+        locks
+            .insert(vec![
+                (Key::from_raw(b"a"), lock_a),
+                (Key::from_raw(b"c"), lock_c),
+            ])
+            .unwrap();
+    }
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"a".to_vec());
+    mutation.set_value(b"v2".to_vec());
+    let mut req = PrewriteRequest::default();
+    req.set_context(cluster.get_ctx(b"a"));
+    req.set_mutations(vec![mutation].into());
+    req.set_is_pessimistic_lock(vec![true]);
+    req.set_start_version(10);
+    req.set_for_update_ts(commit_ts + 20);
+    req.set_primary_lock(b"a".to_vec());
+
+    // First let prewrite get snapshot
+    fail::cfg("txn_before_process_write", "pause").unwrap();
+    let resp = thread::spawn(move || client.kv_prewrite(&req).unwrap());
+    thread::sleep(Duration::from_millis(150));
+
+    // In the meantime, split region.
+    fail::cfg("on_split_invalidate_locks", "pause").unwrap();
+    cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
+    thread::sleep(Duration::from_millis(300));
+
+    // PrewriteResponse should contain an EpochNotMatch instead of
+    // PessimisticLockNotFound.
+    fail::remove("txn_before_process_write");
+    let resp = resp.join().unwrap();
+    assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+
+    fail::remove("on_split_invalidate_locks");
+}
+
+/// Logs are gced asynchronously. If an uninitialized peer is destroyed before
+/// being replaced by split, then the asynchronous log gc response may arrive
+/// after the peer is replaced, hence it will lead to incorrect memory state.
+/// Actually, there is nothing to be gc for uninitialized peer. The case is to
+/// guarantee such incorrect state will not happen.
+#[test]
+fn test_split_replace_skip_log_gc() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 15;
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
+    fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
+
+    // So the split peer on store 2 always uninitialized.
+    let filter = RegionPacketFilter::new(1000, 2).msg_type(MessageType::MsgSnapshot);
+    cluster.add_send_filter(CloneFilterFactory(filter));
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    let region = pd_client.get_region(b"k1").unwrap();
+    // [-∞, k2), [k2, +∞)
+    //    b         a
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k3", b"v3");
+
+    // Because a is not initialized, so b must be created using heartbeat on store
+    // 3.
+
+    // Simulate raft log gc stall.
+    let gc_fp = "worker_gc_raft_log_flush";
+    let destroy_fp = "destroy_peer_after_pending_move";
+
+    fail::cfg(gc_fp, "pause").unwrap();
+    let (tx, rx) = crossbeam::channel::bounded(0);
+    fail::cfg_callback(destroy_fp, move || {
+        let _ = tx.send(());
+        let _ = tx.send(());
+    })
+    .unwrap();
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let left_peer_on_store_2 = find_peer(&left, 2).unwrap();
+    pd_client.must_remove_peer(left.get_id(), left_peer_on_store_2.clone());
+    // Wait till destroy is triggered.
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Make it split.
+    fail::remove(before_check_snapshot_1_2_fp);
+    // Wait till split is finished.
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+    // Wait a little bit so the uninitialized peer is replaced.
+    thread::sleep(Duration::from_millis(10));
+    // Resume destroy.
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    // Resume gc.
+    fail::remove(gc_fp);
+    // Check store 3 is still working correctly.
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+}
+
+#[test]
+fn test_split_store_channel_full() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.notify_capacity = 10;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.messages_per_tick = 1;
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let region = pd_client.get_region(b"k2").unwrap();
+    let apply_fp = "before_nofity_apply_res";
+    fail::cfg(apply_fp, "pause").unwrap();
+    let (tx, rx) = mpsc::channel();
+    cluster.split_region(
+        &region,
+        b"k2",
+        Callback::write(Box::new(move |_| tx.send(()).unwrap())),
+    );
+    rx.recv().unwrap();
+    let sender_fp = "loose_bounded_sender_check_interval";
+    fail::cfg(sender_fp, "return").unwrap();
+    let store_fp = "begin_raft_poller";
+    fail::cfg(store_fp, "pause").unwrap();
+    let raft_router = cluster.sim.read().unwrap().get_router(1).unwrap();
+    for _ in 0..50 {
+        raft_router.force_send(1, PeerMsg::Noop).unwrap();
+    }
+    fail::remove(apply_fp);
+    fail::remove(store_fp);
+    sleep_ms(300);
+    let region = pd_client.get_region(b"k1").unwrap();
+    assert_ne!(region.id, 1);
+    fail::remove(sender_fp);
+}
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
