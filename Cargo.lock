@@ -4155,6 +4155,7 @@ dependencies = [
  "raft-proto",
  "rand 0.8.3",
  "resource_metering",
+ "rocksdb",
  "serde",
  "serde_derive",
  "serde_with",

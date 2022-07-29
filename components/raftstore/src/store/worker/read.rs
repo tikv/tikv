@@ -48,7 +48,7 @@ pub trait ReadExecutor<E: KvEngine> {
     fn get_snapshot(
         &mut self,
         ts: Option<ThreadReadId>,
-        ext: &mut Option<ReadDelegateExt<'_, E>>,
+        delegate_ext: &mut Option<ReadDelegateExt<'_, E>>,
     ) -> Arc<E::Snapshot>;
 
     fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
@@ -94,7 +94,7 @@ pub trait ReadExecutor<E: KvEngine> {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
-        mut ext: Option<ReadDelegateExt<'_, E>>,
+        mut delegate_ext: Option<ReadDelegateExt<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -119,7 +119,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 },
                 CmdType::Snap => {
                     let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(ts.take(), &mut ext),
+                        self.get_snapshot(ts.take(), &mut delegate_ext),
                         region.clone(),
                     );
                     response.snapshot = Some(snapshot);
@@ -173,6 +173,9 @@ pub struct ReadDelegate {
     pub track_ver: TrackVer,
 }
 
+/// CachedReadDelegate is a wrapper the ReadDelegate and kv_engine. LocalReader
+/// dispatch local read requests to ReadDeleage according to the region_id where
+/// ReadDelegate needs kv_engine to read data or fetch snapshot.
 pub struct CachedReadDelegate<E>
 where
     E: KvEngine,
@@ -204,6 +207,7 @@ where
     }
 }
 
+/// ReadDelegateExt combines some LocalReader's fields for temporary usage.
 pub struct ReadDelegateExt<'a, E>
 where
     E: KvEngine,
@@ -252,6 +256,17 @@ where
     }
 }
 
+impl<E> Deref for StoreMetaDelegate<E>
+where
+    E: KvEngine,
+{
+    type Target = Arc<Mutex<StoreMeta>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store_meta
+    }
+}
+
 impl<E> DelegateStore<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
@@ -259,11 +274,11 @@ where
     type Delegate = CachedReadDelegate<E>;
 
     fn store_id(&self) -> Option<u64> {
-        self.store_meta.as_ref().lock().unwrap().store_id
+        self.as_ref().lock().unwrap().store_id
     }
 
     fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>) {
-        let meta = self.store_meta.as_ref().lock().unwrap();
+        let meta = self.as_ref().lock().unwrap();
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
             return (
@@ -524,6 +539,9 @@ impl Progress {
     }
 }
 
+/// LocalReader is an entry point where local read requests are dipatch to the
+/// relevant regions by LocalReader so that these requests can be handled by the
+/// relevant ReadDelegate respectively.
 pub struct LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
@@ -555,9 +573,9 @@ where
     fn get_snapshot(
         &mut self,
         create_time: Option<ThreadReadId>,
-        ext: &mut Option<ReadDelegateExt<'_, E>>,
+        delegate_ext: &mut Option<ReadDelegateExt<'_, E>>,
     ) -> Arc<E::Snapshot> {
-        let ext = ext.as_mut().unwrap();
+        let ext = delegate_ext.as_mut().unwrap();
         ext.metrics.local_executed_requests += 1;
         if let Some(ts) = create_time {
             if ts == *ext.read_id {
@@ -1052,9 +1070,11 @@ mod tests {
     use std::{sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
+    use engine_rocks::util::get_cf_handle;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::ALL_CFS;
+    use engine_traits::{Peekable, ALL_CFS, CF_DEFAULT};
     use kvproto::raft_cmdpb::*;
+    use rocksdb::Writable;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -1530,6 +1550,65 @@ mod tests {
         }
         let d = reader.get_delegate(1).unwrap();
         assert_eq!(d.leader_lease.clone().unwrap().term(), 3);
+    }
+
+    #[test]
+    fn test_read_delegate() {
+        let path = Builder::new()
+            .prefix("test-local-reader")
+            .tempdir()
+            .unwrap();
+        let kv_engine =
+            engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let db = kv_engine.get_sync_db();
+        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
+        db.put_cf(handle, b"a1", b"val1").unwrap();
+        let store_meta =
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
+
+        {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+
+            // Create read_delegate with region id 1
+            let read_delegate = ReadDelegate::mock(1);
+            meta.readers.insert(1, read_delegate);
+
+            // Create read_delegate with region id 1
+            let read_delegate = ReadDelegate::mock(2);
+            meta.readers.insert(2, read_delegate);
+        }
+
+        let mut read_id = ThreadReadId::new();
+        let mut read_metrics = ReadMetrics::default();
+        let mut snap_cache = Box::new(None);
+
+        let read_id_copy = Some(read_id.clone());
+
+        let mut delegate_ext = Some(ReadDelegateExt {
+            metrics: &mut read_metrics,
+            read_id: &mut read_id,
+            snap_cache: &mut snap_cache,
+        });
+
+        let (_, delegate) = store_meta.get_delegate_and_len(1);
+        let mut delegate = delegate.unwrap();
+        let tablet = delegate.get_tablet();
+        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut delegate_ext);
+        let val = snapshot.get_value(b"a1").unwrap().unwrap();
+        assert_eq!(b"val1", val.deref());
+
+        let (_, delegate) = store_meta.get_delegate_and_len(2);
+        let mut delegate = delegate.unwrap();
+        let tablet = delegate.get_tablet();
+        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        let snapshot = delegate.get_snapshot(read_id_copy, &mut delegate_ext);
+        let val = snapshot.get_value(b"a1").unwrap().unwrap();
+        assert_eq!(b"val1", val.deref());
+
+        assert!(snap_cache.as_ref().is_some());
+        assert_eq!(read_metrics.local_executed_requests, 2);
+        assert_eq!(read_metrics.local_executed_snapshot_cache_hit, 1);
     }
 
     #[test]
