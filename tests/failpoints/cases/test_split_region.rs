@@ -21,7 +21,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback},
+    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
     Result,
 };
 use test_raftstore::*;
@@ -983,4 +983,41 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     fail::remove("txn_before_process_write");
     let resp = resp.join().unwrap();
     assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
+}
+
+#[test]
+fn test_split_store_channel_full() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.notify_capacity = 10;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.messages_per_tick = 1;
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    let region = pd_client.get_region(b"k2").unwrap();
+    let apply_fp = "before_nofity_apply_res";
+    fail::cfg(apply_fp, "pause").unwrap();
+    let (tx, rx) = mpsc::channel();
+    cluster.split_region(
+        &region,
+        b"k2",
+        Callback::write(Box::new(move |_| tx.send(()).unwrap())),
+    );
+    rx.recv().unwrap();
+    let sender_fp = "loose_bounded_sender_check_interval";
+    fail::cfg(sender_fp, "return").unwrap();
+    let store_fp = "begin_raft_poller";
+    fail::cfg(store_fp, "pause").unwrap();
+    let raft_router = cluster.sim.read().unwrap().get_router(1).unwrap();
+    for _ in 0..50 {
+        raft_router.force_send(1, PeerMsg::Noop).unwrap();
+    }
+    fail::remove(apply_fp);
+    fail::remove(store_fp);
+    sleep_ms(300);
+    let region = pd_client.get_region(b"k1").unwrap();
+    assert_ne!(region.id, 1);
+    fail::remove(sender_fp);
 }
