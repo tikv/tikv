@@ -45,6 +45,7 @@ fail = "0.4"
 file_system = { path = "../file_system", default-features = false }
 fs2 = "0.4"
 futures = "0.3"
+futures-timer = "3.0"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"

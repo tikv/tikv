@@ -1428,7 +1428,8 @@ impl Applier {
                 self.handle_unsafe_destroy(ctx, region_id);
             }
             ApplyMsg::PendingSplit(pending_split) => {
-                self.pending_split.insert(pending_split.sequence, pending_split);
+                self.pending_split
+                    .insert(pending_split.sequence, pending_split);
             }
             ApplyMsg::PrepareChangeSet(cs) => {
                 self.handle_prepare_change_set(ctx, cs);

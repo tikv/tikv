@@ -9,10 +9,10 @@ use std::{
     pin::Pin,
     result,
     sync::{
-        atomic::{AtomicBool, AtomicI32, Ordering},
+        atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashSet};
@@ -20,9 +20,11 @@ use crossbeam::queue::ArrayQueue;
 use futures::{
     channel::oneshot,
     compat::Future01CompatExt,
+    ready,
     task::{Context, Poll, Waker},
     Future, Sink,
 };
+use futures_timer::Delay;
 use grpcio::{
     ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, RpcStatusCode,
     WriteFlags,
@@ -33,19 +35,42 @@ use kvproto::{
 };
 use rfstore::{errors::DiscardReason, router::RaftStoreRouter};
 use security::SecurityManager;
-use tikv::server::{self, metrics::*, Config, StoreAddrResolver};
-use tikv_util::{lru::LruCache, timer::GLOBAL_TIMER_HANDLE};
+use tikv::server::{self, load_statistics::ThreadLoadPool, metrics::*, Config, StoreAddrResolver};
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    lru::LruCache,
+    timer::GLOBAL_TIMER_HANDLE,
+};
 use yatp::{task::future::TaskCell, ThreadPool};
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
 const _ON_RESOLVE_FP: &str = "transport_snapshot_on_resolve";
 
+#[repr(u8)]
+enum ConnState {
+    Established = 0,
+    /// The connection is paused and may be resumed later.
+    Paused = 1,
+    /// The connection is closed and removed from the connection pool.
+    Disconnected = 2,
+}
+
+impl From<u8> for ConnState {
+    fn from(state: u8) -> ConnState {
+        match state {
+            0 => ConnState::Established,
+            1 => ConnState::Paused,
+            2 => ConnState::Disconnected,
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// A quick queue for sending raft messages.
 struct Queue {
     buf: ArrayQueue<RaftMessage>,
-    /// A flag indicates whether the queue can still accept messages.
-    connected: AtomicBool,
+    conn_state: AtomicU8,
     waker: Mutex<Option<Waker>>,
 }
 
@@ -54,7 +79,7 @@ impl Queue {
     fn with_capacity(cap: usize) -> Queue {
         Queue {
             buf: ArrayQueue::new(cap),
-            connected: AtomicBool::new(true),
+            conn_state: AtomicU8::new(ConnState::Established as u8),
             waker: Mutex::new(None),
         }
     }
@@ -66,25 +91,18 @@ impl Queue {
     ///
     /// True when the message is pushed into queue otherwise false.
     fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
-        // Another way is pop the old messages, but it makes things
-        // complicated.
-        if self.connected.load(Ordering::Relaxed) {
-            match self.buf.push(msg) {
-                Ok(()) => (),
-                Err(_) => return Err(DiscardReason::Full),
-            }
-        } else {
-            return Err(DiscardReason::Disconnected);
-        }
-        if self.connected.load(Ordering::SeqCst) {
-            Ok(())
-        } else {
-            Err(DiscardReason::Disconnected)
+        match self.conn_state.load(Ordering::SeqCst).into() {
+            ConnState::Established => match self.buf.push(msg) {
+                Ok(()) => Ok(()),
+                Err(_) => Err(DiscardReason::Full),
+            },
+            ConnState::Paused => Err(DiscardReason::Paused),
+            ConnState::Disconnected => Err(DiscardReason::Disconnected),
         }
     }
 
-    fn disconnect(&self) {
-        self.connected.store(false, Ordering::SeqCst);
+    fn set_conn_state(&self, s: ConnState) {
+        self.conn_state.store(s as u8, Ordering::SeqCst);
     }
 
     /// Wakes up consumer to retrive message.
@@ -142,6 +160,12 @@ trait Buffer {
         &mut self,
         sender: &mut ClientCStreamSender<Self::OutputMessage>,
     ) -> grpcio::Result<()>;
+
+    /// If the buffer is not full, suggest whether sender should wait
+    /// for next message.
+    fn wait_hint(&mut self) -> Option<Duration> {
+        None
+    }
 }
 
 /// A buffer for BatchRaftMessage.
@@ -149,17 +173,47 @@ struct BatchMessageBuffer {
     batch: BatchRaftMessage,
     overflowing: Option<RaftMessage>,
     size: usize,
-    cfg: Arc<Config>,
+    cfg: Config,
+    cfg_tracker: Tracker<Config>,
+    loads: Arc<ThreadLoadPool>,
 }
 
 impl BatchMessageBuffer {
-    fn new(cfg: Arc<Config>) -> BatchMessageBuffer {
+    fn new(
+        global_cfg_track: &Arc<VersionTrack<Config>>,
+        loads: Arc<ThreadLoadPool>,
+    ) -> BatchMessageBuffer {
+        let cfg_tracker = Arc::clone(global_cfg_track).tracker("raft-client-buffer".into());
+        let cfg = global_cfg_track.value().clone();
         BatchMessageBuffer {
             batch: BatchRaftMessage::default(),
             overflowing: None,
             size: 0,
             cfg,
+            cfg_tracker,
+            loads,
         }
+    }
+
+    #[inline]
+    fn message_size(msg: &RaftMessage) -> usize {
+        let mut msg_size = msg.start_key.len()
+            + msg.end_key.len()
+            + msg.get_message().context.len()
+            + msg.extra_ctx.len()
+            // index: 3, term: 2, data tag and size: 3, entry tag and size: 3
+            + 11 * msg.get_message().get_entries().len();
+        for entry in msg.get_message().get_entries() {
+            msg_size += entry.data.len();
+        }
+        msg_size
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.batch = BatchRaftMessage::default();
+        self.size = 0;
+        self.overflowing = None;
     }
 }
 
@@ -173,9 +227,10 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn push(&mut self, msg: RaftMessage) {
-        let mut msg_size = msg.start_key.len() + msg.end_key.len();
-        for entry in msg.get_message().get_entries() {
-            msg_size += entry.data.len();
+        let msg_size = Self::message_size(&msg);
+        // try refresh config before check
+        if let Some(new_cfg) = self.cfg_tracker.any_new() {
+            self.cfg = new_cfg.clone();
         }
         // To avoid building too large batch, we limit each batch's size. Since `msg_size`
         // is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
@@ -209,6 +264,20 @@ impl Buffer for BatchMessageBuffer {
             self.push(more);
         }
         res
+    }
+
+    #[inline]
+    fn wait_hint(&mut self) -> Option<Duration> {
+        let wait_dur = self.cfg.heavy_load_wait_duration();
+        if !wait_dur.is_zero() {
+            if self.loads.current_thread_in_heavy_load() {
+                Some(wait_dur)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -273,18 +342,16 @@ fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
 }
 
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
-struct RaftCall<R, M, B> {
+struct AsyncRaftSender<R, M, B> {
     sender: ClientCStreamSender<M>,
-    receiver: ClientCStreamReceiver<Done>,
     queue: Arc<Queue>,
     buffer: B,
     router: R,
-    lifetime: Option<oneshot::Sender<()>>,
-    store_id: u64,
     addr: String,
+    flush_timeout: Option<Delay>,
 }
 
-impl<R, M, B> RaftCall<R, M, B>
+impl<R, M, B> AsyncRaftSender<R, M, B>
 where
     R: RaftStoreRouter + 'static,
     B: Buffer<OutputMessage = M>,
@@ -298,9 +365,77 @@ where
             self.buffer.push(msg);
         }
     }
+}
 
-    fn clean_up(&mut self, sink_err: &Option<grpcio::Error>, recv_err: &Option<grpcio::Error>) {
-        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.addr);
+impl<R, M, B> Future for AsyncRaftSender<R, M, B>
+where
+    R: RaftStoreRouter + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+{
+    type Output = grpcio::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
+        let s = &mut *self;
+        loop {
+            s.fill_msg(ctx);
+            if !s.buffer.empty() {
+                // Then it's the first time visit this block since last flush.
+                if s.flush_timeout.is_none() {
+                    ready!(Pin::new(&mut s.sender).poll_ready(ctx))?;
+                }
+                // Only set up a timer if buffer is not full.
+                if !s.buffer.full() {
+                    if s.flush_timeout.is_none() {
+                        // Only set up a timer if necessary.
+                        if let Some(wait_time) = s.buffer.wait_hint() {
+                            s.flush_timeout = Some(Delay::new(wait_time));
+                        }
+                    }
+
+                    // It will be woken up again when the timer fires or new messages are enqueued.
+                    if let Some(timeout) = &mut s.flush_timeout {
+                        if Pin::new(timeout).poll(ctx).is_pending() {
+                            return Poll::Pending;
+                        } else {
+                            RAFT_MESSAGE_FLUSH_COUNTER.delay.inc_by(1);
+                        }
+                    } else {
+                        RAFT_MESSAGE_FLUSH_COUNTER.eof.inc_by(1);
+                    }
+                } else if s.flush_timeout.is_some() {
+                    RAFT_MESSAGE_FLUSH_COUNTER.full_after_delay.inc_by(1);
+                } else {
+                    RAFT_MESSAGE_FLUSH_COUNTER.full.inc_by(1);
+                }
+
+                // So either enough messages are batched up or don't need to wait or wait timeouts.
+                s.flush_timeout.take();
+                ready!(Poll::Ready(s.buffer.flush(&mut s.sender)))?;
+                continue;
+            }
+
+            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
+                return Poll::Ready(Err(e));
+            }
+            return Poll::Pending;
+        }
+    }
+}
+
+struct RaftCall<R, M, B> {
+    sender: AsyncRaftSender<R, M, B>,
+    receiver: ClientCStreamReceiver<Done>,
+    lifetime: Option<oneshot::Sender<()>>,
+    store_id: u64,
+}
+
+impl<R, M, B> RaftCall<R, M, B>
+where
+    R: RaftStoreRouter + Unpin + 'static,
+    B: Buffer<OutputMessage = M> + Unpin,
+{
+    fn clean_up(&mut self, sink_err: Option<grpcio::Error>, recv_err: Option<grpcio::Error>) {
+        error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
 
         if let Some(tx) = self.lifetime.take() {
             let should_fallback = [sink_err, recv_err]
@@ -312,80 +447,37 @@ where
                 return;
             }
         }
-        let router = &self.router;
-        router.broadcast_unreachable(self.store_id);
+        self.sender.router.broadcast_unreachable(self.store_id);
     }
-}
 
-impl<R, M, B> Future for RaftCall<R, M, B>
-where
-    R: RaftStoreRouter + Unpin + 'static,
-    B: Buffer<OutputMessage = M> + Unpin,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
-        let s = &mut *self;
-        loop {
-            s.fill_msg(ctx);
-            if !s.buffer.empty() {
-                let mut res = Pin::new(&mut s.sender).poll_ready(ctx);
-                if let Poll::Ready(Ok(())) = res {
-                    res = Poll::Ready(s.buffer.flush(&mut s.sender));
-                }
-                match res {
-                    Poll::Ready(Ok(())) => continue,
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => {
-                        let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                            Poll::Ready(Err(e)) => Some(e),
-                            _ => None,
-                        };
-                        s.clean_up(&Some(e), &re);
-                        return Poll::Ready(());
-                    }
-                }
-            }
-
-            if let Poll::Ready(Err(e)) = Pin::new(&mut s.sender).poll_flush(ctx) {
-                let re = match Pin::new(&mut s.receiver).poll(ctx) {
-                    Poll::Ready(Err(e)) => Some(e),
-                    _ => None,
-                };
-                s.clean_up(&Some(e), &re);
-                return Poll::Ready(());
-            }
-            match Pin::new(&mut s.receiver).poll(ctx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(_)) => {
-                    info!("connection close"; "store_id" => s.store_id, "addr" => %s.addr);
-                    return Poll::Ready(());
-                }
-                Poll::Ready(Err(e)) => {
-                    s.clean_up(&None, &Some(e));
-                    return Poll::Ready(());
-                }
-            }
+    async fn poll(&mut self) {
+        let res = futures::join!(&mut self.sender, &mut self.receiver);
+        if let (Ok(()), Ok(Done { .. })) = res {
+            info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
+            return;
         }
+        self.clean_up(res.0.err(), res.1.err());
     }
 }
 
 #[derive(Clone)]
 pub struct ConnectionBuilder<S, R> {
     env: Arc<Environment>,
-    cfg: Arc<Config>,
+    cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     resolver: S,
     router: R,
+    loads: Arc<ThreadLoadPool>,
 }
 
 impl<S, R> ConnectionBuilder<S, R> {
     pub fn new(
         env: Arc<Environment>,
-        cfg: Arc<Config>,
+        cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         resolver: S,
         router: R,
+        loads: Arc<ThreadLoadPool>,
     ) -> ConnectionBuilder<S, R> {
         ConnectionBuilder {
             env,
@@ -393,6 +485,7 @@ impl<S, R> ConnectionBuilder<S, R> {
             security_mgr,
             resolver,
             router,
+            loads,
         }
     }
 }
@@ -426,6 +519,9 @@ where
                             let sid: u64 = sid.parse().unwrap();
                             if sid == store_id {
                                 mem::swap(&mut addr, &mut Err(box_err!("injected failure")));
+                                // Sleep some time to avoid race between enqueuing message and
+                                // resolving address.
+                                std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         })
                     };
@@ -459,12 +555,12 @@ where
     fn connect(&self, addr: &str) -> TikvClient {
         info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
+        let cfg = self.builder.cfg.value();
         let cb = ChannelBuilder::new(self.builder.env.clone())
-            .stream_initial_window_size(self.builder.cfg.grpc_stream_initial_window_size.0 as i32)
-            .max_send_message_len(self.builder.cfg.max_grpc_send_msg_len)
-            .keepalive_time(self.builder.cfg.grpc_keepalive_time.0)
-            .keepalive_timeout(self.builder.cfg.grpc_keepalive_timeout.0)
-            .default_compression_algorithm(self.builder.cfg.grpc_compression_algorithm())
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
+            .keepalive_time(cfg.grpc_keepalive_time.0)
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
+            .default_compression_algorithm(cfg.grpc_compression_algorithm())
             // hack: so it's different args, grpc will always create a new connection.
             .raw_cfg_int(
                 CString::new("random id").unwrap(),
@@ -477,44 +573,54 @@ where
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (batch_sink, batch_stream) = client.batch_raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: batch_sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: batch_sink,
+                queue: self.queue.clone(),
+                buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
+                router: self.builder.router.clone(),
+                addr,
+                flush_timeout: None,
+            },
             receiver: batch_stream,
-            queue: self.queue.clone(),
-            buffer: BatchMessageBuffer::new(self.builder.cfg.clone()),
-            router: self.builder.router.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<()> {
         let (sink, stream) = client.raft().unwrap();
         let (tx, rx) = oneshot::channel();
-        let call = RaftCall {
-            sender: sink,
+        let mut call = RaftCall {
+            sender: AsyncRaftSender {
+                sender: sink,
+                queue: self.queue.clone(),
+                buffer: MessageBuffer::new(),
+                router: self.builder.router.clone(),
+                addr,
+                flush_timeout: None,
+            },
             receiver: stream,
-            queue: self.queue.clone(),
-            buffer: MessageBuffer::new(),
-            router: self.builder.router.clone(),
             lifetime: Some(tx),
             store_id: self.store_id,
-            addr,
         };
-        client.spawn(call);
+        client.spawn(async move {
+            call.poll().await;
+        });
         rx
     }
 }
 
-async fn maybe_backoff(cfg: &Config, last_wake_time: &mut Instant, retry_times: &mut u32) {
+async fn maybe_backoff(backoff: Duration, last_wake_time: &mut Instant, retry_times: &mut u32) {
     if *retry_times == 0 {
         return;
     }
-    let timeout = cfg.raft_client_backoff_step.0 * cmp::min(*retry_times, 5);
+    let timeout = backoff * cmp::min(*retry_times, 5);
     let now = Instant::now();
     if *last_wake_time + timeout < now {
         // We have spent long enough time in last retry, no need to backoff again.
@@ -548,8 +654,9 @@ async fn start<S, R>(
 {
     let mut last_wake_time = Instant::now();
     let mut retry_times = 0;
+    let backoff_duration = back_end.builder.cfg.value().raft_client_backoff_step.0;
     loop {
-        maybe_backoff(&back_end.builder.cfg, &mut last_wake_time, &mut retry_times).await;
+        maybe_backoff(backoff_duration, &mut last_wake_time, &mut retry_times).await;
         retry_times += 1;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -566,7 +673,7 @@ async fn start<S, R>(
                 if format!("{}", e).contains("has been removed") {
                     let mut pool = pool.lock().unwrap();
                     if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
-                        s.disconnect();
+                        s.set_conn_state(ConnState::Disconnected);
                     }
                     pool.tombstone_stores.insert(back_end.store_id);
                     return;
@@ -616,6 +723,24 @@ async fn start<S, R>(
 struct ConnectionPool {
     connections: HashMap<(u64, usize), Arc<Queue>>,
     tombstone_stores: HashSet<u64>,
+    store_allowlist: Vec<u64>,
+}
+
+impl ConnectionPool {
+    fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        self.store_allowlist = stores;
+        for (&(store_id, _), q) in self.connections.iter() {
+            let mut state = ConnState::Established;
+            if self.need_pause(store_id) {
+                state = ConnState::Paused;
+            }
+            q.set_conn_state(state);
+        }
+    }
+
+    fn need_pause(&self, store_id: u64) -> bool {
+        !self.store_allowlist.is_empty() && !self.store_allowlist.contains(&store_id)
+    }
 }
 
 /// Queue in cache.
@@ -686,13 +811,17 @@ where
                 self.cache.resize(pool_len);
                 return false;
             }
+            let need_pause = pool.need_pause(store_id);
             let conn = pool
                 .connections
                 .entry((store_id, conn_id))
                 .or_insert_with(|| {
                     let queue = Arc::new(Queue::with_capacity(
-                        self.builder.cfg.raft_client_queue_size,
+                        self.builder.cfg.value().raft_client_queue_size,
                     ));
+                    if need_pause {
+                        queue.set_conn_state(ConnState::Paused);
+                    }
                     let back_end = StreamBackEnd {
                         store_id,
                         queue: queue.clone(),
@@ -724,19 +853,40 @@ where
     /// are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
         let store_id = msg.get_to_peer().store_id;
-        let conn_id = if self.builder.cfg.grpc_raft_conn_num == 1 {
+        let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
+        let conn_id = if grpc_raft_conn_num == 1 {
             0
         } else {
             if self.last_hash.0 == 0 || msg.region_id != self.last_hash.0 {
                 self.last_hash = (
                     msg.region_id,
-                    seahash::hash(&msg.region_id.to_le_bytes())
-                        % self.builder.cfg.grpc_raft_conn_num as u64,
+                    seahash::hash(&msg.region_id.to_ne_bytes()) % grpc_raft_conn_num,
                 );
             };
             self.last_hash.1 as usize
         };
+
         #[allow(unused_mut)]
+        let mut transport_on_send_store_fp = || {
+            fail_point!(
+                "transport_on_send_snapshot",
+                msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgSnapshot,
+                |sid| if let Some(sid) = sid {
+                    let sid: u64 = sid.parse().unwrap();
+                    if sid == store_id {
+                        // Forbid building new connections.
+                        fail::cfg(_ON_RESOLVE_FP, &format!("1*return({})", sid)).unwrap();
+                        self.cache.remove(&(store_id, conn_id));
+                        self.pool
+                            .lock()
+                            .unwrap()
+                            .connections
+                            .remove(&(store_id, conn_id));
+                    }
+                }
+            )
+        };
+        transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
                 match s.queue.push(msg) {
@@ -757,6 +907,7 @@ where
                         return Err(DiscardReason::Full);
                     }
                     Err(DiscardReason::Disconnected) => break,
+                    Err(DiscardReason::Paused) => return Err(DiscardReason::Paused),
                     Err(DiscardReason::Filtered) => return Err(DiscardReason::Filtered),
                 }
             }
@@ -797,16 +948,19 @@ where
         if self.need_flush.is_empty() {
             return;
         }
+        let mut counter = 0;
         for id in &self.need_flush {
             if let Some(s) = self.cache.get_mut(id) {
                 if s.dirty {
                     s.dirty = false;
+                    counter += 1;
                     s.queue.notify();
                 }
                 continue;
             }
             let l = self.pool.lock().unwrap();
             if let Some(q) = l.connections.get(id) {
+                counter += 1;
                 q.notify();
             }
         }
@@ -814,6 +968,12 @@ where
         if self.need_flush.capacity() > 2048 {
             self.need_flush.shrink_to(512);
         }
+        RAFT_MESSAGE_FLUSH_COUNTER.wake.inc_by(counter);
+    }
+
+    pub fn set_store_allowlist(&mut self, stores: Vec<u64>) {
+        let mut p = self.pool.lock().unwrap();
+        p.set_store_allowlist(stores);
     }
 }
 

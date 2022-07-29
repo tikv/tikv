@@ -214,10 +214,11 @@ impl<T: RaftStoreRouter + Unpin, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            Arc::new(cfg.value().clone()),
+            cfg.clone(),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
+            grpc_thread_load.clone(),
         );
         let raft_client = RaftClient::new(conn_builder);
 
