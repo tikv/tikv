@@ -417,6 +417,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    // (index, term) is for the applying entry.
     pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest, index: u64, term: u64) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.has_admin_request() {
