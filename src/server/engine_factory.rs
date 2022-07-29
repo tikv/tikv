@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use collections::HashMap;
 use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
@@ -18,6 +19,7 @@ use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
+use super::engine_factory_v2::KvEngineFactoryV2;
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
@@ -87,6 +89,18 @@ impl KvEngineFactoryBuilder {
         KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
+        }
+    }
+
+    pub fn buildv2(self) -> KvEngineFactoryV2 {
+        let factory = KvEngineFactory {
+            inner: Arc::new(self.inner),
+            compact_event_sender: self.compact_event_sender.clone(),
+        };
+        KvEngineFactoryV2 {
+            inner: factory,
+            registry: Arc::new(Mutex::new(HashMap::default())),
+            registry_latest: Arc::new(Mutex::new(HashMap::default())),
         }
     }
 }
@@ -226,6 +240,21 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
+        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
+            return Some(engine);
+        }
+        None
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
+    }
+
+    fn open_tablet_cache_latest(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
+    }
+
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
         TabletFactory::create_tablet(self, 0, 0)
     }
@@ -233,9 +262,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
+
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
