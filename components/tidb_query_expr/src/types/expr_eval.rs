@@ -1246,14 +1246,15 @@ mod tests {
 
         profiler::start("./bench_eval_plus_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1283,14 +1284,15 @@ mod tests {
 
         profiler::start("./eval_compare_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1320,14 +1322,15 @@ mod tests {
 
         profiler::start("./bench_eval_compare_5_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(5),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(5),
+                )
+                .unwrap();
         });
         profiler::stop();
     }

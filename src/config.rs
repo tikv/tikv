@@ -1920,7 +1920,7 @@ mod unified_read_pool_tests {
             stack_size: ReadableSize::mb(2),
             max_tasks_per_worker: 2000,
         };
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         let cfg = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: cmp::max(
@@ -1929,7 +1929,7 @@ mod unified_read_pool_tests {
             ),
             ..cfg
         };
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
@@ -2103,7 +2103,7 @@ macro_rules! readpool_config {
             #[test]
             fn test_validate() {
                 let cfg = $struct_name::default();
-                assert!(cfg.validate().is_ok());
+                cfg.validate().unwrap();
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.high_concurrency = 0;
@@ -2127,7 +2127,7 @@ macro_rules! readpool_config {
                 invalid_cfg.max_tasks_per_worker_high = 1;
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_high = 100;
-                assert!(cfg.validate().is_ok());
+                cfg.validate().unwrap();
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_normal = 0;
@@ -2135,7 +2135,7 @@ macro_rules! readpool_config {
                 invalid_cfg.max_tasks_per_worker_normal = 1;
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_normal = 100;
-                assert!(cfg.validate().is_ok());
+                cfg.validate().unwrap();
 
                 let mut invalid_cfg = cfg.clone();
                 invalid_cfg.max_tasks_per_worker_low = 0;
@@ -2143,12 +2143,12 @@ macro_rules! readpool_config {
                 invalid_cfg.max_tasks_per_worker_low = 1;
                 assert!(invalid_cfg.validate().is_err());
                 invalid_cfg.max_tasks_per_worker_low = 100;
-                assert!(cfg.validate().is_ok());
+                cfg.validate().unwrap();
 
                 let mut invalid_but_unified = cfg.clone();
                 invalid_but_unified.use_unified_pool = Some(true);
                 invalid_but_unified.low_concurrency = 0;
-                assert!(invalid_but_unified.validate().is_ok());
+                invalid_but_unified.validate().unwrap();
             }
         }
     };
@@ -2263,23 +2263,23 @@ mod readpool_tests {
             use_unified_pool: Some(false),
             ..Default::default()
         };
-        assert!(storage.validate().is_ok());
+        storage.validate().unwrap();
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
         };
-        assert!(coprocessor.validate().is_ok());
+        coprocessor.validate().unwrap();
         let cfg = ReadPoolConfig {
             unified,
             storage,
             coprocessor,
         };
         assert!(!cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         // Storage and coprocessor config must be valid when yatp is not used.
         let unified = UnifiedReadPoolConfig::default();
-        assert!(unified.validate().is_ok());
+        unified.validate().unwrap();
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(false),
             high_concurrency: 0,
@@ -2312,9 +2312,9 @@ mod readpool_tests {
             use_unified_pool: Some(true),
             ..Default::default()
         };
-        assert!(storage.validate().is_ok());
+        storage.validate().unwrap();
         let coprocessor = CoprReadPoolConfig::default();
-        assert!(coprocessor.validate().is_ok());
+        coprocessor.validate().unwrap();
         let mut cfg = ReadPoolConfig {
             unified,
             storage,
@@ -2368,7 +2368,7 @@ mod readpool_tests {
         assert!(cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_err());
         cfg.storage.low_concurrency = 1;
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(true),
@@ -2389,7 +2389,7 @@ mod readpool_tests {
         assert!(cfg.is_unified_pool_enabled());
         assert!(cfg.validate().is_err());
         cfg.coprocessor.low_concurrency = 1;
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
     }
 }
 
@@ -4220,13 +4220,13 @@ mod tests {
         let first_modified = last_cfg_metadata.modified().unwrap();
 
         // not write to file when config is the equivalent of last one.
-        assert!(persist_config(&cfg).is_ok());
+        persist_config(&cfg).unwrap();
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
 
         // write to file when config is the inequivalent of last one.
         cfg.log_level = slog::Level::Warning.into();
-        assert!(persist_config(&cfg).is_ok());
+        persist_config(&cfg).unwrap();
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
     }
@@ -4305,7 +4305,7 @@ mod tests {
 
         let mut tikv_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = path.as_path().to_str().unwrap().to_owned();
-        assert!(persist_config(&tikv_cfg).is_ok());
+        persist_config(&tikv_cfg).unwrap();
     }
 
     #[test]
@@ -5199,11 +5199,11 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TiKvConfig::default();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
         cfg.raft_store.region_split_check_diff =
             Some(ReadableSize(cfg.raft_store.region_split_check_diff().0 + 1));
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(
             cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
@@ -5216,7 +5216,7 @@ mod tests {
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = None;
         cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
 
         // Test memory_usage_limit will fallback to system memory capacity with huge
@@ -5224,7 +5224,7 @@ mod tests {
         cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
     }
 
@@ -5243,7 +5243,7 @@ mod tests {
 
         {
             let mut cfg = TiKvConfig::default();
-            assert!(cfg.validate().is_ok());
+            cfg.validate().unwrap();
         }
 
         {
@@ -5285,7 +5285,7 @@ mod tests {
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            assert!(cfg.validate().is_ok());
+            cfg.validate().unwrap();
         }
     }
 

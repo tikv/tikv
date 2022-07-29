@@ -1311,7 +1311,7 @@ fn test_resolve_lock_deadline() {
             }),
         )
         .unwrap();
-    assert!(rx.recv().unwrap().is_ok());
+    rx.recv().unwrap().unwrap();
 
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.

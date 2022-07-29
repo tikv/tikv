@@ -1933,25 +1933,20 @@ mod tests {
     #[test]
     fn test_check_data_dir_empty() {
         // test invalid data_path
-        let ret = check_data_dir_empty("/sys/invalid", "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty("/sys/invalid", "txt").unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
             .tempdir()
             .unwrap()
             .into_path();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "xt").unwrap();
     }
 
     #[test]
