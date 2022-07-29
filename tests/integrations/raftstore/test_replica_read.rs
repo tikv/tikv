@@ -317,8 +317,8 @@ fn test_read_index_out_of_order() {
 
     // After peer 2 is removed, we can get 2 read responses.
     let resp2 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
-    assert!(resp2.recv_timeout(Duration::from_secs(1)).is_ok());
-    assert!(resp1.recv_timeout(Duration::from_secs(1)).is_ok());
+    resp2.recv_timeout(Duration::from_secs(1)).unwrap();
+    resp1.recv_timeout(Duration::from_secs(1)).unwrap();
 }
 
 #[test]
