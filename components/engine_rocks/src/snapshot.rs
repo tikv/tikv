@@ -9,7 +9,7 @@ use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, 
 use rocksdb::{rocksdb_options::UnsafeSnap, DBIterator, DB};
 
 use crate::{
-    db_vector::RocksDBVector, options::RocksReadOptions, r2e, util::get_cf_handle,
+    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
     RocksEngineIterator,
 };
 
@@ -71,16 +71,16 @@ impl Iterable for RocksSnapshot {
 }
 
 impl Peekable for RocksSnapshot {
-    type DBVector = RocksDBVector;
+    type DbVector = RocksDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         let v = self.db.get_opt(key, &opt).map_err(r2e)?;
-        Ok(v.map(RocksDBVector::from_raw))
+        Ok(v.map(RocksDbVector::from_raw))
     }
 
     fn get_value_cf_opt(
@@ -88,7 +88,7 @@ impl Peekable for RocksSnapshot {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<RocksDBVector>> {
+    ) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -96,6 +96,6 @@ impl Peekable for RocksSnapshot {
         }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         let v = self.db.get_cf_opt(handle, key, &opt).map_err(r2e)?;
-        Ok(v.map(RocksDBVector::from_raw))
+        Ok(v.map(RocksDbVector::from_raw))
     }
 }

@@ -18,32 +18,34 @@ use crate::{interface::*, util::*};
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
     ///
-    /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`, `order_is_desc`
-    /// and `src` because it relies on data in those fields and we want this field to be dropped
-    /// first.
+    /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
+    /// `order_is_desc` and `src` because it relies on data in those fields
+    /// and we want this field to be dropped first.
     heap: BinaryHeap<HeapItemUnsafe>,
 
-    /// A collection of all evaluated columns. This is to avoid repeated allocations in
-    /// each `next_batch()`.
+    /// A collection of all evaluated columns. This is to avoid repeated
+    /// allocations in each `next_batch()`.
     ///
-    /// DO NOT EVER try to read the content of the elements directly, since it is highly unsafe.
-    /// The lifetime of elements is not really 'static. Certain elements are valid only if both
-    /// of the following conditions are satisfied:
+    /// DO NOT EVER try to read the content of the elements directly, since it
+    /// is highly unsafe. The lifetime of elements is not really 'static.
+    /// Certain elements are valid only if both of the following conditions
+    /// are satisfied:
     ///
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
-    /// 2. The referenced `LazyBatchColumnVec` of the element must be valid, which only happens
-    ///    when at least one of the row is in the `heap`. Note that rows may be swapped out from
-    ///    `heap` at any time.
+    /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
+    /// which only happens    when at least one of the row is in the `heap`.
+    /// Note that rows may be swapped out from    `heap` at any time.
     ///
-    /// This field is placed before `order_exprs` and `src` because it relies on data in
-    /// those fields and we want this field to be dropped first.
+    /// This field is placed before `order_exprs` and `src` because it relies on
+    /// data in those fields and we want this field to be dropped first.
     #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
     order_exprs: Box<[RpnExpression]>,
 
-    /// This field stores the field type of the results evaluated by the exprs in `order_exprs`.
+    /// This field stores the field type of the results evaluated by the exprs
+    /// in `order_exprs`.
     order_exprs_field_type: Box<[FieldType]>,
 
     /// Whether or not it is descending order for each order by column.
@@ -56,13 +58,14 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     is_ended: bool,
 }
 
-/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
-/// `BatchTopNExecutor` doesn't leak the pointers to other threads. Therefore, with those `NonNull`
-/// pointers, BatchTopNExecutor still remains `Send`.
+/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the
+/// struct and `BatchTopNExecutor` doesn't leak the pointers to other threads.
+/// Therefore, with those `NonNull` pointers, BatchTopNExecutor still remains
+/// `Send`.
 unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -208,8 +211,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             &logical_rows,
         )?;
 
-        // Pin data behind an Arc, so that they won't be dropped as long as this `pinned_data`
-        // is kept somewhere.
+        // Pin data behind an Arc, so that they won't be dropped as long as this
+        // `pinned_data` is kept somewhere.
         let pinned_source_data = Arc::new(HeapItemSourceData {
             physical_columns,
             logical_rows,
@@ -404,8 +407,8 @@ struct HeapItemSourceData {
 
 /// The item in the heap of `BatchTopNExecutor`.
 ///
-/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
-/// not dropped). Thus it is called unsafe.
+/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is
+/// valid (i.e. not dropped). Thus it is called unsafe.
 struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
@@ -424,7 +427,8 @@ struct HeapItemUnsafe {
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
     eval_columns_offset: usize,
 
-    /// Which logical row in the evaluated columns this heap item is representing.
+    /// Which logical row in the evaluated columns this heap item is
+    /// representing.
     logical_row_index: usize,
 }
 
@@ -460,8 +464,9 @@ impl HeapItemUnsafe {
             let lhs = lhs_node.get_logical_scalar_ref(self.logical_row_index);
             let rhs = rhs_node.get_logical_scalar_ref(other.logical_row_index);
 
-            // There is panic inside, but will never panic, since the data type of corresponding
-            // column should be consistent for each `HeapItemUnsafe`.
+            // There is panic inside, but will never panic, since the data type of
+            // corresponding column should be consistent for each
+            // `HeapItemUnsafe`.
             let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
 
             if ord == Ordering::Equal {
@@ -478,8 +483,8 @@ impl HeapItemUnsafe {
     }
 }
 
-/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator fails to parse.
-/// So make sure that it is valid before putting it into a heap.
+/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator
+/// fails to parse. So make sure that it is valid before putting it into a heap.
 impl Ord for HeapItemUnsafe {
     fn cmp(&self, other: &Self) -> Ordering {
         self.cmp_sort_key(other).unwrap()
@@ -884,6 +889,7 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
     /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])     Col2(Bytes[Binary])
     /// == Call #1 ==
@@ -897,6 +903,7 @@ mod tests {
     /// "Aa"                                NULL                        "aaa"
     /// "aaa"                               "Aa"                        "áa"
     /// (drained)
+    /// ```
     fn make_bytes_src_executor() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -1139,6 +1146,7 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
     /// Col0 (LongLong(Unsigned))      Col1(LongLong[Signed])       Col2(Long[Unsigned])
     /// == Call #1 ==
@@ -1152,6 +1160,7 @@ mod tests {
     /// 300                            300                          300
     /// 9,223,372,036,854,775,808      -9,223,372,036,854,775,808   2,147,483,648
     /// (drained)                      (drained)                    (drained)
+    /// ```
     fn make_src_executor_unsigned() -> MockExecutor {
         MockExecutor::new(
             vec![

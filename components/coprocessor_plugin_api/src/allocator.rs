@@ -9,8 +9,8 @@ type DeallocFn = unsafe fn(*mut u8, Layout);
 
 /// Used to initialize the plugin's allocator.
 ///
-/// A `HostAllocatorPtr` contains the relevant pointers to initialize the allocator of
-/// to plugin. It will be passed from TiKV to the plugin.
+/// A `HostAllocatorPtr` contains the relevant pointers to initialize the
+/// allocator of to plugin. It will be passed from TiKV to the plugin.
 #[repr(C)]
 pub struct HostAllocatorPtr {
     pub alloc_fn: AllocFn,
@@ -26,8 +26,9 @@ pub struct HostAllocator {
 impl HostAllocator {
     /// Creates a new [`HostAllocator`].
     ///
-    /// The internal function pointers are initially `None`, so any attempt to allocate memory
-    /// before a call to [`set_allocator()`] will result in a panic.
+    /// The internal function pointers are initially `None`, so any attempt to
+    /// allocate memory before a call to [`set_allocator()`] will result in
+    /// a panic.
     pub const fn new() -> Self {
         HostAllocator {
             alloc_fn: Atomic::new(None),
@@ -35,9 +36,10 @@ impl HostAllocator {
         }
     }
 
-    /// Updates the function pointers of the [`HostAllocator`] to the given [`HostAllocatorPtr`].
-    /// This function needs to be called before _any_ allocation with this allocator is performed,
-    /// because otherwise the [`HostAllocator`] is in an invalid state.
+    /// Updates the function pointers of the [`HostAllocator`] to the given
+    /// [`HostAllocatorPtr`]. This function needs to be called before _any_
+    /// allocation with this allocator is performed, because otherwise the
+    /// [`HostAllocator`] is in an invalid state.
     pub fn set_allocator(&self, allocator: HostAllocatorPtr) {
         self.alloc_fn
             .store(Some(allocator.alloc_fn), Ordering::SeqCst);

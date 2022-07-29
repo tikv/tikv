@@ -45,7 +45,8 @@ mod tests {
             (Collation::GbkChineseCi, 6),
         ];
         let cases = vec![
-            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi, Latin1, GBKBin, GbkChineseCi])
+            // (sa, sb, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi,
+            // Latin1, GBKBin, GbkChineseCi])
             (
                 "a".as_bytes(),
                 "a".as_bytes(),
@@ -232,7 +233,8 @@ mod tests {
             (Collation::GbkChineseCi, 6),
         ];
         let cases = vec![
-            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi, Latin1, GBKBin, GbkChineseCi])
+            // (str, [Utf8Mb4Bin, Utf8Mb4BinNoPadding, Utf8Mb4GeneralCi, Utf8Mb4UnicodeCi, Latin1,
+            // GBKBin, GbkChineseCi])
             (
                 "a",
                 [

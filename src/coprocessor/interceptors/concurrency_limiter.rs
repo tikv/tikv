@@ -15,8 +15,8 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::coprocessor::metrics::*;
 
-/// Limits the concurrency of heavy tasks by limiting the time spent on executing `fut`
-/// before forcing to acquire a semaphore permit.
+/// Limits the concurrency of heavy tasks by limiting the time spent on
+/// executing `fut` before forcing to acquire a semaphore permit.
 ///
 /// The future `fut` can always run for at least `time_limit_without_permit`,
 /// but it needs to acquire a permit from the semaphore before it can continue.
@@ -159,8 +159,8 @@ mod tests {
             .is_ok()
         );
 
-        // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter than t1,
-        // it starts with t1
+        // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter
+        // than t1, it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
         let mut t1 =

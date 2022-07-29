@@ -4,7 +4,8 @@ use bstr::{ByteSlice, B};
 
 use super::*;
 
-/// Collator for latin1_bin collation with padding behavior (trims right spaces).
+/// Collator for latin1_bin collation with padding behavior (trims right
+/// spaces).
 #[derive(Debug)]
 pub struct CollatorLatin1Bin;
 

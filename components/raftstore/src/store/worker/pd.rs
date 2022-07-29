@@ -738,11 +738,12 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-// Slow score is a value that represents the speed of a store and ranges in [1, 100].
-// It is maintained in the AIMD way.
-// If there are some inspecting requests timeout during a round, by default the score
-// will be increased at most 1x when above 10% inspecting requests timeout.
-// If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
+// Slow score is a value that represents the speed of a store and ranges in [1,
+// 100]. It is maintained in the AIMD way.
+// If there are some inspecting requests timeout during a round, by default the
+// score will be increased at most 1x when above 10% inspecting requests
+// timeout. If there is not any timeout inspecting requests, the score will go
+// back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
     last_record_time: Instant,
@@ -1086,9 +1087,10 @@ where
                         Default::default(),
                     );
                 }
-                // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
-                // In this situation, PD version check would refuse `ask_batch_split`.
-                // But if update time is long, it may cause large Regions, so call `ask_split` instead.
+                // When rolling update, there might be some old version tikvs that don't support
+                // batch split in cluster. In this situation, PD version check would refuse
+                // `ask_batch_split`. But if update time is long, it may cause large Regions, so
+                // call `ask_split` instead.
                 Err(Error::Incompatible) => {
                     let (region_id, peer_id) = (region.id, peer.id);
                     info!(
@@ -1237,7 +1239,8 @@ where
         stats.set_used_size(used_size);
 
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available here.
+        // We only care about rocksdb SST file size, so we should check disk available
+        // here.
         available = cmp::min(available, disk_stats.available_space());
 
         if available == 0 {
@@ -2074,8 +2077,8 @@ where
         self.slow_score.last_tick_finished = false;
 
         if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
-            // `last_update_time` is refreshed every round. If no update happens in a whole round,
-            // we set the status to unknown.
+            // `last_update_time` is refreshed every round. If no update happens in a whole
+            // round, we set the status to unknown.
             if self.curr_health_status == ServingStatus::Serving
                 && self.slow_score.last_record_time < self.slow_score.last_update_time
             {

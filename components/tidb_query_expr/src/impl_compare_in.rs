@@ -161,8 +161,8 @@ impl InByCompare for Int {}
 impl InByCompare for Real {}
 impl InByCompare for Decimal {}
 impl InByCompare for Duration {}
-// DateTime requires TZInfo in context, and we cannot acquire it during metadata_mapper.
-// TODO: implement InByHash for DateTime.
+// DateTime requires TZInfo in context, and we cannot acquire it during
+// metadata_mapper. TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
 
 #[derive(Debug)]

@@ -2,14 +2,17 @@
 
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
-//! 1. The scale of High-Available is specified by config item `causal-ts.available-interval`.
-//! 2. Count usage of TSO on every renew interval.
-//! 3. Calculate `cache_multiplier` by `causal-ts.available-interval / causal-ts.renew-interval`.
-//! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should be cached.
-//! 5. And `tso_usage x cache_multiplier - tso_remain` is the expected number of TSO to be requested from TSO service (if it's not a flush).
+//! 1. The scale of High-Available is specified by config item
+//! `causal-ts.available-interval`. 2. Count usage of TSO on every renew
+//! interval. 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
+//! causal-ts.renew-interval`. 4. Then `tso_usage x cache_multiplier` is the
+//! expected number of TSO should be cached. 5. And `tso_usage x
+//! cache_multiplier - tso_remain` is the expected number of TSO to be requested
+//! from TSO service (if it's not a flush).
 //!
 //! Others:
-//! * `cache_multiplier` is also used as capacity of TSO batch list, as we append an item to the list on every renew.
+//! * `cache_multiplier` is also used as capacity of TSO batch list, as we
+//!   append an item to the list on every renew.
 
 use std::{
     collections::{btree_map, BTreeMap},
@@ -46,16 +49,18 @@ use crate::{
 pub(crate) const DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS: u64 = 100;
 // Minimal batch size of TSO requests. This is an empirical value.
 pub(crate) const DEFAULT_TSO_BATCH_MIN_SIZE: u32 = 100;
-// Maximum batch size of TSO requests. As PD provides 262144 TSO per 50ms, conservatively set to 1/16
-// of 262144. Exceed this space will cause PD to sleep for 50ms, waiting for physical update interval.
-// The 50ms limitation can not be broken through now (see `tso-update-physical-interval`).
+// Maximum batch size of TSO requests. As PD provides 262144 TSO per 50ms,
+// conservatively set to 1/16 of 262144. Exceed this space will cause PD to
+// sleep for 50ms, waiting for physical update interval. The 50ms limitation can
+// not be broken through now (see `tso-update-physical-interval`).
 pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
 // Maximum available interval of TSO cache.
-// It means the duration that TSO we cache would be available despite failure of PD. The longer of
-// the value can provide better "High-Availability" against PD failure, but more overhead of
-// `TsoBatchList` & pressure to TSO service.
+// It means the duration that TSO we cache would be available despite failure of
+// PD. The longer of the value can provide better "High-Availability" against PD
+// failure, but more overhead of `TsoBatchList` & pressure to TSO service.
 pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
-// Just a limitation for safty, in case user specify a too big `available_interval`.
+// Just a limitation for safty, in case user specify a too big
+// `available_interval`.
 const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
 const TSO_BATCH_RENEW_ON_INITIALIZE: &str = "init";
@@ -127,30 +132,33 @@ impl TsoBatch {
 /// `TsoBatchList` is a ordered list of `TsoBatch`. It aims to:
 /// 1. Cache more number of TSO to improve high availability. See issue #12794.
 ///    `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
-/// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in the scenario of leader transfer).
-///    Other regions without the requirement can still use older TSO cache.
+/// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
+/// the scenario of leader transfer).    Other regions without the requirement
+/// can still use older TSO cache.
 #[derive(Default)]
 struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
 
     /// Number of remaining (available) TSO.
-    /// Using signed integer for avoiding a wrap around huge value as it's not precisely counted.
+    /// Using signed integer for avoiding a wrap around huge value as it's not
+    /// precisely counted.
     tso_remain: AtomicI32,
 
     /// Statistics of TSO usage.
     tso_usage: AtomicU32,
 
-    /// Length of batch list. It is used to limit size for efficiency, and keep batches fresh.
+    /// Length of batch list. It is used to limit size for efficiency, and keep
+    /// batches fresh.
     capacity: u32,
 }
 
 // Inner data structure of batch list.
 // The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
-// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch after the it is removed,
-//    which would violate the causality requirement. The `RwLock<BTreeMap>` avoid this scenario
-//    by lock synchronization.
-// 2. It is a scenario with much more reads than writes. The `RwLock` would be no less efficient
-//    than lock free implementation.
+// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
+// after the it is removed,    which would violate the causality requirement.
+// The `RwLock<BTreeMap>` avoid this scenario    by lock synchronization.
+// 2. It is a scenario with much more reads than writes. The `RwLock` would be
+// no less efficient    than lock free implementation.
 type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
 
 enum TsoBatchListIter<'a> {
@@ -200,9 +208,10 @@ impl TsoBatchList {
     }
 
     /// Pop timestamp.
-    /// When `after_ts.is_some()`, it will pop timestamp larger that `after_ts`. It is used for
-    /// the scenario that some regions have causality requirement (e.g. after transfer, the next
-    /// timestamp of new leader should be larger than the store where it is transferred from).
+    /// When `after_ts.is_some()`, it will pop timestamp larger that `after_ts`.
+    /// It is used for the scenario that some regions have causality
+    /// requirement (e.g. after transfer, the next timestamp of new leader
+    /// should be larger than the store where it is transferred from).
     /// `after_ts` is included.
     pub fn pop(&self, after_ts: Option<TimeStamp>) -> Option<TimeStamp> {
         let inner = self.inner.read();
@@ -243,7 +252,8 @@ impl TsoBatchList {
         let key = new_batch.original_start().into_inner();
         {
             // Hold the write lock until new batch is inserted.
-            // Otherwise a `pop()` would acquire the lock, meet no TSO available, and invoke renew request.
+            // Otherwise a `pop()` would acquire the lock, meet no TSO available, and invoke
+            // renew request.
             let mut inner = self.inner.write();
             if need_flush {
                 self.flush_internal(&mut inner);
@@ -277,7 +287,8 @@ impl TsoBatchList {
     }
 }
 
-/// MAX_RENEW_BATCH_SIZE is the batch size of TSO renew. It is an empirical value.
+/// MAX_RENEW_BATCH_SIZE is the batch size of TSO renew. It is an empirical
+/// value.
 const MAX_RENEW_BATCH_SIZE: usize = 64;
 
 type RenewError = Arc<dyn error::Error + Send + Sync>;
@@ -422,10 +433,11 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
                 debug!("BatchTsoProvider::renew_tso_batch";
                     "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);
 
-                // Should only be invoked after successful renew. Otherwise the TSO usage will be lost,
-                // and batch size requirement will be less than expected.
-                // Note that invoked here is not precise. There would be `get_ts()` before here
-                // after above `tso_batch_list.push()`, and make `tso_usage` a little bigger.
+                // Should only be invoked after successful renew. Otherwise the TSO usage will
+                // be lost, and batch size requirement will be less than
+                // expected. Note that invoked here is not precise. There would
+                // be `get_ts()` before here after above
+                // `tso_batch_list.push()`, and make `tso_usage` a little bigger.
                 // This error is acceptable.
                 tso_batch_list.take_and_report_usage();
 
@@ -492,9 +504,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
     ) -> u32 {
         // The expected number of TSO is `cache_multiplier` times on latest usage.
         // Note:
-        //   There is a `batch_max_size` limitation, so the request batch size will be less
-        //   than expected, and will be fulfill in next renew.
-        // TODO: consider schedule TSO requests exceed `batch_max_size` limitation to fulfill requirement in time.
+        //   There is a `batch_max_size` limitation, so the request batch size will be
+        // less   than expected, and will be fulfill in next renew.
+        // TODO: consider schedule TSO requests exceed `batch_max_size` limitation to
+        // fulfill requirement in time.
         let mut new_batch_size = tso_batch_list.usage() * renew_parameter.cache_multiplier;
         if !need_flush {
             new_batch_size = new_batch_size.saturating_sub(tso_batch_list.remain())
@@ -578,8 +591,8 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
                 break;
             }
             if let Err(err) = block_on(self.renew_tso_batch(false, TSO_BATCH_RENEW_FOR_USED_UP)) {
-                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would mean that PD is quite busy.
-                // So do not retry any more.
+                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would
+                // mean that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
                 break;
             }
@@ -847,8 +860,8 @@ pub mod tests {
         let pd_cli = Arc::new(TestPdClient::new(1, false));
         pd_cli.set_tso(1000.into());
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
+        // renew manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
@@ -929,8 +942,8 @@ pub mod tests {
             );
         }
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
+        // renew manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,

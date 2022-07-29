@@ -3,7 +3,8 @@
 //! This module contains all structs related to apply batch system.
 //!
 //! After being started, each thread will have its own `ApplyPoller` and poll
-//! using `ApplyContext`. For more information, see the documentation of batch-system.
+//! using `ApplyContext`. For more information, see the documentation of
+//! batch-system.
 
 use std::{
     ops::{Deref, DerefMut},
@@ -50,7 +51,7 @@ pub struct ApplyPoller {
 
 impl ApplyPoller {
     pub fn new(apply_ctx: ApplyContext, cfg_tracker: Tracker<Config>) -> ApplyPoller {
-        ApplyPoller {
+        Self {
             apply_task_buf: Vec::new(),
             pending_latency_inspect: Vec::new(),
             apply_ctx,
@@ -58,7 +59,7 @@ impl ApplyPoller {
         }
     }
 
-    /// Updates the internal buffer to latest capacity.
+    /// Updates the internal buffer to match the latest configuration.
     fn apply_buf_capacity(&mut self) {
         let new_cap = self.messages_per_tick();
         tikv_util::set_vec_capacity(&mut self.apply_task_buf, new_cap);

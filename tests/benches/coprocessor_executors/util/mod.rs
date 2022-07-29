@@ -20,8 +20,8 @@ use tipb::Executor as PbExecutor;
 
 pub use self::fixture::FixtureBuilder;
 
-/// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more comprehensive benchmarks
-/// will be.
+/// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more
+/// comprehensive benchmarks will be.
 pub fn bench_level() -> usize {
     if let Ok(s) = std::env::var("TIKV_BENCH_LEVEL") {
         s.parse::<usize>().unwrap()
