@@ -34,7 +34,7 @@ impl RocksEngine {
         RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
-            support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
+            support_multi_batch_write: false,
         }
     }
 
