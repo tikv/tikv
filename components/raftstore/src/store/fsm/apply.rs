@@ -1234,7 +1234,7 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result, flash_res) = if ctx.host.pre_exec(&self.region, req) {
+        let (resp, exec_result, flash_res) = if ctx.host.pre_exec(&self.region, req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -5062,7 +5062,13 @@ mod tests {
     }
 
     impl AdminObserver for ApplyObserver {
-        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+        fn pre_exec_admin(
+            &self,
+            _: &mut ObserverContext<'_>,
+            req: &AdminRequest,
+            _: u64,
+            _: u64,
+        ) -> bool {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog
                 && self.filter_compact_log.deref().load(Ordering::SeqCst)

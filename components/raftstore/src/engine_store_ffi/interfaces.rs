@@ -363,6 +363,8 @@ pub mod root {
                     arg1: *mut root::DB::EngineStoreServerWrap,
                     arg2: u64,
                     arg3: u8,
+                    arg4: u64,
+                    arg5: u64,
                 ) -> u8,
             >,
             pub fn_atomic_update_proxy: ::std::option::Option<
@@ -441,7 +443,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 11834134381166380568;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 794398293737678384;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

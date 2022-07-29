@@ -188,7 +188,8 @@ struct EngineStoreServerHelper {
                                                   BaseBuffView, BaseBuffView,
                                                   RaftCmdHeader);
   uint8_t (*fn_need_flush_data)(EngineStoreServerWrap *, uint64_t);
-  uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t, uint8_t);
+  uint8_t (*fn_try_flush_data)(EngineStoreServerWrap *, uint64_t, uint8_t,
+                               uint64_t, uint64_t);
   void (*fn_atomic_update_proxy)(EngineStoreServerWrap *,
                                  RaftStoreProxyFFIHelper *);
   void (*fn_handle_destroy)(EngineStoreServerWrap *, uint64_t);
