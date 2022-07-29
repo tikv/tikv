@@ -4137,8 +4137,22 @@ impl<EK> ApplyRouter<EK>
 where
     EK: KvEngine,
 {
+    pub fn schedule_task_high_pri(&self, region_id: u64, msg: Msg<EK>) {
+        let res = self.try_send(region_id, msg, true);
+        self.schedule_task_inner(region_id, res);
+    }
+
     pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
-        let reg = match self.try_send(region_id, msg) {
+        let res = self.try_send(region_id, msg, false);
+        self.schedule_task_inner(region_id, res);
+    }
+
+    fn schedule_task_inner(
+        &self,
+        region_id: u64,
+        res: Either<std::result::Result<(), TrySendError<Msg<EK>>>, Msg<EK>>,
+    ) {
+        let reg = match res {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,

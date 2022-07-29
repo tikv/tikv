@@ -58,6 +58,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
     pub(crate) normal_scheduler: Ns,
+    pub(crate) high_pri_normal_scheduler: Ns,
     pub(crate) control_scheduler: Cs,
 
     // Count of Mailboxes that is not destroyed.
@@ -76,6 +77,7 @@ where
 {
     pub(super) fn new(
         control_box: BasicMailbox<C>,
+        high_pri_normal_scheduler: Ns,
         normal_scheduler: Ns,
         control_scheduler: Cs,
         state_cnt: Arc<AtomicUsize>,
@@ -87,6 +89,7 @@ where
             })),
             caches: Cell::new(LruCache::with_capacity_and_sample(1024, 7)),
             control_box,
+            high_pri_normal_scheduler,
             normal_scheduler,
             control_scheduler,
             state_cnt,
@@ -212,11 +215,17 @@ where
         &self,
         addr: u64,
         msg: N::Message,
+        high_pri: bool,
     ) -> Either<Result<(), TrySendError<N::Message>>, N::Message> {
+        let sched = if high_pri {
+            &self.high_pri_normal_scheduler
+        } else {
+            &self.normal_scheduler
+        };
         let mut msg = Some(msg);
         let res = self.check_do(addr, |mailbox| {
             let m = msg.take().unwrap();
-            match mailbox.try_send(m, &self.normal_scheduler) {
+            match mailbox.try_send(m, sched) {
                 Ok(()) => Some(Ok(())),
                 r @ Err(TrySendError::Full(_)) => {
                     CHANNEL_FULL_COUNTER_VEC
@@ -240,7 +249,7 @@ where
     /// Send the message to specified address.
     #[inline]
     pub fn send(&self, addr: u64, msg: N::Message) -> Result<(), TrySendError<N::Message>> {
-        match self.try_send(addr, msg) {
+        match self.try_send(addr, msg, false) {
             Either::Left(res) => res,
             Either::Right(m) => Err(TrySendError::Disconnected(m)),
         }
@@ -367,6 +376,7 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
             // These two schedulers should be unified as single one. However
             // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
             // for now.
+            high_pri_normal_scheduler: self.high_pri_normal_scheduler.clone(),
             normal_scheduler: self.normal_scheduler.clone(),
             control_scheduler: self.control_scheduler.clone(),
             shutdown: self.shutdown.clone(),

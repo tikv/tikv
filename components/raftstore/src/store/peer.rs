@@ -2718,6 +2718,7 @@ where
         );
         // Leader needs to update lease.
         let mut lease_to_be_updated = self.is_leader();
+        let mut has_split_or_merge = false;
         for entry in committed_entries.iter().rev() {
             // raft meta is very small, can be ignored.
             self.raft_log_size_hint += entry.get_data().len() as u64;
@@ -2739,10 +2740,15 @@ where
                 }
             }
 
+            let ctx = ProposalContext::from_bytes(&entry.context);
+            if ctx.contains(ProposalContext::PREPARE_MERGE) || ctx.contains(ProposalContext::SPLIT)
+            {
+                has_split_or_merge = true;
+            }
+
             fail_point!(
                 "leader_commit_prepare_merge",
                 {
-                    let ctx = ProposalContext::from_bytes(&entry.context);
                     self.is_leader()
                         && entry.term == self.term()
                         && ctx.contains(ProposalContext::PREPARE_MERGE)
@@ -2804,8 +2810,13 @@ where
                 // Compact all cached entries instead of half evict.
                 self.mut_store().evict_entry_cache(false);
             }
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::apply(apply));
+            if self.is_leader() || has_split_or_merge {
+                ctx.apply_router
+                    .schedule_task_high_pri(self.region_id, ApplyTask::apply(apply));
+            } else {
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::apply(apply));
+            }
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
     }

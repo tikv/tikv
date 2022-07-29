@@ -60,6 +60,7 @@ where
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.state.fsm_receiver.clone(),
+                high_pri_fsm_receiver: self.state.high_pri_fsm_receiver.clone(),
                 handler,
                 max_batch_size: self.state.max_batch_size,
                 reschedule_duration: self.state.reschedule_duration,

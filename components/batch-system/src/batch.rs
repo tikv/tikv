@@ -88,6 +88,7 @@ macro_rules! impl_sched {
     };
 }
 
+impl_sched!(HighPriNormalScheduler, FsmTypes::Normal, Fsm = N);
 impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
 impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 
@@ -223,7 +224,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
             Some(ReschedulePolicy::Remove) => self.remove(to_schedule),
             Some(ReschedulePolicy::Schedule) => {
-                router.normal_scheduler.schedule(to_schedule.fsm);
+                router.high_pri_normal_scheduler.schedule(to_schedule.fsm);
                 None
             }
             None => Some(to_schedule),
@@ -340,6 +341,7 @@ pub trait PollHandler<N, C>: Send + 'static {
 pub struct Poller<N: Fsm, C: Fsm, Handler> {
     pub router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub high_pri_fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     pub handler: Handler,
     pub max_batch_size: usize,
     pub reschedule_duration: Duration,
@@ -370,14 +372,27 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             return true;
         }
 
+        if let Ok(fsm) = self.high_pri_fsm_receiver.try_recv() {
+            return batch.push(fsm);
+        }
+
         if let Ok(fsm) = self.fsm_receiver.try_recv() {
             return batch.push(fsm);
         }
 
         if batch.is_empty() {
             self.handler.pause();
-            if let Ok(fsm) = self.fsm_receiver.recv() {
-                return batch.push(fsm);
+            channel::select! {
+                recv(self.high_pri_fsm_receiver) -> msg => {
+                    if let Ok(fsm) = msg {
+                        return batch.push(fsm);
+                    }
+                }
+                recv(self.fsm_receiver) -> msg => {
+                    if let Ok(fsm) = msg {
+                        return batch.push(fsm);
+                    }
+                }
             }
         }
         !batch.is_empty()
@@ -454,7 +469,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             let mut fsm_cnt = batch.normals.len();
             while batch.normals.len() < max_batch_size {
-                if let Ok(fsm) = self.fsm_receiver.try_recv() {
+                if let Ok(fsm) = self.high_pri_fsm_receiver.try_recv() {
+                    run = batch.push(fsm);
+                } else if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because
@@ -527,6 +544,7 @@ pub trait HandlerBuilder<N, C> {
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
+    high_pri_receiver: channel::Receiver<FsmTypes<N, C>>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
     low_receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
@@ -574,6 +592,7 @@ where
         };
         let mut poller = Poller {
             router: self.router.clone(),
+            high_pri_fsm_receiver: self.high_pri_receiver.clone(),
             fsm_receiver: receiver,
             handler,
             max_batch_size: self.max_batch_size,
@@ -646,6 +665,7 @@ struct PoolStateBuilder<N, C> {
     max_batch_size: usize,
     reschedule_duration: Duration,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    high_pri_fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     fsm_sender: channel::Sender<FsmTypes<N, C>>,
     pool_size: usize,
 }
@@ -664,6 +684,7 @@ impl<N, C> PoolStateBuilder<N, C> {
             name_prefix,
             handler_builder,
             fsm_receiver: self.fsm_receiver,
+            high_pri_fsm_receiver: self.high_pri_fsm_receiver,
             fsm_sender: self.fsm_sender,
             low_priority_pool_size,
             workers,
@@ -680,6 +701,7 @@ pub struct PoolState<N, C, H: HandlerBuilder<N, C>> {
     pub name_prefix: String,
     pub handler_builder: H,
     pub fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
+    pub high_pri_fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     pub fsm_sender: channel::Sender<FsmTypes<N, C>>,
     pub low_priority_pool_size: usize,
     pub expected_pool_size: usize,
@@ -704,6 +726,11 @@ pub fn create_system<N: Fsm, C: Fsm>(
     let control_box = BasicMailbox::new(sender, controller, state_cnt.clone());
     let (tx, rx) = channel::unbounded();
     let (tx2, rx2) = channel::unbounded();
+    let (tx3, rx3) = channel::unbounded();
+    let high_pri_normal_scheduler = NormalScheduler {
+        sender: tx3.clone(),
+        low_sender: tx2.clone(),
+    };
     let normal_scheduler = NormalScheduler {
         sender: tx.clone(),
         low_sender: tx2.clone(),
@@ -716,13 +743,21 @@ pub fn create_system<N: Fsm, C: Fsm>(
         max_batch_size: cfg.max_batch_size(),
         reschedule_duration: cfg.reschedule_duration.0,
         fsm_receiver: rx.clone(),
+        high_pri_fsm_receiver: rx3.clone(),
         fsm_sender: tx,
         pool_size: cfg.pool_size,
     };
-    let router = Router::new(control_box, normal_scheduler, control_scheduler, state_cnt);
+    let router = Router::new(
+        control_box,
+        high_pri_normal_scheduler,
+        normal_scheduler,
+        control_scheduler,
+        state_cnt,
+    );
     let system = BatchSystem {
         name_prefix: None,
         router: router.clone(),
+        high_pri_receiver: rx3,
         receiver: rx,
         low_receiver: rx2,
         pool_size: cfg.pool_size,
