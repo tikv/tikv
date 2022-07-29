@@ -1184,7 +1184,10 @@ impl DbConfig {
             )
             .into());
         }
+<<<<<<< HEAD
 
+=======
+>>>>>>> 1e13ddf3b... Make max_subcompactions dynamically changeable (#13151)
         if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
@@ -1315,8 +1318,12 @@ pub struct RaftDbConfig {
     #[online_config(skip)]
     pub info_log_dir: String,
     #[online_config(skip)]
+<<<<<<< HEAD
     pub info_log_level: LogLevel,
     #[online_config(skip)]
+=======
+    pub info_log_level: RocksLogLevel,
+>>>>>>> 1e13ddf3b... Make max_subcompactions dynamically changeable (#13151)
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[online_config(skip)]
@@ -1639,6 +1646,14 @@ impl ConfigManager for DBConfigManger {
         {
             let max_background_jobs = background_jobs_config.1.into();
             self.set_max_background_jobs(max_background_jobs)?;
+        }
+
+        if let Some(background_subcompactions_config) = change
+            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .next()
+        {
+            let max_subcompactions = background_subcompactions_config.1.into();
+            self.set_max_subcompactions(max_subcompactions)?;
         }
 
         if let Some(background_flushes_config) = change
