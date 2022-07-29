@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
+use tracker::TrackerToken;
 
 use crate::{engine::RocksEngine, perf_context_impl::PerfContextStatistics};
 
@@ -30,7 +31,7 @@ impl PerfContext for RocksPerfContext {
         self.stats.start()
     }
 
-    fn report_metrics(&mut self) {
-        self.stats.report()
+    fn report_metrics(&mut self, trackers: &[TrackerToken]) {
+        self.stats.report(trackers)
     }
 }

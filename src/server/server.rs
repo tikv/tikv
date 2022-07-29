@@ -44,6 +44,7 @@ use crate::{
     read_pool::ReadPool,
     server::{gc_worker::GcWorker, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -64,6 +65,7 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
+    grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S, E::Local>,
@@ -108,6 +110,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .after_start_wrapper(|| {})
+                    .before_stop_wrapper(|| {})
                     .build()
                     .unwrap(),
             )
@@ -145,7 +149,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             .stream_initial_window_size(cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota)
+            .set_resource_quota(mem_quota.clone())
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cfg.value().grpc_keepalive_time.into())
@@ -163,7 +167,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            Arc::new(cfg.value().clone()),
+            Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
@@ -178,6 +182,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
+            grpc_mem_quota: mem_quota,
             local_addr: addr,
             trans,
             raft_router,
@@ -208,6 +213,10 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
     pub fn env(&self) -> Arc<Environment> {
         self.env.clone()
+    }
+
+    pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {
+        &self.grpc_mem_quota
     }
 
     /// Register a gRPC service.
@@ -468,7 +477,8 @@ mod tests {
         }
     }
 
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    // if this failed, unset the environmental variables 'http_proxy' and
+    // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
         let cfg = Config {
@@ -520,6 +530,8 @@ mod tests {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );

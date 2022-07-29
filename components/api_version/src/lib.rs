@@ -18,13 +18,15 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     const CLIENT_TAG: ApiVersion;
     const IS_TTL_ENABLED: bool;
 
-    /// Parse the key prefix and infer key mode. It's safe to parse either raw key or encoded key.
+    /// Parse the key prefix and infer key mode. It's safe to parse either raw
+    /// key or encoded key.
     fn parse_key_mode(key: &[u8]) -> KeyMode;
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode;
 
     /// Parse from the bytes from storage.
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>>;
-    /// This is equivalent to `decode_raw_value()` but returns the owned user value.
+    /// This is equivalent to `decode_raw_value()` but returns the owned user
+    /// value.
     fn decode_raw_value_owned(mut bytes: Vec<u8>) -> Result<RawValue<Vec<u8>>> {
         let (len, expire_ts, is_delete) = {
             let raw_value = Self::decode_raw_value(&bytes)?;
@@ -47,8 +49,8 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     /// This is equivalent to `encode_raw_value` but reduced an allocation.
     fn encode_raw_value_owned(value: RawValue<Vec<u8>>) -> Vec<u8>;
 
-    /// Parse from the txn_types::Key from storage. Default implementation for API V1|V1TTL.
-    /// Return: (user key, optional timestamp)
+    /// Parse from the txn_types::Key from storage. Default implementation for
+    /// API V1|V1TTL. Return: (user key, optional timestamp)
     fn decode_raw_key(encoded_key: &Key, _with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
         Ok((encoded_key.as_encoded().clone(), None))
     }
@@ -59,7 +61,8 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
         Ok((encoded_key.into_encoded(), None))
     }
-    /// Encode the user key & optional timestamp into txn_types::Key. Default implementation for API V1|V1TTL.
+    /// Encode the user key & optional timestamp into txn_types::Key. Default
+    /// implementation for API V1|V1TTL.
     fn encode_raw_key(user_key: &[u8], _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded_slice(user_key)
     }
@@ -80,7 +83,7 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
         src_api: ApiVersion,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>);
+    ) -> Result<(Vec<u8>, Vec<u8>)>;
 
     /// Convert the encoded value from src_api version to Self::TAG version
     fn convert_raw_encoded_value_version_from(
@@ -138,7 +141,8 @@ macro_rules! match_template_api_version {
      }}
 }
 
-/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `KvFormat`
+/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to
+/// corresponding concrete type of `KvFormat`
 ///
 /// For example, the following code
 ///
@@ -197,8 +201,8 @@ pub enum KeyMode {
 ///
 /// ### ApiVersion::V1ttl
 ///
-/// 8 bytes representing the unix timestamp in seconds for expiring time will be append
-/// to the value of all RawKV kv pairs.
+/// 8 bytes representing the unix timestamp in seconds for expiring time will be
+/// append to the value of all RawKV kv pairs.
 ///
 /// ```text
 /// ------------------------------------------------------------
@@ -221,8 +225,8 @@ pub enum KeyMode {
 /// ```
 ///
 /// As shown in the example below, the least significant bit of the meta flag
-/// indicates whether the value contains 8 bytes expire ts at the very left to the
-/// meta flags.
+/// indicates whether the value contains 8 bytes expire ts at the very left to
+/// the meta flags.
 ///
 /// ```text
 /// --------------------------------------------------------------------------------
@@ -235,7 +239,8 @@ pub enum KeyMode {
 pub struct RawValue<T: AsRef<[u8]>> {
     /// The user value.
     pub user_value: T,
-    /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
+    /// The unix timestamp in seconds indicating the point of time that this key
+    /// will be deleted.
     pub expire_ts: Option<u64>,
     /// Logical deletion flag in ApiV2, should be `false` in ApiV1 and ApiV1Ttl
     pub is_delete: bool,
@@ -633,8 +638,8 @@ mod tests {
             .clone()
             .into_iter()
             .map(|key| {
-                let mut v2_key = key;
-                v2_key.insert(0, RAW_KEY_PREFIX);
+                let mut v2_key = vec![RAW_KEY_PREFIX, 0, 0, 0];
+                v2_key.extend(key);
                 ApiV2::encode_raw_key_owned(v2_key, Some(TimeStamp::from(timestamp))).into_encoded()
             })
             .collect();
@@ -642,8 +647,6 @@ mod tests {
         let test_cases = vec![
             (ApiVersion::V1, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
             (ApiVersion::V1ttl, ApiVersion::V2, &apiv1_keys, &apiv2_keys),
-            (ApiVersion::V2, ApiVersion::V1, &apiv2_keys, &apiv1_keys),
-            (ApiVersion::V2, ApiVersion::V1ttl, &apiv2_keys, &apiv1_keys),
         ];
         for i in 0..apiv1_keys.len() {
             for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases.clone() {
@@ -731,14 +734,14 @@ mod tests {
             .clone()
             .into_iter()
             .map(|(start_key, end_key)| {
-                let mut v2_start_key = start_key;
-                let mut v2_end_key = end_key;
-                v2_start_key.insert(0, RAW_KEY_PREFIX);
-                if v2_end_key.is_empty() {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX_END);
+                let mut v2_start_key = vec![RAW_KEY_PREFIX, 0, 0, 0]; // key space takes 3 bytes.
+                let mut v2_end_key = if end_key.is_empty() {
+                    vec![RAW_KEY_PREFIX, 0, 0, 1]
                 } else {
-                    v2_end_key.insert(0, RAW_KEY_PREFIX);
-                }
+                    vec![RAW_KEY_PREFIX, 0, 0, 0] // key space takes 3 bytes.
+                };
+                v2_start_key.extend(start_key);
+                v2_end_key.extend(end_key);
                 (v2_start_key, v2_end_key)
             })
             .collect();
@@ -756,18 +759,6 @@ mod tests {
                 &apiv1_key_ranges,
                 &apiv2_key_ranges,
             ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
-            ),
-            (
-                ApiVersion::V2,
-                ApiVersion::V1ttl,
-                &apiv2_key_ranges,
-                &apiv1_key_ranges,
-            ),
         ];
         for (src_api_ver, dst_api_ver, src_data, dst_data) in test_cases {
             for i in 0..apiv1_key_ranges.len() {
@@ -775,7 +766,7 @@ mod tests {
                     let (src_start, src_end) = src_data[i].clone();
                     API::convert_raw_user_key_range_version_from(src_api_ver, src_start, src_end)
                 });
-                assert_eq!(dst_key_range, dst_data[i]);
+                assert_eq!(dst_key_range.unwrap(), dst_data[i]);
             }
         }
     }

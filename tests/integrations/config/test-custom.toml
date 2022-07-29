@@ -219,6 +219,7 @@ reactive-memory-lock-tick-interval = "566ms"
 reactive-memory-lock-timeout-tick = 8
 report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
 
 [coprocessor]
 split-region-on-table = false
@@ -232,6 +233,7 @@ enable-region-bucket = true
 region-bucket-size = "1MB"
 region-size-threshold-for-approximate = "3MB"
 region-bucket-merge-size-ratio = 0.4
+prefer-approximate-bucket = false
 
 [rocksdb]
 wal-recovery-mode = "absolute-consistency"
@@ -319,6 +321,9 @@ enable-doubly-skiplist = false
 enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -327,13 +332,11 @@ blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
 discardable-ratio = 0.00156
-sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [rocksdb.writecf]
 block-size = "12KB"
@@ -380,6 +383,9 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = false
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -426,6 +432,9 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -472,6 +481,9 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -551,6 +563,9 @@ prop-keys-index-distance = 40000
 enable-compaction-guard = true
 compaction-guard-min-output-file-size = "12MB"
 compaction-guard-max-output-file-size = "34MB"
+prepopulate-block-cache = "flush-only"
+format-version = 5
+checksum = "xxh3"
 
 [raftdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -559,13 +574,11 @@ blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
 discardable-ratio = 0.00156
-sample-ratio = 0.982
 merge-small-file-threshold = "21KB"
 blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
-gc-merge-rewrite = true
 
 [raft-engine]
 enable = false
@@ -638,6 +651,7 @@ incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
 incremental-scan-ts-filter-ratio = 0.7
+tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
 sink-memory-quota = "7MB"
 

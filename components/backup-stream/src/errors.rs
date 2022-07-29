@@ -6,13 +6,13 @@ use std::{
 
 use error_code::ErrorCodeExt;
 use etcd_client::Error as EtcdError;
-use kvproto::errorpb::Error as StoreError;
+use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
 use raftstore::Error as RaftStoreError;
 use thiserror::Error as ThisError;
 use tikv::storage::txn::Error as TxnError;
-use tikv_util::{error, worker::ScheduleError};
+use tikv_util::{error, warn, worker::ScheduleError};
 
 use crate::{endpoint::Task, metrics};
 
@@ -24,6 +24,8 @@ pub enum Error {
     Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
+    #[error("Observe have already canceled for region {0} (version = {1:?})")]
+    ObserveCanceled(u64, RegionEpoch),
     #[error("Malformed metadata {0}")]
     MalformedMetadata(String),
     #[error("I/O Error: {0}")]
@@ -63,6 +65,7 @@ impl ErrorCodeExt for Error {
             Error::Contextual { inner_error, .. } => inner_error.error_code(),
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
+            Error::ObserveCanceled(..) => OBSERVE_CANCELED,
         }
     }
 }
@@ -117,7 +120,10 @@ where
 #[macro_export(crate)]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
-        Error::Other(tikv_util::box_err!("{}: {}", $message, $inner))
+        {
+            use tikv_util::box_err;
+            $crate::errors::Error::Other(box_err!("{}: {}", $message, $inner))
+        }
     };
     ($inner: expr, $format: literal, $($args: expr),+) => {
         annotate!($inner, format_args!($format, $($args),+))
@@ -126,12 +132,18 @@ macro_rules! annotate {
 
 impl Error {
     pub fn report(&self, context: impl Display) {
-        error!(%self; "backup stream meet error"; "context" => %context,);
+        warn!("backup stream meet error"; "context" => %context, "err" => %self);
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()
     }
 
+    pub fn report_fatal(&self) {
+        error!(%self; "backup stream meet fatal error");
+        metrics::STREAM_FATAL_ERROR
+            .with_label_values(&[self.kind()])
+            .inc()
+    }
     /// remove all context added to the error.
     pub fn without_context(&self) -> &Self {
         match self {

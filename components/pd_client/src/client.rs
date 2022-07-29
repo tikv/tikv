@@ -548,7 +548,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                if resp.has_region() {
+                if resp.has_region() && resp.has_leader() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
@@ -619,6 +619,9 @@ impl PdClient for RpcClient {
                             if last > last_report {
                                 last_report = last - 1;
                             }
+                            fail::fail_point!("region_heartbeat_send_failed", |_| {
+                                Err(Error::Grpc(grpcio::Error::RemoteStopped))
+                            });
                             Ok((r, WriteFlags::default()))
                         }))
                         .await;
@@ -643,7 +646,8 @@ impl PdClient for RpcClient {
                 .expect("expect region heartbeat sender");
             let ret = sender
                 .unbounded_send(req)
-                .map_err(|e| Error::Other(Box::new(e)));
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
+
             Box::pin(future::ready(ret)) as PdFuture<_>
         };
 
@@ -727,7 +731,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
-        report_opt: Option<pdpb::StoreReport>,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
@@ -738,7 +742,7 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        if let Some(report) = report_opt {
+        if let Some(report) = store_report {
             req.set_store_report(report);
         }
         if let Some(status) = dr_autosync_status {
@@ -1048,7 +1052,7 @@ impl PdClient for RpcClient {
                 .expect("expect region buckets sender");
             let ret = sender
                 .unbounded_send(req)
-                .map_err(|e| Error::Other(Box::new(e)));
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
             Box::pin(future::ready(ret)) as PdFuture<_>
         };
 

@@ -1,19 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
+//! This crate implements a simple SQL query engine to work with TiDB pushed
+//! down executors.
 //!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
+//! The query engine is able to scan and understand rows stored by TiDB, run
+//! against a series of executors and then return the execution result. The
+//! query engine is provided via TiKV Coprocessor interface. However standalone
+//! UDF functions are also exported and can be used standalone.
 
 #![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(test)]
-#![feature(const_fn_fn_ptr_basics)]
-#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -143,7 +142,8 @@ fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<
 where
     F: Fn(bool, bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
@@ -222,7 +222,8 @@ fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Res
 where
     F: Fn(bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",

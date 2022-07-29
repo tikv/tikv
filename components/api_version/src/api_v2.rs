@@ -7,6 +7,7 @@ use tikv_util::codec::{
     number::{self, NumberEncoder},
     Error,
 };
+use txn_types::{Key, TimeStamp};
 
 use super::*;
 
@@ -15,6 +16,8 @@ pub const RAW_KEY_PREFIX_END: u8 = RAW_KEY_PREFIX + 1;
 pub const TXN_KEY_PREFIX: u8 = b'x';
 pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
+pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
+pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -140,8 +143,8 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // scope of raw keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
         let encoded_key = Key::from_raw(user_key);
         if let Some(ts) = ts {
@@ -153,13 +156,14 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // scope of raw keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key_owned(mut user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
         let src_len = user_key.len();
         let encoded_len = MemComparableByteCodec::encoded_len(src_len);
 
-        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later, especially in raw write procedures.
+        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later,
+        // especially in raw write procedures.
         user_key.reserve(encoded_len - src_len + number::U64_SIZE);
         user_key.resize(encoded_len, 0u8);
         MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);
@@ -181,9 +185,7 @@ impl KvFormat for ApiV2 {
     ) -> Result<Key> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                let mut apiv2_key = Vec::with_capacity(ApiV2::get_encode_len(key.len() + 1));
-                apiv2_key.push(RAW_KEY_PREFIX);
-                apiv2_key.extend(key);
+                let apiv2_key = ApiV2::add_prefix(key, &DEFAULT_KEY_SPACE_ID);
                 Ok(Self::encode_raw_key_owned(apiv2_key, ts))
             }
             ApiVersion::V2 => Ok(Key::from_encoded_slice(key)),
@@ -194,18 +196,18 @@ impl KvFormat for ApiV2 {
         src_api: ApiVersion,
         mut start_key: Vec<u8>,
         mut end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         match src_api {
             ApiVersion::V1 | ApiVersion::V1ttl => {
-                start_key.insert(0, RAW_KEY_PREFIX);
+                start_key = ApiV2::add_prefix(&start_key, &DEFAULT_KEY_SPACE_ID);
                 if end_key.is_empty() {
-                    end_key.insert(0, RAW_KEY_PREFIX_END);
+                    end_key = ApiV2::add_prefix(&end_key, &DEFAULT_KEY_SPACE_ID_END);
                 } else {
-                    end_key.insert(0, RAW_KEY_PREFIX);
+                    end_key = ApiV2::add_prefix(&end_key, &DEFAULT_KEY_SPACE_ID);
                 }
-                (start_key, end_key)
+                Ok((start_key, end_key))
             }
-            ApiVersion::V2 => (start_key, end_key),
+            ApiVersion::V2 => Ok((start_key, end_key)),
         }
     }
 }
@@ -221,12 +223,34 @@ impl ApiV2 {
         MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
     }
 
+    pub fn get_rawkv_range() -> (u8, u8) {
+        (RAW_KEY_PREFIX, RAW_KEY_PREFIX_END)
+    }
+
+    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp> {
+        let ts = Key::decode_ts_from(key)?;
+        Ok(ts)
+    }
+
+    pub fn split_ts(key: &[u8]) -> Result<(&[u8], TimeStamp)> {
+        Ok(Key::split_on_ts_for(key)?)
+    }
+
+    pub fn add_prefix(key: &[u8], key_space: &[u8]) -> Vec<u8> {
+        let mut apiv2_key =
+            Vec::with_capacity(ApiV2::get_encode_len(key.len() + key_space.len() + 1));
+        apiv2_key.push(RAW_KEY_PREFIX);
+        apiv2_key.extend(key_space); // Reserved 3 bytes for key space id.
+        apiv2_key.extend(key);
+        apiv2_key
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
 // Note: `encoded_bytes` may not be `KeyMode::Raw`.
-// E.g., backup service accept an exclusive end key just beyond the scope of raw keys.
-// The validity is ensured by client & Storage interfaces.
+// E.g., backup service accept an exclusive end key just beyond the scope of raw
+// keys. The validity is ensured by client & Storage interfaces.
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
     bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
@@ -238,8 +262,8 @@ fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
     is_valid_encoded_bytes(encoded_key.as_encoded(), with_ts)
 }
 
-/// TimeStamp::zero is not acceptable, as such entries can not be retrieved by RawKV MVCC.
-/// See `RawMvccSnapshot::seek_first_key_value_cf`.
+/// TimeStamp::zero is not acceptable, as such entries can not be retrieved by
+/// RawKV MVCC. See `RawMvccSnapshot::seek_first_key_value_cf`.
 #[inline]
 fn is_valid_ts(ts: TimeStamp) -> bool {
     !ts.is_zero()
@@ -325,6 +349,20 @@ mod tests {
     }
 
     #[test]
+    fn test_key_split_ts() {
+        let user_key = b"r\0aaaaaaaaaaa";
+        let ts = 10;
+        let key = Key::from_raw(user_key).append_ts(ts.into()).into_encoded();
+
+        let encoded_key = ApiV2::encode_raw_key(user_key, None);
+
+        let (split_key, split_ts) = ApiV2::split_ts(key.as_slice()).unwrap();
+
+        assert_eq!(encoded_key.into_encoded(), split_key.to_vec());
+        assert_eq!(ts, split_ts.into_inner());
+    }
+
+    #[test]
     fn test_append_ts_on_encoded_bytes() {
         let cases = vec![
             (true, vec![b'r', 2, 3, 4, 0, 0, 0, 0, 0xfb], 10),
@@ -371,6 +409,26 @@ mod tests {
         {
             let v = ApiV2::decode_raw_value(&ApiV2::ENCODED_LOGICAL_DELETE).unwrap();
             assert!(v.is_delete);
+        }
+    }
+
+    #[test]
+    fn test_decode_ts_from() {
+        let test_cases: Vec<(Vec<u8>, TimeStamp)> = vec![
+            (b"rkey1".to_vec(), 1.into()),
+            (b"rkey2".to_vec(), 2.into()),
+            (b"rkey3".to_vec(), 3.into()),
+            (b"rkey4".to_vec(), 4.into()),
+        ];
+        for (idx, (key, ts)) in test_cases.into_iter().enumerate() {
+            let key_with_ts = ApiV2::encode_raw_key(&key, Some(ts)).into_encoded();
+            let (decoded_key, decoded_ts1) =
+                ApiV2::decode_raw_key_owned(Key::from_encoded(key_with_ts.clone()), true).unwrap();
+            let decoded_ts2 = ApiV2::decode_ts_from(&key_with_ts).unwrap();
+
+            assert_eq!(key, decoded_key, "case {}", idx);
+            assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
+            assert_eq!(ts, decoded_ts2, "case {}", idx);
         }
     }
 }

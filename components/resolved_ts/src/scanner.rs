@@ -19,7 +19,7 @@ use tikv::storage::{
     mvcc::{DeltaScanner, MvccReader, ScannerBuilder},
     txn::{TxnEntry, TxnEntryScanner},
 };
-use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{sys::thread::ThreadBuildWrapper, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::{Builder, Runtime};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
@@ -74,6 +74,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
             Builder::new_multi_thread()
                 .thread_name("inc-scan")
                 .worker_threads(count)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
@@ -210,7 +212,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
             let mut resp = box_try!(fut.await);
             if resp.response.get_header().has_error() {
                 let err = resp.response.take_header().take_error();
-                // These two errors can't handled by retrying since the epoch and observe id is unchanged
+                // These two errors can't handled by retrying since the epoch and observe id is
+                // unchanged
                 if err.has_epoch_not_match() || err.get_message().contains("stale observe id") {
                     return Err(Error::request(err));
                 }

@@ -66,7 +66,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -100,6 +100,10 @@ impl ReadableSize {
 
     pub const fn as_mb(self) -> u64 {
         self.0 / MIB
+    }
+
+    pub fn as_mb_f64(self) -> f64 {
+        self.0 as f64 / MIB as f64
     }
 }
 
@@ -140,14 +144,14 @@ impl Serialize for ReadableSize {
             write!(buffer, "{}PiB", size / PIB).unwrap();
         } else if size % TIB == 0 {
             write!(buffer, "{}TiB", size / TIB).unwrap();
-        } else if size % GIB as u64 == 0 {
+        } else if size % GIB == 0 {
             write!(buffer, "{}GiB", size / GIB).unwrap();
-        } else if size % MIB as u64 == 0 {
+        } else if size % MIB == 0 {
             write!(buffer, "{}MiB", size / MIB).unwrap();
-        } else if size % KIB as u64 == 0 {
+        } else if size % KIB == 0 {
             write!(buffer, "{}KiB", size / KIB).unwrap();
         } else {
-            return serializer.serialize_u64(size);
+            write!(buffer, "{}B", size).unwrap();
         }
         serializer.serialize_str(&buffer)
     }
@@ -183,7 +187,15 @@ impl FromStr for ReadableSize {
             "G" | "GB" | "GiB" => GIB,
             "T" | "TB" | "TiB" => TIB,
             "P" | "PB" | "PiB" => PIB,
-            "B" | "" => UNIT,
+            "B" | "" => {
+                if size.chars().all(|c| char::is_ascii_digit(&c)) {
+                    return size
+                        .parse::<u64>()
+                        .map(|n| ReadableSize(n))
+                        .map_err(|_| format!("invalid size string: {:?}", s));
+                }
+                UNIT
+            }
             _ => {
                 return Err(format!(
                     "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
@@ -527,7 +539,8 @@ pub fn normalize_path<P: AsRef<Path>>(path: P) -> PathBuf {
     ret
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     fn try_canonicalize_normalized_path(path: &Path) -> std::io::Result<PathBuf> {
         use std::path::Component;
@@ -579,7 +592,8 @@ fn canonicalize_non_existing_path<P: AsRef<Path>>(path: P) -> std::io::Result<Pa
     try_canonicalize_normalized_path(&normalize_path(path))
 }
 
-/// Normalizes the path and canonicalizes its longest physically existing sub-path.
+/// Normalizes the path and canonicalizes its longest physically existing
+/// sub-path.
 fn canonicalize_imp<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
     match path.as_ref().canonicalize() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => canonicalize_non_existing_path(path),
@@ -702,7 +716,8 @@ mod check_kernel {
         Ok(())
     }
 
-    /// `check_kernel_params` checks kernel parameters, following are checked so far:
+    /// `check_kernel_params` checks kernel parameters, following are checked so
+    /// far:
     ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
@@ -935,8 +950,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
         #[test]
         fn test_check_data_dir() {
             // test invalid data_path
-            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
-            assert!(ret.is_err());
+            check_data_dir("/sys/invalid", "/proc/mounts").unwrap_err();
             // get real path's fs_info
             let tmp_dir = Builder::new()
                 .prefix("test-check-data-dir")
@@ -947,13 +961,15 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
 
             // data_path may not mounted on a normal device on container
-            if !fs_info.fsname.starts_with("/dev") {
+            // /proc/mounts may contain host's device, which is not accessible in container.
+            if Path::new("/.dockerenv").exists()
+                && (!fs_info.fsname.starts_with("/dev") || !Path::new(&fs_info.fsname).exists())
+            {
                 return;
             }
 
             // test with real path
-            let ret = check_data_dir(&data_path, "/proc/mounts");
-            assert!(ret.is_ok());
+            check_data_dir(&data_path, "/proc/mounts").unwrap();
 
             // test with device mapper
             // get real_path's rotational info
@@ -973,8 +989,7 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
             let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
             create_file(&mnt_file, mninfo.as_bytes());
             // check info
-            let res = check_data_dir(&data_path, &mnt_file);
-            assert!(res.is_ok());
+            check_data_dir(&data_path, &mnt_file).unwrap();
             // check rotational info
             let get = get_rotational_info(&tmp_device).unwrap();
             assert_eq!(expect, get);
@@ -1022,7 +1037,8 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
     Ok(file_count)
 }
 
-// check dir is empty of file with certain extension, empty string for any extension.
+// check dir is empty of file with certain extension, empty string for any
+// extension.
 pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
     let op = "data-dir.empty.check";
     let dir = Path::new(data_path);
@@ -1040,7 +1056,8 @@ pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), Conf
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
-/// More details about **Host** and **Port** can be found in WHATWG URL Standard.
+/// More details about **Host** and **Port** can be found in WHATWG URL
+/// Standard.
 ///
 /// Return whether the address is unspecified, i.e. `0.0.0.0` or `::0`
 pub fn check_addr(addr: &str) -> Result<bool, ConfigError> {
@@ -1096,13 +1113,15 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update the value
-    pub fn update<F>(&self, f: F)
+    pub fn update<F, O, E>(&self, f: F) -> Result<O, E>
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) -> Result<O, E>,
     {
-        f(&mut self.value.write().unwrap());
-        self.version.fetch_add(1, Ordering::Release);
+        let res = f(&mut self.value.write().unwrap());
+        if res.is_ok() {
+            self.version.fetch_add(1, Ordering::Release);
+        }
+        res
     }
 
     pub fn value(&self) -> RwLockReadGuard<'_, T> {
@@ -1224,9 +1243,9 @@ impl TomlLine {
     }
 }
 
-/// TomlWriter use to update the config file and only cover the most commom toml
-/// format that used by tikv config file, toml format like: quoted keys, multi-line
-/// value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
+/// TomlWriter use to update the config file and only cover the most common toml
+/// format that used by tikv config file, toml format like: quoted keys,
+/// multi-line value, inline table, etc, are not supported, see <https://github.com/toml-lang/toml>
 /// for more detail.
 pub struct TomlWriter {
     dst: Vec<u8>,
@@ -1388,14 +1407,15 @@ macro_rules! numeric_enum_serializing_mod {
 }
 
 /// Helper for migrating Raft data safely. Such migration is defined as
-/// multiple states that can be uniquely distinguished. And the transtions
+/// multiple states that can be uniquely distinguished. And the transitions
 /// between these states are atomic.
 ///
 /// States:
 ///   1. Init - Only source directory contains Raft data.
-///   2. Migrating - A marker file contains the path of source directory. The source
-///      directory contains a complete copy of Raft data. Target directory may exist.
-///   3. Completed - Only target directory contains Raft data. Marker file may exist.
+///   2. Migrating - A marker file contains the path of source directory. The
+/// source      directory contains a complete copy of Raft data. Target
+/// directory may exist.   3. Completed - Only target directory contains Raft
+/// data. Marker file may exist.
 pub struct RaftDataStateMachine {
     root: PathBuf,
     in_progress_marker: PathBuf,
@@ -1440,8 +1460,9 @@ impl RaftDataStateMachine {
         Ok(())
     }
 
-    /// Returns whether a migration is needed. When it's needed, enters the `Migrating`
-    /// state. Otherwise prepares the target directory for opening.
+    /// Returns whether a migration is needed. When it's needed, enters the
+    /// `Migrating` state. Otherwise prepares the target directory for
+    /// opening.
     pub fn before_open_target(&mut self) -> bool {
         // Clean up trash directory if there is any.
         for p in [&self.source, &self.target] {
@@ -1464,8 +1485,8 @@ impl RaftDataStateMachine {
                         Self::must_remove(&self.source);
                         return false;
                     }
-                    // It's actually in Completed state, just in the reverse direction.
-                    // Equivalent to Init state.
+                    // It's actually in Completed state, just in the reverse
+                    // direction. Equivalent to Init state.
                 } else {
                     assert!(real_source == self.source);
                     Self::must_remove(&self.target);
@@ -1489,8 +1510,8 @@ impl RaftDataStateMachine {
         Self::must_remove(&self.in_progress_marker);
     }
 
-    // `after_dump_data` involves two atomic operations, insert a check point between
-    // them to test crash safety.
+    // `after_dump_data` involves two atomic operations, insert a check point
+    // between them to test crash safety.
     #[cfg(test)]
     fn after_dump_data_with_check<F: Fn()>(&mut self, check: &F) {
         assert!(Self::data_exists(&self.source));
@@ -1511,8 +1532,8 @@ impl RaftDataStateMachine {
         Self::sync_dir(&self.root);
     }
 
-    // Assumes there is a marker file. Returns None when the content of marker file is
-    // incomplete.
+    // Assumes there is a marker file. Returns None when the content of marker file
+    // is incomplete.
     fn read_marker(&self) -> Option<PathBuf> {
         let marker = fs::read_to_string(&self.in_progress_marker).unwrap();
         if marker.ends_with("//") {
@@ -1608,10 +1629,10 @@ mod tests {
         }
 
         let c = SizeHolder {
-            s: ReadableSize(512),
+            s: ReadableSize((isize::MAX) as u64),
         };
         let res_str = toml::to_string(&c).unwrap();
-        assert_eq!(res_str, "s = 512\n");
+        assert_eq!(res_str, "s = \"9223372036854775807B\"\n");
         let res_size: SizeHolder = toml::from_str(&res_str).unwrap();
         assert_eq!(res_size.s.0, c.s.0);
 
@@ -1954,9 +1975,10 @@ mod tests {
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
 
-        vc.update(|v| {
+        let _ = vc.update(|v| -> Result<(), ()> {
             v.v1 = 1000;
             v.v2 = true;
+            Ok(())
         });
         for tr in trackers.iter_mut() {
             let incoming = tr.any_new();

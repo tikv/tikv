@@ -26,7 +26,8 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockRes>,
-        display => "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} | {:?}",
+        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -52,6 +53,7 @@ command! {
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
     tag!(acquire_pessimistic_lock);
+    request_type!(KvPessimisticLock);
     ts!(start_ts);
     property!(can_be_pipelined);
 
@@ -87,8 +89,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut res = if self.return_values {
             Ok(PessimisticLockRes::Values(vec![]))
         } else if self.check_existence {
-            // If return_value is set, the existence status is implicitly included in the result.
-            // So check_existence only need to be explicitly handled if `return_values` is not set.
+            // If return_value is set, the existence status is implicitly included in the
+            // result. So check_existence only need to be explicitly handled if
+            // `return_values` is not set.
             Ok(PessimisticLockRes::Existence(vec![]))
         } else {
             Ok(PessimisticLockRes::Empty)

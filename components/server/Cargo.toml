@@ -60,17 +60,16 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "../log_wrappers" }
-nix = "0.23"
 pd_client = { path = "../pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
-raftstore = { path = "../raftstore", default-features = false }
+raftstore = { path = "../raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
 resource_metering = { path = "../resource_metering" }
-security = { path = "../security", default-features = false }
+security = { path = "../security", default-features = false, features = ["tonic"] }
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
@@ -84,4 +83,4 @@ txn_types = { path = "../txn_types", default-features = false }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [target.'cfg(unix)'.dependencies]
-signal = "0.6"
+signal-hook = "0.3"

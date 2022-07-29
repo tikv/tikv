@@ -13,12 +13,13 @@ use std::{
 // Extention Traits
 use fs2::FileExt;
 
-use super::{get_io_rate_limiter, IOOp, IORateLimiter};
+use super::{get_io_rate_limiter, IoOp, IoRateLimiter};
 
-/// A wrapper around `std::fs::File` with capability to track and regulate IO flow.
+/// A wrapper around `std::fs::File` with capability to track and regulate IO
+/// flow.
 pub struct File {
     inner: fs::File,
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Debug for File {
@@ -39,7 +40,7 @@ impl File {
     #[cfg(test)]
     pub fn open_with_limiter<P: AsRef<Path>>(
         path: P,
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Option<Arc<IoRateLimiter>>,
     ) -> io::Result<File> {
         let inner = fs::File::open(path)?;
         Ok(File { inner, limiter })
@@ -56,7 +57,7 @@ impl File {
     #[cfg(test)]
     pub fn create_with_limiter<P: AsRef<Path>>(
         path: P,
-        limiter: Option<Arc<IORateLimiter>>,
+        limiter: Option<Arc<IoRateLimiter>>,
     ) -> io::Result<File> {
         let inner = fs::File::create(path)?;
         Ok(File { inner, limiter })
@@ -104,7 +105,7 @@ impl Read for File {
             let mut remains = buf.len();
             let mut pos = 0;
             while remains > 0 {
-                let allowed = limiter.request(IOOp::Read, remains);
+                let allowed = limiter.request(IoOp::Read, remains);
                 let read = self.inner.read(&mut buf[pos..pos + allowed])?;
                 pos += read;
                 remains -= read;
@@ -131,7 +132,7 @@ impl Write for File {
             let mut remains = buf.len();
             let mut pos = 0;
             while remains > 0 {
-                let allowed = limiter.request(IOOp::Write, remains);
+                let allowed = limiter.request(IoOp::Write, remains);
                 let written = self.inner.write(&buf[pos..pos + allowed])?;
                 pos += written;
                 remains -= written;
@@ -261,19 +262,19 @@ mod tests {
             .prefix("test_instrumented_file")
             .tempdir()
             .unwrap();
-        let limiter = Arc::new(IORateLimiter::new_for_test());
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
         limiter.set_io_rate_limit(crate::rate_limiter::DEFAULT_REFILLS_PER_SEC);
         let stats = limiter.statistics().unwrap();
 
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("drink full and descend");
         {
-            let _guard = WithIOType::new(IOType::ForegroundWrite);
+            let _guard = WithIoType::new(IoType::ForegroundWrite);
             let mut f = File::create_with_limiter(&tmp_file, Some(limiter)).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
-                stats.fetch(IOType::ForegroundWrite, IOOp::Write),
+                stats.fetch(IoType::ForegroundWrite, IoOp::Write),
                 content.len()
             );
         }

@@ -117,7 +117,8 @@ impl<T: Display + Send> Scheduler<T> {
 
     /// Schedules a task to run.
     ///
-    /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
+    /// If the worker is stopped or number pending tasks exceeds capacity, an
+    /// error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {
@@ -440,6 +441,10 @@ impl Worker {
     pub fn is_busy(&self) -> bool {
         self.stop.load(Ordering::Acquire)
             || self.counter.load(Ordering::Acquire) >= self.thread_count
+    }
+
+    pub fn remote(&self) -> Remote<yatp::task::future::TaskCell> {
+        self.remote.clone()
     }
 
     fn start_impl<R: Runnable + 'static>(

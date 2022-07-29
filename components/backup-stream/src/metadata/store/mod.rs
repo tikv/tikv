@@ -1,10 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod lazy_etcd;
+
+// Note: these mods also used for integration tests,
+//       so we cannot compile them only when `#[cfg(test)]`.
+//       (See https://github.com/rust-lang/rust/issues/84629)
+//       Maybe we'd better make a feature like `integration-test`?
 pub mod slash_etc;
 pub use slash_etc::SlashEtcStore;
 
 pub mod etcd;
-use std::{future::Future, pin::Pin};
+use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_trait::async_trait;
 pub use etcd::EtcdStore;
@@ -22,25 +28,74 @@ pub struct Transaction {
     ops: Vec<TransactionOp>,
 }
 
+/// A condition for executing a transcation.
+/// Compare value a key with arg.
+#[derive(Debug)]
+pub struct Condition {
+    over_key: Vec<u8>,
+    result: Ordering,
+    arg: Vec<u8>,
+}
+
+impl Condition {
+    pub fn new(over_key: MetaKey, result: Ordering, arg: Vec<u8>) -> Self {
+        Self {
+            over_key: over_key.0,
+            result,
+            arg,
+        }
+    }
+}
+
+/// A conditional transaction.
+/// This would atomically evaluate the condition, and execute corresponding
+/// transaction.
+#[derive(Debug)]
+pub struct CondTransaction {
+    cond: Condition,
+    success: Transaction,
+    failure: Transaction,
+}
+
+impl CondTransaction {
+    pub fn new(cond: Condition, success: Transaction, failure: Transaction) -> Self {
+        Self {
+            cond,
+            success,
+            failure,
+        }
+    }
+}
+
 impl Transaction {
     fn into_ops(self) -> Vec<TransactionOp> {
         self.ops
     }
 
-    fn put(mut self, kv: KeyValue) -> Self {
-        self.ops.push(TransactionOp::Put(kv));
+    pub fn put(mut self, kv: KeyValue) -> Self {
+        self.ops.push(TransactionOp::Put(kv, PutOption::default()));
         self
     }
 
-    fn delete(mut self, keys: Keys) -> Self {
+    pub fn put_opt(mut self, kv: KeyValue, opt: PutOption) -> Self {
+        self.ops.push(TransactionOp::Put(kv, opt));
+        self
+    }
+
+    pub fn delete(mut self, keys: Keys) -> Self {
         self.ops.push(TransactionOp::Delete(keys));
         self
     }
 }
 
+#[derive(Default, Debug)]
+pub struct PutOption {
+    pub ttl: Duration,
+}
+
 #[derive(Debug)]
 pub enum TransactionOp {
-    Put(KeyValue),
+    Put(KeyValue, PutOption),
     Delete(Keys),
 }
 
@@ -139,8 +194,9 @@ pub trait MetaStore: Clone + Send + Sync {
     /// Can be canceled then by polling the `cancel` future in the Subscription.
     async fn watch(&self, keys: Keys, start_rev: i64) -> Result<KvChangeSubscription>;
     /// Execute an atomic write (write batch) over the store.
-    /// Maybe support etcd-like compare operations?
     async fn txn(&self, txn: Transaction) -> Result<()>;
+    /// Execute an conditional transaction over the store.
+    async fn txn_cond(&self, txn: CondTransaction) -> Result<()>;
 
     /// Set a key in the store.
     /// Maybe rename it to `put` to keeping consistency with etcd?

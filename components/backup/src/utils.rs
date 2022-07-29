@@ -3,20 +3,22 @@
 use std::sync::Arc;
 
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
-use file_system::IOType;
+use file_system::IoType;
 use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::error;
+use tikv_util::{error, sys::thread::ThreadBuildWrapper};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
 
 use crate::{metrics::*, Result};
 
-// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version V1/V1Ttl data and save to V2 format.
-// Use 1 other than 0 because 0 is not a acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
+// BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version
+// V1/V1Ttl data and save to V2 format. Use 1 other than 0 because 0 is not a
+// acceptable value for causal timestamp. See api_version::ApiV2::is_valid_ts.
 pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
-/// any task spawn into it would run until finish even the runtime isn't referenced.
+/// any task spawn into it would run until finish even the runtime isn't
+/// referenced.
 pub struct DaemonRuntime(Option<Runtime>);
 
 impl DaemonRuntime {
@@ -90,11 +92,11 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
-        .on_thread_start(|| {
+        .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
-            file_system::set_io_type(IOType::Export);
+            file_system::set_io_type(IoType::Export);
         })
-        .on_thread_stop(|| {
+        .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .worker_threads(thread_count)
@@ -109,11 +111,12 @@ pub struct KeyValueCodec {
 }
 
 // Usage of the KeyValueCodec in backup process is as following:
-// `new` -> `check_backup_api_version`, return false if not supported or input invalid.
-// encode the backup range with `encode_backup_key`
+// `new` -> `check_backup_api_version`, return false if not supported or input
+// invalid. encode the backup range with `encode_backup_key`
 // In `backup_raw` process -> use `is_valid_raw_value` &
 // `convert_encoded_key_to_dst_version` & `convert_encoded_value_to_dst_version`
-// In BackupResponse, call `decode_backup_key` & `convert_key_range_to_dst_version`
+// In BackupResponse, call `decode_backup_key` &
+// `convert_key_range_to_dst_version`
 impl KeyValueCodec {
     pub fn new(is_raw_kv: bool, cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> Self {
         KeyValueCodec {
@@ -204,7 +207,8 @@ impl KeyValueCodec {
         })
     }
 
-    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst apiversion key.
+    // Input key is encoded key for rawkv apiv2 and txnkv. return the decode dst
+    // apiversion key.
     pub fn decode_backup_key(&self, key: Option<Key>) -> Result<Vec<u8>> {
         if key.is_none() {
             return Ok(vec![]);
@@ -240,12 +244,14 @@ impl KeyValueCodec {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-    ) -> (Vec<u8>, Vec<u8>) {
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
         if !self.is_raw_kv {
-            return (start_key, end_key);
+            return Ok((start_key, end_key));
         }
         dispatch_api_version!(self.dst_api_ver, {
-            API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)
+            let (start, end) =
+                API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)?;
+            Ok((start, end))
         })
     }
 }
@@ -500,14 +506,14 @@ pub mod tests {
             (
                 ApiVersion::V1,
                 ApiVersion::V2,
-                b"abc".to_vec(),
-                ApiV2::encode_raw_key_owned(b"rabc".to_vec(), ts),
+                [61, 62, 63].to_vec(),
+                ApiV2::encode_raw_key_owned([114, 0, 0, 0, 61, 62, 63].to_vec(), ts),
             ),
             (
                 ApiVersion::V1ttl,
                 ApiVersion::V2,
                 b"".to_vec(),
-                ApiV2::encode_raw_key_owned(b"r".to_vec(), ts),
+                ApiV2::encode_raw_key_owned([114, 0, 0, 0].to_vec(), ts),
             ),
         ];
 

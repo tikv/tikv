@@ -2,6 +2,7 @@
 
 use std::{sync::*, time::Duration};
 
+use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, SinkExt};
@@ -18,7 +19,11 @@ use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_basic_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_basic_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -52,7 +57,8 @@ fn test_cdc_basic() {
         )))
         .unwrap();
 
-    let (k, v) = ("key1".to_owned(), "value".to_owned());
+    // If tikv enable ApiV2, txn key needs to start with 'x';
+    let (k, v) = ("xkey1".to_owned(), "value".to_owned());
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -99,7 +105,7 @@ fn test_cdc_basic() {
 
     // Split region 1
     let region1 = suite.cluster.get_region(&[]);
-    suite.cluster.must_split(&region1, b"key2");
+    suite.cluster.must_split(&region1, b"xkey2");
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -177,8 +183,79 @@ fn test_cdc_basic() {
 }
 
 #[test]
+fn test_cdc_rawkv_basic() {
+    let mut suite = TestSuite::new(1, ApiVersion::V2);
+
+    // rawkv
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    let (mut req_tx, _event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let event = receive_event(false);
+    event.events.into_iter().for_each(|e| {
+        match e.event.unwrap() {
+            // Even if there is no write,
+            // it should always outputs an Initialized event.
+            Event_oneof_event::Entries(es) => {
+                assert!(es.entries.len() == 1, "{:?}", es);
+                let e = &es.entries[0];
+                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+            }
+            other => panic!("unknown event {:?}", other),
+        }
+    });
+    // Sleep a while to make sure the stream is registered.
+    sleep_ms(1000);
+    // There must be a delegate.
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    scheduler
+        .schedule(Task::Validate(Validate::Region(
+            1,
+            Box::new(|delegate| {
+                let d = delegate.unwrap();
+                assert_eq!(d.downstreams().len(), 1);
+            }),
+        )))
+        .unwrap();
+
+    // If tikv enable ApiV2, raw key needs to start with 'r';
+    let (k, v) = (b"rkey1".to_vec(), b"value".to_vec());
+    suite.must_kv_put(1, k, v);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    // boundary case
+    let (k, v) = (b"r\0".to_vec(), b"value".to_vec());
+    suite.must_kv_put(1, k, v);
+    let mut events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+
+    match events.pop().unwrap().event.unwrap() {
+        Event_oneof_event::Entries(entries) => {
+            assert_eq!(entries.entries.len(), 1);
+            assert_eq!(entries.entries[0].get_type(), EventLogType::Committed);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+}
+
+#[test]
 fn test_cdc_not_leader() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_cdc_not_leader_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_not_leader_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let leader = suite.cluster.leader_of_region(1).unwrap();
     let req = suite.new_changedata_request(1);
@@ -295,7 +372,11 @@ fn test_cdc_not_leader() {
 
 #[test]
 fn test_cdc_cluster_id_mismatch() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_cdc_cluster_id_mismatch_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     // Send request with mismatched cluster id.
     let mut req = suite.new_changedata_request(1);
@@ -340,7 +421,11 @@ fn test_cdc_cluster_id_mismatch() {
 
 #[test]
 fn test_cdc_stale_epoch_after_region_ready() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_cdc_stale_epoch_after_region_ready_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -401,9 +486,13 @@ fn test_cdc_stale_epoch_after_region_ready() {
 
 #[test]
 fn test_cdc_scan() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_scan_impl<ApiV1 ApiV2>);
+}
 
-    let (k, v) = (b"key1".to_vec(), b"value".to_vec());
+fn test_cdc_scan_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
+
+    let (k, v) = (b"xkey1".to_vec(), b"value".to_vec());
     // Prewrite
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -521,8 +610,75 @@ fn test_cdc_scan() {
 }
 
 #[test]
+fn test_cdc_rawkv_scan() {
+    let mut suite = TestSuite::new(3, ApiVersion::V2);
+
+    suite.set_tso(10);
+    suite.flush_causal_timestamp_for_region(1);
+    let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
+    suite.must_kv_put(1, k1, v1);
+
+    let (k2, v2) = (b"rkey2".to_vec(), b"value2".to_vec());
+    suite.must_kv_put(1, k2, v2);
+
+    suite.set_tso(1000);
+    suite.flush_causal_timestamp_for_region(1);
+    let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
+    suite.must_kv_put(1, k3.clone(), v3.clone());
+
+    let (k4, v4) = (b"rkey4".to_vec(), b"value4".to_vec());
+    suite.must_kv_put(1, k4.clone(), v4.clone());
+
+    let mut req = suite.new_changedata_request(1);
+    req.set_kv_api(ChangeDataRequestKvApi::RawKv);
+    req.set_checkpoint_ts(999);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut events = receive_event(false).events.to_vec();
+    if events.len() == 1 {
+        events.extend(receive_event(false).events.into_iter());
+    }
+    assert_eq!(events.len(), 2, "{:?}", events);
+
+    match events.remove(0).event.unwrap() {
+        // Batch size is set to 3.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 2, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k3, "{:?}", es);
+            assert_eq!(e.value, v3, "{:?}", es);
+
+            let e = &es.entries[1];
+            assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", es);
+            assert_eq!(e.key, k4, "{:?}", es);
+            assert_eq!(e.value, v4, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    match events.pop().unwrap().event.unwrap() {
+        // Then it outputs Initialized event.
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1, "{:?}", es);
+            let e = &es.entries[0];
+            assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
+        }
+        other => panic!("unknown event {:?}", other),
+    }
+
+    event_feed_wrap.replace(None);
+    suite.stop();
+}
+
+#[test]
 fn test_cdc_tso_failure() {
-    let mut suite = TestSuite::new(3);
+    test_kv_format_impl!(test_cdc_tso_failure_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_tso_failure_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -660,7 +816,11 @@ fn test_region_split() {
 
 #[test]
 fn test_duplicate_subscribe() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_duplicate_subscribe_impl<ApiV1 ApiV2>);
+}
+
+fn test_duplicate_subscribe_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(3, F::TAG);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -697,17 +857,21 @@ fn test_duplicate_subscribe() {
 
 #[test]
 fn test_cdc_batch_size_limit() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_batch_size_limit_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = vec![0; 6 * 1024 * 1024];
     let mut m2 = Mutation::default();
-    let k2 = b"k2".to_vec();
+    let k2 = b"xk2".to_vec();
     m2.set_op(Op::Put);
     m2.key = k2.clone();
     m2.value = b"v2".to_vec();
@@ -727,7 +891,7 @@ fn test_cdc_batch_size_limit() {
             assert!(es.entries.len() == 1);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k1", "{:?}", e.key);
+            assert_eq!(e.key, b"xk1", "{:?}", e.key);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -744,7 +908,7 @@ fn test_cdc_batch_size_limit() {
     assert_eq!(entries.len(), 2, "{:?}", entries);
     let e = &entries[0];
     assert_eq!(e.get_type(), EventLogType::Committed, "{:?}", e.get_type());
-    assert_eq!(e.key, b"k2", "{:?}", e.key);
+    assert_eq!(e.key, b"xk2", "{:?}", e.key);
     let e = &entries[1];
     assert_eq!(
         e.get_type(),
@@ -756,12 +920,12 @@ fn test_cdc_batch_size_limit() {
     // Prewrite
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut m3 = Mutation::default();
-    let k3 = b"k3".to_vec();
+    let k3 = b"xk3".to_vec();
     m3.set_op(Op::Put);
     m3.key = k3.clone();
     m3.value = vec![0; 7 * 1024 * 1024];
     let mut m4 = Mutation::default();
-    let k4 = b"k4".to_vec();
+    let k4 = b"xk4".to_vec();
     m4.set_op(Op::Put);
     m4.key = k4;
     m4.value = b"v4".to_vec();
@@ -771,13 +935,13 @@ fn test_cdc_batch_size_limit() {
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2);
+            assert_eq!(es.entries.len(), 2);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k4", "{:?}", e.key);
+            assert_eq!(e.key, b"xk3", "{:?}", e.key);
             let e = &es.entries[1];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
-            assert_eq!(e.key, b"k3", "{:?}", e.key);
+            assert_eq!(e.key, b"xk4", "{:?}", e.key);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -788,7 +952,11 @@ fn test_cdc_batch_size_limit() {
 
 #[test]
 fn test_old_value_basic() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_old_value_basic_impl<ApiV1 ApiV2>);
+}
+
+fn test_old_value_basic_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
@@ -798,7 +966,7 @@ fn test_old_value_basic() {
 
     // Insert value
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Insert);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -945,7 +1113,11 @@ fn test_old_value_basic() {
 
 #[test]
 fn test_old_value_multi_changefeeds() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_old_value_multi_changefeeds_impl<ApiV1 ApiV2>);
+}
+
+fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
@@ -960,7 +1132,7 @@ fn test_old_value_multi_changefeeds() {
     sleep_ms(1000);
     // Insert value
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -1005,7 +1177,8 @@ fn test_old_value_multi_changefeeds() {
         }
     }
 
-    // The downstream 2 can also get old values because `req`.`extra_op` field is ignored now.
+    // The downstream 2 can also get old values because `req`.`extra_op` field is
+    // ignored now.
     event_count = 0;
     loop {
         let events = receive_event_2(false).events.to_vec();
@@ -1038,7 +1211,11 @@ fn test_old_value_multi_changefeeds() {
 
 #[test]
 fn test_cdc_resolve_ts_checking_concurrency_manager() {
-    let mut suite: crate::TestSuite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_resolve_ts_checking_concurrency_manager_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
     let lock_key = |key: &[u8], ts: u64| {
         let guard = block_on(cm.lock_key(&Key::from_raw(key)));
@@ -1108,10 +1285,10 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
         }
     }
 
-    let _guard = lock_key(b"a", 90);
-    // The resolved_ts should be blocked by the mem lock but it's already greater than 90.
-    // Retry until receiving an unchanged resolved_ts because the first several resolved ts received
-    // might be updated before acquiring the lock.
+    let _guard = lock_key(b"xa", 90);
+    // The resolved_ts should be blocked by the mem lock but it's already greater
+    // than 90. Retry until receiving an unchanged resolved_ts because the first
+    // several resolved ts received might be updated before acquiring the lock.
     let mut last_resolved_ts = 0;
     let mut success = false;
     for _ in 0..5 {
@@ -1135,8 +1312,11 @@ fn test_cdc_resolve_ts_checking_concurrency_manager() {
 
 #[test]
 fn test_cdc_1pc() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_1pc_impl<ApiV1 ApiV2>);
+}
 
+fn test_cdc_1pc_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
@@ -1154,8 +1334,8 @@ fn test_cdc_1pc() {
         }
     });
 
-    let (k1, v1) = (b"k1", b"v1");
-    let (k2, v2) = (b"k2", &[0u8; 512]);
+    let (k1, v1) = (b"xk1", b"v1");
+    let (k2, v2) = (b"xk2", &[0u8; 512]);
 
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
 
@@ -1200,12 +1380,12 @@ fn test_cdc_1pc() {
                     assert_eq!(entries.entries.len(), 2);
                     let (e0, e1) = (&entries.entries[0], &entries.entries[1]);
                     assert_eq!(e0.get_type(), EventLogType::Committed);
-                    assert_eq!(e0.get_key(), k1);
-                    assert_eq!(e0.get_value(), v1);
+                    assert_eq!(e0.get_key(), k2);
+                    assert_eq!(e0.get_value(), v2);
                     assert!(e0.commit_ts > resolved_ts);
                     assert_eq!(e1.get_type(), EventLogType::Committed);
-                    assert_eq!(e1.get_key(), k2);
-                    assert_eq!(e1.get_value(), v2);
+                    assert_eq!(e1.get_key(), k1);
+                    assert_eq!(e1.get_value(), v1);
                     assert!(e1.commit_ts > resolved_ts);
                     break;
                 }
@@ -1219,7 +1399,11 @@ fn test_cdc_1pc() {
 
 #[test]
 fn test_old_value_1pc() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_old_value_1pc_impl<ApiV1 ApiV2>);
+}
+
+fn test_old_value_1pc_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1227,7 +1411,7 @@ fn test_old_value_1pc() {
 
     // Insert value
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -1278,7 +1462,11 @@ fn test_old_value_1pc() {
 
 #[test]
 fn test_old_value_cache_hit() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_old_value_cache_hit_impl<ApiV1 ApiV2>);
+}
+
+fn test_old_value_cache_hit_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
@@ -1297,7 +1485,7 @@ fn test_old_value_cache_hit() {
 
     // Insert value, simulate INSERT INTO.
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Insert);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -1339,7 +1527,7 @@ fn test_old_value_cache_hit() {
 
     // Update a noexist value, simulate INSERT IGNORE INTO.
     let mut m2 = Mutation::default();
-    let k2 = b"k2".to_vec();
+    let k2 = b"xk2".to_vec();
     m2.set_op(Op::Put);
     m2.key = k2.clone();
     m2.value = b"v2".to_vec();
@@ -1381,7 +1569,7 @@ fn test_old_value_cache_hit() {
 
     // Update an exist value, simulate UPDATE.
     let mut m2 = Mutation::default();
-    let k2 = b"k2".to_vec();
+    let k2 = b"xk2".to_vec();
     m2.set_op(Op::Put);
     m2.key = k2.clone();
     m2.value = b"v3".to_vec();
@@ -1427,7 +1615,11 @@ fn test_old_value_cache_hit() {
 
 #[test]
 fn test_old_value_cache_hit_pessimistic() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_old_value_cache_hit_pessimistic_impl<ApiV1 ApiV2>);
+}
+
+fn test_old_value_cache_hit_pessimistic_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
@@ -1446,7 +1638,7 @@ fn test_old_value_cache_hit_pessimistic() {
 
     // Insert a value in pessimistic txn.
     let mut m3 = Mutation::default();
-    let k3 = b"k3".to_vec();
+    let k3 = b"xk3".to_vec();
     m3.set_op(Op::PessimisticLock);
     m3.key = k3.clone();
     suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 10.into(), 10.into());
@@ -1505,7 +1697,7 @@ fn test_old_value_cache_hit_pessimistic() {
 
     // Update a value in pessimistic txn.
     let mut m3 = Mutation::default();
-    let k3 = b"k3".to_vec();
+    let k3 = b"xk3".to_vec();
     m3.set_op(Op::PessimisticLock);
     m3.key = k3.clone();
     suite.must_acquire_pessimistic_lock(1, vec![m3.clone()], k3.clone(), 20.into(), 20.into());
@@ -1618,10 +1810,14 @@ fn test_region_created_replicate() {
 
 #[test]
 fn test_cdc_scan_ignore_gc_fence() {
-    // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_scan_ignore_gc_fence_impl<ApiV1 ApiV2>);
+}
 
-    let (key, v1, v2) = (b"key", b"value1", b"value2");
+fn test_cdc_scan_ignore_gc_fence_impl<F: KvFormat>() {
+    // This case is similar to `test_cdc_scan` but constructs a case with GC Fence.
+    let mut suite = TestSuite::new(1, F::TAG);
+
+    let (key, v1, v2) = (b"xkey", b"value1", b"value2");
 
     // Write two versions to the key.
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
@@ -1645,9 +1841,10 @@ fn test_cdc_scan_ignore_gc_fence() {
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
 
-    // Assume the first version above is written by async commit and it's commit_ts is not unique.
-    // Use it's commit_ts as another transaction's start_ts.
-    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first version.
+    // Assume the first version above is written by async commit and it's commit_ts
+    // is not unique. Use it's commit_ts as another transaction's start_ts.
+    // Run check_txn_status on commit_ts1 so that gc_fence will be set on the first
+    // version.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let action = suite.must_check_txn_status(
         1,
@@ -1699,7 +1896,11 @@ fn test_cdc_scan_ignore_gc_fence() {
 
 #[test]
 fn test_cdc_extract_rollback_if_gc_fence_set() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_extract_rollback_if_gc_fence_set_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1720,7 +1921,7 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
     sleep_ms(1000);
 
     // Write two versions of a key
-    let (key, v1, v2, v3) = (b"key", b"value1", b"value2", b"value3");
+    let (key, v1, v2, v3) = (b"xkey", b"value1", b"value2", b"value3");
     let start_ts1 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1741,9 +1942,10 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
     let commit_ts2 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(1, vec![key.to_vec()], start_ts2, commit_ts2);
 
-    // We don't care about the events caused by the previous writings in this test case, and it's
-    // too complicated to check them. Just skip them here, and wait for resolved_ts to be pushed to
-    // a greater value than the two versions' commit_ts-es.
+    // We don't care about the events caused by the previous writings in this test
+    // case, and it's too complicated to check them. Just skip them here, and
+    // wait for resolved_ts to be pushed to a greater value than the two
+    // versions' commit_ts-es.
     let skip_to_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     loop {
         let e = receive_event(true);
@@ -1754,9 +1956,10 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
         }
     }
 
-    // Assume the two versions of the key are written by async commit transactions, and their
-    // commit_ts-es are also other transaction's start_ts-es. Run check_txn_status on the
-    // commit_ts-es of the two versions to cause overlapping rollback.
+    // Assume the two versions of the key are written by async commit transactions,
+    // and their commit_ts-es are also other transaction's start_ts-es. Run
+    // check_txn_status on the commit_ts-es of the two versions to cause
+    // overlapping rollback.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_check_txn_status(
         1,
@@ -1808,9 +2011,9 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
             other => panic!("unknown event {:?}", other),
         });
 
-    // In some special cases, a newly committed record may carry an overlapped rollback initially.
-    // In this case, gc_fence shouldn't be set, and CDC ignores the rollback and handles the
-    // committing normally.
+    // In some special cases, a newly committed record may carry an overlapped
+    // rollback initially. In this case, gc_fence shouldn't be set, and CDC
+    // ignores the rollback and handles the committing normally.
     let start_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1832,11 +2035,11 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
             other => panic!("unknown event {:?}", other),
         });
 
-    // Again, assume the transaction is committed with async commit protocol, and the commit_ts is
-    // also another transaction's start_ts.
+    // Again, assume the transaction is committed with async commit protocol, and
+    // the commit_ts is also another transaction's start_ts.
     let commit_ts3 = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    // Rollback another transaction before committing, then the rolling back information will be
-    // recorded in the lock.
+    // Rollback another transaction before committing, then the rolling back
+    // information will be recorded in the lock.
     let caller_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_check_txn_status(
         1,
@@ -1883,10 +2086,11 @@ fn test_cdc_extract_rollback_if_gc_fence_set() {
     suite.stop();
 }
 
-// This test is created for covering the case that term was increased without leader change.
-// Ideally leader id and term in StoreMeta should be updated together with a yielded SoftState,
-// but sometimes the leader was transferred to another store and then changed back,
-// a follower would not get a new SoftState.
+// This test is created for covering the case that term was increased without
+// leader change. Ideally leader id and term in StoreMeta should be updated
+// together with a yielded SoftState, but sometimes the leader was transferred
+// to another store and then changed back, a follower would not get a new
+// SoftState.
 #[test]
 fn test_term_change() {
     let cluster = new_server_cluster(0, 3);
@@ -1939,7 +2143,11 @@ fn test_term_change() {
 
 #[test]
 fn test_cdc_no_write_corresponding_to_lock() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_no_write_corresponding_to_lock_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_no_write_corresponding_to_lock_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1947,7 +2155,7 @@ fn test_cdc_no_write_corresponding_to_lock() {
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -1984,7 +2192,11 @@ fn test_cdc_no_write_corresponding_to_lock() {
 
 #[test]
 fn test_cdc_write_rollback_when_no_lock() {
-    let mut suite = TestSuite::new(1);
+    test_kv_format_impl!(test_cdc_write_rollback_when_no_lock_impl<ApiV1 ApiV2>);
+}
+
+fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
+    let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
@@ -1992,7 +2204,7 @@ fn test_cdc_write_rollback_when_no_lock() {
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
-    let k1 = b"k1".to_vec();
+    let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
     m1.value = b"v1".to_vec();
@@ -2110,4 +2322,40 @@ fn test_resolved_ts_with_learners() {
         }
     }
     panic!("resolved timestamp should be advanced correctly");
+}
+
+#[test]
+fn test_prewrite_without_value() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(rid);
+    let client = suite.get_tikv_client(rid).clone();
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+
+    // Perform a pessimistic prewrite with a large value.
+    let mut muts = vec![Mutation::default()];
+    muts[0].set_op(Op::Put);
+    muts[0].key = b"key".to_vec();
+    muts[0].value = large_value.clone();
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
+
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // The prewrite can be retrieved from incremental scan.
+    let event = receive_event(false);
+    assert_eq!(
+        event.get_events()[0].get_entries().entries[0].value,
+        large_value
+    );
+
+    // check_txn_status will put the lock again, but without value.
+    must_check_txn_status(&client, ctx.clone(), b"key", 10, 12, 12);
+    must_kv_commit(&client, ctx, vec![b"key".to_vec()], 10, 14, 14);
+    // The lock without value shouldn't be retrieved.
+    let event = receive_event(false);
+    assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }

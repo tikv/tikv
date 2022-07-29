@@ -27,7 +27,7 @@ fn test_bucket_stats() {
     req.set_context(ctx);
     req.set_keys(protobuf::RepeatedField::from(keys));
     client.raw_batch_get(&req).unwrap();
-    sleep_ms(400);
+    sleep_ms(600);
     let buckets = cluster.must_get_buckets(1);
     assert_eq!(buckets.meta.keys.len(), 2);
     assert_eq!(buckets.stats.get_write_keys(), [50]);

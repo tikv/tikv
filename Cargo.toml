@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.0.0-alpha"
+version = "6.2.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -53,6 +53,7 @@ test-engines-panic = [
 ]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
+pprof-fp = ["pprof/frame-pointer"]
 
 # for testing configure propegate to other crates
 # https://stackoverflow.com/questions/41700543/can-we-share-test-utilites-between-crates
@@ -88,11 +89,13 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
 futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
-grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
+getset = "0.1"
+grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 http = "0"
@@ -107,7 +110,7 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
-match_template = { path = "components/match_template" }
+match-template = "0.0.1"
 memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
@@ -123,12 +126,13 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
+pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "3fed55af8fc6cf69dbd954a0321c799c5a111e4e", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
-raftstore = { path = "components/raftstore", default-features = false }
+raftstore = { path = "components/raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.7.3"
 regex = "1.3"
 resource_metering = { path = "components/resource_metering" }
@@ -139,7 +143,7 @@ semver = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 sst_importer = { path = "components/sst_importer", default-features = false }
@@ -161,14 +165,12 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 toml = "0.5"
+tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types", default-features = false }
 url = "2"
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
-
-[target.'cfg(target_arch = "x86_64")'.dependencies]
-pprof = { version = "^0.6", default-features = false, features = ["flamegraph", "protobuf-codec"] }
 
 [dev-dependencies]
 api_version = { path = "components/api_version", features = ["testexport"] }
@@ -187,7 +189,6 @@ raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
-pprof = { git = "https://github.com/tikv/pprof-rs.git" }
 
 # TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
 rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
@@ -242,11 +243,11 @@ members = [
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
-  "components/match_template",
   "components/online_config",
   "components/panic_hook",
   "components/pd_client",
   "components/raftstore",
+  "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
   "components/server",
@@ -269,6 +270,7 @@ members = [
   "components/tikv_alloc",
   "components/tikv_util",
   "components/tipb_helper",
+  "components/tracker",
   "components/txn_types",
   "fuzz",
   "fuzz/fuzzer-afl",
@@ -278,9 +280,25 @@ members = [
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
+[profile.dev.package.grpcio-sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.librocksdb_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.libtitan_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tests]
+debug = 1
+opt-level = 1
+
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -306,7 +324,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true

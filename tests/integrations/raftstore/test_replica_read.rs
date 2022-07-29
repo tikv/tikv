@@ -61,10 +61,10 @@ fn test_replica_read_not_applied() {
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
-    // After the leader has committed to its term, pending reads on followers can be responsed.
-    // However followers can receive `ReadIndexResp` after become candidate if the leader has
-    // hibernated. So, disable the feature to avoid read requests on followers to be cleared as
-    // stale.
+    // After the leader has committed to its term, pending reads on followers can be
+    // responsed. However followers can receive `ReadIndexResp` after become
+    // candidate if the leader has hibernated. So, disable the feature to avoid
+    // read requests on followers to be cleared as stale.
     cluster.cfg.raft_store.hibernate_regions = false;
 
     cluster.pd_client.disable_default_operator();
@@ -103,13 +103,15 @@ fn test_replica_read_not_applied() {
     let resp1_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k1", true, true);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
-    // Unpark all append responses so that the new leader can commit its first entry.
+    // Unpark all append responses so that the new leader can commit its first
+    // entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
     for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
-    // The old read index request won't be blocked forever as it's retried internally.
+    // The old read index request won't be blocked forever as it's retried
+    // internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(6)).unwrap();
@@ -128,8 +130,6 @@ fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    // let max_lease = Duration::from_secs(2);
-    // cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -210,19 +210,14 @@ fn test_read_hibernated_region() {
     cluster.stop_node(2);
     cluster.run_node(2).unwrap();
 
-    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = mpsc::sync_channel(1);
+    let store2_sent_msgs = Arc::new(Mutex::new(Vec::new()));
     let filter = Box::new(
-        RegionPacketFilter::new(1, 3)
-            .direction(Direction::Recv)
-            .reserve_dropped(Arc::clone(&dropped_msgs))
-            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-                if msg.has_extra_msg() {
-                    tx.send(msg.clone()).unwrap();
-                }
-            })),
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Send)
+            .reserve_dropped(Arc::clone(&store2_sent_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(3, filter);
+    cluster.sim.wl().add_send_filter(2, filter);
+    cluster.pd_client.trigger_leader_info_loss();
     // This request will fail because no valid leader.
     let resp1_ch = async_read_on_peer(&mut cluster, p2.clone(), region.clone(), b"k1", true, true);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -231,11 +226,20 @@ fn test_read_hibernated_region() {
         "{:?}",
         resp1.get_header()
     );
-    // Wait util receiving wake up message.
-    let wake_up_msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    cluster.sim.wl().clear_recv_filters(3);
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    router.send_raft_message(wake_up_msg).unwrap();
+    thread::sleep(Duration::from_millis(300));
+    cluster.sim.wl().clear_send_filters(2);
+    let mut has_extra_message = false;
+    for msg in std::mem::take(&mut *store2_sent_msgs.lock().unwrap()) {
+        let to_store = msg.get_to_peer().get_store_id();
+        assert_ne!(to_store, 0, "{:?}", msg);
+        if to_store == 3 && msg.has_extra_msg() {
+            has_extra_message = true;
+        }
+        let router = cluster.sim.wl().get_router(to_store).unwrap();
+        router.send_raft_message(msg).unwrap();
+    }
+    // Had a wakeup message from 2 to 3.
+    assert!(has_extra_message);
     // Wait for the leader is woken up.
     thread::sleep(Duration::from_millis(500));
     let resp2_ch = async_read_on_peer(&mut cluster, p2, region, b"k1", true, true);
@@ -397,7 +401,7 @@ fn test_split_isolation() {
     // Use long election timeout and short lease.
     configure_for_hibernate(&mut cluster);
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(11);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -414,8 +418,9 @@ fn test_split_isolation() {
     let r1 = cluster.get_region(b"k2");
     cluster.must_split(&r1, b"k2");
     let idx = cluster.truncated_state(1, 1).get_index();
-    // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
-    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit * 2 {
+    // Trigger a log compaction, so the left region ['', 'k2'] cannot created
+    // through split cmd.
+    for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
     cluster.wait_log_truncated(1, 1, idx + 1);
@@ -435,7 +440,8 @@ fn test_split_isolation() {
     }
     let peer = peer.unwrap();
     cluster.run_node(2).unwrap();
-    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be created.
+    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer
+    // cannot be created.
     for _ in 0..10 {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
         let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -447,14 +453,16 @@ fn test_split_isolation() {
     panic!("test failed");
 }
 
-/// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta` will be replace with
-/// the new `ReadDelegate`, and the `ReadDelegate` stored at `LocalReader` should also be updated
+/// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta`
+/// will be replace with the new `ReadDelegate`, and the `ReadDelegate` stored
+/// at `LocalReader` should also be updated
 #[test]
 fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -467,8 +475,9 @@ fn test_read_local_after_snapshpot_replace_peer() {
         must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
     }
 
-    // send read request to peer 3, so the local reader will cache the `ReadDelegate` of peer 3
-    // it is okey only send one request because the read pool thread count is 1
+    // send read request to peer 3, so the local reader will cache the
+    // `ReadDelegate` of peer 3 it is okay only send one request because the
+    // read pool thread count is 1
     let r = cluster.get_region(b"k1");
     // wait applying snapshot finish
     sleep_ms(100);
@@ -511,13 +520,14 @@ fn test_read_local_after_snapshpot_replace_peer() {
     assert_eq!(exp_value, b"v3");
 }
 
-/// The case checks if a malformed request should not corrupt the leader's read queue.
+/// The case checks if a malformed request should not corrupt the leader's read
+/// queue.
 #[test]
 fn test_malformed_read_index() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(12);
     cluster.cfg.raft_store.hibernate_regions = true;
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::hours(10);
     let pd_client = Arc::clone(&cluster.pd_client);

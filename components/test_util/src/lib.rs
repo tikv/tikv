@@ -20,6 +20,7 @@ use std::{
 };
 
 use rand::Rng;
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 
 pub use crate::{
     encryption::*,
@@ -31,12 +32,12 @@ pub use crate::{
 };
 
 pub fn setup_for_ci() {
-    // We use backtrace in tests to record suspicious problems. And loading backtrace
-    // the first time can take several seconds. Spawning a thread and load it ahead
-    // of time to avoid causing timeout.
+    // We use backtrace in tests to record suspicious problems. And loading
+    // backtrace the first time can take several seconds. Spawning a thread and
+    // load it ahead of time to avoid causing timeout.
     thread::Builder::new()
         .name(tikv_util::thd_name!("backtrace-loader"))
-        .spawn(::backtrace::Backtrace::new)
+        .spawn_wrapper(::backtrace::Backtrace::new)
         .unwrap();
 
     if env::var("CI").is_ok() {

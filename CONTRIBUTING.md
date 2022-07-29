@@ -77,6 +77,12 @@ make test
 env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
+Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to run tests:
+
+```bash
+env EXTRA_CARGO_ARGS=$TESTNAME make test_with_nextest
+```
+
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
 
 ```bash
@@ -92,7 +98,7 @@ Please follow this style to make TiKV easy to review, maintain, and develop.
 
 ### Build issues
 
-To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include full debug. To decrease compilation time with another ~5% (around 10 seconds for a 4 min build time), change the `debug = true` to `debug = 1` in the Cargo.toml file to only include line numbers for `dev` and `test`. Another way to change debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
+To reduce compilation time and disk usage, TiKV builds do not include full debugging information by default &mdash; only tests package will have line debug info enabled. To change debuginfo, just precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
 
 ```bash
 RUSTFLAGS=-Cdebuginfo=1 make dev

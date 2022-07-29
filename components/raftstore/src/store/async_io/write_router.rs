@@ -90,7 +90,8 @@ where
         }
     }
 
-    /// Send write msg to write worker or push into inner buffer and wait for rescheduling.
+    /// Send write msg to write worker or push into inner buffer and wait for
+    /// rescheduling.
     pub fn send_write_msg<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -105,9 +106,9 @@ where
         }
     }
 
-    /// If there is some msgs need to be rescheduled, check the new persisted number and
-    /// sending these msgs to a new write worker if persisted number is greater than
-    /// `self.last_unpersisted`.
+    /// If there is some msgs need to be rescheduled, check the new persisted
+    /// number and sending these msgs to a new write worker if persisted
+    /// number is greater than `self.last_unpersisted`.
     pub fn check_new_persisted<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -117,7 +118,8 @@ where
             return;
         }
         // The peer must be destroyed after all previous write tasks have been finished.
-        // So do not worry about a destroyed peer being counted in `io_reschedule_concurrent_count`.
+        // So do not worry about a destroyed peer being counted in
+        // `io_reschedule_concurrent_count`.
         ctx.io_reschedule_concurrent_count()
             .fetch_sub(1, Ordering::SeqCst);
 
@@ -144,10 +146,12 @@ where
         }
     }
 
-    /// Check if write task can be sent to write worker or pushed into `self.pending_write_msgs`.
+    /// Check if write task can be sent to write worker or pushed into
+    /// `self.pending_write_msgs`.
     ///
-    /// Returns false if the task should be pushed into `self.pending_write_msgs`.
-    /// true means the task should be sent to the write worker.
+    /// Returns false if the task should be pushed into
+    /// `self.pending_write_msgs`. true means the task should be sent to the
+    /// write worker.
     fn should_send<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -180,7 +184,8 @@ where
         }
         if self.next_writer_id.is_none() {
             // The hot write peers should not be rescheduled entirely.
-            // So it will not be rescheduled if the random id is the same as the original one.
+            // So it will not be rescheduled if the random id is the same as the original
+            // one.
             let new_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
             if new_id == self.writer_id {
                 // Reset the time
@@ -191,8 +196,9 @@ where
         }
         // This peer should be rescheduled.
         // Try to add 1 to `io_reschedule_concurrent_count`.
-        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
-        // of rescheduling peer fsm because rescheduling will introduce performance penalty.
+        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the
+        // concurrent count of rescheduling peer fsm because rescheduling will
+        // introduce performance penalty.
         let success = ctx
             .io_reschedule_concurrent_count()
             .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |c| {
@@ -205,7 +211,8 @@ where
             .is_ok();
         if success {
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
-            // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
+            // Rescheduling succeeds. The task should be pushed into
+            // `self.pending_write_msgs`.
             self.last_unpersisted = last_unpersisted;
             info!("starts io reschedule"; "tag" => &self.tag);
             false

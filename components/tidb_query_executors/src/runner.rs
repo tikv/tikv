@@ -32,32 +32,34 @@ use super::{
     *,
 };
 
-// TODO: The value is chosen according to some very subjective experience, which is not tuned
-// carefully. We need to benchmark to find a best value. Also we may consider accepting this value
-// from TiDB side.
+// TODO: The value is chosen according to some very subjective experience, which
+// is not tuned carefully. We need to benchmark to find a best value. Also we
+// may consider accepting this value from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
 
-// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
+// TODO: This value is chosen based on MonetDB/X100's research without our own
+// benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
-/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time a coroutine
-/// can run without being yielded.
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
+/// a coroutine can run without being yielded.
 pub const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
-    /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
-    /// whether or not the deadline is exceeded and break the process if so.
+    /// The deadline of this handler. For each check point (e.g. each iteration)
+    /// we need to check whether or not the deadline is exceeded and break
+    /// the process if so.
     // TODO: Deprecate it using a better deadline mechanism.
     deadline: Deadline,
 
     out_most_executor: Box<dyn BatchExecutor<StorageStats = SS>>,
 
-    /// The offset of the columns need to be outputted. For example, TiDB may only needs a subset
-    /// of the columns in the result so that unrelated columns don't need to be encoded and
-    /// returned back.
+    /// The offset of the columns need to be outputted. For example, TiDB may
+    /// only needs a subset of the columns in the result so that unrelated
+    /// columns don't need to be encoded and returned back.
     output_offsets: Vec<u32>,
 
     config: Arc<EvalConfig>,
@@ -76,16 +78,18 @@ pub struct BatchExecutorsRunner<SS> {
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
 
-    /// If it's a paging request, paging_size indicates to the required size for current page.
+    /// If it's a paging request, paging_size indicates to the required size for
+    /// current page.
     paging_size: Option<u64>,
 
     quota_limiter: Arc<QuotaLimiter>,
 }
 
-// We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
+// We assign a dummy type `()` so that we can omit the type when calling
+// `check_supported`.
 impl BatchExecutorsRunner<()> {
-    /// Given a list of executor descriptors and checks whether all executor descriptors can
-    /// be used to build batch executors.
+    /// Given a list of executor descriptors and checks whether all executor
+    /// descriptors can be used to build batch executors.
     pub fn check_supported(exec_descriptors: &[tipb::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
@@ -378,14 +382,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
-        let config = Arc::new(EvalConfig::from_request(&req)?);
+        let mut config = EvalConfig::from_request(&req)?;
+        config.paging_size = paging_size;
+        let config = Arc::new(config);
 
         let out_most_executor = build_executors(
             req.take_executors().into(),
             storage,
             ranges,
             config.clone(),
-            is_streaming || paging_size.is_some(), // For streaming and paging request, executors will continue scan from range end where last scan is finished
+            is_streaming || paging_size.is_some(), /* For streaming and paging request,
+                                                    * executors will continue scan from range
+                                                    * end where last scan is finished */
         )?;
 
         let encode_type = if !is_arrow_encodable(out_most_executor.schema()) {
@@ -432,8 +440,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// handle_request returns the response of selection and an optional range,
     /// only paging request will return Some(IntervalRange),
     /// this should be used when calculating ranges of the next batch.
-    /// IntervalRange records whole range scanned though there are gaps in multi ranges.
-    /// e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4) with IntervalRange like (k1, k4).
+    /// IntervalRange records whole range scanned though there are gaps in multi
+    /// ranges. e.g.: [(k1 -> k2), (k4 -> k5)] may got response (k1, k2, k4)
+    /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
         let mut batch_size = Self::batch_initial_size();
@@ -451,7 +460,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             let mut chunk = Chunk::default();
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
                 let _guard = sample.observe_cpu();
                 self.internal_handle_request(
@@ -463,7 +472,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 )?
             };
 
-            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::dag)

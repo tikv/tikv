@@ -23,7 +23,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        display => "kv::command::commit {} {} -> {} | {:?}", (keys.len, lock_ts, commit_ts, ctx),
+        display => "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx),
         content => {
             /// The keys affected.
             keys: Vec<Key>,
@@ -37,6 +37,7 @@ command! {
 impl CommandExt for Commit {
     ctx!();
     tag!(commit);
+    request_type!(KvCommit);
     ts!(commit_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

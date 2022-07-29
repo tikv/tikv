@@ -6,29 +6,29 @@ mod stub {
 
     use strum::EnumCount;
 
-    use crate::{IOBytes, IOContext, IOType};
+    use crate::{IoBytes, IoContext, IoType};
 
     pub fn init() -> Result<(), String> {
         Err("No I/O tracing tool available".to_owned())
     }
 
     thread_local! {
-        static IO_CTX: Cell<IOContext> = Cell::new(IOContext::new(IOType::Other));
+        static IO_CTX: Cell<IoContext> = Cell::new(IoContext::new(IoType::Other));
     }
 
-    pub(crate) fn get_io_context() -> IOContext {
+    pub(crate) fn get_io_context() -> IoContext {
         IO_CTX.with(|ctx| ctx.get())
     }
 
-    pub(crate) fn set_io_context(new_ctx: IOContext) {
+    pub(crate) fn set_io_context(new_ctx: IoContext) {
         IO_CTX.with(|ctx| ctx.set(new_ctx));
     }
 
-    pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+    pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
         Default::default()
     }
 
-    pub fn fetch_thread_io_bytes() -> IOBytes {
+    pub fn fetch_thread_io_bytes() -> IoBytes {
         Default::default()
     }
 }
@@ -47,8 +47,10 @@ pub use proc::*;
 
 #[cfg(test)]
 mod tests {
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
+
     use super::*;
-    use crate::{IOContext, IOType};
+    use crate::{IoContext, IoType};
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {
@@ -56,8 +58,8 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
-                    set_io_context(IOContext::new(IOType::ForegroundWrite));
+                std::thread::Builder::new().spawn_wrapper(move || {
+                    set_io_context(IoContext::new(IoType::ForegroundWrite));
                     tx_clone.send(()).unwrap();
                 })
             })
@@ -74,17 +76,17 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
-                    set_io_context(IOContext::new(IOType::ForegroundWrite));
+                std::thread::Builder::new().spawn_wrapper(move || {
+                    set_io_context(IoContext::new(IoType::ForegroundWrite));
                     tx_clone.send(()).unwrap();
                 })
             })
             .collect::<Vec<_>>();
         b.iter(|| {
-            if get_io_context().io_type == IOType::ForegroundRead {
-                set_io_context(IOContext::new(IOType::ForegroundWrite));
+            if get_io_context().io_type == IoType::ForegroundRead {
+                set_io_context(IoContext::new(IoType::ForegroundWrite));
             } else {
-                set_io_context(IOContext::new(IOType::ForegroundRead));
+                set_io_context(IoContext::new(IoType::ForegroundRead));
             }
         });
         for _ in 0..8 {

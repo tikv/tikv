@@ -913,7 +913,8 @@ const RAW_KEY_CASE: &[u8] = b"r\0_a";
 // Test API version verification for txnkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_txnkv_api_version() {
     let test_data = vec![
@@ -966,7 +967,10 @@ fn test_txn_store_txnkv_api_version() {
                 store.batch_get_command_err(&[key, key, key], 10);
 
                 store.scan_err(key, None, 100, 10);
-                store.scan_locks_err(20, key, &end_key, 10);
+
+                // To compatible with TiDB gc-worker, we remove check_api_version_ranges in
+                // scan_lock
+                store.scan_locks_ok(20, key, &end_key, 10, vec![]);
 
                 store.delete_range_err(key, key);
             }
@@ -977,7 +981,8 @@ fn test_txn_store_txnkv_api_version() {
 // Test API version verification for rawkv requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_store_rawkv_api_version() {
     let test_data = vec![

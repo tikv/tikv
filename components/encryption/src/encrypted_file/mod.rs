@@ -34,8 +34,8 @@ impl<'a> EncryptedFile<'a> {
         EncryptedFile { base, name }
     }
 
-    /// Read and decrypt the file. Caller need to handle the NotFound io error in case file not
-    /// exists.
+    /// Read and decrypt the file. Caller need to handle the NotFound io error
+    /// in case file not exists.
     pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
         let start = Instant::now();
         let res = OpenOptions::new()
@@ -127,7 +127,6 @@ mod tests {
 
         let content = b"test content";
         file.write(content, &PlaintextBackend::default()).unwrap();
-        drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(file.read(&PlaintextBackend::default()).unwrap(), content);

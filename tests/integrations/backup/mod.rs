@@ -21,11 +21,11 @@ fn assert_same_file_name(s1: String, s2: String) {
     let tokens1: Vec<&str> = s1.split('_').collect();
     let tokens2: Vec<&str> = s2.split('_').collect();
     assert_eq!(tokens1.len(), tokens2.len());
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
-    // 2_1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693105_write.sst
+    // 2/1_1_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855_1609407693199_write.sst
     // should be equal
     for i in 0..tokens1.len() {
-        if i != 4 {
+        if i != 3 {
             assert_eq!(tokens1[i], tokens2[i]);
         }
     }
@@ -33,9 +33,11 @@ fn assert_same_file_name(s1: String, s2: String) {
 
 fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
-    // Sort here by start key in case of unordered response (by pipelined write + scan)
-    // `sort_by_key` couldn't be used here -- rustc would complain that `file.start_key.as_slice()`
-    //       may not live long enough. (Is that a bug of rustc?)
+    // Sort here by start key in case of unordered response (by pipelined write +
+    // scan).
+    // `sort_by_key` couldn't be used here -- rustc would complain that
+    // `file.start_key.as_slice()` may not live long enough. (Is that a
+    // bug of rustc?)
     files1.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
     files2.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
 
@@ -52,6 +54,11 @@ fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvpro
         assert_ne!(f1.cipher_iv, f2.cipher_iv);
         f1.cipher_iv = "".to_string().into_bytes();
         f2.cipher_iv = "".to_string().into_bytes();
+        // After RocksDB 6.12, each SST file writer writes its own session id to the
+        // generated file. The SHA will not never be the same.
+        // Detail: https://github.com/facebook/rocksdb/pull/6983
+        f1.sha256.clear();
+        f2.sha256.clear();
         assert_eq!(f1, f2);
     }
 }
@@ -174,7 +181,9 @@ fn test_backup_huge_range_and_import() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = block_on(rx.collect::<Vec<_>>());
+    let mut resps1 = block_on(rx.collect::<Vec<_>>());
+    resps1.sort_by(|r1, r2| r1.start_key.cmp(&r2.start_key));
+
     // Only leader can handle backup.
     // ... But the response may be split into two parts (when meeting huge region).
     assert_eq!(resps1.len(), 2, "{:?}", resps1);
@@ -187,9 +196,8 @@ fn test_backup_huge_range_and_import() {
     assert!(!resps1[0].get_files().is_empty());
 
     // Sort the files for avoiding race conditions. (would this happen?)
-    if files1[0].start_key > files1[1].start_key {
-        files1.swap(0, 1);
-    }
+    files1.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
+
     assert_eq!(resps1[0].start_key, b"".to_vec());
     assert_eq!(resps1[0].end_key, resps1[1].start_key);
     assert_eq!(resps1[1].end_key, b"".to_vec());
@@ -353,7 +361,9 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
         let key = {
             let mut key = k.into_bytes();
             if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
-                key.insert(0, b'r')
+                let mut apiv2_key = [b'r', 0, 0, 0].to_vec();
+                apiv2_key.extend(key);
+                key = apiv2_key;
             }
             key
         };
@@ -363,9 +373,17 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
 
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
+    let (backup_start, backup_end) = if cur_api_ver != dst_api_ver {
+        (
+            vec![b'r', 0, 0, 0, b'r', b'a'],
+            vec![b'r', 0, 0, 0, b'r', b'z'],
+        )
+    } else {
+        (vec![b'r', b'a'], vec![b'r', b'z'])
+    };
     let rx = target_suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        backup_start, // start
+        backup_end,   // end
         cf,
         &make_unique_dir(tmp.path()),
         dst_api_ver,
@@ -454,7 +472,8 @@ fn test_backup_raw_meta_impl(cur_api_version: ApiVersion, dst_api_version: ApiVe
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
-    // assert_eq!(total_size, 1619); // the number changed when kv size change, should not be an test points.
+    // assert_eq!(total_size, 1619);
+    // the number changed when kv size change, should not be an test points.
     // please update this number (must be > 0) when the test failed
 
     suite.stop();

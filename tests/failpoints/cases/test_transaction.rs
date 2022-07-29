@@ -1,7 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{mpsc::channel, Arc},
+    sync::{
+        mpsc::{channel, sync_channel},
+        Arc,
+    },
     thread,
     time::Duration,
 };
@@ -68,8 +71,13 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
         .unwrap();
 
     let (prewrite_tx, prewrite_rx) = channel();
+    let (fp_tx, fp_rx) = sync_channel(1);
     // sleep a while between getting max ts and store the lock in memory
-    fail::cfg("before-set-lock-in-memory", "sleep(500)").unwrap();
+    fail::cfg_callback("before-set-lock-in-memory", move || {
+        fp_tx.send(()).unwrap();
+        thread::sleep(Duration::from_millis(200));
+    })
+    .unwrap();
     storage
         .sched_txn_command(
             commands::Prewrite::new(
@@ -91,8 +99,7 @@ fn test_atomic_getting_max_ts_and_storing_memory_lock() {
             }),
         )
         .unwrap();
-    // sleep a while so prewrite gets max ts before get is triggered
-    thread::sleep(Duration::from_millis(200));
+    fp_rx.recv().unwrap();
     match block_on(storage.get(Context::default(), Key::from_raw(b"k"), 100.into())) {
         // In this case, min_commit_ts is smaller than the start ts, but the lock is visible
         // to the get.
@@ -114,7 +121,8 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .build()
         .unwrap();
 
-    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
+    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the
+    // following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
@@ -144,7 +152,8 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .unwrap();
     let has_lock = block_on(get_fut).is_err();
     let res = prewrite_rx.recv().unwrap().unwrap();
-    // We must make sure either the lock is visible to the reader or min_commit_ts > read_ts.
+    // We must make sure either the lock is visible to the reader or min_commit_ts >
+    // read_ts.
     assert!(res.min_commit_ts > read_ts || has_lock);
 }
 
@@ -190,10 +199,17 @@ fn test_update_max_ts_before_scan_memory_locks() {
     assert_eq!(res.min_commit_ts, 101.into());
 }
 
-/// Generates a test that checks the correct behavior of holding and dropping locks,
-/// during the process of a single prewrite command.
+/// Generates a test that checks the correct behavior of holding and dropping
+/// locks, during the process of a single prewrite command.
 macro_rules! lock_release_test {
-    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
+    (
+        $test_name:ident,
+        $lock_exists:ident,
+        $before_actions:expr,
+        $middle_actions:expr,
+        $after_actions:expr,
+        $should_succeed:expr
+    ) => {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
@@ -255,7 +271,8 @@ lock_release_test!(
     false
 );
 
-// Must hold lock until prewrite ends. Must release lock after prewrite succeeds.
+// Must hold lock until prewrite ends. Must release lock after prewrite
+// succeeds.
 lock_release_test!(
     test_lock_lifetime_on_prewrite_success,
     lock_exists,
@@ -388,7 +405,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert_eq!(locks[1].get_key(), b"k2");
     assert!(!locks[1].get_use_async_commit());
 
-    // Send a duplicated request to test the idempotency of prewrite when falling back to 2PC.
+    // Send a duplicated request to test the idempotency of prewrite when falling
+    // back to 2PC.
     let (prewrite_tx, prewrite_rx) = channel();
     storage
         .sched_txn_command(
@@ -434,7 +452,11 @@ fn test_pessimistic_lock_check_epoch() {
     ctx.set_peer(leader.clone());
     ctx.set_region_epoch(epoch);
 
-    fail::cfg("acquire_pessimistic_lock", "pause").unwrap();
+    let (fp_tx, fp_rx) = sync_channel(0);
+    fail::cfg_callback("acquire_pessimistic_lock", move || {
+        fp_tx.send(()).unwrap();
+    })
+    .unwrap();
 
     let env = Arc::new(Environment::new(1));
     let channel =
@@ -462,7 +484,7 @@ fn test_pessimistic_lock_check_epoch() {
     // Transfer leader out and back, so the term should have changed.
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::remove("acquire_pessimistic_lock");
+    fp_rx.recv().unwrap();
 
     let resp = lock_resp.join().unwrap();
     // Region leader changes, so we should get a StaleCommand error.
@@ -572,7 +594,8 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     let mut req = PrewriteRequest::default();
     req.set_context(ctx);
     req.set_mutations(vec![mutation].into());
-    // Set a different start_ts. It should fail because the memory lock is still visible.
+    // Set a different start_ts. It should fail because the memory lock is still
+    // visible.
     req.set_start_version(20);
     req.set_primary_lock(b"key".to_vec());
 

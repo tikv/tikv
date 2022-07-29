@@ -9,7 +9,6 @@ extern crate slog_global;
 extern crate tikv_alloc;
 
 use std::{
-    fs,
     io::{self, Write},
     marker::Unpin,
     sync::Arc,
@@ -17,7 +16,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
+use encryption::{from_engine_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
@@ -31,7 +30,7 @@ use tokio::time::timeout;
 
 mod hdfs;
 pub use hdfs::{HdfsConfig, HdfsStorage};
-mod local;
+pub mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
@@ -51,9 +50,9 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 }
 
 /// UnpinReader is a simple wrapper for AsyncRead + Unpin + Send.
-/// This wrapper would remove the lifetime at the argument of the generted async function
-/// in order to make rustc happy. (And reduce the length of signture of write.)
-/// see https://github.com/rust-lang/rust/issues/63033
+/// This wrapper would remove the lifetime at the argument of the generated
+/// async function in order to make rustc happy. (And reduce the length of
+/// signature of write.) see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
 
 #[derive(Debug, Default)]
@@ -87,16 +86,6 @@ pub trait ExternalStorage: 'static + Send + Sync {
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
         let reader = self.read(storage_name);
-        if let Some(p) = restore_name.parent() {
-            // try create all parent dirs from the path (optional).
-            fs::create_dir_all(p).or_else(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })?;
-        }
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
@@ -163,7 +152,7 @@ pub fn encrypt_wrap_reader<'a>(
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
-            encryption_method_from_db_encryption_method(x.method),
+            from_engine_encryption_method(x.method),
             &x.key,
             Iv::from_slice(&x.iv)?,
         )?),

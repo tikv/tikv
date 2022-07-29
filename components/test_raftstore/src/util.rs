@@ -3,7 +3,8 @@
 use std::{
     fmt::Write,
     path::Path,
-    sync::{mpsc, Arc},
+    str::FromStr,
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -12,13 +13,13 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
     CF_DEFAULT, CF_RAFT,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -43,7 +44,7 @@ use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
     store::{fsm::RaftRouter, *},
-    Result,
+    RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
@@ -54,9 +55,9 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
 
-pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
+pub fn must_get(engine: &RocksEngine, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
-        let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+        let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;
@@ -67,7 +68,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         thread::sleep(Duration::from_millis(20));
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
-    let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
+    let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
     {
@@ -80,19 +81,19 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     )
 }
 
-pub fn must_get_equal(engine: &Arc<DB>, key: &[u8], value: &[u8]) {
+pub fn must_get_equal(engine: &RocksEngine, key: &[u8], value: &[u8]) {
     must_get(engine, "default", key, Some(value));
 }
 
-pub fn must_get_none(engine: &Arc<DB>, key: &[u8]) {
+pub fn must_get_none(engine: &RocksEngine, key: &[u8]) {
     must_get(engine, "default", key, None);
 }
 
-pub fn must_get_cf_equal(engine: &Arc<DB>, cf: &str, key: &[u8], value: &[u8]) {
+pub fn must_get_cf_equal(engine: &RocksEngine, cf: &str, key: &[u8], value: &[u8]) {
     must_get(engine, cf, key, Some(value));
 }
 
-pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
+pub fn must_get_cf_none(engine: &RocksEngine, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
@@ -106,7 +107,7 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
     for cf in ALL_CFS {
         engine
             .kv
-            .scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            .scan(cf, &start_key, &end_key, false, |k, v| {
                 panic!(
                     "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
                     id, k, v, cf
@@ -624,7 +625,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,
@@ -657,10 +658,12 @@ pub fn create_test_engine(
         builder = builder.block_cache(cache);
     }
     if let Some(router) = router {
-        builder = builder.compaction_filter_router(router);
+        builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
+            router: Mutex::new(router),
+        }));
     }
     let factory = builder.build();
-    let engine = factory.create_tablet().unwrap();
+    let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
     (engines, key_manager, dir, sst_worker)
 }
@@ -668,8 +671,8 @@ pub fn create_test_engine(
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // We don't want to generate snapshots due to compact log.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -682,7 +685,7 @@ pub fn configure_for_hibernate<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
@@ -690,8 +693,8 @@ pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid log compaction which will prevent merge.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
     // When isolated, follower relies on stale check tick to detect failure leader,
@@ -721,8 +724,9 @@ pub fn configure_for_lease_read<T: Simulator>(
     // Adjust max leader lease.
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(election_timeout - base_tick_interval);
-    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
-    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
+    // Use large peer check interval, abnormal and max leader missing duration to
+    // make a valid config, that is election timeout x 2 < peer stale state
+    // check < abnormal < max leader missing duration.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
     cluster.cfg.raft_store.abnormal_leader_missing_duration =
         ReadableDuration(election_timeout * 4);
@@ -759,6 +763,16 @@ pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
             path: master_key_file.to_str().unwrap().to_owned(),
         },
     }
+}
+
+pub fn configure_for_causal_ts<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    renew_interval: &str,
+    renew_batch_min_size: u32,
+) {
+    let cfg = &mut cluster.cfg.causal_ts;
+    cfg.renew_interval = ReadableDuration::from_str(renew_interval).unwrap();
+    cfg.renew_batch_min_size = renew_batch_min_size;
 }
 
 /// Keep putting random kvs until specified size limit is reached.
@@ -1156,7 +1170,8 @@ pub fn check_compacted(
     compact_count: u64,
     must_compacted: bool,
 ) -> bool {
-    // Every peer must have compacted logs, so the truncate log state index/term must > than before.
+    // Every peer must have compacted logs, so the truncate log state index/term
+    // must > than before.
     let mut compacted_idx = HashMap::default();
 
     for (&id, engines) in all_engines {
@@ -1204,6 +1219,46 @@ pub fn check_compacted(
         }
     }
     true
+}
+
+pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<u8>) {
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = key;
+    put_req.value = value;
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(
+        !put_resp.has_region_error(),
+        "{:?}",
+        put_resp.get_region_error()
+    );
+    assert!(
+        put_resp.get_error().is_empty(),
+        "{:?}",
+        put_resp.get_error()
+    );
+}
+
+pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {
+    let mut get_req = RawGetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = key;
+    let get_resp = client.raw_get(&get_req).unwrap();
+    assert!(
+        !get_resp.has_region_error(),
+        "{:?}",
+        get_resp.get_region_error()
+    );
+    assert!(
+        get_resp.get_error().is_empty(),
+        "{:?}",
+        get_resp.get_error()
+    );
+    if get_resp.not_found {
+        None
+    } else {
+        Some(get_resp.value)
+    }
 }
 
 // A helpful wrapper to make the test logic clear

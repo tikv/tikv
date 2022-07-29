@@ -1,23 +1,35 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::AsRef, fmt, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
-use kvproto::{brpb::StreamBackupError, metapb::Region};
+use futures::FutureExt;
+use kvproto::{
+    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    metapb::Region,
+};
 use online_config::ConfigChange;
 use pd_client::PdClient;
-use raft::StateRole;
 use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::RaftStoreRouter,
-    store::fsm::ChangeObserver,
 };
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
-    box_err, debug, error, info,
-    time::Instant,
+    box_err,
+    config::ReadableDuration,
+    debug, defer, info,
+    sys::thread::ThreadBuildWrapper,
+    time::{Instant, Limiter},
     warn,
     worker::{Runnable, Scheduler},
     HandyRwLock,
@@ -25,42 +37,59 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
+    sync::oneshot,
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
 
-use super::metrics::{HANDLE_EVENT_DURATION_HISTOGRAM, HANDLE_KV_HISTOGRAM};
+use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
-    errors::{Error, Result},
-    event_loader::InitialDataLoader,
-    metadata::{
-        store::{EtcdStore, MetaStore},
-        MetadataClient, MetadataEvent, StreamTask,
+    checkpoint_manager::{
+        BasicFlushObserver, CheckpointManager, CheckpointV2FlushObserver,
+        CheckpointV3FlushObserver, FlushObserver, GetCheckpointResult, RegionIdWithVersion,
     },
-    metrics,
+    errors::{Error, Result},
+    event_loader::{InitialDataLoader, PendingMemoryQuota},
+    future,
+    metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
+    metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{ApplyEvents, Router, FLUSH_STORAGE_INTERVAL},
+    router::{ApplyEvents, Router, TaskSelector},
+    subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::SubscriptionTracer,
     try_send,
-    utils::{self, StopWatch},
+    utils::{self, CallbackWaitGroup, StopWatch, Work},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
+/// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
+/// task has fatal error.
+const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
-pub struct Endpoint<S: MetaStore + 'static, R, E, RT, PDC> {
-    meta_client: Option<MetadataClient<S>>,
+pub struct Endpoint<S, R, E, RT, PDC> {
+    // Note: those fields are more like a shared context between components.
+    // For now, we copied them everywhere, maybe we'd better extract them into a
+    // context type.
+    pub(crate) meta_client: MetadataClient<S>,
+    pub(crate) scheduler: Scheduler<Task>,
+    pub(crate) store_id: u64,
+    pub(crate) regions: R,
+    pub(crate) engine: PhantomData<E>,
+    pub(crate) router: RT,
+    pub(crate) pd_client: Arc<PDC>,
+    pub(crate) subs: SubscriptionTracer,
+    pub(crate) concurrency_manager: ConcurrencyManager,
+
     range_router: Router,
-    scheduler: Scheduler<Task>,
     observer: BackupStreamObserver,
     pool: Runtime,
-    store_id: u64,
-    regions: R,
-    engine: PhantomData<E>,
-    router: RT,
-    pd_client: Arc<PDC>,
-    subs: SubscriptionTracer,
-    concurrency_manager: ConcurrencyManager,
+    initial_scan_memory_quota: PendingMemoryQuota,
+    initial_scan_throughput_quota: Limiter,
+    region_operator: RegionSubscriptionManager<S, R, PDC>,
+    failover_time: Option<Instant>,
+    config: BackupStreamConfig,
+    checkpoint_mgr: CheckpointManager,
 }
 
 impl<S, R, E, RT, PDC> Endpoint<S, R, E, RT, PDC>
@@ -71,71 +100,9 @@ where
     PDC: PdClient + 'static,
     S: MetaStore + 'static,
 {
-    pub fn with_client(
+    pub fn new(
         store_id: u64,
-        cli: MetadataClient<S>,
-        config: BackupStreamConfig,
-        scheduler: Scheduler<Task>,
-        observer: BackupStreamObserver,
-        accessor: R,
-        router: RT,
-        pd_client: Arc<PDC>,
-        cm: ConcurrencyManager,
-    ) -> Self {
-        let pool = create_tokio_runtime(config.num_threads, "br-stream")
-            .expect("failed to create tokio runtime for backup stream worker.");
-
-        // TODO consider TLS?
-        let meta_client = Some(cli);
-        let range_router = Router::new(
-            PathBuf::from(config.temp_path.clone()),
-            scheduler.clone(),
-            config.temp_file_size_limit_per_task.0,
-        );
-
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
-
-        info!("the endpoint of backup stream started"; "path" => %config.temp_path);
-        Endpoint {
-            meta_client,
-            range_router,
-            scheduler,
-            observer,
-            pool,
-            store_id,
-            regions: accessor,
-            engine: PhantomData,
-            router,
-            pd_client,
-            subs: Default::default(),
-            concurrency_manager: cm,
-        }
-    }
-}
-
-impl<R, E, RT, PDC> Endpoint<EtcdStore, R, E, RT, PDC>
-where
-    R: RegionInfoProvider + 'static + Clone,
-    E: KvEngine,
-    RT: RaftStoreRouter<E> + 'static,
-    PDC: PdClient + 'static,
-{
-    pub fn new<S: AsRef<str>>(
-        store_id: u64,
-        endpoints: &dyn AsRef<[S]>,
+        store: S,
         config: BackupStreamConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
@@ -143,46 +110,59 @@ where
         router: RT,
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
-    ) -> Endpoint<EtcdStore, R, E, RT, PDC> {
+    ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
-        let pool = create_tokio_runtime(config.num_threads, "backup-stream")
+        let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
-        // TODO consider TLS?
-        let meta_client = match pool.block_on(etcd_client::Client::connect(&endpoints, None)) {
-            Ok(c) => {
-                let meta_store = EtcdStore::from(c);
-                Some(MetadataClient::new(meta_store, store_id))
-            }
-            Err(e) => {
-                error!("failed to create etcd client for backup stream worker"; "error" => ?e);
-                None
-            }
-        };
-
+        let meta_client = MetadataClient::new(store, store_id);
         let range_router = Router::new(
             PathBuf::from(config.temp_path.clone()),
             scheduler.clone(),
-            config.temp_file_size_limit_per_task.0,
+            config.file_size_limit.0,
+            config.max_flush_interval.0,
         );
 
-        if let Some(meta_client) = meta_client.as_ref() {
-            // spawn a worker to watch task changes from etcd periodically.
-            let meta_client_clone = meta_client.clone();
-            let scheduler_clone = scheduler.clone();
-            // TODO build a error handle mechanism #error 2
-            pool.spawn(async {
-                if let Err(err) =
-                    Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
-                {
-                    err.report("failed to start watch tasks");
-                }
-            });
+        // spawn a worker to watch task changes from etcd periodically.
+        let meta_client_clone = meta_client.clone();
+        let scheduler_clone = scheduler.clone();
+        // TODO build a error handle mechanism #error 2
+        pool.spawn(async {
+            if let Err(err) = Self::start_and_watch_tasks(meta_client_clone, scheduler_clone).await
+            {
+                err.report("failed to start watch tasks");
+            }
+        });
 
-            pool.spawn(Self::starts_flush_ticks(range_router.clone()));
-        }
+        pool.spawn(Self::starts_flush_ticks(range_router.clone()));
 
+        let initial_scan_memory_quota =
+            PendingMemoryQuota::new(config.initial_scan_pending_memory_quota.0 as _);
+        let limit = if config.initial_scan_rate_limit.0 > 0 {
+            config.initial_scan_rate_limit.0 as f64
+        } else {
+            f64::INFINITY
+        };
+        let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
+        let subs = SubscriptionTracer::default();
+        let (region_operator, op_loop) = RegionSubscriptionManager::start(
+            InitialDataLoader::new(
+                router.clone(),
+                accessor.clone(),
+                range_router.clone(),
+                subs.clone(),
+                scheduler.clone(),
+                initial_scan_memory_quota.clone(),
+                pool.handle().clone(),
+                initial_scan_throughput_quota.clone(),
+            ),
+            observer.clone(),
+            meta_client.clone(),
+            pd_client.clone(),
+            ((config.num_threads + 1) / 2).max(1),
+        );
+        pool.spawn(op_loop);
         Endpoint {
             meta_client,
             range_router,
@@ -194,8 +174,14 @@ where
             engine: PhantomData,
             router,
             pd_client,
-            subs: Default::default(),
+            subs,
             concurrency_manager,
+            initial_scan_memory_quota,
+            initial_scan_throughput_quota,
+            region_operator,
+            failover_time: None,
+            config,
+            checkpoint_mgr: Default::default(),
         }
     }
 }
@@ -209,45 +195,70 @@ where
     PDC: PdClient + 'static,
 {
     fn get_meta_client(&self) -> MetadataClient<S> {
-        self.meta_client.as_ref().unwrap().clone()
+        self.meta_client.clone()
     }
 
-    fn on_fatal_error(&self, task: String, err: Box<Error>) {
-        // Let's pause the task locally first.
-        self.on_unregister(&task);
-        err.report(format_args!("fatal for task {}", err));
+    fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
+        err.report_fatal();
+        let tasks = self
+            .pool
+            .block_on(self.range_router.select_task(select.reference()));
+        warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
+        for task in tasks {
+            // Let's pause the task first.
+            self.unload_task(&task);
+            metrics::update_task_status(TaskStatus::Error, &task);
 
-        let meta_cli = self.get_meta_client();
-        let store_id = self.store_id;
-        let sched = self.scheduler.clone();
-        self.pool.block_on(async move {
-            // TODO: also pause the task using the meta client.
-            let err_fut = async {
-                meta_cli.pause(&task).await?;
-                let mut last_error = StreamBackupError::new();
-                last_error.set_error_code(err.error_code().code.to_owned());
-                last_error.set_error_message(err.to_string());
-                last_error.set_store_id(store_id);
-                last_error.set_happen_at(TimeStamp::physical_now());
-                meta_cli.report_last_error(&task, last_error).await?;
-                Result::Ok(())
-            };
-            if let Err(err_report) = err_fut.await {
-                err_report.report(format_args!("failed to upload error {}", err_report));
-                // Let's retry reporting after 5s.
-                tokio::task::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    try_send!(sched, Task::FatalError(task, err));
-                });
-            }
-        })
+            let meta_cli = self.get_meta_client();
+            let pdc = self.pd_client.clone();
+            let store_id = self.store_id;
+            let sched = self.scheduler.clone();
+            let safepoint_name = self.pause_guard_id_for_task(&task);
+            let safepoint_ttl = self.pause_guard_duration();
+            let code = err.error_code().code.to_owned();
+            let msg = err.to_string();
+            self.pool.block_on(async move {
+                let err_fut = async {
+                    let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                    pdc.update_service_safe_point(
+                        safepoint_name,
+                        TimeStamp::new(safepoint - 1),
+                        safepoint_ttl,
+                    )
+                    .await?;
+                    meta_cli.pause(&task).await?;
+                    let mut last_error = StreamBackupError::new();
+                    last_error.set_error_code(code);
+                    last_error.set_error_message(msg.clone());
+                    last_error.set_store_id(store_id);
+                    last_error.set_happen_at(TimeStamp::physical_now());
+                    meta_cli.report_last_error(&task, last_error).await?;
+                    Result::Ok(())
+                };
+                if let Err(err_report) = err_fut.await {
+                    err_report.report(format_args!("failed to upload error {}", err_report));
+                    // Let's retry reporting after 5s.
+                    tokio::task::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        try_send!(
+                            sched,
+                            Task::FatalError(
+                                TaskSelector::ByName(task.to_owned()),
+                                Box::new(annotate!(err_report, "origin error: {}", msg))
+                            )
+                        );
+                    });
+                }
+            });
+        }
     }
 
     async fn starts_flush_ticks(router: Router) {
         loop {
-            // check every 15s.
-            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of enabling timing in the current runtime)?
-            tokio::time::sleep(Duration::from_secs(FLUSH_STORAGE_INTERVAL / 20)).await;
+            // check every 5s.
+            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of
+            // enabling timing in the current runtime)?
+            tokio::time::sleep(Duration::from_secs(5)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
         }
@@ -264,6 +275,8 @@ where
             if task.is_paused {
                 continue;
             }
+            // We have meet task upon store start, we must in a failover.
+            scheduler.schedule(Task::MarkFailover(Instant::now()))?;
             // move task to schedule
             scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
         }
@@ -294,19 +307,44 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from(revision).await?;
+        let mut revision_new = revision;
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::AddTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+            let watcher = meta_client.events_from(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::RemoveTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+
+                    match event {
+                        MetadataEvent::AddTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+                        }
+                        MetadataEvent::RemoveTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
@@ -317,50 +355,116 @@ where
         scheduler: Scheduler<Task>,
         revision: i64,
     ) -> Result<()> {
-        let mut watcher = meta_client.events_from_pause(revision).await?;
+        let mut revision_new = revision;
+
         loop {
-            if let Some(event) = watcher.stream.next().await {
-                info!("backup stream watch event from etcd"; "event" => ?event);
-                match event {
-                    MetadataEvent::PauseTask { task } => {
-                        scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+            let watcher = meta_client.events_from_pause(revision_new).await;
+            let mut watcher = match watcher {
+                Ok(w) => w,
+                Err(e) => {
+                    e.report("failed to start watch pause");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            };
+
+            loop {
+                if let Some(event) = watcher.stream.next().await {
+                    info!("backup stream watch event from etcd"; "event" => ?event);
+                    let revision = meta_client.get_reversion().await;
+                    if let Ok(r) = revision {
+                        revision_new = r;
                     }
-                    MetadataEvent::ResumeTask { task } => {
-                        let task = meta_client.get_task(&task).await?;
-                        scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+
+                    match event {
+                        MetadataEvent::PauseTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+                        }
+                        MetadataEvent::ResumeTask { task } => {
+                            scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+                        }
+                        MetadataEvent::Error { err } => {
+                            err.report("metadata client watch meet error");
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            break;
+                        }
+                        _ => warn!("BUG: invalid event"; "event" => ?event),
                     }
-                    MetadataEvent::Error { err } => err.report("metadata client watch meet error"),
-                    _ => panic!("BUG: invalid event {:?}", event),
+                } else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    break;
                 }
             }
         }
     }
 
-    fn backup_batch(&self, batch: CmdBatch) {
-        let mut sw = StopWatch::new();
+    fn flush_observer(&self) -> Box<dyn FlushObserver> {
+        let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
+        if self.config.use_checkpoint_v3 {
+            Box::new(CheckpointV3FlushObserver::new(
+                self.scheduler.clone(),
+                self.meta_client.clone(),
+                self.subs.clone(),
+                basic,
+            ))
+        } else {
+            Box::new(CheckpointV2FlushObserver::new(
+                self.meta_client.clone(),
+                self.make_flush_guard(),
+                self.subs.clone(),
+                basic,
+            ))
+        }
+    }
+
+    /// Convert a batch of events to the cmd batch, and update the resolver
+    /// status.
+    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
         let region_id = batch.region_id;
-        let mut resolver = match self.subs.get_subscription_of(region_id) {
+        let mut resolver = match subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
-                warn!("BUG: the region isn't registered (no resolver found) but sent to backup_batch."; "region_id" => %region_id);
-                return;
+                debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
+                return None;
             }
         };
-        let sched = self.scheduler.clone();
-
-        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
-        drop(resolver);
-        if kvs.len() == 0 {
-            return;
+        // Stale data is acceptable, while stale locks may block the checkpoint
+        // advancing.
+        // ```text
+        // Let L be the instant some key locked, U be the instant it unlocked,
+        // +---------*-------L-----------U--*-------------+
+        //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
+        //           +- If we issue refresh resolver at here, and the cmd batch (1) is the last cmd batch of the first observing.
+        //              ...the background initial scanning may keep running, and the lock would be sent to the scanning.
+        //              ...note that (1) is the last cmd batch of first observing, so the unlock event would never be sent to us.
+        //              ...then the lock would get an eternal life in the resolver :|
+        //                 (Before we refreshing the resolver for this region again)
+        // ```
+        if batch.pitr_id != resolver.value().handle.id {
+            debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
+            return None;
         }
 
-        HANDLE_EVENT_DURATION_HISTOGRAM
-            .with_label_values(&["to_stream_event"])
-            .observe(sw.lap().as_secs_f64());
+        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
+        Some(kvs)
+    }
+
+    fn backup_batch(&self, batch: CmdBatch, work: Work) {
+        let mut sw = StopWatch::new();
+
         let router = self.range_router.clone();
+        let sched = self.scheduler.clone();
+        let subs = self.subs.clone();
         self.pool.spawn(async move {
+            let region_id = batch.region_id;
+            let kvs = Self::record_batch(subs, batch);
+            if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
+                return;
+            }
+            let kvs = kvs.unwrap();
+
             HANDLE_EVENT_DURATION_HISTOGRAM
-                .with_label_values(&["get_router_lock"])
+                .with_label_values(&["to_stream_event"])
                 .observe(sw.lap().as_secs_f64());
             let kv_count = kvs.len();
             let total_size = kvs.size();
@@ -369,14 +473,14 @@ where
             utils::handle_on_event_result(&sched, router.on_events(kvs).await);
             metrics::HEAP_MEMORY
                 .sub(total_size as _);
-            HANDLE_KV_HISTOGRAM.observe(kv_count as _);
             let time_cost = sw.lap().as_secs_f64();
             if time_cost > SLOW_EVENT_THRESHOLD {
                 warn!("write to temp file too slow."; "time_cost" => ?time_cost, "region_id" => %region_id, "len" => %kv_count);
             }
             HANDLE_EVENT_DURATION_HISTOGRAM
                 .with_label_values(&["save_to_temp_file"])
-                .observe(time_cost)
+                .observe(time_cost);
+            drop(work)
         });
     }
 
@@ -388,6 +492,9 @@ where
             self.range_router.clone(),
             self.subs.clone(),
             self.scheduler.clone(),
+            self.initial_scan_memory_quota.clone(),
+            self.pool.handle().clone(),
+            self.initial_scan_throughput_quota.clone(),
         )
     }
 
@@ -400,10 +507,10 @@ where
                 self.on_unregister(&task_name);
             }
             TaskOp::PauseTask(task_name) => {
-                self.on_unregister(&task_name);
+                self.on_pause(&task_name);
             }
             TaskOp::ResumeTask(task) => {
-                self.on_register(task);
+                self.on_resume(task);
             }
         }
     }
@@ -428,462 +535,492 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        tokio::task::spawn_blocking(move || {
-            let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
-            match range_init_result {
-                Ok(()) => {
-                    info!("backup stream success to initialize"; 
+        // Assuming the `region info provider` would read region info form `StoreMeta`
+        // directly and this would be fast. If this gets slow, maybe make it async
+        // again. (Will that bring race conditions? say `Start` handled after
+        // `ResfreshResolver` of some region.)
+        let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
+        match range_init_result {
+            Ok(()) => {
+                info!("backup stream success to initialize"; 
                         "start_key" => utils::redact(&start_key),
                         "end_key" => utils::redact(&end_key),
                         "take" => ?start.saturating_elapsed(),)
-                }
-                Err(e) => {
-                    e.report("backup stream initialize failed");
-                }
             }
-        });
+            Err(e) => {
+                e.report("backup stream initialize failed");
+            }
+        }
         Ok(())
     }
 
     // register task ranges
     pub fn on_register(&self, task: StreamTask) {
-        if let Some(cli) = self.meta_client.as_ref() {
-            let cli = cli.clone();
-            let init = self.make_initial_loader();
-            let range_router = self.range_router.clone();
+        let name = task.info.name.clone();
+        let start_ts = task.info.start_ts;
+        self.load_task(task);
 
-            info!(
-                "register backup stream task";
-                "task" => ?task,
-            );
-
-            self.pool.block_on(async move {
-                let task_name = task.info.get_name();
-                match cli.ranges_of_task(task_name).await {
-                    Ok(ranges) => {
-                        info!(
-                            "register backup stream ranges";
-                            "task" => ?task,
-                            "ranges-count" => ranges.inner.len(),
-                        );
-                        let ranges = ranges
-                            .inner
-                            .into_iter()
-                            .map(|(start_key, end_key)| {
-                                (utils::wrap_key(start_key), utils::wrap_key(end_key))
-                            })
-                            .collect::<Vec<_>>();
-                        if let Err(err) = range_router
-                            .register_task(task.clone(), ranges.clone())
-                            .await
-                        {
-                            err.report(format!(
-                                "failed to register backup stream task {}",
-                                task.info.name
-                            ));
-                            return;
-                        }
-
-                        for (start_key, end_key) in ranges {
-                            let init = init.clone();
-
-                            self.observe_and_scan_region(init, &task, start_key, end_key)
-                                .await
-                                .unwrap();
-                        }
-                        info!(
-                            "finish register backup stream ranges";
-                            "task" => ?task,
-                        );
-                    }
-                    Err(e) => {
-                        e.report(format!(
-                            "failed to register backup stream task {} to router: ranges not found",
-                            task.info.get_name()
-                        ));
-                        // TODO build a error handle mechanism #error 5
-                    }
-                }
-            });
-        };
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[name.as_str()])
+            .set(start_ts as _);
     }
 
-    pub fn on_unregister(&self, task: &str) {
-        let router = self.range_router.clone();
+    /// Load the task into memory: this would make the endpint start to observe.
+    fn load_task(&self, task: StreamTask) {
+        let cli = self.meta_client.clone();
+        let init = self.make_initial_loader();
+        let range_router = self.range_router.clone();
+        let use_v3 = self.config.use_checkpoint_v3;
 
-        self.pool.block_on(async move {
-            router.unregister_task(task).await;
-        });
-        // for now, we support one concurrent task only.
-        // so simply clear all info would be fine.
-        self.subs.clear();
-        self.observer.ranges.wl().clear();
-    }
+        info!(
+            "register backup stream task";
+            "task" => ?task,
+        );
 
-    /// try advance the resolved ts by the pd tso.
-    async fn try_resolve(
-        cm: &ConcurrencyManager,
-        pd_client: Arc<PDC>,
-        resolvers: SubscriptionTracer,
-    ) -> TimeStamp {
-        let pd_tso = pd_client
-            .get_tso()
-            .await
-            .map_err(|err| Error::from(err).report("failed to get tso from pd"))
-            .unwrap_or_default();
-        let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
-        let tso = Ord::min(pd_tso, min_ts);
-        let ts = resolvers.resolve_with(tso);
-        resolvers.warn_if_gap_too_huge(ts);
-        ts
-    }
-
-    async fn flush_for_task(
-        task: String,
-        store_id: u64,
-        router: Router,
-        pd_cli: Arc<PDC>,
-        resolvers: SubscriptionTracer,
-        meta_cli: MetadataClient<S>,
-        concurrency_manager: ConcurrencyManager,
-    ) {
-        let start = Instant::now_coarse();
-        // NOTE: Maybe push down the resolve step to the router?
-        //       Or if there are too many duplicated `Flush` command, we may do some useless works.
-        let new_rts = Self::try_resolve(&concurrency_manager, pd_cli.clone(), resolvers).await;
-        metrics::FLUSH_DURATION
-            .with_label_values(&["resolve_by_now"])
-            .observe(start.saturating_elapsed_secs());
-        if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
-            info!("flushing and refreshing checkpoint ts.";
-                "checkpoint_ts" => %rts,
-                "task" => %task,
-            );
-            if rts == 0 {
-                // We cannot advance the resolved ts for now.
-                return;
-            }
-            concurrency_manager.update_max_ts(TimeStamp::new(rts));
-            if let Err(err) = pd_cli
+        let task_name = task.info.get_name().to_owned();
+        // clean the safepoint created at pause(if there is)
+        self.pool.spawn(
+            self.pd_client
                 .update_service_safe_point(
-                    format!("backup-stream-{}-{}", task, store_id),
-                    TimeStamp::new(rts),
-                    // Add a service safe point for 10mins (2x the default flush interval).
-                    // It would probably be safe.
-                    Duration::from_secs(600),
+                    self.pause_guard_id_for_task(task.info.get_name()),
+                    TimeStamp::zero(),
+                    Duration::new(0, 0),
                 )
-                .await
-            {
-                Error::from(err).report("failed to update service safe point!");
-                // don't give up?
+                .map(|r| {
+                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                }),
+        );
+        self.pool.block_on(async move {
+            let task_clone = task.clone();
+            let run = async move {
+                let task_name = task.info.get_name();
+                if !use_v3 {
+                    cli.init_task(&task.info).await?;
+                }
+                let ranges = cli.ranges_of_task(task_name).await?;
+                info!(
+                    "register backup stream ranges";
+                    "task" => ?task,
+                    "ranges-count" => ranges.inner.len(),
+                );
+                let ranges = ranges
+                    .inner
+                    .into_iter()
+                    .map(|(start_key, end_key)| {
+                        (utils::wrap_key(start_key), utils::wrap_key(end_key))
+                    })
+                    .collect::<Vec<_>>();
+                range_router
+                    .register_task(task.clone(), ranges.clone())
+                    .await?;
+
+                for (start_key, end_key) in ranges {
+                    let init = init.clone();
+
+                    self.observe_and_scan_region(init, &task, start_key, end_key)
+                        .await?
+                }
+                info!(
+                    "finish register backup stream ranges";
+                    "task" => ?task,
+                );
+                Result::Ok(())
+            };
+            if let Err(e) = run.await {
+                e.report(format!(
+                    "failed to register backup stream task {} to router: ranges not found",
+                    task_clone.info.get_name()
+                ));
             }
-            if let Err(err) = meta_cli.step_task(&task, rts).await {
-                err.report(format!("on flushing task {}", task));
-                // we can advance the progress at next time.
-                // return early so we won't be mislead by the metrics.
-                return;
+        });
+        metrics::update_task_status(TaskStatus::Running, &task_name);
+    }
+
+    fn pause_guard_id_for_task(&self, task: &str) -> String {
+        format!("{}-{}-pause-guard", task, self.store_id)
+    }
+
+    fn pause_guard_duration(&self) -> Duration {
+        ReadableDuration::hours(CHECKPOINT_SAFEPOINT_TTL_IF_ERROR).0
+    }
+
+    pub fn on_pause(&self, task: &str) {
+        self.unload_task(task);
+
+        metrics::update_task_status(TaskStatus::Paused, task);
+    }
+
+    pub fn on_resume(&self, task_name: String) {
+        let task = self.pool.block_on(self.meta_client.get_task(&task_name));
+        match task {
+            Ok(Some(stream_task)) => self.load_task(stream_task),
+            Ok(None) => {
+                info!("backup stream task not existed"; "task" => %task_name);
             }
-            metrics::STORE_CHECKPOINT_TS
-                // Currently, we only support one task at the same time,
-                // so use the task as label would be ok.
-                .with_label_values(&[task.as_str()])
-                .set(rts as _)
+            Err(err) => {
+                err.report(format!("failed to resume backup stream task {}", task_name));
+                let sched = self.scheduler.clone();
+                tokio::task::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    sched
+                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                        .unwrap();
+                });
+            }
         }
     }
 
-    pub fn on_force_flush(&self, task: String, store_id: u64) {
+    pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
+        let info = self.unload_task(task);
+        self.remove_metrics_after_unregister(task);
+        info
+    }
+
+    fn remove_metrics_after_unregister(&self, task: &str) {
+        // remove metrics of the task so it won't mislead the metrics.
+        let _ = metrics::STORE_CHECKPOINT_TS
+            .remove_label_values(&[task])
+            .map_err(
+                |err| info!("failed to remove checkpoint ts metric"; "task" => task, "err" => %err),
+            );
+        let _ = metrics::remove_task_status_metric(task).map_err(
+            |err| info!("failed to remove checkpoint ts metric"; "task" => task, "err" => %err),
+        );
+    }
+
+    /// unload a task from memory: this would stop observe the changes required
+    /// by the task temporarily.
+    fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
+
+        // for now, we support one concurrent task only.
+        // so simply clear all info would be fine.
+        self.observer.ranges.wl().clear();
+        self.subs.clear();
+        self.pool.block_on(router.unregister_task(task))
+    }
+
+    /// Make a guard for checking whether we can flush the checkpoint ts.
+    fn make_flush_guard(&self) -> impl FnOnce() -> bool + Send {
+        let failover = self.failover_time;
+        let flush_duration = self.config.max_flush_interval;
+        move || {
+            if failover
+                .as_ref()
+                .map(|failover_t| failover_t.saturating_elapsed() < flush_duration.0 * 2)
+                .unwrap_or(false)
+            {
+                warn!("during failover, skipping advancing resolved ts"; 
+                    "failover_time_ago" => ?failover.map(|failover_t| failover_t.saturating_elapsed()));
+                return false;
+            }
+            let in_flight = crate::observer::IN_FLIGHT_START_OBSERVE_MESSAGE.load(Ordering::SeqCst);
+            if in_flight > 0 {
+                warn!("inflight leader detected, skipping advancing resolved ts"; "in_flight" => %in_flight);
+                return false;
+            }
+            true
+        }
+    }
+
+    fn prepare_min_ts(&self) -> future![TimeStamp] {
         let pd_cli = self.pd_client.clone();
-        let resolvers = self.subs.clone();
         let cm = self.concurrency_manager.clone();
-        self.pool.spawn(async move {
-            let info = router.get_task_info(&task).await;
+        async move {
+            let pd_tso = pd_cli
+                .get_tso()
+                .await
+                .map_err(|err| Error::from(err).report("failed to get tso from pd"))
+                .unwrap_or_default();
+            cm.update_max_ts(pd_tso);
+            let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
+            Ord::min(pd_tso, min_ts)
+        }
+    }
+
+    fn get_resolved_regions(&self, min_ts: TimeStamp) -> future![Result<ResolvedRegions>] {
+        let (tx, rx) = oneshot::channel();
+        let op = self.region_operator.clone();
+        async move {
+            let req = ObserveOp::ResolveRegions {
+                callback: Box::new(move |rs| {
+                    let _ = tx.send(rs);
+                }),
+                min_ts,
+            };
+            op.request(req).await;
+            rx.await
+                .map_err(|err| annotate!(err, "failed to send request for resolve regions"))
+        }
+    }
+
+    fn do_flush(&self, task: String, min_ts: TimeStamp) -> future![Result<()>] {
+        let get_rts = self.get_resolved_regions(min_ts);
+        let router = self.range_router.clone();
+        let store_id = self.store_id;
+        let mut flush_ob = self.flush_observer();
+        async move {
+            let mut resolved = get_rts.await?;
+            let mut new_rts = resolved.global_checkpoint();
+            #[cfg(feature = "failpoints")]
+            fail::fail_point!("delay_on_flush");
+            flush_ob.before(resolved.take_region_checkpoints()).await;
+            if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
+                info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
+                new_rts = rewritten_rts.min(new_rts);
+            }
+            if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
+                info!("flushing and refreshing checkpoint ts.";
+                    "checkpoint_ts" => %rts,
+                    "task" => %task,
+                );
+                if rts == 0 {
+                    // We cannot advance the resolved ts for now.
+                    return Ok(());
+                }
+                flush_ob.after(&task, rts).await?
+            }
+            Ok(())
+        }
+    }
+
+    pub fn on_force_flush(&self, task: String) {
+        self.pool.block_on(async move {
+            let info = self.range_router.get_task_info(&task).await;
             // This should only happen in testing, it would be to unwrap...
             let _ = info.unwrap().set_flushing_status_cas(false, true);
-            Self::flush_for_task(task, store_id, router, pd_cli, resolvers, cli, cm).await;
+            let mts = self.prepare_min_ts().await;
+            try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
         });
     }
 
-    pub fn on_flush(&self, task: String, store_id: u64) {
-        let router = self.range_router.clone();
-        let cli = self
-            .meta_client
-            .as_ref()
-            .expect("on_flush: executed from an endpoint without cli")
-            .clone();
-        let pd_cli = self.pd_client.clone();
-        let resolvers = self.subs.clone();
-        let cm = self.concurrency_manager.clone();
-        self.pool.spawn(Self::flush_for_task(
-            task, store_id, router, pd_cli, resolvers, cli, cm,
-        ));
+    pub fn on_flush(&self, task: String) {
+        self.pool.block_on(async move {
+            let mts = self.prepare_min_ts().await;
+            info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
+        })
     }
 
-    /// Start observe over some region.
-    /// This would modify some internal state, and delegate the task to InitialLoader::observe_over.
-    fn observe_over(&self, region: &Region, handle: ObserveHandle) -> Result<()> {
-        let init = self.make_initial_loader();
-        let region_id = region.get_id();
-        self.subs.register_region(region, handle.clone(), None);
-        init.observe_over_with_retry(region, || {
-            ChangeObserver::from_pitr(region_id, handle.clone())
-        })?;
-        Ok(())
+    fn on_flush_with_min_ts(&self, task: String, min_ts: TimeStamp) {
+        self.pool.spawn(self.do_flush(task, min_ts).map(|r| {
+            if let Err(err) = r {
+                err.report("during updating flush status")
+            }
+        }));
     }
 
-    fn observe_over_with_initial_data_from_checkpoint(
-        &self,
-        region: &Region,
-        task: String,
-        handle: ObserveHandle,
-    ) -> Result<()> {
-        let init = self.make_initial_loader();
-
-        let meta_cli = self.meta_client.as_ref().unwrap().clone();
-        let last_checkpoint = TimeStamp::new(
-            self.pool
-                .block_on(meta_cli.global_progress_of_task(&task))?,
-        );
-        self.subs
-            .register_region(region, handle.clone(), Some(last_checkpoint));
-
-        let region_id = region.get_id();
-        let snap = init.observe_over_with_retry(region, move || {
-            ChangeObserver::from_pitr(region_id, handle.clone())
-        })?;
-        let region = region.clone();
-
-        self.pool.spawn_blocking(move || {
-            match init.do_initial_scan(&region, last_checkpoint, snap) {
-                Ok(stat) => {
-                    info!("initial scanning of leader transforming finished!"; "statistics" => ?stat, "region" => %region.get_id(), "from_ts" => %last_checkpoint);
-                    utils::record_cf_stat("lock", &stat.lock);
-                    utils::record_cf_stat("write", &stat.write);
-                    utils::record_cf_stat("default", &stat.data);
+    fn on_update_global_checkpoint(&self, task: String) {
+        self.pool.block_on(async move {
+            let ts = self.meta_client.global_progress_of_task(&task).await;
+            match ts {
+                Ok(global_checkpoint) => {
+                    let r = self
+                        .range_router
+                        .update_global_checkpoint(&task, global_checkpoint, self.store_id)
+                        .await;
+                    match r {
+                        Ok(true) => {
+                            if let Err(err) = self
+                                .meta_client
+                                .set_storage_checkpoint(&task, global_checkpoint)
+                                .await
+                            {
+                                warn!("backup stream failed to set global checkpoint.";
+                                    "task" => ?task,
+                                    "global-checkpoint" => global_checkpoint,
+                                    "err" => ?err,
+                                );
+                            }
+                        }
+                        Ok(false) => {
+                            debug!("backup stream no need update global checkpoint.";
+                                "task" => ?task,
+                                "global-checkpoint" => global_checkpoint,
+                            );
+                        }
+                        Err(e) => {
+                            warn!("backup stream failed to update global checkpoint.";
+                                "task" => ?task,
+                                "err" => ?e
+                            );
+                        }
+                    }
                 }
-                Err(err) => err.report(format!("during initial scanning of region {:?}", region)),
+                Err(e) => {
+                    warn!("backup stream failed to get global checkpoint.";
+                        "task" => ?task,
+                        "err" => ?e
+                    );
+                }
             }
         });
-        Ok(())
-    }
-
-    fn find_task_by_region(&self, r: &Region) -> Option<String> {
-        self.range_router
-            .find_task_by_range(&r.start_key, &r.end_key)
     }
 
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
-        info!("backup stream: on_modify_observe"; "op" => ?op);
-        match op {
-            ObserveOp::Start {
-                region,
-                needs_initial_scanning,
-            } => self.start_observe(region, needs_initial_scanning),
-            ObserveOp::Stop { ref region } => {
-                self.subs.deregister_region(region, |_, _| true);
-            }
-            ObserveOp::CheckEpochAndStop { ref region } => {
-                self.subs.deregister_region(region, |old, new| {
-                    raftstore::store::util::compare_region_epoch(
-                        old.meta.get_region_epoch(),
-                        new,
-                        true,
-                        true,
-                        false,
-                    )
-                    .map_err(|err| warn!("check epoch and stop failed."; "err" => %err))
-                    .is_ok()
-                });
-            }
-            ObserveOp::RefreshResolver { ref region } => {
-                let need_refresh_all = !self.subs.try_update_region(region);
-
-                if need_refresh_all {
-                    let canceled = self.subs.deregister_region(region, |_, _| true);
-                    let handle = ObserveHandle::new();
-                    if canceled {
-                        let for_task = self.find_task_by_region(region).unwrap_or_else(|| {
-                            panic!(
-                                "BUG: the region {:?} is register to no task but being observed",
-                                region
-                            )
-                        });
-                        if let Err(e) = self.observe_over_with_initial_data_from_checkpoint(
-                            region,
-                            for_task,
-                            handle.clone(),
-                        ) {
-                            try_send!(
-                                self.scheduler,
-                                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                                    region: region.clone(),
-                                    handle,
-                                    err: Box::new(e)
-                                })
-                            );
-                        }
-                    }
-                }
-            }
-            ObserveOp::NotifyFailToStartObserve {
-                region,
-                handle,
-                err,
-            } => {
-                info!("retry observe region"; "region" => %region.get_id(), "err" => %err);
-                match self.retry_observe(region, handle) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        try_send!(
-                            self.scheduler,
-                            Task::FatalError(
-                                format!("While retring to observe region, origin error is {}", err),
-                                Box::new(e)
-                            )
-                        );
-                    }
-                }
-            }
-        }
+        self.pool.block_on(self.region_operator.request(op));
     }
 
-    fn start_observe(&self, region: Region, needs_initial_scanning: bool) {
-        let handle = ObserveHandle::new();
-        let result = if needs_initial_scanning {
-            let for_task = self.find_task_by_region(&region).unwrap_or_else(|| {
-                panic!(
-                    "BUG: the region {:?} is register to no task but being observed (start_key = {}; end_key = {}; task_stat = {:?})",
-                    region, utils::redact(&region.get_start_key()), utils::redact(&region.get_end_key()), self.range_router
-                )
-            });
-            self.observe_over_with_initial_data_from_checkpoint(&region, for_task, handle.clone())
-        } else {
-            self.observe_over(&region, handle.clone())
-        };
-        if let Err(err) = result {
-            try_send!(
-                self.scheduler,
-                Task::ModifyObserve(ObserveOp::NotifyFailToStartObserve {
-                    region,
-                    handle,
-                    err: Box::new(err)
-                })
-            );
+    pub fn run_task(&mut self, task: Task) {
+        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
+        let now = Instant::now_coarse();
+        let label = task.label();
+        defer! {
+            metrics::INTERNAL_ACTOR_MESSAGE_HANDLE_DURATION.with_label_values(&[label])
+                .observe(now.saturating_elapsed_secs())
         }
-    }
-
-    fn retry_observe(&self, region: Region, handle: ObserveHandle) -> Result<()> {
-        let (tx, rx) = crossbeam::channel::bounded(1);
-        self.regions
-            .find_region_by_id(
-                region.get_id(),
-                Box::new(move |item| {
-                    tx.send(item)
-                        .expect("BUG: failed to send to newly created channel.");
-                }),
-            )
-            .map_err(|err| {
-                annotate!(
-                    err,
-                    "failed to send request to region info accessor, server maybe too too too busy. (region id = {})",
-                    region.get_id()
-                )
-            })?;
-        let new_region_info = rx
-            .recv()
-            .map_err(|err| annotate!(err, "BUG?: unexpected channel message dropped."))?;
-        if new_region_info.is_none() {
-            metrics::SKIP_RETRY
-                .with_label_values(&["region-absent"])
-                .inc();
-            return Ok(());
-        }
-        if new_region_info
-            .as_ref()
-            .map(|r| r.role != StateRole::Leader)
-            .unwrap_or(true)
-        {
-            metrics::SKIP_RETRY.with_label_values(&["not-leader"]).inc();
-            return Ok(());
-        }
-        let removed = self.subs.deregister_region(&region, |old, _| {
-            let should_remove = old.handle().id == handle.id;
-            if !should_remove {
-                warn!("stale retry command"; "region" => ?region, "handle" => ?handle, "old_handle" => ?old.handle());
-            }
-            should_remove
-        });
-        if !removed {
-            metrics::SKIP_RETRY
-                .with_label_values(&["stale-command"])
-                .inc();
-            return Ok(());
-        }
-        self.start_observe(region, true);
-        Ok(())
-    }
-
-    pub fn run_task(&self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task);
         match task {
             Task::WatchTask(op) => self.handle_watch_task(op),
             Task::BatchEvent(events) => self.do_backup(events),
-            Task::Flush(task) => self.on_flush(task, self.store_id),
+            Task::Flush(task) => self.on_flush(task),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
-            Task::ForceFlush(task) => self.on_force_flush(task, self.store_id),
+            Task::ForceFlush(task) => self.on_force_flush(task),
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
             Task::ChangeConfig(_) => {
                 warn!("change config online isn't supported for now.")
+            }
+            Task::Sync(cb, mut cond) => {
+                if cond(&self.range_router) {
+                    cb()
+                } else {
+                    let sched = self.scheduler.clone();
+                    self.pool.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        sched.schedule(Task::Sync(cb, cond)).unwrap();
+                    });
+                }
+            }
+            Task::MarkFailover(t) => self.failover_time = Some(t),
+            Task::FlushWithMinTs(task, min_ts) => self.on_flush_with_min_ts(task, min_ts),
+            Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
+            Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
+        }
+    }
+
+    pub fn handle_region_checkpoints_op(&mut self, op: RegionCheckpointOperation) {
+        match op {
+            RegionCheckpointOperation::Update(u) => {
+                // Let's clear all stale checkpoints first.
+                // Or they may slow down the global checkpoint.
+                self.checkpoint_mgr.clear();
+                for (region, checkpoint) in u {
+                    debug!("setting region checkpoint"; "region" => %region.get_id(), "ts" => %checkpoint);
+                    self.checkpoint_mgr
+                        .update_region_checkpoint(&region, checkpoint)
+                }
+            }
+            RegionCheckpointOperation::Get(g, cb) => {
+                let _guard = self.pool.handle().enter();
+                match g {
+                    RegionSet::Universal => cb(self
+                        .checkpoint_mgr
+                        .get_all()
+                        .into_iter()
+                        .map(|c| GetCheckpointResult::ok(c.region.clone(), c.checkpoint))
+                        .collect()),
+                    RegionSet::Regions(rs) => cb(rs
+                        .iter()
+                        .map(|(id, version)| {
+                            self.checkpoint_mgr
+                                .get_from_region(RegionIdWithVersion::new(*id, *version))
+                        })
+                        .collect()),
+                }
             }
         }
     }
 
     pub fn do_backup(&self, events: Vec<CmdBatch>) {
+        let wg = CallbackWaitGroup::new();
         for batch in events {
-            self.backup_batch(batch)
+            self.backup_batch(batch, wg.clone().work());
         }
+        self.pool.block_on(wg.wait())
     }
 }
 
 /// Create a standard tokio runtime
 /// (which allows io and time reactor, involve thread memory accessor),
 fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+    info!("create tokio runtime for backup stream"; "thread_name" => thread_name, "thread-count" => thread_count);
+
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         // Maybe make it more configurable?
-        // currently, blocking threads would be used for incremental scanning.
-        .max_blocking_threads(thread_count)
+        // currently, blocking threads would be used for tokio local I/O.
+        // (`File` API in `tokio::io` would use this pool.)
+        .max_blocking_threads(thread_count * 8)
         .worker_threads(thread_count)
         .enable_io()
         .enable_time()
-        .on_thread_start(|| {
+        .after_start_wrapper(|| {
             tikv_alloc::add_thread_memory_accessor();
         })
-        .on_thread_stop(|| {
+        .before_stop_wrapper(|| {
             tikv_alloc::remove_thread_memory_accessor();
         })
         .build()
+}
+
+#[derive(Debug)]
+pub enum RegionSet {
+    /// The universal set.
+    Universal,
+    /// A subset.
+    Regions(HashSet<(u64, u64)>),
+}
+
+pub enum RegionCheckpointOperation {
+    Update(Vec<(Region, TimeStamp)>),
+    Get(RegionSet, Box<dyn FnOnce(Vec<GetCheckpointResult>) + Send>),
+}
+
+impl fmt::Debug for RegionCheckpointOperation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Update(arg0) => f.debug_tuple("Update").field(arg0).finish(),
+            Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
+        }
+    }
 }
 
 pub enum Task {
     WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(ConfigChange),
-    /// Flush the task with name.
-    Flush(String),
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.
     ForceFlush(String),
     /// FatalError pauses the task and set the error.
-    FatalError(String, Box<Error>),
+    FatalError(TaskSelector, Box<Error>),
+    /// Run the callback when see this message. Only for test usage.
+    /// NOTE: Those messages for testing are not guarded by `#[cfg(test)]` for
+    /// now, because the integration test would not enable test config when
+    /// compiling (why?)
+    Sync(
+        // Run the closure if ...
+        Box<dyn FnOnce() + Send>,
+        // This returns `true`.
+        Box<dyn FnMut(&Router) -> bool + Send>,
+    ),
+    /// Mark the store as a failover store.
+    /// This would prevent store from updating its checkpoint ts for a while.
+    /// Because we are not sure whether the regions in the store have new leader
+    /// -- we keep a safe checkpoint so they can choose a safe `from_ts` for
+    /// initial scanning.
+    MarkFailover(Instant),
+    /// Flush the task with name.
+    Flush(String),
+    /// Execute the flush with the calculated `min_ts`.
+    /// This is an internal command only issued by the `Flush` task.
+    FlushWithMinTs(String, TimeStamp),
+    /// The command for getting region checkpoints.
+    RegionCheckpointsOp(RegionCheckpointOperation),
+    /// update global-checkpoint-ts to storage.
+    UpdateGlobalCheckpoint(String),
 }
 
 #[derive(Debug)]
@@ -891,22 +1028,24 @@ pub enum TaskOp {
     AddTask(StreamTask),
     RemoveTask(String),
     PauseTask(String),
-    ResumeTask(StreamTask),
+    ResumeTask(String),
 }
 
-#[derive(Debug)]
+/// The callback for resolving region.
+type ResolveRegionsCallback = Box<dyn FnOnce(ResolvedRegions) + 'static + Send>;
+
 pub enum ObserveOp {
     Start {
         region: Region,
-        // if `true`, would scan and sink change from the global checkpoint ts.
-        // Note: maybe we'd better make it Option<TimeStamp> to make it more generic,
-        //       but that needs the `observer` know where the checkpoint is, which is a little dirty...
-        needs_initial_scanning: bool,
     },
     Stop {
         region: Region,
     },
-    CheckEpochAndStop {
+    /// Destroy the region subscription.
+    /// Unlike `Stop`, this will assume the region would never go back.
+    /// For now, the effect of "never go back" is that we won't try to hint
+    /// other store the checkpoint ts of this region.
+    Destroy {
         region: Region,
     },
     RefreshResolver {
@@ -917,6 +1056,39 @@ pub enum ObserveOp {
         handle: ObserveHandle,
         err: Box<Error>,
     },
+    ResolveRegions {
+        callback: ResolveRegionsCallback,
+        min_ts: TimeStamp,
+    },
+}
+
+impl std::fmt::Debug for ObserveOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start { region } => f.debug_struct("Start").field("region", region).finish(),
+            Self::Stop { region } => f.debug_struct("Stop").field("region", region).finish(),
+            Self::Destroy { region } => f.debug_struct("Destroy").field("region", region).finish(),
+            Self::RefreshResolver { region } => f
+                .debug_struct("RefreshResolver")
+                .field("region", region)
+                .finish(),
+            Self::NotifyFailToStartObserve {
+                region,
+                handle,
+                err,
+            } => f
+                .debug_struct("NotifyFailToStartObserve")
+                .field("region", region)
+                .field("handle", handle)
+                .field("err", err)
+                .finish(),
+            Self::ResolveRegions { min_ts, .. } => f
+                .debug_struct("ResolveRegions")
+                .field("min_ts", min_ts)
+                .field("callback", &format_args!("fn {{ .. }}"))
+                .finish(),
+        }
+    }
 }
 
 impl fmt::Debug for Task {
@@ -934,6 +1106,20 @@ impl fmt::Debug for Task {
             Self::FatalError(task, err) => {
                 f.debug_tuple("FatalError").field(task).field(err).finish()
             }
+            Self::Sync(..) => f.debug_tuple("Sync").finish(),
+            Self::MarkFailover(t) => f
+                .debug_tuple("MarkFailover")
+                .field(&format_args!("{:?} ago", t.saturating_elapsed()))
+                .finish(),
+            Self::FlushWithMinTs(arg0, arg1) => f
+                .debug_tuple("FlushWithMinTs")
+                .field(arg0)
+                .field(arg1)
+                .finish(),
+            Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
+            Self::UpdateGlobalCheckpoint(task) => {
+                f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
+            }
         }
     }
 }
@@ -941,6 +1127,37 @@ impl fmt::Debug for Task {
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Task {
+    fn label(&self) -> &'static str {
+        match self {
+            Task::WatchTask(w) => match w {
+                TaskOp::AddTask(_) => "watch_task.add",
+                TaskOp::RemoveTask(_) => "watch_task.remove",
+                TaskOp::PauseTask(_) => "watch_task.pause",
+                TaskOp::ResumeTask(_) => "watch_task.resume",
+            },
+            Task::BatchEvent(_) => "batch_event",
+            Task::ChangeConfig(_) => "change_config",
+            Task::Flush(_) => "flush",
+            Task::ModifyObserve(o) => match o {
+                ObserveOp::Start { .. } => "modify_observe.start",
+                ObserveOp::Stop { .. } => "modify_observe.stop",
+                ObserveOp::Destroy { .. } => "modify_observe.destroy",
+                ObserveOp::RefreshResolver { .. } => "modify_observe.refresh_resolver",
+                ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
+                ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
+            },
+            Task::ForceFlush(_) => "force_flush",
+            Task::FatalError(..) => "fatal_error",
+            Task::Sync(..) => "sync",
+            Task::MarkFailover(_) => "mark_failover",
+            Task::FlushWithMinTs(..) => "flush_with_min_ts",
+            Task::RegionCheckpointsOp(..) => "get_checkpoints",
+            Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
+        }
     }
 }
 

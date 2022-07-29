@@ -9,26 +9,29 @@ use crate::{impl_bit_op::*, impl_max_min::*, impl_variance::*, AggrFunction};
 
 /// Parse a specific aggregate function definition from protobuf.
 ///
-/// All aggregate function implementations should include an impl for this trait as well as
-/// add a match arm in `map_pb_sig_to_aggr_func_parser` so that the aggregate function can be
-/// actually utilized.
+/// All aggregate function implementations should include an impl for this trait
+/// as well as add a match arm in `map_pb_sig_to_aggr_func_parser` so that the
+/// aggregate function can be actually utilized.
 pub trait AggrDefinitionParser {
-    /// Checks whether the inner expression of the aggregate function definition is supported.
-    /// It is ensured that `aggr_def.tp` maps the current parser instance.
+    /// Checks whether the inner expression of the aggregate function definition
+    /// is supported. It is ensured that `aggr_def.tp` maps the current
+    /// parser instance.
     fn check_supported(&self, aggr_def: &Expr) -> Result<()>;
 
     /// Parses and transforms the aggregate function definition.
     ///
-    /// The schema of this aggregate function will be appended in `out_schema` and the final
-    /// RPN expression (maybe wrapped by some casting according to types) will be appended in
-    /// `out_exp`.
+    /// The schema of this aggregate function will be appended in `out_schema`
+    /// and the final RPN expression (maybe wrapped by some casting
+    /// according to types) will be appended in `out_exp`.
     ///
-    /// The parser may choose particular aggregate function implementation based on the data
-    /// type, so `schema` is also needed in case of data type depending on the column.
+    /// The parser may choose particular aggregate function implementation based
+    /// on the data type, so `schema` is also needed in case of data type
+    /// depending on the column.
     ///
     /// # Panic
     ///
-    /// May panic if the aggregate function definition is not supported by this parser.
+    /// May panic if the aggregate function definition is not supported by this
+    /// parser.
     fn parse(
         &self,
         mut aggr_def: Expr,
@@ -100,8 +103,8 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
         })
     }
 
-    /// Parses and transforms the aggregate function definition to generate corresponding
-    /// `AggrFunction` instance.
+    /// Parses and transforms the aggregate function definition to generate
+    /// corresponding `AggrFunction` instance.
     ///
     /// # Panic
     ///

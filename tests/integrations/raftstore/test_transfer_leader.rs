@@ -181,7 +181,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     // Disable default max peer count check.
     pd_client.disable_default_operator();
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
     cluster.cfg.raft_store.merge_max_log_gap = 1;
 
     let r1 = cluster.run_conf_change();
@@ -361,7 +361,8 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         LocksStatus::TransferringLeader
     );
 
-    // After several ticks, in-memory pessimistic locks should become available again.
+    // After several ticks, in-memory pessimistic locks should become available
+    // again.
     thread::sleep(Duration::from_secs(1));
     assert_eq!(txn_ext.pessimistic_locks.read().status, LocksStatus::Normal);
     cluster.reset_leader_of_region(1);

@@ -2,15 +2,17 @@
 
 use std::sync::Arc;
 
-use file_system::{get_io_rate_limiter, IOOp, IORateLimiter};
+use file_system::{get_io_rate_limiter, IoOp, IoRateLimiter};
+
+use crate::Result;
 
 pub trait FileSystemInspector: Sync + Send {
-    fn read(&self, len: usize) -> Result<usize, String>;
-    fn write(&self, len: usize) -> Result<usize, String>;
+    fn read(&self, len: usize) -> Result<usize>;
+    fn write(&self, len: usize) -> Result<usize>;
 }
 
 pub struct EngineFileSystemInspector {
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl EngineFileSystemInspector {
@@ -21,7 +23,7 @@ impl EngineFileSystemInspector {
         }
     }
 
-    pub fn from_limiter(limiter: Option<Arc<IORateLimiter>>) -> Self {
+    pub fn from_limiter(limiter: Option<Arc<IoRateLimiter>>) -> Self {
         EngineFileSystemInspector { limiter }
     }
 }
@@ -33,17 +35,17 @@ impl Default for EngineFileSystemInspector {
 }
 
 impl FileSystemInspector for EngineFileSystemInspector {
-    fn read(&self, len: usize) -> Result<usize, String> {
+    fn read(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
-            Ok(limiter.request(IOOp::Read, len))
+            Ok(limiter.request(IoOp::Read, len))
         } else {
             Ok(len)
         }
     }
 
-    fn write(&self, len: usize) -> Result<usize, String> {
+    fn write(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
-            Ok(limiter.request(IOOp::Write, len))
+            Ok(limiter.request(IoOp::Write, len))
         } else {
             Ok(len)
         }

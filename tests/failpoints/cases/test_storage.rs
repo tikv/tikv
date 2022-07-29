@@ -12,6 +12,7 @@ use std::{
 
 use api_version::KvFormat;
 use collections::HashMap;
+use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use grpcio::*;
@@ -33,8 +34,9 @@ use tikv::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
         test_util::*,
         txn::{
-            commands, flow_controller::FlowController, Error as TxnError,
-            ErrorInner as TxnErrorInner,
+            commands,
+            flow_controller::{EngineFlowController, FlowController},
+            Error as TxnError, ErrorInner as TxnErrorInner,
         },
         Error as StorageError, ErrorInner as StorageErrorInner, *,
     },
@@ -253,18 +255,18 @@ fn test_scale_scheduler_pool() {
     let cfg = new_tikv_config(1);
     let kv_engine = storage.get_engine().kv_engine();
     let (_tx, rx) = std::sync::mpsc::channel();
-    let flow_controller = Arc::new(FlowController::new(
+    let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,
         kv_engine.clone(),
         rx,
-    ));
+    )));
 
     let cfg_controller = ConfigController::new(cfg.clone());
     let (scheduler, _receiver) = dummy_scheduler();
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            kv_engine,
+            Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
             cfg.storage.block_cache.shared,
             scheduler,
             flow_controller,
@@ -477,8 +479,9 @@ fn test_pipelined_pessimistic_lock() {
     fail::remove(scheduler_async_write_finish_fp);
     delete_pessimistic_lock(&storage, key.clone(), 50, 50);
 
-    // The proposed callback, which is responsible for returning response, is not guaranteed to be
-    // invoked. In this case it should still be continued properly.
+    // The proposed callback, which is responsible for returning response, is not
+    // guaranteed to be invoked. In this case it should still be continued
+    // properly.
     fail::cfg(before_pipelined_write_finish_fp, "return()").unwrap();
     storage
         .sched_txn_command(
@@ -1334,10 +1337,11 @@ fn test_resolve_lock_deadline() {
 
 /// Checks if concurrent transaction works correctly during shutdown.
 ///
-/// During shutdown, all pending writes will fail with error so its latch will be released.
-/// Then other writes in the latch queue will be continued to be processed, which can break
-/// the correctness of latch: underlying command result is always determined, it should be
-/// either always success written or never be written.
+/// During shutdown, all pending writes will fail with error so its latch will
+/// be released. Then other writes in the latch queue will be continued to be
+/// processed, which can break the correctness of latch: underlying command
+/// result is always determined, it should be either always success written or
+/// never be written.
 #[test]
 fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     let (mut cluster, mut client, mut ctx) = must_new_cluster_and_kv_client_mul(3);
@@ -1405,7 +1409,8 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     client = TikvClient::new(channel);
 
-    // The first request is commit, the second is rollback, the first one should succeed.
+    // The first request is commit, the second is rollback, the first one should
+    // succeed.
     ts += 1;
     let get_version = ts;
     let mut get_req = GetRequest::default();

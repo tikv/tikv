@@ -4,7 +4,7 @@ use std::{cmp, i32, isize, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
-use grpcio::CompressionAlgorithms;
+use grpcio::{CompressionAlgorithms, ResourceQuota};
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
@@ -26,6 +26,8 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
+const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 // Number of rows in each chunk.
 const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -83,7 +85,6 @@ pub struct Config {
     #[online_config(skip)]
     pub status_thread_pool_size: usize,
 
-    #[online_config(skip)]
     pub max_grpc_send_msg_len: i32,
 
     // When merge raft messages into a batch message, leave a buffer.
@@ -93,19 +94,21 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_client_queue_size: usize,
 
-    #[online_config(skip)]
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
     #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
     #[online_config(skip)]
+    pub grpc_gzip_compression_level: usize,
+    #[online_config(skip)]
+    pub grpc_min_message_size_to_compress: usize,
+    #[online_config(skip)]
     pub grpc_concurrency: usize,
     #[online_config(skip)]
     pub grpc_concurrent_stream: i32,
     #[online_config(skip)]
     pub grpc_raft_conn_num: usize,
-    #[online_config(skip)]
     pub grpc_memory_pool_quota: ReadableSize,
     #[online_config(skip)]
     pub grpc_stream_initial_window_size: ReadableSize,
@@ -161,9 +164,10 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
-    /// increasing. For server layer some messages will be rejected or droped, if they utilize
-    /// memory more than `reject_messages_on_memory_ratio` * total.
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// limit memory increasing. For server layer some messages will be rejected
+    /// or dropped, if they utilize memory more than
+    /// `reject_messages_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable message rejecting.
     // By default it's 0.2. So for different memory capacity, messages are rejected when:
@@ -171,6 +175,10 @@ pub struct Config {
     // * system=16G, memory_usage_limit=12G, reject_at=2.4G
     // * system=32G, memory_usage_limit=24G, reject_at=4.8G
     pub reject_messages_on_memory_ratio: f64,
+
+    // whether to compact metrics or not.
+    #[doc(hidden)]
+    pub simplify_metrics: bool,
 
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
@@ -212,6 +220,8 @@ impl Default for Config {
             raft_client_queue_size: 8192,
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
+            grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
+            grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
@@ -250,6 +260,7 @@ impl Default for Config {
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
+            simplify_metrics: false,
         }
     }
 }
@@ -321,6 +332,10 @@ impl Config {
                 "concurrent-recv-snap-limit",
                 self.concurrent_recv_snap_limit,
             ),
+            (
+                "grpc-memory-pool-quota",
+                self.grpc_memory_pool_quota.0 as usize,
+            ),
         ];
         for (label, value) in non_zero_entries {
             if value == 0 {
@@ -337,6 +352,12 @@ impl Config {
         {
             return Err(box_err!(
                 "server.end-point-request-max-handle-secs is too small."
+            ));
+        }
+
+        if self.max_grpc_send_msg_len <= 0 {
+            return Err(box_err!(
+                "server.max-grpc-send-msg-len must be bigger than 0."
             ));
         }
 
@@ -364,8 +385,8 @@ impl Config {
         }
 
         if self.heavy_load_threshold > 100 {
-            // The configuration has been changed to describe CPU usage of a single thread instead
-            // of all threads. So migrate from the old style.
+            // The configuration has been changed to describe CPU usage of a single thread
+            // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
         }
 
@@ -385,11 +406,23 @@ impl Config {
 pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
+    grpc_mem_quota: ResourceQuota,
 }
 
+unsafe impl Send for ServerConfigManager {}
+unsafe impl Sync for ServerConfigManager {}
+
 impl ServerConfigManager {
-    pub fn new(tx: Scheduler<SnapTask>, config: Arc<VersionTrack<Config>>) -> ServerConfigManager {
-        ServerConfigManager { tx, config }
+    pub fn new(
+        tx: Scheduler<SnapTask>,
+        config: Arc<VersionTrack<Config>>,
+        grpc_mem_quota: ResourceQuota,
+    ) -> ServerConfigManager {
+        ServerConfigManager {
+            tx,
+            config,
+            grpc_mem_quota,
+        }
     }
 }
 
@@ -397,7 +430,15 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config.update(move |cfg| cfg.update(change));
+            self.config.update(move |cfg| cfg.update(change))?;
+            if let Some(value) = c.get("grpc_memory_pool_quota") {
+                let mem_quota: ReadableSize = value.clone().into();
+                // the resize is done inplace indeed, but grpc-rs's api need self, so we just
+                // clone it here, but this no extra side effect here.
+                self.grpc_mem_quota
+                    .clone()
+                    .resize_memory(mem_quota.0 as usize);
+            }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
             }
@@ -465,6 +506,10 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
 
         let mut invalid_cfg = cfg.clone();
+        invalid_cfg.grpc_memory_pool_quota = ReadableSize::mb(0);
+        assert!(invalid_cfg.validate().is_err());
+
+        let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
         assert!(invalid_cfg.validate().is_err());
 
@@ -486,6 +531,10 @@ mod tests {
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
+        assert!(invalid_cfg.validate().is_err());
+
+        invalid_cfg = Config::default();
+        invalid_cfg.max_grpc_send_msg_len = 0;
         assert!(invalid_cfg.validate().is_err());
 
         invalid_cfg = Config::default();

@@ -2,10 +2,10 @@
 
 //! Storage configuration.
 
-use std::error::Error;
+use std::{cmp::max, error::Error};
 
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
-use file_system::{IOPriority, IORateLimitMode, IORateLimiter, IOType};
+use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
 use online_config::OnlineConfig;
@@ -14,7 +14,7 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::BLOCK_CACHE_RATE;
+use crate::config::{BLOCK_CACHE_RATE, MIN_BLOCK_CACHE_SHARD_SIZE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -64,7 +64,7 @@ pub struct Config {
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
-    pub io_rate_limit: IORateLimitConfig,
+    pub io_rate_limit: IoRateLimitConfig,
 }
 
 impl Default for Config {
@@ -88,7 +88,7 @@ impl Default for Config {
             ttl_check_poll_interval: ReadableDuration::hours(12),
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
-            io_rate_limit: IORateLimitConfig::default(),
+            io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
         }
     }
@@ -216,6 +216,15 @@ impl Default for BlockCacheConfig {
 }
 
 impl BlockCacheConfig {
+    fn adjust_shard_bits(&self, capacity: usize) -> i32 {
+        let max_shard_count = capacity / MIN_BLOCK_CACHE_SHARD_SIZE;
+        if max_shard_count < (2 << self.num_shard_bits) {
+            max((max_shard_count as f64).log2() as i32, 1)
+        } else {
+            self.num_shard_bits
+        }
+    }
+
     pub fn build_shared_cache(&self) -> Option<Cache> {
         if !self.shared {
             return None;
@@ -229,7 +238,7 @@ impl BlockCacheConfig {
         };
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
-        cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
+        cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
         if let Some(allocator) = self.new_memory_allocator() {
@@ -269,99 +278,99 @@ impl BlockCacheConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct IORateLimitConfig {
+pub struct IoRateLimitConfig {
     pub max_bytes_per_sec: ReadableSize,
     #[online_config(skip)]
     pub max_buffered_read_bytes: ReadableSize,
     #[online_config(skip)]
-    pub mode: IORateLimitMode,
-    /// When this flag is off, high-priority IOs are counted but not limited. Default
-    /// set to false because the optimal throughput target provided by user might not be
-    /// the maximum available bandwidth. For multi-tenancy use case, this flag should be
-    /// turned on.
+    pub mode: IoRateLimitMode,
+    /// When this flag is off, high-priority IOs are counted but not limited.
+    /// Default set to false because the optimal throughput target provided
+    /// by user might not be the maximum available bandwidth. For
+    /// multi-tenancy use case, this flag should be turned on.
     #[online_config(skip)]
     pub strict: bool,
-    pub foreground_read_priority: IOPriority,
-    pub foreground_write_priority: IOPriority,
-    pub flush_priority: IOPriority,
-    pub level_zero_compaction_priority: IOPriority,
-    pub compaction_priority: IOPriority,
-    pub replication_priority: IOPriority,
-    pub load_balance_priority: IOPriority,
-    pub gc_priority: IOPriority,
-    pub import_priority: IOPriority,
-    pub export_priority: IOPriority,
-    pub other_priority: IOPriority,
+    pub foreground_read_priority: IoPriority,
+    pub foreground_write_priority: IoPriority,
+    pub flush_priority: IoPriority,
+    pub level_zero_compaction_priority: IoPriority,
+    pub compaction_priority: IoPriority,
+    pub replication_priority: IoPriority,
+    pub load_balance_priority: IoPriority,
+    pub gc_priority: IoPriority,
+    pub import_priority: IoPriority,
+    pub export_priority: IoPriority,
+    pub other_priority: IoPriority,
 }
 
-impl Default for IORateLimitConfig {
-    fn default() -> IORateLimitConfig {
-        IORateLimitConfig {
+impl Default for IoRateLimitConfig {
+    fn default() -> IoRateLimitConfig {
+        IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(0),
             max_buffered_read_bytes: ReadableSize::mb(1),
-            mode: IORateLimitMode::WriteOnly,
+            mode: IoRateLimitMode::WriteOnly,
             strict: false,
-            foreground_read_priority: IOPriority::High,
-            foreground_write_priority: IOPriority::High,
-            flush_priority: IOPriority::High,
-            level_zero_compaction_priority: IOPriority::Medium,
-            compaction_priority: IOPriority::Low,
-            replication_priority: IOPriority::High,
-            load_balance_priority: IOPriority::High,
-            gc_priority: IOPriority::High,
-            import_priority: IOPriority::Medium,
-            export_priority: IOPriority::Medium,
-            other_priority: IOPriority::High,
+            foreground_read_priority: IoPriority::High,
+            foreground_write_priority: IoPriority::High,
+            flush_priority: IoPriority::High,
+            level_zero_compaction_priority: IoPriority::Medium,
+            compaction_priority: IoPriority::Low,
+            replication_priority: IoPriority::High,
+            load_balance_priority: IoPriority::High,
+            gc_priority: IoPriority::High,
+            import_priority: IoPriority::Medium,
+            export_priority: IoPriority::Medium,
+            other_priority: IoPriority::High,
         }
     }
 }
 
-impl IORateLimitConfig {
-    pub fn build(&mut self, stats_collector_enabled: bool) -> IORateLimiter {
-        if !stats_collector_enabled && self.mode != IORateLimitMode::WriteOnly {
+impl IoRateLimitConfig {
+    pub fn build(&mut self, stats_collector_enabled: bool) -> IoRateLimiter {
+        if !stats_collector_enabled && self.mode != IoRateLimitMode::WriteOnly {
             warn!("Falling back to write-only mode because io-stats-collector is missing.");
-            self.mode = IORateLimitMode::WriteOnly;
+            self.mode = IoRateLimitMode::WriteOnly;
         }
-        let limiter = IORateLimiter::new(
+        let limiter = IoRateLimiter::new(
             self.mode,
             self.strict,
-            Some(self.max_buffered_read_bytes.0 as usize), /*batch_buffered_reads*/
+            Some(self.max_buffered_read_bytes.0 as usize), // batch_buffered_reads
             !stats_collector_enabled,
         );
-        limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
-        limiter.set_io_priority(IOType::ForegroundWrite, self.foreground_write_priority);
-        limiter.set_io_priority(IOType::Flush, self.flush_priority);
+        limiter.set_io_priority(IoType::ForegroundRead, self.foreground_read_priority);
+        limiter.set_io_priority(IoType::ForegroundWrite, self.foreground_write_priority);
+        limiter.set_io_priority(IoType::Flush, self.flush_priority);
         limiter.set_io_priority(
-            IOType::LevelZeroCompaction,
+            IoType::LevelZeroCompaction,
             self.level_zero_compaction_priority,
         );
-        limiter.set_io_priority(IOType::Compaction, self.compaction_priority);
-        limiter.set_io_priority(IOType::Replication, self.replication_priority);
-        limiter.set_io_priority(IOType::LoadBalance, self.load_balance_priority);
-        limiter.set_io_priority(IOType::Gc, self.gc_priority);
-        limiter.set_io_priority(IOType::Import, self.import_priority);
-        limiter.set_io_priority(IOType::Export, self.export_priority);
-        limiter.set_io_priority(IOType::Other, self.other_priority);
+        limiter.set_io_priority(IoType::Compaction, self.compaction_priority);
+        limiter.set_io_priority(IoType::Replication, self.replication_priority);
+        limiter.set_io_priority(IoType::LoadBalance, self.load_balance_priority);
+        limiter.set_io_priority(IoType::Gc, self.gc_priority);
+        limiter.set_io_priority(IoType::Import, self.import_priority);
+        limiter.set_io_priority(IoType::Export, self.export_priority);
+        limiter.set_io_priority(IoType::Other, self.other_priority);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.other_priority != IOPriority::High {
+        if self.other_priority != IoPriority::High {
             warn!(
-                "Occasionally some critical IO operations are tagged as IOType::Other, \
+                "Occasionally some critical IO operations are tagged as IoType::Other, \
                   e.g. IOs are fired from unmanaged threads, thread-local type storage exceeds \
-                  capacity. To be on the safe side, change priority for IOType::Other from \
+                  capacity. To be on the safe side, change priority for IoType::Other from \
                   {:?} to {:?}",
                 self.other_priority,
-                IOPriority::High
+                IoPriority::High
             );
-            self.other_priority = IOPriority::High;
+            self.other_priority = IoPriority::High;
         }
         if self.gc_priority != self.foreground_write_priority {
             warn!(
                 "GC writes are merged with foreground writes. To avoid priority inversion, change \
-                  priority for IOType::Gc from {:?} to {:?}",
+                  priority for IoType::Gc from {:?} to {:?}",
                 self.gc_priority, self.foreground_write_priority,
             );
             self.gc_priority = self.foreground_write_priority;
@@ -379,7 +388,7 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.validate().is_ok());
 
-        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
         cfg.scheduler_worker_pool_size = max_pool_size;
         assert!(cfg.validate().is_ok());
 
@@ -388,5 +397,21 @@ mod tests {
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_adjust_shard_bits() {
+        let config = BlockCacheConfig::default();
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(1).0 as usize);
+        assert_eq!(shard_bits, 3);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(4).0 as usize);
+        assert_eq!(shard_bits, 5);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::gb(8).0 as usize);
+        assert_eq!(shard_bits, 6);
+
+        let shard_bits = config.adjust_shard_bits(ReadableSize::mb(1).0 as usize);
+        assert_eq!(shard_bits, 1);
     }
 }
