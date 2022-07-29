@@ -477,7 +477,8 @@ mod tests {
         }
     }
 
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    // if this failed, unset the environmental variables 'http_proxy' and
+    // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
         let cfg = Config {

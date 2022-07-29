@@ -53,7 +53,8 @@ pub struct Config {
     #[online_config(skip)]
     pub prefer_approximate_bucket: bool,
     // ratio of region_bucket_size. (0, 0.5)
-    // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left neighbor bucket
+    // The region_bucket_merge_size_ratio * region_bucket_size is threshold to merge with its left
+    // neighbor bucket
     pub region_bucket_merge_size_ratio: f64,
 }
 

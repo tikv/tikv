@@ -20,7 +20,8 @@ pub trait Store: Send {
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
-    /// Re-use last cursor to incrementally (if possible) fetch the provided key.
+    /// Re-use last cursor to incrementally (if possible) fetch the provided
+    /// key.
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
 
     /// Take the statistics. Currently only available for `incremental_get`.
@@ -49,13 +50,15 @@ pub trait Store: Send {
 
 /// [`Scanner`]s allow retrieving items or batches from a scan result.
 ///
-/// Commonly they are obtained as a result of a [`scanner`](Store::scanner) operation.
+/// Commonly they are obtained as a result of a [`scanner`](Store::scanner)
+/// operation.
 pub trait Scanner: Send {
     /// Get the next [`KvPair`](KvPair) if it exists.
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
-    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of keys after each returned key.
+    /// If `sample_step` is greater than 0, skips `sample_step - 1` number of
+    /// keys after each returned key.
     fn scan(&mut self, limit: usize, sample_step: usize) -> Result<Vec<Result<KvPair>>> {
         let mut row_count = 0;
         let mut results = Vec::with_capacity(limit);
@@ -1162,12 +1165,14 @@ mod tests {
             Some((Key::from_raw(b"z"), b"beta".to_vec()))
         );
         assert!(scanner.next().is_err());
-        // note: mvcc impl does not guarantee to work any more after meeting a non lock error
+        // note: mvcc impl does not guarantee to work any more after meeting a non lock
+        // error
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store.scanner(true, false, false, None, None).unwrap();
         assert!(scanner.next().is_err());
-        // note: mvcc impl does not guarantee to work any more after meeting a non lock error
+        // note: mvcc impl does not guarantee to work any more after meeting a non lock
+        // error
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"z"), b"beta".to_vec()))
@@ -1224,7 +1229,8 @@ mod tests {
         );
         assert_eq!(scanner.next().unwrap(), Some((Key::from_raw(b"z"), vec![])));
         assert!(scanner.next().is_err());
-        // note: mvcc impl does not guarantee to work any more after meeting a non lock error
+        // note: mvcc impl does not guarantee to work any more after meeting a non lock
+        // error
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store

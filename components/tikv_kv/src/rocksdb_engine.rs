@@ -11,13 +11,12 @@ use std::{
 
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, raw::DBOptions, raw_util::CFOptions, RocksEngine as BaseRocksEngine,
-    RocksEngineIterator,
+    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -89,11 +88,10 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn new(
         path: &str,
-        cfs: &[CfName],
-        cfs_opts: Option<Vec<CFOptions<'_>>>,
+        db_opts: Option<RocksDbOptions>,
+        cfs_opts: Vec<(CfName, RocksCfOptions)>,
         shared_block_cache: bool,
-        io_rate_limiter: Option<Arc<IORateLimiter>>,
-        db_opts: Option<DBOptions>,
+        io_rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -104,21 +102,16 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let worker = Worker::new("engine-rocksdb");
-        let mut db_opts = db_opts.unwrap_or_else(|| DBOptions::new());
+        let mut db_opts = db_opts.unwrap_or_default();
         if io_rate_limiter.is_some() {
-            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
         }
 
-        let db = Arc::new(engine_rocks::raw_util::new_engine(
-            &path,
-            Some(db_opts),
-            cfs,
-            cfs_opts,
-        )?);
+        let db = engine_rocks::util::new_engine_opt(&path, db_opts, cfs_opts)?;
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let mut kv_engine = BaseRocksEngine::from_db(db.clone());
-        let mut raft_engine = BaseRocksEngine::from_db(db);
+        let mut kv_engine = db.clone();
+        let mut raft_engine = db;
         kv_engine.set_shared_block_cache(shared_block_cache);
         raft_engine.set_shared_block_cache(shared_block_cache);
         let engines = Engines::new(kv_engine, raft_engine);
@@ -158,7 +151,8 @@ impl RocksEngine {
     }
 
     /// `pre_propose` is called before propose.
-    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by
+    /// now.
     fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
         let requests = batch
             .modifies

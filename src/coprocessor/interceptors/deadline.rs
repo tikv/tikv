@@ -9,8 +9,8 @@ use std::{
 use pin_project::pin_project;
 use tikv_util::deadline::{Deadline, DeadlineError};
 
-/// Checks the deadline before every poll of the future. If the deadline is exceeded,
-/// `DeadlineError` is returned.
+/// Checks the deadline before every poll of the future. If the deadline is
+/// exceeded, `DeadlineError` is returned.
 pub fn check_deadline<F: Future>(
     fut: F,
     deadline: Deadline,

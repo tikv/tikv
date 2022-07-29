@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use engine_traits::{IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, Snapshot};
 
-use crate::{db_vector::PanicDBVector, engine::PanicEngine};
+use crate::{db_vector::PanicDbVector, engine::PanicEngine};
 
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
@@ -16,9 +16,9 @@ impl Snapshot for PanicSnapshot {
 }
 
 impl Peekable for PanicSnapshot {
-    type DBVector = PanicDBVector;
+    type DbVector = PanicDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         panic!()
     }
     fn get_value_cf_opt(
@@ -26,7 +26,7 @@ impl Peekable for PanicSnapshot {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<Self::DBVector>> {
+    ) -> Result<Option<Self::DbVector>> {
         panic!()
     }
 }

@@ -247,8 +247,6 @@ impl RetryError for RequestError {
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// A helper for uploading a large file to Azure storage.
-///
-///
 struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
@@ -257,7 +255,8 @@ struct AzureUploader {
 }
 
 impl AzureUploader {
-    /// Creates a new uploader with a given target location and upload configuration.
+    /// Creates a new uploader with a given target location and upload
+    /// configuration.
     fn new(client_builder: Arc<dyn ContainerBuilder>, config: &Config, name: String) -> Self {
         AzureUploader {
             client_builder,
@@ -288,8 +287,8 @@ impl AzureUploader {
 
     /// Uploads a file atomically.
     ///
-    /// This should be used only when the data is known to be short, and thus relatively cheap to
-    /// retry the entire upload.
+    /// This should be used only when the data is known to be short, and thus
+    /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
         match timeout(Self::get_timeout(), async {
             self.client_builder
