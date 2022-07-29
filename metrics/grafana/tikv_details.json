@@ -7148,12 +7148,27 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "expr": "sum(delta(tikv_pd_reconnect_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+=======
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cdcwkr.*\"}[1m])) by (instance)",
+>>>>>>> f96c66015... metrics: fix wrong expression for cdc cpu usage (#13148)
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{ type }}",
               "refId": "A",
               "step": 4
+<<<<<<< HEAD
+=======
+            },
+            {
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"tso\"}[1m])) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}} - tso",
+              "refId": "B",
+              "step": 4
+>>>>>>> f96c66015... metrics: fix wrong expression for cdc cpu usage (#13148)
             }
           ],
           "thresholds": [],
@@ -7241,7 +7256,11 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "expr": "sum(rate(tikv_pd_validate_peer_total{tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+=======
+              "expr": "sum(rate(tikv_thread_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cdc_.*\"}[1m])) by (instance)",
+>>>>>>> f96c66015... metrics: fix wrong expression for cdc cpu usage (#13148)
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{ type }}",
