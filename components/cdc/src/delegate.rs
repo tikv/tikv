@@ -679,15 +679,6 @@ impl Delegate {
     }
 
     pub fn raw_track_ts(&mut self, ts: TimeStamp) {
-        // If downstream is not ready for change event, the `on_flush_applied_cmd_batch`
-        // does not accept apply request because of ObserveLevel is lower than ObserveLevel::All
-        let initialized = self
-            .downstreams()
-            .iter()
-            .any(|d| d.state.load().ready_for_change_events());
-        if !initialized {
-            return;
-        }
         match self.resolver {
             Some(ref mut resolver) => {
                 resolver.raw_track_lock(ts);
