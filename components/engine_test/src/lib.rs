@@ -281,15 +281,12 @@ pub mod kv {
 
         fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
             let mut reg = self.registry.lock().unwrap();
-            let mut reg_latest = self.registry_latest.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
             }
 
             let db_path = self.tablet_path(id, suffix);
             let db = self.open_tablet_raw(db_path.as_path(), false)?;
-            reg.insert((id, suffix), db.clone());
-            reg_latest.insert(id, (suffix, db.clone()));
             Ok(db)
         }
 

@@ -61,8 +61,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let mut reg = self.registry.lock().unwrap();
-        let mut reg_latest = self.registry_latest.lock().unwrap();
+        let reg = self.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
             return Ok(db.clone());
         }
@@ -70,8 +69,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let db_path = self.tablet_path(id, suffix);
         let db = self.open_tablet_raw(db_path.as_path(), false)?;
         debug!("open tablet"; "key" => ?(id, suffix));
-        reg.insert((id, suffix), db.clone());
-        reg_latest.insert(id, (suffix, db.clone()));
         Ok(db)
     }
 
