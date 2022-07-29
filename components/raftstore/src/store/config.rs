@@ -275,9 +275,12 @@ pub struct Config {
     pub reactive_memory_lock_timeout_tick: usize,
     // Interval of scheduling a tick to report region buckets.
     pub report_region_buckets_tick_interval: ReadableDuration,
+
     /// Interval to check long uncommitted proposals.
+    #[doc(hidden)]
     pub check_long_uncommitted_interval: ReadableDuration,
     /// Base threshold of long uncommitted proposal.
+    #[doc(hidden)]
     pub long_uncommitted_base_threshold: ReadableDuration,
 
     #[doc(hidden)]
