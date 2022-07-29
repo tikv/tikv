@@ -284,8 +284,9 @@ pub struct Config {
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
 
-    /// The capacity of in-memory pessimistic locks. Make it smaller than `raft-max-size-per-msg` so that
-    /// locks in one region can be proposed in a single command.
+    /// The capacity of in-memory pessimistic locks. Make it smaller than
+    /// `raft-max-size-per-msg` so that locks in one region can be proposed
+    /// in a single command.
     pub in_memory_pessimistic_locks_capacity: ReadableSize,
 }
 
@@ -486,12 +487,12 @@ impl Config {
         }
 
         if self.raft_max_size_per_msg.0
-            < txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
-                * self.in_memory_pessimistic_locks_capacity.0
+            < (txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
+                * self.in_memory_pessimistic_locks_capacity.0 as f64) as u64
         {
             return Err(box_err!(
                 "raft_max_size_per_msg should be at least {}x as large as in_memory_pessimistic_locks_capacity",
-                txn_types::Lock::max_size_amplification_from_pes_lock_to_lock(),
+                txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
             ));
         }
 
