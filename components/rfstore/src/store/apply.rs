@@ -215,7 +215,7 @@ pub(crate) struct Applier {
 
     pub(crate) metrics: ApplyMetrics,
 
-    pub(crate) pending_split: Option<kvenginepb::ChangeSet>,
+    pub(crate) pending_split: HashMap<u64, kvenginepb::ChangeSet>,
 
     pub(crate) paused: bool,
 
@@ -1121,10 +1121,11 @@ impl Applier {
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         // Write the engine before run finish split, or we will get shard not match error.
-        if self.pending_split.is_none() {
+        let cs = self.pending_split.remove(&ctx.exec_log_index);
+        if cs.is_none() {
             return Err(box_err!("split conflict with conf change"));
         }
-        let cs = self.pending_split.take().unwrap();
+        let cs = cs.unwrap();
         let mut resp = AdminResponse::default();
         if let Err(err) = ctx.engine.split(cs, RAFT_INIT_LOG_INDEX) {
             // This must be a follower that fall behind, we need to pause the apply and wait for split files to finish
@@ -1427,7 +1428,7 @@ impl Applier {
                 self.handle_unsafe_destroy(ctx, region_id);
             }
             ApplyMsg::PendingSplit(pending_split) => {
-                self.pending_split = Some(pending_split);
+                self.pending_split.insert(pending_split.sequence, pending_split);
             }
             ApplyMsg::PrepareChangeSet(cs) => {
                 self.handle_prepare_change_set(ctx, cs);
