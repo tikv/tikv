@@ -58,8 +58,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
         let db_path = self.tablet_path(id, suffix);
         let db = self.open_tablet_raw(db_path.as_path(), false)?;
-        // debug!("open tablet"; "key" => ?(id, suffix));
-        // reg.insert((id, suffix), db.clone());
+        debug!("open tablet"; "key" => ?(id, suffix));
         Ok(db)
     }
 
@@ -275,18 +274,13 @@ mod tests {
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         let tablet = factory.create_tablet(1, 10);
-        // assert!(tablet.is_ok());
-        // let tablet = tablet.unwrap();
-        // let tablet2 = factory.open_tablet(1, 10).unwrap();
-        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        // let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
-        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        // let tablet2 = factory.open_tablet_cache_any(1).unwrap();
-        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-
-        // DB exists but not in the registry
-        let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
+        assert!(tablet.is_ok());
+        let tablet = tablet.unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
+        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
+        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        let tablet2 = factory.open_tablet_cache_any(1).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
 
         let tablet_path = factory.tablet_path(1, 10);
@@ -320,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_something() {
+    fn test_existed_db_not_in_registry() {
         let cfg = TEST_CONFIG.clone();
         assert!(cfg.storage.block_cache.shared);
         let cache = cfg.storage.block_cache.build_shared_cache();
@@ -334,8 +328,12 @@ mod tests {
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         let tablet = factory.create_tablet(1, 10).unwrap();
-        let tablet2 = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
+        drop(tablet);
+        let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
+        drop(tablet);
         let _ = factory.open_tablet(1, 10).unwrap();
+
+        assert!(factory.exists(1, 10));
     }
 
     #[test]
