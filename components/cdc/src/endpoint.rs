@@ -56,7 +56,9 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, MemoryQuota, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState},
+    delegate::{
+        on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState, RawRegionTs,
+    },
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -177,6 +179,9 @@ pub enum Task {
         region_id: u64,
         ts: TimeStamp,
     },
+    RawUntrackTs {
+        raw_track_ts: Vec<RawRegionTs>,
+    },
 }
 
 impl_display_as_debug!(Task);
@@ -256,6 +261,9 @@ impl fmt::Debug for Task {
                 .field("region_id", &region_id)
                 .field("ts", &ts)
                 .finish(),
+            Task::RawUntrackTs { raw_track_ts } => {
+                de.field("raw_track_ts", &raw_track_ts.len()).finish()
+            }
         }
     }
 }
@@ -857,6 +865,19 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
+    pub fn on_raw_untrack_ts(&mut self, batch_region_ts: Vec<RawRegionTs>) {
+        for region_ts in batch_region_ts {
+            let region_id = region_ts.region_id;
+            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+                if delegate.has_failed() {
+                    // Skip the batch if the delegate has failed.
+                    continue;
+                }
+                delegate.raw_untrack_ts(region_ts.cdc_id, region_ts.max_ts);
+            }
+        }
+    }
+
     fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         let mut failed_downstreams = Vec::new();
@@ -1330,6 +1351,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
             Task::RawTrackTs { region_id, ts } => self.on_raw_track_ts(region_id, ts),
+            Task::RawUntrackTs { raw_track_ts } => self.on_raw_untrack_ts(raw_track_ts),
         }
     }
 }

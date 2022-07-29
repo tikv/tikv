@@ -14,6 +14,7 @@ use tikv_util::{box_err, error, warn, worker::Scheduler};
 use txn_types::TimeStamp;
 
 use crate::{
+    delegate::get_max_raw_ts,
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
     Error as CdcError,
@@ -91,6 +92,25 @@ impl CdcObserver {
             .get(&region_id)
             .cloned()
     }
+
+    // Ignore err result, raw dead lock is detected in `Endpoint::on_min_ts`
+    // TODO: optimize this if cdc is not registered.
+    fn untrack_raw_ts(&self, cmd_batches: &mut Vec<CmdBatch>) {
+        match get_max_raw_ts(cmd_batches) {
+            Ok(region_ts) => {
+                if !region_ts.is_empty() {
+                    if let Err(e) = self.sched.schedule(Task::RawUntrackTs {
+                        raw_track_ts: region_ts,
+                    }) {
+                        warn!("cdc schedule task failed"; "error" => ?e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("get region raw ts from CmdBatch fail"; "errr" => ?e);
+            }
+        }
+    }
 }
 
 impl Coprocessor for CdcObserver {}
@@ -105,6 +125,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     ) {
         assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
+        // Untrack raw ts here because it's tracked in CausalObserver::pre_propose_query.
+        self.untrack_raw_ts(cmd_batches);
         if max_level < ObserveLevel::All {
             return;
         }

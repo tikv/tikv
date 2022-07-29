@@ -24,7 +24,7 @@ use kvproto::{
     },
 };
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveID},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
@@ -44,6 +44,46 @@ use crate::{
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
+// max_ts presents the max ts in one batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawRegionTs {
+    pub region_id: u64,
+    pub cdc_id: ObserveID,
+    pub max_ts: TimeStamp,
+}
+// parse rawkv cmd from CmdBatch Vec and return the max ts of every region.
+pub fn get_max_raw_ts(cmd_batches: &Vec<CmdBatch>) -> Result<Vec<RawRegionTs>> {
+    let mut region_ts = vec![];
+    for batch in cmd_batches {
+        if batch.is_empty() {
+            continue;
+        }
+        let region_id = batch.region_id;
+        let cdc_id = batch.cdc_id;
+        let cmd = &batch.cmds.last().unwrap();
+        let raw_put_requests: Vec<&PutRequest> = cmd
+            .request
+            .get_requests()
+            .iter()
+            .filter(|req| {
+                CmdType::Put == req.get_cmd_type()
+                    && ApiV2::parse_key_mode(req.get_put().get_key()) == KeyMode::Raw
+            })
+            .map(|req| req.get_put())
+            .collect();
+        if raw_put_requests.is_empty() {
+            continue;
+        }
+        let last_key = raw_put_requests.last().unwrap().get_key();
+        let (_, ts) = ApiV2::decode_raw_key_owned(Key::from_encoded_slice(last_key), true)?;
+        region_ts.push(RawRegionTs {
+            region_id,
+            cdc_id,
+            max_ts: ts.unwrap(),
+        });
+    }
+    Ok(region_ts)
+}
 /// A unique identifier of a Downstream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct DownstreamID(usize);
@@ -613,12 +653,17 @@ impl Delegate {
     }
 
     fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
+        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
+    }
+
+    pub fn raw_untrack_ts(&mut self, cdc_id: ObserveID, max_ts: TimeStamp) {
+        // Stale CmdBatch, drop it silently.
+        if cdc_id != self.handle.id {
+            return;
         }
         // the entry's timestamp is non-decreasing, the last has the max ts.
         // use prev ts, see reason at CausalObserver::pre_propose_query
-        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts).prev();
+        let max_raw_ts = max_ts.prev();
         match self.resolver {
             Some(ref mut resolver) => {
                 resolver.raw_untrack_lock(max_raw_ts);
@@ -631,7 +676,6 @@ impl Delegate {
                     .push(PendingLock::RawUntrack { ts: max_raw_ts });
             }
         }
-        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
     }
 
     pub fn raw_track_ts(&mut self, ts: TimeStamp) {
@@ -1052,8 +1096,14 @@ mod tests {
     use std::cell::Cell;
 
     use api_version::RawValue;
+    use engine_traits::CF_WRITE;
     use futures::{executor::block_on, stream::StreamExt};
-    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+    use kvproto::{
+        errorpb::Error as ErrorHeader,
+        metapb::Region,
+        raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    };
+    use raftstore::coprocessor::CmdObserveInfo;
 
     use super::*;
 
@@ -1279,5 +1329,99 @@ mod tests {
                 assert_eq!(row.expire_ts_unix_secs, 0);
             }
         }
+    }
+
+    fn put_cf(cf: &str, key: &[u8], value: &[u8]) -> Request {
+        let mut cmd = Request::default();
+        cmd.set_cmd_type(CmdType::Put);
+        cmd.mut_put().set_cf(cf.to_owned());
+        cmd.mut_put().set_key(key.to_vec());
+        cmd.mut_put().set_value(value.to_vec());
+        cmd
+    }
+
+    #[test]
+    fn test_get_max_raw_ts() {
+        let mut cmd = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        cmd.request.mut_requests().clear();
+        // Both cdc and resolved-ts worker are observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
+        let region_id = 1;
+        let mut cb = CmdBatch::new(&observe_info, region_id);
+        cb.push(&observe_info, region_id, cmd.clone());
+        let cmd_batches = vec![cb];
+        // parse rawkv cmd from CndBatch Vec and return the max ts of every region.
+        let ret = get_max_raw_ts(&cmd_batches).unwrap();
+        assert!(ret.is_empty());
+
+        let data = vec![put_cf(CF_WRITE, b"k7", b"v"), put_cf(CF_WRITE, b"k8", b"v")];
+        for put in &data {
+            cmd.request.mut_requests().push(put.clone());
+        }
+        let mut cb = CmdBatch::new(&observe_info, region_id);
+        cb.push(&observe_info, region_id, cmd.clone());
+        let cmd_batches = vec![cb];
+        let ret = get_max_raw_ts(&cmd_batches).unwrap();
+        assert!(ret.is_empty()); // no apiv2 key
+        cmd.request.mut_requests().clear();
+        let data = vec![
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"ra", Some(TimeStamp::from(100))).as_encoded(),
+                b"v1",
+            ),
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"rb", Some(TimeStamp::from(200))).as_encoded(),
+                b"v2",
+            ),
+        ];
+        for put in &data {
+            cmd.request.mut_requests().push(put.clone());
+        }
+        let mut cb1 = CmdBatch::new(&observe_info, region_id);
+        cb1.push(&observe_info, region_id, cmd.clone());
+        let mut cmd2 = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        cmd2.request.mut_requests().clear();
+        let data2 = vec![
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"ra", Some(TimeStamp::from(300))).as_encoded(),
+                b"v1",
+            ),
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"rb", Some(TimeStamp::from(400))).as_encoded(),
+                b"v2",
+            ),
+        ];
+        for put in &data2 {
+            cmd2.request.mut_requests().push(put.clone());
+        }
+        let mut cb2 = CmdBatch::new(&observe_info, region_id + 1);
+        cb2.push(&observe_info, region_id + 1, cmd2.clone());
+        let cmd_batches = vec![cb1, cb2];
+        let ret = get_max_raw_ts(&cmd_batches).unwrap();
+        assert_eq!(ret.len(), 2); // two batch
+        assert_eq!(
+            ret[0],
+            RawRegionTs {
+                region_id,
+                cdc_id: observe_info.cdc_id.id,
+                max_ts: TimeStamp::from(200)
+            }
+        );
+        assert_eq!(
+            ret[1],
+            RawRegionTs {
+                region_id: region_id + 1,
+                cdc_id: observe_info.cdc_id.id,
+                max_ts: TimeStamp::from(400)
+            }
+        );
     }
 }
