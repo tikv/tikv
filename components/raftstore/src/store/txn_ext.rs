@@ -17,13 +17,13 @@ use super::Config;
 /// Transaction extensions related to a peer.
 #[derive(Default)]
 pub struct TxnExt {
-    /// The max timestamp recorded in the concurrency manager is only updated at leader.
-    /// So if a peer becomes leader from a follower, the max timestamp can be outdated.
-    /// We need to update the max timestamp with a latest timestamp from PD before this
-    /// peer can work.
-    /// From the least significant to the most, 1 bit marks whether the timestamp is
-    /// updated, 31 bits for the current epoch version, 32 bits for the current term.
-    /// The version and term are stored to prevent stale UpdateMaxTimestamp task from
+    /// The max timestamp recorded in the concurrency manager is only updated at
+    /// leader. So if a peer becomes leader from a follower, the max timestamp
+    /// can be outdated. We need to update the max timestamp with a latest
+    /// timestamp from PD before this peer can work. From the least significant
+    /// to the most, 1 bit marks whether the timestamp is updated, 31 bits for
+    /// the current epoch version, 32 bits for the current term. The version
+    /// and term are stored to prevent stale UpdateMaxTimestamp task from
     /// marking the lowest bit.
     pub max_ts_sync_status: AtomicU64,
 
@@ -74,51 +74,53 @@ const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
 pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
-    /// The bool marks an ongoing write request (which has been sent to the raftstore while not
-    /// applied yet) will delete this lock. The lock will be really deleted after applying the
-    /// write request. The flag will decide whether this lock should be migrated to other peers
-    /// on leader or region changes:
+    /// The bool marks an ongoing write request (which has been sent to the
+    /// raftstore while not applied yet) will delete this lock. The lock will be
+    /// really deleted after applying the write request. The flag will decide
+    /// whether this lock should be migrated to other peers on leader or region
+    /// changes:
     ///
-    /// - Transfer leader
-    ///   The lock with the deleted mark SHOULD NOT be proposed before transferring leader.
-    ///   Considering the following cases with different orders:
-    ///   1. Propose write -> propose locks -> apply write -> apply locks -> transfer leader
-    ///      Because the locks marking deleted will not be proposed. The lock will be deleted when
-    ///      applying the write while not showing up again after applying the locks.
-    ///   2. Propose locks -> propose write -> transfer leader
-    ///      No lock will be lost in normal cases because the write request has been sent to the
-    ///      raftstore, it is likely to be proposed successfully, while the leader will need at
-    ///      least another round to receive the transfer leader message from the transferree.
+    /// - Transfer leader The lock with the deleted mark SHOULD NOT be proposed
+    ///   before transferring leader. Considering the following cases with
+    ///   different orders: 1. Propose write -> propose locks -> apply write ->
+    ///   apply locks -> transfer leader Because the locks marking deleted will
+    ///   not be proposed. The lock will be deleted when applying the write
+    ///   while not showing up again after applying the locks. 2. Propose locks
+    ///   -> propose write -> transfer leader No lock will be lost in normal
+    ///   cases because the write request has been sent to the raftstore, it is
+    ///   likely to be proposed successfully, while the leader will need at
+    ///   least another round to receive the transfer leader message from the
+    ///   transferee.
     ///  
-    /// - Split region
-    ///   The lock with the deleted mark SHOULD be moved to new regions on region split.
-    ///   Considering the following cases with different orders:
-    ///   1. Propose write -> propose split -> apply write -> execute split
-    ///      The write will be applied earlier than split. So, the lock will be deleted earlier
-    ///      than moving locks to new regions.
-    ///   2. Propose split -> propose write -> ready split -> apply write
-    ///      The write will be skipped because its version is lower than the new region. So, no
-    ///      lock should be deleted in this case.
-    ///   3. Propose split -> ready split -> propose write
-    ///      The write proposal will be rejected because of version mismatch.
+    /// - Split region The lock with the deleted mark SHOULD be moved to new
+    ///   regions on region split. Considering the following cases with
+    ///   different orders: 1. Propose write -> propose split -> apply write ->
+    ///   execute split The write will be applied earlier than split. So, the
+    ///   lock will be deleted earlier than moving locks to new regions. 2.
+    ///   Propose split -> propose write -> ready split -> apply write The write
+    ///   will be skipped because its version is lower than the new region. So,
+    ///   no lock should be deleted in this case. 3. Propose split -> ready
+    ///   split -> propose write The write proposal will be rejected because of
+    ///   version mismatch.
     ///
-    /// - Merge region
-    ///   The lock with the deleted mark SHOULD be included in the catch up logs on region merge.
-    ///   Considering the following cases with different orders:
-    ///   1. Propose write -> propose prepare merge -> apply write -> execute merge
-    ///      The locks marked deleted will be deleted when applying the write request. So, the
-    ///      deleted locks will not be included again in the commit merge request.
-    ///   2. Propose prepare merge -> propose write -> execute merge -> apply write
-    ///      Applying the write will be skipped because of version mismatch. So, no lock should
-    ///      be deleted. It's correct that we include the locks that are marked deleted in the
-    ///      commit merge request.
+    /// - Merge region The lock with the deleted mark SHOULD be included in the
+    ///   catch up logs on region merge. Considering the following cases with
+    ///   different orders: 1. Propose write -> propose prepare merge -> apply
+    ///   write -> execute merge The locks marked deleted will be deleted when
+    ///   applying the write request. So, the deleted locks will not be included
+    ///   again in the commit merge request. 2. Propose prepare merge -> propose
+    ///   write -> execute merge -> apply write Applying the write will be
+    ///   skipped because of version mismatch. So, no lock should be deleted.
+    ///   It's correct that we include the locks that are marked deleted in the
+    ///   commit merge request.
     map: HashMap<Key, (PessimisticLock, bool)>,
     /// Status of the pessimistic lock map.
     /// The map is writable only in the Normal state.
     pub status: LocksStatus,
     /// Refers to the Raft term in which the pessimistic lock table is valid.
     pub term: u64,
-    /// Refers to the region version in which the pessimistic lock table is valid.
+    /// Refers to the region version in which the pessimistic lock table is
+    /// valid.
     pub version: u64,
     /// Estimated memory used by the pessimistic locks.
     pub memory_size: usize,
@@ -176,8 +178,8 @@ impl PeerPessimisticLocks {
         for pair in &pairs {
             let (key, lock) = pair.as_pair();
             // If the key already exists in the map, it's an overwrite.
-            // The primary lock does not change during an overwrite, so we don't need to update
-            // the memory size.
+            // The primary lock does not change during an overwrite, so we don't need to
+            // update the memory size.
             if !self.map.contains_key(key) {
                 incr += key.len() + lock.memory_size();
             }
@@ -233,11 +235,12 @@ impl PeerPessimisticLocks {
 
     /// Group pessimistic locks in the original region to the split regions.
     ///
-    /// The given regions MUST be sorted by key in the ascending order. The returned
-    /// `HashMap`s are in the same order of the given regions.
+    /// The given regions MUST be sorted by key in the ascending order. The
+    /// returned `HashMap`s are in the same order of the given regions.
     ///
-    /// The locks belonging to the derived region will be kept in the given `locks` map,
-    /// and the corresponding position in the returned `Vec` will be an empty map.
+    /// The locks belonging to the derived region will be kept in the given
+    /// `locks` map, and the corresponding position in the returned `Vec`
+    /// will be an empty map.
     pub fn group_by_regions(
         &mut self,
         regions: &[metapb::Region],

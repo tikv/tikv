@@ -9,10 +9,11 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine,
-    RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
+    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
+    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
+    RaftLogGcTask, Result,
 };
-use file_system::{IOOp, IORateLimiter, IOType};
+use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
@@ -41,12 +42,12 @@ impl MessageExt for MessageExtTyped {
     }
 }
 
-struct ManagedReader {
+pub struct ManagedReader {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Reader,
         DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedReader {
@@ -62,7 +63,7 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundRead, IOOp::Read, size);
+            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -71,12 +72,12 @@ impl Read for ManagedReader {
     }
 }
 
-struct ManagedWriter {
+pub struct ManagedWriter {
     inner: Either<
         <DefaultFileSystem as FileSystem>::Writer,
         EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedWriter {
@@ -92,7 +93,7 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundWrite, IOOp::Write, size);
+            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -129,26 +130,26 @@ impl WriteExt for ManagedWriter {
     }
 }
 
-struct ManagedFileSystem {
-    base_level_file_system: DefaultFileSystem,
+pub struct ManagedFileSystem {
+    base_file_system: DefaultFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl ManagedFileSystem {
-    fn new(
+    pub fn new(
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Self {
         Self {
-            base_level_file_system: DefaultFileSystem,
+            base_file_system: DefaultFileSystem,
             key_manager,
             rate_limiter,
         }
     }
 }
 
-struct ManagedHandle {
+pub struct ManagedHandle {
     path: PathBuf,
     base: Arc<<DefaultFileSystem as FileSystem>::Handle>,
 }
@@ -169,7 +170,7 @@ impl FileSystem for ManagedFileSystem {
     type Writer = ManagedWriter;
 
     fn create<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
-        let base = Arc::new(self.base_level_file_system.create(path.as_ref())?);
+        let base = Arc::new(self.base_file_system.create(path.as_ref())?);
         if let Some(ref manager) = self.key_manager {
             manager.new_file(path.as_ref().to_str().unwrap())?;
         }
@@ -182,14 +183,38 @@ impl FileSystem for ManagedFileSystem {
     fn open<P: AsRef<Path>>(&self, path: P) -> IoResult<Self::Handle> {
         Ok(ManagedHandle {
             path: path.as_ref().to_path_buf(),
-            base: Arc::new(self.base_level_file_system.open(path.as_ref())?),
+            base: Arc::new(self.base_file_system.open(path.as_ref())?),
         })
     }
 
+    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
+        }
+        self.base_file_system.delete(path)
+    }
+
+    fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
+        if let Some(ref manager) = self.key_manager {
+            if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
+                if info.method != EncryptionMethod::Plaintext {
+                    return true;
+                }
+            }
+        }
+        self.base_file_system.exists_metadata(path)
+    }
+
+    fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: no error if the file doesn't exist.
+            manager.delete_file(path.as_ref().to_str().unwrap())?;
+        }
+        self.base_file_system.delete_metadata(path)
+    }
+
     fn new_reader(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Reader> {
-        let base_reader = self
-            .base_level_file_system
-            .new_reader(handle.base.clone())?;
+        let base_reader = self.base_file_system.new_reader(handle.base.clone())?;
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedReader {
                 inner: Either::Right(key_manager.open_file_with_reader(&handle.path, base_reader)?),
@@ -204,9 +229,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn new_writer(&self, handle: Arc<Self::Handle>) -> IoResult<Self::Writer> {
-        let base_writer = self
-            .base_level_file_system
-            .new_writer(handle.base.clone())?;
+        let base_writer = self.base_file_system.new_writer(handle.base.clone())?;
 
         if let Some(ref key_manager) = self.key_manager {
             Ok(ManagedWriter {
@@ -224,10 +247,6 @@ impl FileSystem for ManagedFileSystem {
             })
         }
     }
-
-    fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
-        self.base_level_file_system.delete(path)
-    }
 }
 
 #[derive(Clone)]
@@ -237,7 +256,7 @@ impl RaftLogEngine {
     pub fn new(
         config: RaftEngineConfig,
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Self> {
         let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
         Ok(RaftLogEngine(Arc::new(
@@ -292,7 +311,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in `append`.
+        // It's unnecessary because overlapped entries can be handled in
+        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -496,14 +516,14 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        self.batch_gc(vec![RaftLogGCTask {
+        self.batch_gc(vec![RaftLogGcTask {
             raft_group_id,
             from,
             to,
         }])
     }
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut batch = self.log_batch(tasks.len());
         let mut old_first_index = Vec::with_capacity(tasks.len());
         for task in &tasks {
@@ -529,12 +549,6 @@ impl RaftEngine for RaftLogEngine {
         self.0.purge_expired_files().map_err(transfer_error)
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
-
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {
         None
@@ -547,6 +561,14 @@ impl RaftEngine for RaftLogEngine {
 
     fn get_engine_size(&self) -> Result<u64> {
         Ok(self.0.get_used_size() as u64)
+    }
+
+    fn for_each_raft_group<E, F>(&self, _f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<engine_traits::Error>,
+    {
+        unimplemented!()
     }
 }
 

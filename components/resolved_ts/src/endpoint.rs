@@ -63,8 +63,8 @@ enum PendingLock {
 }
 
 // Records information related to observed region.
-// observe_id is used for avoiding ABA problems in incremental scan task, advance resolved ts task,
-// and command observing.
+// observe_id is used for avoiding ABA problems in incremental scan task,
+// advance resolved ts task, and command observing.
 struct ObserveRegion {
     meta: Region,
     handle: ObserveHandle,
@@ -106,8 +106,9 @@ impl ObserveRegion {
                             continue;
                         }
                         ChangeLog::Admin(req_type) => {
-                            // TODO: for admin cmd that won't change the region meta like peer list and key range
-                            // (i.e. `CompactLog`, `ComputeHash`) we may not need to return error
+                            // TODO: for admin cmd that won't change the region meta like peer list
+                            // and key range (i.e. `CompactLog`, `ComputeHash`) we may not need to
+                            // return error
                             return Err(format!(
                                 "region met admin command {:?} while initializing resolver",
                                 req_type
@@ -167,8 +168,9 @@ impl ObserveRegion {
                                     "region met split/merge command, stop tracking since key range changed, wait for re-register";
                                     "req_type" => ?req_type,
                                 );
-                                // Stop tracking so that `tracked_index` larger than the split/merge command index won't be published
-                                // untill `RegionUpdate` event trigger the region re-register and re-scan the new key range
+                                // Stop tracking so that `tracked_index` larger than the split/merge
+                                // command index won't be published until `RegionUpdate` event
+                                // trigger the region re-register and re-scan the new key range
                                 self.resolver.stop_tracking();
                             }
                             _ => {
@@ -421,15 +423,17 @@ where
                 return;
             }
             // TODO: may not need to re-register region for some cases:
-            // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from the `Resolver`'s lock heap
+            // - `Split/BatchSplit`, which can be handled by remove out-of-range locks from
+            //   the `Resolver`'s lock heap
             // - `PrepareMerge` and `RollbackMerge`, the key range is unchanged
             self.deregister_region(region_id);
             self.register_region(incoming_region);
         }
     }
 
-    // This function is corresponding to RegionDestroyed event that can be only scheduled by observer.
-    // To prevent destroying region for wrong peer, it should check the region epoch at first.
+    // This function is corresponding to RegionDestroyed event that can be only
+    // scheduled by observer. To prevent destroying region for wrong peer, it
+    // should check the region epoch at first.
     fn region_destroyed(&mut self, region: Region) {
         if let Some(observe_region) = self.regions.get(&region.id) {
             if util::compare_region_epoch(
@@ -491,7 +495,7 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let resolved_ts = observe_region.resolver.resolve(ts);
+                    let resolved_ts = observe_region.resolver.resolve(ts).min();
                     if resolved_ts < min_ts {
                         min_ts = resolved_ts;
                     }
@@ -501,7 +505,8 @@ where
         self.sinker.sink_resolved_ts(regions, ts);
     }
 
-    // Tracking or untracking locks with incoming commands that corresponding observe id is valid.
+    // Tracking or untracking locks with incoming commands that corresponding
+    // observe id is valid.
     #[allow(clippy::drop_ref)]
     fn handle_change_log(
         &mut self,
@@ -566,7 +571,8 @@ where
     }
 
     fn register_advance_event(&self, cfg_version: usize) {
-        // Ignore advance event that registered with previous `advance_ts_interval` config
+        // Ignore advance event that registered with previous `advance_ts_interval`
+        // config
         if self.cfg_version != cfg_version {
             return;
         }

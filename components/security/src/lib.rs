@@ -41,7 +41,8 @@ pub struct SecurityConfig {
 ///
 ///  # Arguments
 ///
-///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
+///  - `tag`: only used in the error message, like "ca key", "cert key",
+///    "private key", etc.
 fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);
@@ -165,7 +166,7 @@ impl SecurityManager {
             sb.bind(addr, port)
         } else {
             if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CNChecker {
+                let cn_checker = CnChecker {
                     allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
                 };
                 sb = sb.add_checker(cn_checker);
@@ -185,11 +186,11 @@ impl SecurityManager {
 }
 
 #[derive(Clone)]
-struct CNChecker {
+struct CnChecker {
     allowed_cn: Arc<HashSet<String>>,
 }
 
-impl ServerChecker for CNChecker {
+impl ServerChecker for CnChecker {
     fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
         match check_common_name(&self.allowed_cn, ctx) {
             Ok(()) => CheckResult::Continue,

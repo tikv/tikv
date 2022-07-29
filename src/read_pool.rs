@@ -2,10 +2,10 @@
 
 use std::{
     future::Future,
-    sync::{Arc, Mutex},
+    sync::{mpsc::SyncSender, Arc, Mutex},
 };
 
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
@@ -261,7 +261,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
-            set_io_type(IOType::ForegroundRead);
+            set_io_type(IoType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
@@ -292,13 +292,14 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-pub struct ReadPoolConfigManager(pub ReadPoolHandle);
+pub struct ReadPoolConfigManager(pub ReadPoolHandle, pub SyncSender<usize>);
 
 impl ConfigManager for ReadPoolConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(unified)) = change.get("unified") {
             if let Some(ConfigValue::Usize(max_thread_count)) = unified.get("max_thread_count") {
                 self.0.scale_pool_size(*max_thread_count);
+                self.1.send(*max_thread_count)?;
             }
         }
         info!(

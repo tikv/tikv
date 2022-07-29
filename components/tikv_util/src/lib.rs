@@ -9,6 +9,7 @@
 extern crate test;
 
 use std::{
+    cmp,
     collections::{
         hash_map::Entry,
         vec_deque::{Iter, VecDeque},
@@ -497,10 +498,11 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         );
 
         // There might be remaining logs in the async logger.
-        // To collect remaining logs and also collect future logs, replace the old one with a
-        // terminal logger.
-        // When the old global async logger is replaced, the old async guard will be taken and dropped.
-        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one
+        // with a terminal logger.
+        // When the old global async logger is replaced, the old async guard will be
+        // taken and dropped. In the drop() the async guard, it waits for the
+        // finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer(), true);
             let _ = logger::init_log(
@@ -582,6 +584,16 @@ pub fn empty_shared_slice<T>() -> Arc<[T]> {
 /// A useful hook to check if master branch is being built.
 pub fn build_on_master_branch() -> bool {
     option_env!("TIKV_BUILD_GIT_BRANCH").map_or(false, |b| "master" == b)
+}
+
+/// Set the capacity of a vector to the given capacity.
+#[inline]
+pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
+    match cap.cmp(&v.capacity()) {
+        cmp::Ordering::Less => v.shrink_to(cap),
+        cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
+        cmp::Ordering::Equal => {}
+    }
 }
 
 #[cfg(test)]

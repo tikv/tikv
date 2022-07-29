@@ -28,7 +28,7 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::Resolver;
+use resolved_ts::{ResolvedTs, Resolver};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{debug, info, warn};
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
@@ -64,10 +64,11 @@ impl Default for DownstreamID {
 pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
-    /// It has got a snapshot for incremental scan, and change events will be accepted.
-    /// However it still rejects resolved timestamps.
+    /// It has got a snapshot for incremental scan, and change events will be
+    /// accepted. However it still rejects resolved timestamps.
     Initializing,
-    /// Incremental scan is finished so that resolved timestamps are acceptable now.
+    /// Incremental scan is finished so that resolved timestamps are acceptable
+    /// now.
     Normal,
     Stopped,
 }
@@ -78,7 +79,8 @@ impl Default for DownstreamState {
     }
 }
 
-/// Shold only be called when it's uninitialized or stopped. Return false if it's stopped.
+/// Should only be called when it's uninitialized or stopped. Return false if
+/// it's stopped.
 pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
         DownstreamState::Uninitialized,
@@ -87,7 +89,8 @@ pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     .is_ok()
 }
 
-/// Shold only be called when it's initializing or stopped. Return false if it's stopped.
+/// Should only be called when it's initializing or stopped. Return false if
+/// it's stopped.
 pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
         .is_ok()
@@ -225,6 +228,8 @@ impl Drop for Pending {
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
+    RawTrack { ts: TimeStamp },
+    RawUntrack { ts: TimeStamp },
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -244,7 +249,6 @@ pub struct Delegate {
     pending: Option<Pending>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
-    has_resolver: bool,
 }
 
 impl Delegate {
@@ -259,12 +263,7 @@ impl Delegate {
             pending: Some(Pending::default()),
             txn_extra_op,
             failed: false,
-            has_resolver: false,
         }
-    }
-
-    pub fn has_resolver(&self) -> bool {
-        self.has_resolver
     }
 
     /// Let downstream subscribe the delegate.
@@ -273,9 +272,6 @@ impl Delegate {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
-        }
-        if downstream.kv_api == ChangeDataRequestKvApi::TiDb {
-            self.has_resolver = true;
         }
         self.add_downstream(downstream);
         Ok(())
@@ -355,9 +351,10 @@ impl Delegate {
         let _ = self.broadcast(send);
     }
 
-    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's transaction layer to
-    /// determine whether to capture modifications' old value or not. Unsubsribing all downstreams
-    /// or calling `Delegate::stop` will store it with `TxnExtraOp::Noop`.
+    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
+    /// transaction layer to determine whether to capture modifications' old
+    /// value or not. Unsubscribing all downstreams or calling
+    /// `Delegate::stop` will store it with `TxnExtraOp::Noop`.
     ///
     /// NOTE: Dropping a `Delegate` won't update this flag.
     pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
@@ -380,7 +377,8 @@ impl Delegate {
         Ok(())
     }
 
-    /// Install a resolver. Return downstreams which fail because of the region's internal changes.
+    /// Install a resolver. Return downstreams which fail because of the
+    /// region's internal changes.
     pub fn on_region_ready(
         &mut self,
         mut resolver: Resolver,
@@ -401,6 +399,8 @@ impl Delegate {
             match lock {
                 PendingLock::Track { key, start_ts } => resolver.track_lock(start_ts, key, None),
                 PendingLock::Untrack { key } => resolver.untrack_lock(&key, None),
+                PendingLock::RawTrack { ts } => resolver.raw_track_lock(ts),
+                PendingLock::RawUntrack { ts } => resolver.raw_untrack_lock(ts),
             }
         }
         self.resolver = Some(resolver);
@@ -416,7 +416,7 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
+    pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<ResolvedTs> {
         if self.resolver.is_none() {
             debug!("cdc region resolver not ready";
                 "region_id" => self.region_id, "min_ts" => min_ts);
@@ -426,9 +426,9 @@ impl Delegate {
         let resolver = self.resolver.as_mut().unwrap();
         let resolved_ts = resolver.resolve(min_ts);
         debug!("cdc resolved ts updated";
-            "region_id" => self.region_id, "resolved_ts" => resolved_ts);
+            "region_id" => self.region_id, "resolved_ts" => ?resolved_ts);
         CDC_RESOLVED_TS_GAP_HISTOGRAM
-            .observe((min_ts.physical() - resolved_ts.physical()) as f64 / 1000f64);
+            .observe((min_ts.physical() - resolved_ts.min().physical()) as f64 / 1000f64);
         Some(resolved_ts)
     }
 
@@ -446,6 +446,7 @@ impl Delegate {
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
                 index,
+                term: _,
                 mut request,
                 mut response,
             } = cmd;
@@ -613,10 +614,42 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
+        self.sink_raw_downstream(raw_rows, index)
+    }
 
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)?;
+    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        // the entry's timestamp is non-decreasing, the last has the max ts.
+        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
+        match self.resolver {
+            Some(ref mut resolver) => {
+                // use prev ts, see reason at CausalObserver::pre_propose_query
+                resolver.raw_untrack_lock(max_raw_ts.prev());
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
+                pending
+                    .locks
+                    .push(PendingLock::RawUntrack { ts: max_raw_ts });
+            }
+        }
+        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
+    }
 
-        Ok(())
+    pub fn raw_track_ts(&mut self, ts: TimeStamp) {
+        match self.resolver {
+            Some(ref mut resolver) => {
+                resolver.raw_track_lock(ts);
+            }
+            None => {
+                assert!(self.pending.is_some(), "region resolver not ready");
+                let pending = self.pending.as_mut().unwrap();
+                pending.locks.push(PendingLock::RawTrack { ts });
+            }
+        }
     }
 
     fn sink_downstream(
@@ -639,8 +672,8 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will be ignored.
-            // There will be one region that contains both Txn & Raw entries.
+            // No ready downstream or a downstream that does not match the kv_api type, will
+            // be ignored. There will be one region that contains both Txn & Raw entries.
             // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
@@ -849,9 +882,9 @@ impl Delegate {
         if let Err(e) = compare_region_epoch(
             &downstream.region_epoch,
             region,
-            false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            false, // check_conf_ver
+            true,  // check_ver
+            true,  // include_region
         ) {
             info!(
                 "cdc fail to subscribe downstream";
@@ -890,9 +923,10 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
     set_event_row_type(row, EventLogType::Rollback);
 }
 
-/// Decodes the write record and store its information in `row`. This may be called both when
-/// doing incremental scan of observing apply events. There's different behavior for the two
-/// case, distinguished by the `is_apply` parameter.
+/// Decodes the write record and store its information in `row`. This may be
+/// called both when doing incremental scan of observing apply events. There's
+/// different behavior for the two case, distinguished by the `is_apply`
+/// parameter.
 fn decode_write(
     key: Vec<u8>,
     value: &[u8],
@@ -904,8 +938,8 @@ fn decode_write(
     let write = WriteRef::parse(value).unwrap().to_owned();
 
     // For scanning, ignore the GC fence and read the old data;
-    // For observed apply, drop the record it self but keep only the overlapped rollback information
-    // if gc_fence exists.
+    // For observed apply, drop the record it self but keep only the overlapped
+    // rollback information if gc_fence exists.
     if is_apply && write.gc_fence.is_some() {
         // `gc_fence` is set means the write record has been rewritten.
         // Currently the only case is writing overlapped_rollback. And in this case

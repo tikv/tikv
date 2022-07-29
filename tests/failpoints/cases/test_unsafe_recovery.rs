@@ -34,7 +34,8 @@ fn test_unsafe_recovery_send_report() {
     })
     .unwrap();
 
-    // Mannually makes an update, and wait for the apply to be triggered, to simulate "some entries are commited but not applied" scenario.
+    // Manually makes an update, and wait for the apply to be triggered, to
+    // simulate "some entries are committed but not applied" scenario.
     cluster.put(b"random_key2", b"random_val2").unwrap();
     apply_triggered_rx
         .recv_timeout(Duration::from_secs(1))
@@ -88,8 +89,8 @@ fn test_unsafe_recovery_execution_result_report() {
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
-    // Split the region into 2, and remove one of them, so that we can test both region peer list
-    // update and region creation.
+    // Split the region into 2, and remove one of them, so that we can test both
+    // region peer list update and region creation.
     pd_client.must_split_region(
         region,
         pdpb::CheckPolicy::Usekey,
@@ -268,9 +269,10 @@ fn test_unsafe_recovery_wait_for_snapshot_apply() {
         sleep_ms(100);
     }
     assert_ne!(store_report, None);
+
     fail::remove("worker_gc_raft_log");
     fail::remove("worker_gc_raft_log_finished");
-    fail::remove("raft_before_apply_snap_callback");
+    fail::remove("region_apply_snap");
 }
 
 #[test]
@@ -381,8 +383,8 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
     cluster.must_transfer_leader(region.get_id(), store2_peer);
     cluster.put(b"random_key1", b"random_val1").unwrap();
 
-    // Split the region into 2, and remove one of them, so that we can test both region peer list
-    // update and region creation.
+    // Split the region into 2, and remove one of them, so that we can test both
+    // region peer list update and region creation.
     pd_client.must_split_region(
         region,
         pdpb::CheckPolicy::Usekey,

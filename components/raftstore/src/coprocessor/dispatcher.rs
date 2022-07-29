@@ -38,7 +38,7 @@ pub trait ClonableObserver: 'static + Send {
 }
 
 macro_rules! impl_box_observer {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
         impl $name {
             pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
@@ -82,7 +82,7 @@ macro_rules! impl_box_observer {
 
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
-    ($name:ident, $ob: ident, $wrapper: ident) => {
+    ($name:ident, $ob:ident, $wrapper:ident) => {
         pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
         impl<E: KvEngine + 'static + Send> $name<E> {
             pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
@@ -254,8 +254,9 @@ impl<E: KvEngine> Registry<E> {
     }
 }
 
-/// A macro that loops over all observers and returns early when error is found or
-/// bypass is set. `try_loop_ob` is expected to be used for hook that returns a `Result`.
+/// A macro that loops over all observers and returns early when error is found
+/// or bypass is set. `try_loop_ob` is expected to be used for hook that returns
+/// a `Result`.
 macro_rules! try_loop_ob {
     ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
         loop_ob!(_imp _res, $r, $obs, $hook, $($args)*)
@@ -413,6 +414,62 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 post_apply_admin,
                 admin
             );
+        }
+    }
+
+    // (index, term) is for the applying entry.
+    pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest, index: u64, term: u64) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        if !cmd.has_admin_request() {
+            let query = cmd.get_requests();
+            for observer in &self.registry.query_observers {
+                let observer = observer.observer.inner();
+                if observer.pre_exec_query(&mut ctx, query, index, term) {
+                    return true;
+                }
+            }
+            false
+        } else {
+            let admin = cmd.get_admin_request();
+            for observer in &self.registry.admin_observers {
+                let observer = observer.observer.inner();
+                if observer.pre_exec_admin(&mut ctx, admin, index, term) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
+    /// `post_exec` should be called immediately after we executed one raft
+    /// command. It notifies observers side effects of this command before
+    /// execution of the next command, including req/resp, apply state,
+    /// modified region state, etc. Return true observers think a
+    /// persistence is necessary.
+    pub fn post_exec(
+        &self,
+        region: &Region,
+        cmd: &Cmd,
+        apply_state: &RaftApplyState,
+        region_state: &RegionState,
+    ) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        if !cmd.response.has_admin_response() {
+            for observer in &self.registry.query_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_query(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
+        } else {
+            for observer in &self.registry.admin_observers {
+                let observer = observer.observer.inner();
+                if observer.post_exec_admin(&mut ctx, cmd, apply_state, region_state) {
+                    return true;
+                }
+            }
+            false
         }
     }
 
@@ -608,6 +665,18 @@ mod tests {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn pre_exec_admin(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &AdminRequest,
+            _: u64,
+            _: u64,
+        ) -> bool {
+            self.called.fetch_add(16, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
+        }
     }
 
     impl QueryObserver for TestCoprocessor {
@@ -632,6 +701,18 @@ mod tests {
         fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn pre_exec_query(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &[Request],
+            _: u64,
+            _: u64,
+        ) -> bool {
+            self.called.fetch_add(15, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
         }
 
         fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
@@ -729,7 +810,7 @@ mod tests {
         assert_all!([&ob.called], &[3]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
-        host.post_apply(&region, &Cmd::new(0, admin_req, admin_resp));
+        host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
         assert_all!([&ob.called], &[6]);
 
         let mut query_req = RaftCmdRequest::default();
@@ -739,7 +820,7 @@ mod tests {
         host.pre_apply(&region, &query_req);
         assert_all!([&ob.called], &[15]);
         let query_resp = RaftCmdResponse::default();
-        host.post_apply(&region, &Cmd::new(0, query_req, query_resp));
+        host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
         assert_all!([&ob.called], &[21]);
 
         host.on_role_change(&region, RoleChange::new(StateRole::Leader));
@@ -767,7 +848,17 @@ mod tests {
         let mut empty_req = RaftCmdRequest::default();
         empty_req.set_requests(vec![Request::default()].into());
         host.on_empty_cmd(&region, 0, 0);
-        assert_all!([&ob.called], &[88]);
+        assert_all!([&ob.called], &[88]); // 14
+
+        let mut query_req = RaftCmdRequest::default();
+        query_req.set_requests(vec![Request::default()].into());
+        host.pre_exec(&region, &query_req, 0, 0);
+        assert_all!([&ob.called], &[103]); // 15
+
+        let mut admin_req = RaftCmdRequest::default();
+        admin_req.set_admin_request(AdminRequest::default());
+        host.pre_exec(&region, &admin_req, 0, 0);
+        assert_all!([&ob.called], &[119]); // 16
     }
 
     #[test]
@@ -808,7 +899,7 @@ mod tests {
             host.pre_apply(&region, &req);
             assert_all!([&ob1.called, &ob2.called], &[0, base_score * 2 + 3]);
 
-            host.post_apply(&region, &Cmd::new(0, req.clone(), resp.clone()));
+            host.post_apply(&region, &Cmd::new(0, 0, req.clone(), resp.clone()));
             assert_all!([&ob1.called, &ob2.called], &[0, base_score * 3 + 6]);
 
             set_all!(&[&ob2.bypass], false);
