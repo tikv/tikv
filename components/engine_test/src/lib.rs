@@ -280,7 +280,7 @@ pub mod kv {
         }
 
         fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            let mut reg = self.registry.lock().unwrap();
+            let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
             }
