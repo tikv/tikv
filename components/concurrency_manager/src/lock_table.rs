@@ -33,12 +33,13 @@ impl LockTable {
             let entry = self.0.get_or_insert(key.clone(), weak);
             if entry.value().ptr_eq(&weak2) {
                 // If the weak ptr returned by `get_or_insert` equals to the one we inserted,
-                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the handle
-                // to the table.
+                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the
+                // handle to the table.
 
-                // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
-                // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
-                // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
+                // SAFETY: The `table` field in `KeyHandle` is only accessed through the
+                // `set_table` or the `drop` method. It's impossible to have a concurrent `drop`
+                // here and `set_table` is only called here. So there is no concurrent access to
+                // the `table` field in `KeyHandle`.
                 unsafe {
                     guard.handle().set_table(self.clone());
                 }

@@ -30,9 +30,9 @@ use crate::{
 
 /// A structure for reporting statistics through [Client].
 ///
-/// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s from
-/// the [Scheduler]. It internally aggregates the reported [RawRecords] into [Records]
-/// and upload them to the remote server through the `Client`.
+/// `Reporter` implements [Runnable] and [RunnableWithTimer] to handle [Task]s
+/// from the [Scheduler]. It internally aggregates the reported [RawRecords]
+/// into [Records] and upload them to the remote server through the `Client`.
 ///
 /// [Runnable]: tikv_util::worker::Runnable
 /// [RunnableWithTimer]: tikv_util::worker::RunnableWithTimer
@@ -205,7 +205,8 @@ impl ConfigChangeNotifier {
     }
 }
 
-/// Constructs a default [Recorder], start it and return the corresponding [ConfigChangeNotifier], [DataSinkRegHandle] and [LazyWorker].
+/// Constructs a default [Recorder], start it and return the corresponding
+/// [ConfigChangeNotifier], [DataSinkRegHandle] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_reporter(

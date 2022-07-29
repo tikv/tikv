@@ -273,8 +273,8 @@ fn test_read_lock_after_become_follower() {
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
 
-    // put kv after get start ts, then this commit will cause a PessimisticLockNotFound
-    // if the pessimistic lock get missing.
+    // put kv after get start ts, then this commit will cause a
+    // PessimisticLockNotFound if the pessimistic lock get missing.
     cluster.must_put(b"key", b"value");
 
     let leader = cluster.leader_of_region(region_id).unwrap();
@@ -334,6 +334,7 @@ fn test_read_lock_after_become_follower() {
     // Transfer leader will not make the command fail.
     fail::remove("txn_before_process_write");
     let resp = resp_rx.recv().unwrap();
-    // The term has changed, so we should get a stale command error instead a PessimisticLockNotFound.
+    // The term has changed, so we should get a stale command error instead a
+    // PessimisticLockNotFound.
     assert!(resp.get_region_error().has_stale_command());
 }
