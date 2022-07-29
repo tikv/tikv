@@ -122,7 +122,8 @@ where
 }
 
 /// Activate heap profile and call `callback` if successfully.
-/// `deactivate_heap_profile` can only be called after it's notified from `callback`.
+/// `deactivate_heap_profile` can only be called after it's notified from
+/// `callback`.
 pub async fn activate_heap_profile<S, F>(
     dump_period: S,
     store_path: PathBuf,
@@ -299,7 +300,8 @@ fn extract_thread_name(thread_name: &str) -> String {
         .unwrap_or_else(|| thread_name.to_owned())
 }
 
-// Re-define some heap profiling functions because heap-profiling is not enabled for tests.
+// Re-define some heap profiling functions because heap-profiling is not enabled
+// for tests.
 #[cfg(test)]
 mod test_utils {
     use std::sync::Mutex;

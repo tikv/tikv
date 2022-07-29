@@ -5,7 +5,7 @@ use std::{
     sync::{mpsc::SyncSender, Arc, Mutex},
 };
 
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
@@ -261,7 +261,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
-            set_io_type(IOType::ForegroundRead);
+            set_io_type(IoType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();

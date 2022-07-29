@@ -173,7 +173,8 @@ impl Iterator for LogIterator {
                         if self.pre_log.time < self.begin_time {
                             continue;
                         }
-                        // treat the invalid log with the pre valid log time and level but its own whole line content
+                        // treat the invalid log with the pre valid log time and level but its own
+                        // whole line content
                         item.set_time(self.pre_log.time);
                         item.set_level(self.pre_log.get_level());
                         item.set_message(input.to_owned());
@@ -267,8 +268,8 @@ fn parse(input: &str) -> Result<(&str, (i64, LogLevel)), Error> {
     Ok((content, (timestamp, level)))
 }
 
-/// Parses the start time and end time of a log file and return the maximal and minimal
-/// timestamp in unix milliseconds.
+/// Parses the start time and end time of a log file and return the maximal and
+/// minimal timestamp in unix milliseconds.
 fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
     let file_start_time = parse_start_time(file, 10)?;
     let file_end_time = parse_end_time(file, 10)?;

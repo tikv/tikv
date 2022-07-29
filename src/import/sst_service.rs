@@ -9,7 +9,7 @@ use std::{
 
 use collections::HashSet;
 use engine_traits::{KvEngine, CF_DEFAULT, CF_WRITE};
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use futures::{
     executor::{ThreadPool, ThreadPoolBuilder},
     future::join_all,
@@ -87,7 +87,7 @@ where
             .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
-                set_io_type(IOType::Import);
+                set_io_type(IoType::Import);
             })
             .before_stop_wrapper(move || tikv_alloc::remove_thread_memory_accessor())
             .create()
@@ -422,7 +422,8 @@ where
         self.threads.spawn_ok(handle_task);
     }
 
-    // Downloads KV file and performs key-rewrite then apply kv into this tikv store.
+    // Downloads KV file and performs key-rewrite then apply kv into this tikv
+    // store.
     fn apply(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -586,7 +587,7 @@ where
     ///
     /// If the ingestion fails because the region is not found or the epoch does
     /// not match, the remaining files will eventually be cleaned up by
-    /// CleanupSSTWorker.
+    /// CleanupSstWorker.
     fn ingest(
         &mut self,
         ctx: RpcContext<'_>,
@@ -629,7 +630,6 @@ where
     }
 
     /// Ingest multiple files by sending a raft command to raftstore.
-    ///
     fn multi_ingest(
         &mut self,
         ctx: RpcContext<'_>,
@@ -858,7 +858,8 @@ fn pb_error_inc(type_: &str, e: &errorpb::Error) {
 
 enum RequestCollector {
     /// Retain the last ts of each key in each request.
-    /// This is used for write CF because resolved ts observer hates duplicated key in the same request.
+    /// This is used for write CF because resolved ts observer hates duplicated
+    /// key in the same request.
     RetainLastTs(HashMap<Vec<u8>, (Request, u64)>),
     /// Collector favor that simple collect all items.
     /// This is used for default CF.
@@ -941,9 +942,10 @@ fn make_request(reqs: &mut RequestCollector, context: Context) -> RaftCmdRequest
     let mut cmd = RaftCmdRequest::default();
     let mut header = make_request_header(context);
     // Set the UUID of header to prevent raftstore batching our requests.
-    // The current `resolved_ts` observer assumes that each batch of request doesn't has
-    // two writes to the same key. (Even with 2 different TS). That was true for normal cases
-    // because the latches reject concurrency write to keys. However we have bypassed the latch layer :(
+    // The current `resolved_ts` observer assumes that each batch of request doesn't
+    // has two writes to the same key. (Even with 2 different TS). That was true
+    // for normal cases because the latches reject concurrency write to keys.
+    // However we have bypassed the latch layer :(
     header.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
     cmd.set_header(header);
     cmd.set_requests(reqs.drain().into());

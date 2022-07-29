@@ -352,7 +352,8 @@ where
                 Ok(val) => val,
                 Err(err) => return Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
             },
-            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
+            None => 99, /* Default frequency of sampling. 99Hz to avoid coincide with special
+                         * periods */
         };
 
         let prototype_content_type: hyper::http::HeaderValue =
@@ -565,8 +566,9 @@ where
                         }
 
                         // 1. POST "/config" will modify the configuration of TiKV.
-                        // 2. GET "/region" will get start key and end key. These keys could be actual
-                        // user data since in some cases the data itself is stored in the key.
+                        // 2. GET "/region" will get start key and end key. These keys could be
+                        // actual user data since in some cases the data itself is stored in the
+                        // key.
                         let should_check_cert = !matches!(
                             (&method, path.as_ref()),
                             (&Method::GET, "/metrics")
@@ -858,7 +860,8 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             Ok(Response::new(body.into()))
         }
         (Method::GET, _) => {
-            // In this scope the path must be like /fail...(/...), which starts with FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
+            // In this scope the path must be like /fail...(/...), which starts with
+            // FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
             // Now we return 404 when path is neither /fail nor /fail/
             if path != FAIL_POINTS_REQUEST_PATH && path != fail_path {
                 return Ok(Response::builder()

@@ -26,9 +26,9 @@ pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
-        // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
-        // it can be different from the one we calculated (e.g. pass a column / fn with different
-        // type).
+        // TODO: This logic relies on the correctness of the passed in GROUP BY eval
+        // type. However it can be different from the one we calculated (e.g.
+        // pass a column / fn with different type).
         box_try!(EvalType::try_from(c.get_field_type().as_accessor().tp()));
 
         match c.get_tp() {
@@ -54,8 +54,8 @@ impl RpnExpressionBuilder {
         Ok(())
     }
 
-    /// Gets the result type when expression tree is converted to RPN expression and evaluated.
-    /// The result type will be either scalar or vector.
+    /// Gets the result type when expression tree is converted to RPN expression
+    /// and evaluated. The result type will be either scalar or vector.
     pub fn is_expr_eval_to_scalar(c: &Expr) -> Result<bool> {
         match c.get_tp() {
             ExprType::Null
@@ -157,8 +157,9 @@ impl RpnExpressionBuilder {
         self
     }
 
-    /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
-    /// field type that matches the field type of the given value.
+    /// Pushes a `Constant` node. The field type will be auto inferred by
+    /// choosing an arbitrary field type that matches the field type of the
+    /// given value.
     #[must_use]
     pub fn push_constant_for_test(mut self, value: impl Into<ScalarValue>) -> Self {
         let value = value.into();
@@ -241,8 +242,8 @@ impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
 /// B E F G C D A
 /// ```
 ///
-/// The transform process is very much like a post-order traversal. This function does it
-/// recursively.
+/// The transform process is very much like a post-order traversal. This
+/// function does it recursively.
 fn append_rpn_nodes_recursively<F>(
     tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
@@ -315,7 +316,8 @@ where
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
-    // Visit children first, then push current node, so that it is a post-order traversal.
+    // Visit children first, then push current node, so that it is a post-order
+    // traversal.
     for arg in args {
         append_rpn_nodes_recursively(arg, rpn_nodes, ctx, fn_mapper, max_columns)?;
     }
@@ -550,9 +552,9 @@ mod tests {
         unreachable!()
     }
 
-    /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
-    /// cannot be modified by us in tests to support fn_a ~ fn_d. So let's just hard code some
-    /// substitute.
+    /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function
+    /// sig enum, which cannot be modified by us in tests to support fn_a ~
+    /// fn_d. So let's just hard code some substitute.
     fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
         // fn_a: CastIntAsInt
         // fn_b: CastIntAsReal

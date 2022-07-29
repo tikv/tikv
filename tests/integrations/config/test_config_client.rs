@@ -224,7 +224,8 @@ raft-log-gc-threshold = 2000
     );
     // config update from config file
     cfg_controller.update_from_toml_file().unwrap();
-    // after update this configration item should be constant with the modified configuration file
+    // after update this configration item should be constant with the modified
+    // configuration file
     assert_eq!(
         cfg_controller
             .get_current()
