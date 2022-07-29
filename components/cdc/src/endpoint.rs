@@ -261,9 +261,10 @@ impl fmt::Debug for Task {
                 .field("region_id", &region_id)
                 .field("ts", &ts)
                 .finish(),
-            Task::RawUntrackTs { raw_track_ts } => {
-                de.field("raw_track_ts", &raw_track_ts.len()).finish()
-            }
+            Task::RawUntrackTs { ref raw_track_ts } => de
+                .field("type", &"raw_track_ts")
+                .field("raw_track_ts", raw_track_ts)
+                .finish(),
         }
     }
 }
@@ -2075,25 +2076,10 @@ mod tests {
 
         let ts = TimeStamp::compose(10, 0);
         suite.run(Task::RawTrackTs { region_id, ts });
-        {
-            let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-            let resolver = delegate.resolver.as_mut().unwrap();
-            let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
-            assert_eq!(raw_resolved_ts, ts);
-            resolver.raw_untrack_lock(TimeStamp::compose(20, 0));
-            delegate.downstreams_mut().iter().for_each(|d| {
-                d.get_state().store(DownstreamState::Uninitialized);
-            });
-        }
-        let ts = TimeStamp::compose(20, 0);
-        suite.run(Task::RawTrackTs { region_id, ts });
-        {
-            // RawTrackTs does not take effect as the downstream state is Uninitialized.
-            let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-            let resolver = delegate.resolver.as_mut().unwrap();
-            let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
-            assert_eq!(raw_resolved_ts, TimeStamp::compose(20, 0)); //
-        }
+        let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
+        let resolver = delegate.resolver.as_mut().unwrap();
+        let raw_resolved_ts = resolver.resolve(TimeStamp::compose(20, 0)).min();
+        assert_eq!(raw_resolved_ts, ts);
     }
 
     #[test]
@@ -2277,6 +2263,34 @@ mod tests {
                 .is_none(),
             true
         );
+        let untrack_region_id = 20;
+        let cdc_id = suite
+            .endpoint
+            .capture_regions
+            .get(&untrack_region_id)
+            .unwrap()
+            .handle
+            .id;
+        let region_ts = RawRegionTs {
+            region_id: untrack_region_id,
+            cdc_id,
+            max_ts: TimeStamp::compose(1000, 0),
+        };
+        suite.run(Task::RawUntrackTs {
+            raw_track_ts: vec![region_ts],
+        });
+        suite
+            .task_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_err();
+        let delegate = suite
+            .endpoint
+            .capture_regions
+            .get_mut(&untrack_region_id)
+            .unwrap();
+        let resolver = delegate.resolver.as_mut().unwrap();
+        let raw_resolved_ts = resolver.resolve(cur_tso).min();
+        assert_eq!(raw_resolved_ts, cur_tso); // region is untracked.
     }
 
     #[test]

@@ -951,13 +951,11 @@ impl Delegate {
     // if raw data and tidb data both exist in this region, it will return false.
     pub fn is_raw_region(&self) -> bool {
         if let Some(region) = &self.region {
-            if ApiV2::parse_range_mode((Some(&region.start_key), Some(&region.end_key)))
+            ApiV2::parse_range_mode((Some(&region.start_key), Some(&region.end_key)))
                 == KeyMode::Raw
-            {
-                return true;
-            }
+        } else {
+            false
         }
-        false
     }
 }
 
