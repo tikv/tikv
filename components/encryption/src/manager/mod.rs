@@ -1342,11 +1342,11 @@ mod tests {
         }
     }
 
-    fn generate_encryption_file_name(method: EncryptionMethod) -> String {
+    fn generate_file_name_by_encryption_algorithm(method: EncryptionMethod) -> String {
         format!("{:?}", method)
     }
 
-    fn generate_encrypted_file_content(method: EncryptionMethod) -> String {
+    fn generate_file_content_by_encryption_algorithm(method: EncryptionMethod) -> String {
         format!("Encrypted with {:?}", method)
     }
 
@@ -1357,10 +1357,7 @@ mod tests {
     ) {
         use std::io::Write;
 
-        let raw = File::create(&path).unwrap();
-        let mut f = manager
-            .open_file_with_writer(&path, raw, false /* create */)
-            .unwrap();
+        let mut f = manager.create_file_for_write(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         f.sync_all().unwrap();
     }
@@ -1378,6 +1375,23 @@ mod tests {
         assert_eq!(buffer, expected.to_string());
     }
 
+    fn generate_plaintext_file<P: AsRef<Path>>(path: P, content: &String) {
+        use std::io::Write;
+
+        let mut f = File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f.sync_all().unwrap();
+    }
+
+    fn check_plaintext_file_content<P: AsRef<Path>>(path: P, expected: &String) {
+        use std::io::Read;
+
+        let mut buffer = String::new();
+        let mut f = File::open(&path).unwrap();
+        assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+        assert_eq!(buffer, expected.to_string());
+    }
+
     fn test_change_method(from: EncryptionMethod, to: EncryptionMethod) {
         if from == to {
             return;
@@ -1388,22 +1402,41 @@ mod tests {
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
-        let path_to_file1 = tmp_dir.path().join(generate_encryption_file_name(from));
+        let path_to_file1 = tmp_dir
+            .path()
+            .join(generate_file_name_by_encryption_algorithm(from));
+        let content1 = generate_file_content_by_encryption_algorithm(from);
 
-        let content1 = generate_encrypted_file_content(from);
-        generate_encrypted_file(&manager, &path_to_file1, &content1);
-        check_encrypted_file_content(&manager, &path_to_file1, &content1);
+        if from == EncryptionMethod::Plaintext {
+            // encryption not enabled.
+            let mut args = def_data_key_args(&tmp_dir);
+            args.method = EncryptionMethod::Plaintext;
+            let manager =
+                DataKeyManager::new(master_key_backend, Box::new(move || Ok(previous)), args)
+                    .unwrap();
+            assert!(manager.is_none());
+            generate_plaintext_file(&path_to_file1, &content1);
+            check_plaintext_file_content(&path_to_file1, &content1);
+        } else {
+            let manager =
+                new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
 
-        // Close and re-open with new encryption algorithm.
-        drop(manager);
+            generate_encrypted_file(&manager, &path_to_file1, &content1);
+            check_encrypted_file_content(&manager, &path_to_file1, &content1);
+            // Close old manager
+            drop(manager);
+        }
+
+        // re-open with new encryption/plaintext algorithm.
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let previous = new_mock_backend() as Box<dyn Backend>;
         let manager = new_key_manager(&tmp_dir, Some(to), master_key_backend, previous).unwrap();
-        let path_to_file2 = tmp_dir.path().join(generate_encryption_file_name(to));
+        let path_to_file2 = tmp_dir
+            .path()
+            .join(generate_file_name_by_encryption_algorithm(to));
 
-        let content2 = generate_encrypted_file_content(to);
+        let content2 = generate_file_content_by_encryption_algorithm(to);
         generate_encrypted_file(&manager, &path_to_file2, &content2);
         check_encrypted_file_content(&manager, &path_to_file2, &content2);
         // check old file content
@@ -1415,6 +1448,7 @@ mod tests {
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
 
         let method_list = [
+            EncryptionMethod::Plaintext,
             EncryptionMethod::Aes128Ctr,
             EncryptionMethod::Aes192Ctr,
             EncryptionMethod::Aes256Ctr,
