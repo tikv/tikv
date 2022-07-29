@@ -99,15 +99,19 @@ impl IoType {
 pub struct IoContext {
     pub(crate) io_type: IoType,
     /// Accumulated physical read I/O bytes used by current thread.
-    /// This counter is periodically refreshed in [`IoRateLimiter`].
+    ///
+    /// This counter is refreshed in [`IoRateLimiter`] whenever the
+    /// `outstanding_read_bytes` reaches a user-defined threshold.
     pub(crate) total_read_bytes: usize,
     /// Buffered read I/O bytes used by current thread since last refresh of
     /// `total_read_bytes`.
+    ///
     /// This counter is updated when new read requests arrive at
     /// [`IoRateLimiter`].
     pub(crate) outstanding_read_bytes: usize,
 
-    /// For asynchronous read I/O limiting.
+    /// For asynchronous read I/O limiting. It is enabled when a
+    /// [`DeferredReadThrottle`] is held.
     pub(crate) defer_mode: bool,
 }
 
@@ -152,22 +156,26 @@ impl Drop for WithIoType {
     }
 }
 
-/// Bypass all I/O limits during the hold of this object, and compensate for
-/// consumed I/O bytes in `async_consume`.
-/// Currently, only read I/Os are compensated, write I/Os will simply be
-/// forgotten.
-pub struct DeferredThrottle {
+/// During the lifetime of this object, bypass all I/O limits.
+///
+/// In [`async_consume`], compensate for I/O flow in this period by submitting
+/// total consumed physical read bytes to [`IoRateLimiter`] again. Write bytes
+/// are simply discarded.
+///
+/// This object is useful for applying read I/O limiting in an async
+/// environment.
+pub struct DeferredReadThrottle {
     previous_io_type: Option<IoType>,
 }
 
-impl DeferredThrottle {
+impl DeferredReadThrottle {
     pub fn new(io_type: IoType) -> Self {
         let mut ctx = io_stats::get_io_context();
         let previous_io_type = Some(ctx.io_type);
         ctx.io_type = io_type;
         ctx.defer_mode = true;
         io_stats::set_io_context(ctx);
-        DeferredThrottle { previous_io_type }
+        DeferredReadThrottle { previous_io_type }
     }
 
     pub async fn async_consume(mut self) {
@@ -190,7 +198,7 @@ impl DeferredThrottle {
     }
 }
 
-impl Drop for DeferredThrottle {
+impl Drop for DeferredReadThrottle {
     fn drop(&mut self) {
         // Make sure `async_consume` is always called.
         debug_assert!(self.previous_io_type.is_none());

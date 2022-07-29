@@ -1836,7 +1836,7 @@ pub struct EnginesBacklogMonitor {
     io_rate_limiter: Arc<IoRateLimiter>,
 
     normalized_pending_bytes_collector: MovingAvgU32,
-    // the original io rate, the io rate recently set by us.
+    /// (Original I/O rate, I/O rate recently set by us)
     history_io_rate_limits: Option<(usize, usize)>,
 }
 
@@ -1859,6 +1859,8 @@ impl EnginesBacklogMonitor {
     }
 
     pub fn update(&mut self, _now: Instant) {
+        // Starts adjusting I/O rate if pending bytes exceeds 80% of soft limit.
+        const BACKLOG_THRESHOLD: u32 = 80;
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1886,9 +1888,11 @@ impl EnginesBacklogMonitor {
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
 
-        // Maps [80, 100] to [1,2].
-        let score =
-            std::cmp::max(normalized_pending_bytes, avg).saturating_sub(80) as f32 / 20.0 + 1.0;
+        // Maps [THRESHOLD, 100] to [1,2].
+        let score = std::cmp::max(normalized_pending_bytes, avg).saturating_sub(BACKLOG_THRESHOLD)
+            as f32
+            / (100.0 - BACKLOG_THRESHOLD as f32)
+            + 1.0;
         let io_limiter = self.io_rate_limiter.clone();
         if score > 1.0 {
             io_limiter.with_io_rate_limit(|current| {

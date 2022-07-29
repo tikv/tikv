@@ -23,7 +23,10 @@ use crate::{IoBytes, IoContext, IoType};
 lazy_static! {
     /// Total I/O bytes read/written by each I/O type.
     static ref GLOBAL_IO_STATS: [AtomicIoBytes; IoType::COUNT] = Default::default();
-    /// Incremental I/O bytes read/written by the thread's own I/O type.
+    /// Incremental I/O bytes read/written by the thread's own I/O type. This
+    /// counter is updated and synchronized to the global counter in
+    /// [`flush_thread_io`]. It is called by user or when the thread-local I/O
+    /// type changes.
     static ref LOCAL_IO_STATS: ThreadLocal<CachePadded<Mutex<LocalIoStats>>> = ThreadLocal::new();
 }
 
@@ -155,8 +158,8 @@ impl AtomicIoBytes {
     }
 }
 
-/// Flushes the local I/O stats to global I/O stats. Returns the renewed total
-/// I/O bytes of current thread.
+/// Fetches latest thread I/O stats from procfs, then flushes it to global I/O
+/// stats. Returns the renewed total I/O bytes of current thread.
 #[inline]
 fn flush_thread_io(sentinel: &mut LocalIoStats) -> IoBytes {
     if let Some(io_bytes) = sentinel.id.fetch_io_bytes() {
@@ -180,13 +183,14 @@ pub(crate) fn get_io_context() -> IoContext {
 pub(crate) fn set_io_context(new_ctx: IoContext) {
     IO_CTX.with(|ctx| {
         let old_ctx = ctx.get();
+        debug_assert!(new_ctx.total_read_bytes >= old_ctx.total_read_bytes);
         if new_ctx.io_type != old_ctx.io_type {
             let mut sentinel = LOCAL_IO_STATS
                 .get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())))
                 .lock();
             flush_thread_io(&mut sentinel);
-            // FIXME: outstanding buffered bytes of old type should be
-            // preserved instead of being passed to the new type.
+            // The `outstanding_read_bytes` of `old_ctx` is inherited by the
+            // `new_ctx` even though they are of different I/O types.
             sentinel.io_type = new_ctx.io_type;
         }
         ctx.set(new_ctx);

@@ -22,7 +22,7 @@ use super::{
 };
 
 /// Theoretically a smaller refill period increases CPU overhead while reduces
-/// busty IOs. In practice the value of this parameter is of little importance.
+/// bursty IOs. In practice the value of this parameter is of little importance.
 pub(crate) const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(100);
 pub(crate) const DEFAULT_REFILLS_PER_SEC: usize =
     (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
@@ -184,7 +184,7 @@ impl IoRateLimiterInner {
     }
 }
 
-/// Macro that can unfold to both async or sync code.
+/// Use cacro to unfold into both async or sync code.
 macro_rules! do_sleep {
     ($duration:expr,sync) => {
         std::thread::sleep($duration);
@@ -207,11 +207,11 @@ macro_rules! do_sleep {
     };
 }
 
-/// Macro that can unfold to both async or sync code.
+/// Use cacro to unfold into both async or sync code.
 macro_rules! request_physical_imp {
     ($self:ident, $priority:ident, $bytes:expr, $mode:tt) => {{
         let priority_idx = $priority as usize;
-        let cached_bytes_per_epoch = $self.bytes_per_epoch.load(Ordering::Relaxed);
+        let mut cached_bytes_per_epoch = $self.bytes_per_epoch.load(Ordering::Relaxed);
         // Flow control is disabled when limit is zero.
         if cached_bytes_per_epoch > 0 {
             let bytes = $bytes;
@@ -219,11 +219,24 @@ macro_rules! request_physical_imp {
                 .fetch_sub(bytes as i64, Ordering::Relaxed)
                 - bytes as i64;
             if remains < 0 && ($priority != IoPriority::High || $self.strict) {
+                let mut max_wait;
                 let mut total_wait = Duration::default();
                 loop {
                     let now = Instant::now_coarse();
                     let wait = {
                         let mut locked = $self.protected.lock();
+                        cached_bytes_per_epoch = $self.bytes_per_epoch.load(Ordering::Relaxed);
+                        if cached_bytes_per_epoch == 0 {
+                            break;
+                        }
+                        // Refresh max wait. It's a safe approximation.
+                        max_wait = DEFAULT_REFILL_PERIOD
+                            * (((-remains) as usize + cached_bytes_per_epoch - 1)
+                                / cached_bytes_per_epoch) as u32;
+                        // Be a little eager to refill, otherwise we have to
+                        // wait which is quite costly.
+                        // The `refill` implementation will use the accurate
+                        // elapsed time.
                         if now + DEFAULT_REFILL_PERIOD / 16 >= locked.next_refill_time {
                             $self.refill(&mut locked, now);
                         }
@@ -234,6 +247,9 @@ macro_rules! request_physical_imp {
                     };
                     do_sleep!(wait, $mode);
                     total_wait += wait;
+                    if total_wait >= max_wait {
+                        break;
+                    }
                 }
                 if !total_wait.is_zero() {
                     tls_collect_rate_limiter_request_wait($priority.as_str(), total_wait);
@@ -407,12 +423,16 @@ impl IoRateLimiter {
 
     /// Updates and refills I/O budgets for next epoch based on I/O priority.
     /// This method is a no-op when high-priority I/O rate limit equals zero.
+    ///
     /// Here we provide best-effort priority control:
+    ///
     /// 1) Limited I/O budget is assigned to lower priority to ensure higher
-    /// priority can at least    consume the same I/O amount as the last few
-    /// epochs without breaching global threshold. 2) Higher priority may
-    /// temporarily use lower priority's I/O budgets. When this happens,
-    ///    total I/O flow could exceed global threshold.
+    /// priority can at least consume the same I/O amount as the last few
+    /// epochs without breaching global threshold.
+    ///
+    /// 2) Higher priority may temporarily use lower priority's I/O budgets.
+    /// When this happens, total I/O flow could exceed global threshold.
+    ///
     /// 3) Highest priority I/O alone must not exceed global threshold (in
     /// strict mode).
     fn refill(&self, locked: &mut IoRateLimiterInner, now: Instant) {
