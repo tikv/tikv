@@ -544,6 +544,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+<<<<<<< HEAD
             for res in self.apply_res.drain(..) {
                 self.notifier.notify(
                     res.region_id,
@@ -552,6 +553,11 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                     },
                 );
             }
+=======
+            fail_point!("before_nofity_apply_res");
+            let apply_res = mem::take(&mut self.apply_res);
+            self.notifier.notify(apply_res);
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
         }
 
         let elapsed = t.saturating_elapsed();

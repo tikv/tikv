@@ -172,7 +172,44 @@ impl<E: KvEngine> Deref for RaftRouter<E> {
     }
 }
 
+<<<<<<< HEAD
 impl<E: KvEngine> RaftRouter<E> {
+=======
+impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+        for r in apply_res {
+            let region_id = r.region_id;
+            if let Err(e) = self.router.force_send(
+                region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            ) {
+                error!("failed to send apply result"; "region_id" => region_id, "err" => ?e);
+            }
+        }
+    }
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        if let Err(e) = self.router.force_send(region_id, msg) {
+            error!("failed to notify apply msg"; "region_id" => region_id, "err" => ?e);
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
+    }
+}
+
+impl<EK, ER> RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
     pub fn send_raft_message(
         &self,
         mut msg: RaftMessage,
@@ -719,9 +756,21 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     }
 }
 
+<<<<<<< HEAD
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
+=======
+impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
+    for RaftPoller<EK, ER, T>
+{
+    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
+    where
+        for<'a> F: FnOnce(&'a BatchSystemConfig),
+    {
+        fail_point!("begin_raft_poller");
+        self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
+>>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
