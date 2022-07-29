@@ -27,8 +27,7 @@ impl ErrorInner {
     }
 }
 
-// ====== The code below is to box the error so that the it can be as small as possible ======
-
+// Box the error so that the it can be as small as possible
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(#[from] pub Box<ErrorInner>);

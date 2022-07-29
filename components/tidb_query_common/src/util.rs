@@ -40,8 +40,8 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
         let mut carry_pos = len;
         loop {
             if carry_pos == 0 {
-                // All bytes of `key` are 255. `next` couldn't be `key`'s prefix_next since their
-                // lengths are equal.
+                // All bytes of `key` are 255. `next` couldn't be `key`'s prefix_next since
+                // their lengths are equal.
                 return false;
             }
 
@@ -71,8 +71,8 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
             && next[carry_pos + 1..].iter().all(|byte| *byte == 0)
             && key[..carry_pos] == next[..carry_pos]
     } else if len + 1 == next_len {
-        // `next` must has one more 0 than `key`, and the first `len` bytes must be all 255.
-        // The case that `len == 0` is also covered here.
+        // `next` must has one more 0 than `key`, and the first `len` bytes must be all
+        // 255. The case that `len == 0` is also covered here.
         *next.last().unwrap() == 0
             && key.iter().all(|byte| *byte == 255)
             && next.iter().take(len).all(|byte| *byte == 255)

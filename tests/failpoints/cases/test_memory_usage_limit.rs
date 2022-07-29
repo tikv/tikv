@@ -13,7 +13,8 @@ use raftstore::store::MEMTRACE_ENTRY_CACHE;
 use test_raftstore::*;
 use tikv_util::config::ReadableDuration;
 
-// Test even if memory usage reaches high water, committed entries can still get applied slowly.
+// Test even if memory usage reaches high water, committed entries can still get
+// applied slowly.
 #[test]
 fn test_memory_usage_reaches_high_water() {
     let mut cluster = new_node_cluster(0, 1);

@@ -306,7 +306,8 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
     }
 
     let th = thread::spawn(move || {
-        // The first downstream can receive timestamps but the second should receive nothing.
+        // The first downstream can receive timestamps but the second should receive
+        // nothing.
         let mut rx = event_feeds[0].replace(None).unwrap();
         assert!(recv_timeout(&mut rx, Duration::from_secs(1)).is_ok());
         let mut rx = event_feeds[1].replace(None).unwrap();
@@ -318,11 +319,11 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
     suite.stop();
 }
 
-// When a new CDC downstream is installed, delta changes for other downstreams on the same
-// region should be flushed so that the new downstream can gets a fresh snapshot to performs
-// a incremental scan. CDC can ensure that those delta changes are sent to CDC's `Endpoint`
-// before the incremental scan, but `Sink` may break this rule. This case tests it won't
-// happen any more.
+// When a new CDC downstream is installed, delta changes for other downstreams
+// on the same region should be flushed so that the new downstream can gets a
+// fresh snapshot to performs a incremental scan. CDC can ensure that those
+// delta changes are sent to CDC's `Endpoint` before the incremental scan, but
+// `Sink` may break this rule. This case tests it won't happen any more.
 #[test]
 fn test_cdc_observed_before_incremental_scan_snapshot() {
     let cluster = new_server_cluster(0, 1);
@@ -331,7 +332,8 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
     let region = suite.cluster.get_region(b"");
     let lead_client = PeerClient::new(&suite.cluster, region.id, new_peer(1, 1));
 
-    // So that the second changefeed can get some delta changes elder than its snapshot.
+    // So that the second changefeed can get some delta changes elder than its
+    // snapshot.
     let (mut req_tx_0, event_feed_0, _) = new_event_feed(suite.get_region_cdc_client(region.id));
     let req_0 = suite.new_changedata_request(region.id);
     block_on(req_tx_0.send((req_0, WriteFlags::default()))).unwrap();

@@ -33,7 +33,8 @@ pub fn prewrite<S: Snapshot>(
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
 
-    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    // Update max_ts for Insert operation to guarantee linearizability and snapshot
+    // isolation
     if mutation.should_not_exist {
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
     }
@@ -76,12 +77,13 @@ pub fn prewrite<S: Snapshot>(
     };
 
     // Check assertion if necessary. There are couple of different cases:
-    // * If the write is already loaded, then assertion can be checked without introducing too much
-    //   performance overhead. So do assertion in this case.
-    // * If `amend_pessimistic_lock` has happened, assertion can be done during amending. Skip it.
-    // * If constraint check is skipped thus `prev_write` is not loaded, doing assertion here
-    //   introduces too much overhead. However, we'll do it anyway if `assertion_level` is set to
-    //   `Strict` level.
+    // * If the write is already loaded, then assertion can be checked without
+    //   introducing too much performance overhead. So do assertion in this case.
+    // * If `amend_pessimistic_lock` has happened, assertion can be done during
+    //   amending. Skip it.
+    // * If constraint check is skipped thus `prev_write` is not loaded, doing
+    //   assertion here introduces too much overhead. However, we'll do it anyway if
+    //   `assertion_level` is set to `Strict` level.
     // Assertion level will be checked within the `check_assertion` function.
     if !lock_amended {
         let (reloaded_prev_write, reloaded) =
@@ -95,11 +97,13 @@ pub fn prewrite<S: Snapshot>(
     let prev_write = prev_write.map(|(w, _)| w);
 
     if mutation.should_not_write {
-        // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
+        // `checkNotExists` is equivalent to a get operation, so it should update the
+        // max_ts.
         txn.concurrency_manager.update_max_ts(txn_props.start_ts);
         let min_commit_ts = if mutation.need_min_commit_ts() {
-            // Don't calculate the min_commit_ts according to the concurrency manager's max_ts
-            // for a should_not_write mutation because it's not persisted and doesn't change data.
+            // Don't calculate the min_commit_ts according to the concurrency manager's
+            // max_ts for a should_not_write mutation because it's not persisted and doesn't
+            // change data.
             cmp::max(txn_props.min_commit_ts, txn_props.start_ts.next())
         } else {
             TimeStamp::zero()
@@ -273,10 +277,11 @@ impl<'a> PrewriteMutation<'a> {
         })
     }
 
-    // Pessimistic transactions only acquire pessimistic locks on row keys and unique index keys.
-    // The corresponding secondary index keys are not locked until pessimistic prewrite.
-    // It's possible that lock conflict occurs on them, but the isolation is
-    // guaranteed by pessimistic locks, so let TiDB resolves these locks immediately.
+    // Pessimistic transactions only acquire pessimistic locks on row keys and
+    // unique index keys. The corresponding secondary index keys are not locked
+    // until pessimistic prewrite. It's possible that lock conflict occurs on
+    // them, but the isolation is guaranteed by pessimistic locks, so let TiDB
+    // resolves these locks immediately.
     fn lock_info(&self, lock: Lock) -> Result<LockInfo> {
         let mut info = lock.into_lock_info(self.key.to_raw()?);
         if self.txn_props.is_pessimistic() {
@@ -343,8 +348,8 @@ impl<'a> PrewriteMutation<'a> {
         match reader.seek_write(&self.key, TimeStamp::max())? {
             Some((commit_ts, write)) => {
                 // Abort on writes after our start/for_update timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start/for_update
-                // timestamp, we should abort current prewrite.
+                // If exists a commit version whose commit timestamp is larger than current
+                // start/for_update timestamp, we should abort current prewrite.
                 match self.txn_props.kind {
                     TransactionKind::Optimistic(_) => {
                         if commit_ts > self.txn_props.start_ts {
@@ -380,8 +385,8 @@ impl<'a> PrewriteMutation<'a> {
                     // TODO: Maybe we need to add a new error for the rolled back case.
                     self.write_conflict_error(&write, commit_ts)?;
                 }
-                // Should check it when no lock exists, otherwise it can report error when there is
-                // a lock belonging to a committed transaction which deletes the key.
+                // Should check it when no lock exists, otherwise it can report error when there
+                // is a lock belonging to a committed transaction which deletes the key.
                 check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
                 Ok(Some((write, commit_ts)))
@@ -491,12 +496,13 @@ impl<'a> PrewriteMutation<'a> {
                 |(w, _)| matches!(w.gc_fence, Some(gc_fence_ts) if !gc_fence_ts.is_zero()),
             )
         {
-            // The previously-loaded write record has an invalid gc_fence. Regard it as none.
+            // The previously-loaded write record has an invalid gc_fence. Regard it as
+            // none.
             write = &None;
         }
 
-        // Load the most recent version if prev write is not loaded yet, or the prev write is not
-        // a data version (`Put` or `Delete`)
+        // Load the most recent version if prev write is not loaded yet, or the prev
+        // write is not a data version (`Put` or `Delete`)
         let need_reload = !write_loaded
             || write.as_ref().map_or(false, |(w, _)| {
                 w.write_type != WriteType::Put && w.write_type != WriteType::Delete
@@ -533,7 +539,8 @@ impl<'a> PrewriteMutation<'a> {
             _ => Ok(()),
         };
 
-        // Assertion error can be caused by a rollback. So make up a constraint check if the check was skipped before.
+        // Assertion error can be caused by a rollback. So make up a constraint check if
+        // the check was skipped before.
         if assertion_err.is_err() {
             if self.skip_constraint_check() {
                 self.check_for_newer_version(reader)?;
@@ -583,8 +590,8 @@ impl<'a> PrewriteMutation<'a> {
     }
 }
 
-// The final_min_commit_ts will be calculated if either async commit or 1PC is enabled.
-// It's allowed to enable 1PC without enabling async commit.
+// The final_min_commit_ts will be calculated if either async commit or 1PC is
+// enabled. It's allowed to enable 1PC without enabling async commit.
 fn async_commit_timestamps(
     key: &Key,
     lock: &mut Lock,
@@ -642,7 +649,8 @@ fn async_commit_timestamps(
 }
 
 // TiKV may fails to write pessimistic locks due to pipelined process.
-// If the data is not changed after acquiring the lock, we can still prewrite the key.
+// If the data is not changed after acquiring the lock, we can still prewrite
+// the key.
 fn amend_pessimistic_lock<S: Snapshot>(
     mutation: &PrewriteMutation<'_>,
     reader: &mut SnapshotReader<S>,
@@ -652,11 +660,14 @@ fn amend_pessimistic_lock<S: Snapshot>(
         // The invariants of pessimistic locks are:
         //   1. lock's for_update_ts >= key's latest commit_ts
         //   2. lock's for_update_ts >= txn's start_ts
-        //   3. If the data is changed after acquiring the pessimistic lock, key's new commit_ts > lock's for_update_ts
+        //   3. If the data is changed after acquiring the pessimistic lock, key's new
+        // commit_ts > lock's for_update_ts
         //
-        // So, if the key's latest commit_ts is still less than or equal to lock's for_update_ts, the data is not changed.
-        // However, we can't get lock's for_update_ts in current implementation (txn's for_update_ts is updated for each DML),
-        // we can only use txn's start_ts to check -- If the key's commit_ts is less than txn's start_ts, it's less than
+        // So, if the key's latest commit_ts is still less than or equal to lock's
+        // for_update_ts, the data is not changed. However, we can't get lock's
+        // for_update_ts in current implementation (txn's for_update_ts is updated for
+        // each DML), we can only use txn's start_ts to check -- If the key's
+        // commit_ts is less than txn's start_ts, it's less than
         // lock's for_update_ts too.
         if *commit_ts >= reader.start_ts {
             warn!(
@@ -676,7 +687,8 @@ fn amend_pessimistic_lock<S: Snapshot>(
         }
     }
     // Used pipelined pessimistic lock acquiring in this txn but failed
-    // Luckily no other txn modified this lock, amend it by treat it as optimistic txn.
+    // Luckily no other txn modified this lock, amend it by treat it as optimistic
+    // txn.
     MVCC_CONFLICT_COUNTER
         .pipelined_acquire_pessimistic_lock_amend_success
         .inc();
@@ -858,8 +870,9 @@ pub mod tests {
         let cm = ConcurrencyManager::new(41.into());
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
-        // should_not_write mutations don't write locks or change data so that they needn't ask
-        // the concurrency manager for max_ts. Its min_commit_ts may be less than or equal to max_ts.
+        // should_not_write mutations don't write locks or change data so that they
+        // needn't ask the concurrency manager for max_ts. Its min_commit_ts may
+        // be less than or equal to max_ts.
         let mut props = optimistic_async_props(b"k0", 10.into(), 50.into(), 2, false);
         props.min_commit_ts = 11.into();
         let mut txn = MvccTxn::new(10.into(), cm.clone());
@@ -878,7 +891,8 @@ pub mod tests {
         assert!(min_ts < 41.into());
         assert_eq!(old_value, OldValue::Unspecified);
 
-        // `checkNotExists` is equivalent to a get operation, so it should update the max_ts.
+        // `checkNotExists` is equivalent to a get operation, so it should update the
+        // max_ts.
         let mut props = optimistic_txn_props(b"k0", 42.into());
         props.min_commit_ts = 43.into();
         let mut txn = MvccTxn::new(42.into(), cm.clone());
@@ -1220,9 +1234,9 @@ pub mod tests {
 
         // PUT,  LOCK,    READ
         //  `----------^
-        // Note that this case is special because usually the `LOCK` is the first write already got
-        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
-        // from the `LOCK` record.
+        // Note that this case is special because usually the `LOCK` is the first write
+        // already got during prewrite/acquire_pessimistic_lock and will continue
+        // searching an older version from the `LOCK` record.
         must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
         must_commit(&engine, b"k7", 16, 30);
         must_prewrite_lock(&engine, b"k7", b"k7", 37);
@@ -1373,9 +1387,9 @@ pub mod tests {
         must_commit(&engine, b"k1", 10, 20);
         must_commit(&engine, b"k2", 10, 20);
 
-        // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In production, the caller
-        // will need to check if the current transaction is already committed before, in order to
-        // provide the idempotency.
+        // This is a re-sent prewrite. It should report a PessimisticLockNotFound. In
+        // production, the caller will need to check if the current transaction is
+        // already committed before, in order to provide the idempotency.
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",
@@ -1405,8 +1419,8 @@ pub mod tests {
         must_commit(&engine, b"k1", 35, 40);
         must_commit(&engine, b"k2", 35, 40);
 
-        // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
-        // It reports a PessimisticLockNotFound.
+        // A retrying non-pessimistic-lock prewrite request should not skip constraint
+        // checks. It reports a PessimisticLockNotFound.
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine,
             b"k2",
@@ -1434,7 +1448,8 @@ pub mod tests {
         must_unlocked(&engine, b"k2");
         // Committing still does nothing.
         must_commit(&engine, b"k2", 10, 25);
-        // Try a different txn start ts (which haven't been successfully committed before).
+        // Try a different txn start ts (which haven't been successfully committed
+        // before).
         let err = must_retry_pessimistic_prewrite_put_err(
             &engine, b"k2", b"v2", b"k1", &None, 11, 11, false, 0,
         );
@@ -1443,7 +1458,8 @@ pub mod tests {
             Error(box ErrorInner::PessimisticLockNotFound { .. })
         ));
         must_unlocked(&engine, b"k2");
-        // However conflict still won't be checked if there's a non-retry request arriving.
+        // However conflict still won't be checked if there's a non-retry request
+        // arriving.
         must_prewrite_put_impl(
             &engine,
             b"k2",
@@ -1464,8 +1480,9 @@ pub mod tests {
         must_locked(&engine, b"k2", 12);
         must_rollback(&engine, b"k2", 12, false);
 
-        // And conflict check is according to the for_update_ts for pessimistic prewrite.
-        // So, it will not report error if for_update_ts is large enough.
+        // And conflict check is according to the for_update_ts for pessimistic
+        // prewrite. So, it will not report error if for_update_ts is large
+        // enough.
         must_prewrite_put_impl(
             &engine,
             b"k2",
@@ -1896,8 +1913,8 @@ pub mod tests {
             must_rollback(&engine, &k1, 30, true);
             must_rollback(&engine, &k3, 30, true);
 
-            // Pessimistic transaction assertion fail on fast/strict level if assertion happens
-            // during amending pessimistic lock.
+            // Pessimistic transaction assertion fail on fast/strict level if assertion
+            // happens during amending pessimistic lock.
             let pass = assertion_level == AssertionLevel::Off;
             prewrite_put(
                 &k2,
@@ -1922,7 +1939,8 @@ pub mod tests {
             must_rollback(&engine, &k2, 30, true);
             must_rollback(&engine, &k4, 30, true);
 
-            // Pessimistic transaction fail on strict level no matter whether `is_pessimistic_lock`.
+            // Pessimistic transaction fail on strict level no matter whether
+            // `is_pessimistic_lock`.
             let pass = assertion_level != AssertionLevel::Strict;
             prewrite_put(
                 &k1,
@@ -1990,8 +2008,8 @@ pub mod tests {
             must_cleanup_with_gc_fence(&engine, k, 5, 0, 7, true);
         };
 
-        // Test multiple cases without recreating the engine. So use a increasing key prefix to
-        // avoid each case interfering each other.
+        // Test multiple cases without recreating the engine. So use a increasing key
+        // prefix to avoid each case interfering each other.
         let mut key_prefix = b'a';
 
         let mut test_all_levels = |prepare| {

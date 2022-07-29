@@ -121,7 +121,8 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .build()
         .unwrap();
 
-    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the following prewrite should complete.
+    // Suppose snapshot was before updating max_ts, after sleeping for 500ms the
+    // following prewrite should complete.
     fail::cfg("after-snapshot", "sleep(500)").unwrap();
     let read_ts = 20.into();
     let get_fut = storage.get(Context::default(), Key::from_raw(b"j"), read_ts);
@@ -151,7 +152,8 @@ fn test_snapshot_must_be_later_than_updating_max_ts() {
         .unwrap();
     let has_lock = block_on(get_fut).is_err();
     let res = prewrite_rx.recv().unwrap().unwrap();
-    // We must make sure either the lock is visible to the reader or min_commit_ts > read_ts.
+    // We must make sure either the lock is visible to the reader or min_commit_ts >
+    // read_ts.
     assert!(res.min_commit_ts > read_ts || has_lock);
 }
 
@@ -197,10 +199,17 @@ fn test_update_max_ts_before_scan_memory_locks() {
     assert_eq!(res.min_commit_ts, 101.into());
 }
 
-/// Generates a test that checks the correct behavior of holding and dropping locks,
-/// during the process of a single prewrite command.
+/// Generates a test that checks the correct behavior of holding and dropping
+/// locks, during the process of a single prewrite command.
 macro_rules! lock_release_test {
-    ($test_name:ident, $lock_exists:ident, $before_actions:expr, $middle_actions:expr, $after_actions:expr, $should_succeed:expr) => {
+    (
+        $test_name:ident,
+        $lock_exists:ident,
+        $before_actions:expr,
+        $middle_actions:expr,
+        $after_actions:expr,
+        $should_succeed:expr
+    ) => {
         #[test]
         fn $test_name() {
             let engine = TestEngineBuilder::new().build().unwrap();
@@ -262,7 +271,8 @@ lock_release_test!(
     false
 );
 
-// Must hold lock until prewrite ends. Must release lock after prewrite succeeds.
+// Must hold lock until prewrite ends. Must release lock after prewrite
+// succeeds.
 lock_release_test!(
     test_lock_lifetime_on_prewrite_success,
     lock_exists,
@@ -395,7 +405,8 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     assert_eq!(locks[1].get_key(), b"k2");
     assert!(!locks[1].get_use_async_commit());
 
-    // Send a duplicated request to test the idempotency of prewrite when falling back to 2PC.
+    // Send a duplicated request to test the idempotency of prewrite when falling
+    // back to 2PC.
     let (prewrite_tx, prewrite_rx) = channel();
     storage
         .sched_txn_command(
@@ -583,7 +594,8 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     let mut req = PrewriteRequest::default();
     req.set_context(ctx);
     req.set_mutations(vec![mutation].into());
-    // Set a different start_ts. It should fail because the memory lock is still visible.
+    // Set a different start_ts. It should fail because the memory lock is still
+    // visible.
     req.set_start_version(20);
     req.set_primary_lock(b"key".to_vec());
 

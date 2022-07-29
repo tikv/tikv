@@ -35,7 +35,8 @@ fn test_deadline() {
 
 #[test]
 fn test_deadline_2() {
-    // It should not even take any snapshots when request is outdated from the beginning.
+    // It should not even take any snapshots when request is outdated from the
+    // beginning.
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
@@ -198,7 +199,8 @@ fn test_paging_scan() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
     for desc in [false, true] {
@@ -217,7 +219,7 @@ fn test_paging_scan() {
             select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
             let mut row_count = 0;
-            let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+            let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
             for (row, (id, name, cnt)) in spliter.zip(exp) {
                 let name_datum = name.unwrap().as_bytes().into();
                 let expected_encoded = datum::encode_value(
@@ -263,7 +265,8 @@ fn test_paging_scan_multi_ranges() {
     ];
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
 
@@ -290,7 +293,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
@@ -346,7 +349,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(

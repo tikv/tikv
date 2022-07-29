@@ -7,9 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
-};
+use engine_traits::{CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -160,7 +158,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         new_engine
     }
 
-    fn set_shared_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         let reg = self.registry.lock().unwrap();
         // pick up any tablet and set the shared block cache capacity
         if let Some(((_id, _suffix), tablet)) = (*reg).iter().next() {
@@ -300,8 +298,8 @@ mod tests {
         assert!(!factory.is_tombstoned(1, 10));
         assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
         assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
-        // After we load it as with the new id or suffix, we should be unable to get it with
-        // the old id and suffix in the cache.
+        // After we load it as with the new id or suffix, we should be unable to get it
+        // with the old id and suffix in the cache.
         assert!(factory.open_tablet_cache(1, 10).is_none());
         assert!(factory.open_tablet_cache(1, 20).is_some());
 
