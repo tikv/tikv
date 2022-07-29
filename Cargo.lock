@@ -459,6 +459,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
+ "futures-io",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -1503,6 +1504,7 @@ version = "0.1.0"
 dependencies = [
  "engine_rocks",
  "engine_test",
+ "engine_traits",
  "fail",
  "futures 0.3.15",
  "keys",
@@ -4194,6 +4196,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "raftstore",
+ "rocksdb",
  "slog",
  "slog-global",
  "smallvec",

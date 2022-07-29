@@ -259,9 +259,10 @@ impl Filter for PrevoteRangeFilter {
     }
 }
 
-// Test if a peer is created from splitting when another initialized peer with the same
-// region id has already existed. In previous implementation, it can be created and panic
-// will happen because there are two initialized peer with the same region id.
+// Test if a peer is created from splitting when another initialized peer with
+// the same region id has already existed. In previous implementation, it can be
+// created and panic will happen because there are two initialized peer with the
+// same region id.
 #[test]
 fn test_split_not_to_split_existing_region() {
     let mut cluster = new_node_cluster(0, 4);
@@ -333,8 +334,8 @@ fn test_split_not_to_split_existing_region() {
     must_get_none(&cluster.get_engine(3), b"k0");
 }
 
-// Test if a peer is created from splitting when another initialized peer with the same
-// region id existed before and has been destroyed now.
+// Test if a peer is created from splitting when another initialized peer with
+// the same region id existed before and has been destroyed now.
 #[test]
 fn test_split_not_to_split_existing_tombstone_region() {
     let mut cluster = new_node_cluster(0, 3);
@@ -401,8 +402,8 @@ fn test_split_not_to_split_existing_tombstone_region() {
 }
 
 // TiKV uses memory lock to control the order between spliting and creating
-// new peer. This case test if tikv continues split if the peer is destroyed after
-// memory lock check.
+// new peer. This case test if tikv continues split if the peer is destroyed
+// after memory lock check.
 #[test]
 fn test_split_continue_when_destroy_peer_after_mem_check() {
     let mut cluster = new_node_cluster(0, 3);
@@ -478,8 +479,8 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     // If value of `k22` is equal to `v22`, the previous split log must be applied.
     must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
 
-    // Once it's marked split in memcheck, destroy should not write tombstone otherwise it will
-    // break the region states. Hence split should continue.
+    // Once it's marked split in memcheck, destroy should not write tombstone
+    // otherwise it will break the region states. Hence split should continue.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     cluster.clear_send_filters();
@@ -488,8 +489,8 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     must_get_none(&cluster.get_engine(2), b"k1");
 }
 
-// Test if a peer can be created from splitting when another uninitialied peer with the same
-// peer id has been created on this store.
+// Test if a peer can be created from splitting when another uninitialied peer
+// with the same peer id has been created on this store.
 #[test]
 fn test_split_should_split_existing_same_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
@@ -541,8 +542,8 @@ fn test_split_should_split_existing_same_uninitialied_peer() {
     must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
 }
 
-// Test if a peer can be created from splitting when another uninitialied peer with different
-// peer id has been created on this store.
+// Test if a peer can be created from splitting when another uninitialied peer
+// with different peer id has been created on this store.
 #[test]
 fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let mut cluster = new_node_cluster(0, 3);
@@ -597,7 +598,8 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
 
     // peer 2 applied snapshot
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
-    // But only the right part because there is a peer 4 of region 1000 on local store
+    // But only the right part because there is a peer 4 of region 1000 on local
+    // store
     must_get_none(&cluster.get_engine(2), b"k1");
 
     fail::remove(before_check_snapshot_1000_2_fp);
@@ -657,9 +659,9 @@ impl Filter for CollectSnapshotFilter {
     }
 }
 
-/// If the uninitialized peer and split peer are fetched into one batch, and the first
-/// one doesn't generate ready, the second one does, ready should not be mapped to the
-/// first one.
+/// If the uninitialized peer and split peer are fetched into one batch, and the
+/// first one doesn't generate ready, the second one does, ready should not be
+/// mapped to the first one.
 #[test]
 fn test_split_duplicated_batch() {
     let mut cluster = new_node_cluster(0, 3);
@@ -696,7 +698,8 @@ fn test_split_duplicated_batch() {
     if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
         panic!("the snapshot is not sent before split, e: {:?}", e);
     }
-    // Split the region range and then there should be another snapshot for the split ranges.
+    // Split the region range and then there should be another snapshot for the
+    // split ranges.
     cluster.must_split(&region, b"k2");
     // Ensure second is also sent and piled in filter.
     if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
@@ -764,8 +767,8 @@ fn test_split_duplicated_batch() {
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
 
-/// We depend on split-check task to update approximate size of region even if this region does not
-/// need to split.
+/// We depend on split-check task to update approximate size of region even if
+/// this region does not need to split.
 #[test]
 fn test_report_approximate_size_after_split_check() {
     let mut cluster = new_server_cluster(0, 3);
@@ -881,7 +884,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
     assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
 
     // 2. Locking happens when split has finished
-    // It needs to be rejected due to incorrect epoch, otherwise the lock may be written to the wrong region.
+    // It needs to be rejected due to incorrect epoch, otherwise the lock may be
+    // written to the wrong region.
     fail::cfg("txn_before_process_write", "pause").unwrap();
     req.set_context(cluster.get_ctx(b"key"));
     let res = thread::spawn(move || client.kv_pessimistic_lock(&req).unwrap());
@@ -979,7 +983,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     cluster.split_region(&cluster.get_region(b"key"), b"a", Callback::None);
     thread::sleep(Duration::from_millis(300));
 
-    // PrewriteResponse should contain an EpochNotMatch instead of PessimisticLockNotFound.
+    // PrewriteResponse should contain an EpochNotMatch instead of
+    // PessimisticLockNotFound.
     fail::remove("txn_before_process_write");
     let resp = resp.join().unwrap();
     assert!(resp.get_region_error().has_epoch_not_match(), "{:?}", resp);
@@ -987,10 +992,11 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     fail::remove("on_split_invalidate_locks");
 }
 
-/// Logs are gced asynchronously. If an uninitialized peer is destroyed before being replaced by
-/// split, then the asynchronous log gc response may arrive after the peer is replaced, hence
-/// it will lead to incorrect memory state. Actually, there is nothing to be gc for uninitialized
-/// peer. The case is to guarantee such incorrect state will not happen.
+/// Logs are gced asynchronously. If an uninitialized peer is destroyed before
+/// being replaced by split, then the asynchronous log gc response may arrive
+/// after the peer is replaced, hence it will lead to incorrect memory state.
+/// Actually, there is nothing to be gc for uninitialized peer. The case is to
+/// guarantee such incorrect state will not happen.
 #[test]
 fn test_split_replace_skip_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
@@ -1023,7 +1029,8 @@ fn test_split_replace_skip_log_gc() {
 
     cluster.must_put(b"k3", b"v3");
 
-    // Because a is not initialized, so b must be created using heartbeat on store 3.
+    // Because a is not initialized, so b must be created using heartbeat on store
+    // 3.
 
     // Simulate raft log gc stall.
     let gc_fp = "worker_gc_raft_log_flush";

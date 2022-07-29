@@ -14,7 +14,7 @@ use crossbeam_utils::CachePadded;
 use strum::{EnumCount, IntoEnumIterator};
 use tikv_util::sys::thread;
 
-use crate::{metrics::*, IOBytes, IOType};
+use crate::{metrics::*, IoBytes, IoType};
 
 /// Biosnoop leverages BCC to make use of eBPF to get disk IO of TiKV requests.
 /// The BCC code is in `biosnoop.c` which is compiled and attached kernel on
@@ -29,17 +29,17 @@ use crate::{metrics::*, IOBytes, IOType};
 /// by address, then all the IO requests for that thread will be recorded in
 /// corresponding type's map in BCC.
 ///
-/// With that information, every time calling `IOContext` it get the stored stats
-/// from corresponding type's map in BCC. Thus it enables TiKV to get the latency and
-/// bytes of read/write request per IO-type.
+/// With that information, every time calling `IoContext` it get the stored
+/// stats from corresponding type's map in BCC. Thus it enables TiKV to get the
+/// latency and bytes of read/write request per IO-type.
 
 const MAX_THREAD_IDX: usize = 192;
 
 // Hold the BPF to keep it not dropped.
 // The two tables are `stats_by_type` and `type_by_pid` respectively.
-static mut BPF_CONTEXT: Option<BPFContext> = None;
+static mut BPF_CONTEXT: Option<BpfContext> = None;
 
-struct BPFContext {
+struct BpfContext {
     bpf: BPF,
     stats_table: Table,
     type_table: Table,
@@ -56,9 +56,9 @@ struct BPFContext {
 // and kernel. Thus no need to make the elements atomic. Also use padding to
 // avoid false sharing.
 // Leave the last element as reserved, when there is no available index, all
-// other threads will be allocated to that index with IOType::Other always.
-static mut IO_TYPE_ARRAY: [CachePadded<IOType>; MAX_THREAD_IDX + 1] =
-    [CachePadded::new(IOType::Other); MAX_THREAD_IDX + 1];
+// other threads will be allocated to that index with IoType::Other always.
+static mut IO_TYPE_ARRAY: [CachePadded<IoType>; MAX_THREAD_IDX + 1] =
+    [CachePadded::new(IoType::Other); MAX_THREAD_IDX + 1];
 
 // The index of the element of IO_TYPE_ARRAY for this thread to access.
 thread_local! {
@@ -71,7 +71,7 @@ thread_local! {
                 &mut tid.to_ne_bytes(),
                 std::slice::from_raw_parts_mut(
                     ptr as *mut u8,
-                    std::mem::size_of::<*const IOType>(),
+                    std::mem::size_of::<*const IoType>(),
                 ),
             ).unwrap();
         }
@@ -83,7 +83,7 @@ struct IdxWrapper(usize);
 
 impl Drop for IdxWrapper {
     fn drop(&mut self) {
-        unsafe { *IO_TYPE_ARRAY[self.0] = IOType::Other };
+        unsafe { *IO_TYPE_ARRAY[self.0] = IoType::Other };
         IDX_ALLOCATOR.free(self.0);
 
         // drop() of static variables won't be called when program exits.
@@ -134,10 +134,10 @@ impl IdxAllocator {
     }
 }
 
-pub fn set_io_type(new_io_type: IOType) {
+pub fn set_io_type(new_io_type: IoType) {
     unsafe {
         IDX.with(|idx| {
-            // if MAX_THREAD_IDX, keep IOType::Other always
+            // if MAX_THREAD_IDX, keep IoType::Other always
             if idx.0 != MAX_THREAD_IDX {
                 *IO_TYPE_ARRAY[idx.0] = new_io_type;
             }
@@ -145,22 +145,22 @@ pub fn set_io_type(new_io_type: IOType) {
     };
 }
 
-pub fn get_io_type() -> IOType {
+pub fn get_io_type() -> IoType {
     unsafe { *IDX.with(|idx| IO_TYPE_ARRAY[idx.0]) }
 }
 
-pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
     let mut bytes = Default::default();
     unsafe {
         if let Some(ctx) = BPF_CONTEXT.as_mut() {
-            for io_type in IOType::iter() {
-                let io_type_buf_ptr = &mut io_type as *mut IOType as *mut u8;
+            for io_type in IoType::iter() {
+                let io_type_buf_ptr = &mut io_type as *mut IoType as *mut u8;
                 let mut io_type_buf =
-                    std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IOType>());
+                    std::slice::from_raw_parts_mut(io_type_buf_ptr, std::mem::size_of::<IoType>());
                 if let Ok(e) = ctx.stats_table.get(&mut io_type_buf) {
-                    assert!(e.len() == std::mem::size_of::<IOBytes>());
+                    assert!(e.len() == std::mem::size_of::<IoBytes>());
                     bytes[io_type as usize] =
-                        std::ptr::read_unaligned(e.as_ptr() as *const IOBytes);
+                        std::ptr::read_unaligned(e.as_ptr() as *const IoBytes);
                 }
             }
         }
@@ -210,7 +210,7 @@ pub fn init() -> Result<(), String> {
     let stats_table = bpf.table("stats_by_type").map_err(|e| e.to_string())?;
     let type_table = bpf.table("type_by_pid").map_err(|e| e.to_string())?;
     unsafe {
-        BPF_CONTEXT = Some(BPFContext {
+        BPF_CONTEXT = Some(BpfContext {
             bpf,
             stats_table,
             type_table,
@@ -286,13 +286,13 @@ mod tests {
         fetch_io_bytes, flush_io_latency_metrics, get_io_type, init, set_io_type, BPF_CONTEXT,
         MAX_THREAD_IDX,
     };
-    use crate::{metrics::*, IOType, OpenOptions};
+    use crate::{metrics::*, IoType, OpenOptions};
 
     #[test]
     fn test_biosnoop() {
         init().unwrap();
-        // Test cases are running in parallel, while they depend on the same global variables.
-        // To make them not affect each other, run them in sequence.
+        // Test cases are running in parallel, while they depend on the same global
+        // variables. To make them not affect each other, run them in sequence.
         test_thread_idx_allocation();
         test_io_context();
         unsafe {
@@ -301,8 +301,8 @@ mod tests {
     }
 
     fn test_io_context() {
-        set_io_type(IOType::Compaction);
-        assert_eq!(get_io_type(), IOType::Compaction);
+        set_io_type(IoType::Compaction);
+        assert_eq!(get_io_type(), IoType::Compaction);
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("test_io_context");
         let mut f = OpenOptions::new()
@@ -313,18 +313,18 @@ mod tests {
             .unwrap();
         let mut w = vec![A512::default(); 2];
         w.as_bytes_mut()[512] = 42;
-        let mut compaction_bytes_before = fetch_io_bytes()[IOType::Compaction as usize];
+        let mut compaction_bytes_before = fetch_io_bytes()[IoType::Compaction as usize];
         f.write(w.as_bytes()).unwrap();
         f.sync_all().unwrap();
-        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
+        let compaction_bytes = fetch_io_bytes()[IoType::Compaction as usize];
         assert_ne!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         compaction_bytes_before = compaction_bytes;
         drop(f);
 
-        let other_bytes_before = fetch_io_bytes()[IOType::Other as usize];
+        let other_bytes_before = fetch_io_bytes()[IoType::Other as usize];
         std::thread::spawn(move || {
-            set_io_type(IOType::Other);
+            set_io_type(IoType::Other);
             let mut f = OpenOptions::new()
                 .read(true)
                 .custom_flags(O_DIRECT)
@@ -337,8 +337,8 @@ mod tests {
         .join()
         .unwrap();
 
-        let compaction_bytes = fetch_io_bytes()[IOType::Compaction as usize];
-        let other_bytes = fetch_io_bytes()[IOType::Other as usize];
+        let compaction_bytes = fetch_io_bytes()[IoType::Compaction as usize];
+        let other_bytes = fetch_io_bytes()[IoType::Other as usize];
         assert_eq!((compaction_bytes - compaction_bytes_before).write, 0);
         assert_eq!((compaction_bytes - compaction_bytes_before).read, 0);
         assert_eq!((other_bytes - other_bytes_before).write, 0);
@@ -353,7 +353,7 @@ mod tests {
         // the thread indexes should be recycled.
         for _ in 1..=MAX_THREAD_IDX * 2 {
             std::thread::spawn(|| {
-                set_io_type(IOType::Other);
+                set_io_type(IoType::Other);
             })
             .join()
             .unwrap();
@@ -365,7 +365,7 @@ mod tests {
         for _ in 1..=MAX_THREAD_IDX {
             let pair1 = pair.clone();
             let h = std::thread::spawn(move || {
-                set_io_type(IOType::Compaction);
+                set_io_type(IoType::Compaction);
                 let (lock, cvar) = &*pair1;
                 let mut stop = lock.lock().unwrap();
                 while !*stop {
@@ -375,11 +375,11 @@ mod tests {
             handles.push(h);
         }
 
-        // the reserved index is used, io type should be IOType::Other
+        // the reserved index is used, io type should be IoType::Other
         for _ in 1..=MAX_THREAD_IDX {
             std::thread::spawn(|| {
-                set_io_type(IOType::Compaction);
-                assert_eq!(get_io_type(), IOType::Other);
+                set_io_type(IoType::Compaction);
+                assert_eq!(get_io_type(), IoType::Other);
             })
             .join()
             .unwrap();
@@ -399,8 +399,8 @@ mod tests {
         // the thread indexes should be available again.
         for _ in 1..=MAX_THREAD_IDX {
             std::thread::spawn(|| {
-                set_io_type(IOType::Compaction);
-                assert_eq!(get_io_type(), IOType::Compaction);
+                set_io_type(IoType::Compaction);
+                assert_eq!(get_io_type(), IoType::Compaction);
             })
             .join()
             .unwrap();
@@ -439,7 +439,7 @@ mod tests {
     #[ignore]
     fn bench_flush_io_latency_metrics(b: &mut Bencher) {
         init().unwrap();
-        set_io_type(IOType::ForegroundWrite);
+        set_io_type(IoType::ForegroundWrite);
 
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("bench_flush_io_latency_metrics");
@@ -476,7 +476,7 @@ mod tests {
         w.as_bytes_mut()[64] = 42;
 
         b.iter(|| {
-            set_io_type(IOType::ForegroundWrite);
+            set_io_type(IoType::ForegroundWrite);
             f.write(w.as_bytes()).unwrap();
             f.sync_all().unwrap();
         });
@@ -509,7 +509,7 @@ mod tests {
             .unwrap();
         let mut r = vec![A512::default(); 2];
         b.iter(|| {
-            set_io_type(IOType::ForegroundRead);
+            set_io_type(IoType::ForegroundRead);
             f.seek(SeekFrom::Start(rng.gen_range(0..100) * 512))
                 .unwrap();
             assert_ne!(f.read(&mut r.as_bytes_mut()).unwrap(), 0);

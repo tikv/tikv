@@ -80,7 +80,8 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         let out_ft = root_expr.take_field_type();
         let out_et = box_try!(EvalType::try_from(out_ft.as_accessor().tp()));
 
-        // Rewrite expression to insert CAST() if needed. The rewrite should always succeed.
+        // Rewrite expression to insert CAST() if needed. The rewrite should always
+        // succeed.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
         let rewritten_eval_type =
@@ -103,7 +104,8 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
         out_schema.push(out_ft);
         out_exp.push(exp);
 
-        // Choose a type-aware VARIANCE implementation based on the eval type after rewriting exp.
+        // Choose a type-aware VARIANCE implementation based on the eval type after
+        // rewriting exp.
         Ok(match rewritten_eval_type {
             EvalType::Decimal => Box::new(AggrFnVariance::<Decimal, V>::new()),
             EvalType::Real => Box::new(AggrFnVariance::<Real, V>::new()),
@@ -117,7 +119,8 @@ impl<V: VarianceType> super::AggrDefinitionParser for AggrFnDefinitionParserVari
 
 /// The VARIANCE aggregate function.
 ///
-/// Note that there are `VARIANCE(Decimal) -> Decimal` and `VARIANCE(Double) -> Double`.
+/// Note that there are `VARIANCE(Decimal) -> Decimal` and `VARIANCE(Double) ->
+/// Double`.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggrFnStateVariance::<T, V>::new())]
 pub struct AggrFnVariance<T, V>
@@ -276,9 +279,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric argument cast the
-    /// argument to a number if necessary. For ENUM values, the index number is used in the
-    /// calculation.
+    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric
+    /// argument cast the argument to a number if necessary. For ENUM values,
+    /// the index number is used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]
@@ -387,9 +390,9 @@ where
 
     /// # Notes
     ///
-    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric argument cast the
-    /// argument to a number if necessary. For ENUM values, the index number is used in the
-    /// calculation.
+    /// Functions such as SUM() or AVG() or VARIANCE() that expect a numeric
+    /// argument cast the argument to a number if necessary. For ENUM values,
+    /// the index number is used in the calculation.
     ///
     /// ref: https://dev.mysql.com/doc/refman/8.0/en/enum.html
     #[inline]

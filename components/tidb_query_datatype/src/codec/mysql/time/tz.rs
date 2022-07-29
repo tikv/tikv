@@ -4,8 +4,8 @@ use std::{fmt, str::FromStr};
 
 use chrono::*;
 
-/// A time zone represented by either offset (i.e. +8) or name (i.e. Asia/Shanghai). In addition,
-/// local time zone is also valid.
+/// A time zone represented by either offset (i.e. +8) or name (i.e.
+/// Asia/Shanghai). In addition, local time zone is also valid.
 #[derive(Clone)]
 pub enum Tz {
     /// A time zone specified by offset seconds.
@@ -26,8 +26,8 @@ impl Tz {
         FixedOffset::east_opt(secs as i32).map(Tz::Offset)
     }
 
-    /// Constructs a time zone from the name. If the specified time zone name is `system`,
-    /// a local time zone will be constructed.
+    /// Constructs a time zone from the name. If the specified time zone name is
+    /// `system`, a local time zone will be constructed.
     pub fn from_tz_name(name: &str) -> Option<Self> {
         if name.to_lowercase() == "system" {
             Some(Tz::local())

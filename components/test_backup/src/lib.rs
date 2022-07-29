@@ -52,7 +52,7 @@ pub struct TestSuite {
 
 // Retry if encounter error
 macro_rules! retry_req {
-    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
+    ($call_req:expr, $check_resp:expr, $resp:ident, $retry:literal, $timeout:literal) => {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
@@ -85,7 +85,7 @@ impl TestSuite {
                 *id,
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
-                engines.kv.as_inner().clone(),
+                engines.kv.clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,

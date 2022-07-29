@@ -151,8 +151,9 @@ impl<I: Iterator> RawMvccIterator<I> {
 }
 
 // RawMvccIterator always return the latest ts of user key.
-// ts is desc encoded after user key, so it's placed the first one for the same user key.
-// Only one-way direction scan is supported. Like `seek` then `next` or `seek_for_prev` then `prev`
+// ts is desc encoded after user key, so it's placed the first one for the same
+// user key. Only one-way direction scan is supported. Like `seek` then `next`
+// or `seek_for_prev` then `prev`
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         if !self.is_forward {
@@ -217,7 +218,8 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
+        // need map_or_else to lazy evaluate the default func, as it will abort when
+        // invalid.
         self.cur_key.as_deref().unwrap_or_else(|| self.inner.key())
     }
 
@@ -259,7 +261,8 @@ mod tests {
         let (tx, rx) = channel();
         let ctx = Context::default();
 
-        // TODO: Consider another way other than hard coding, to generate keys' prefix of test data.
+        // TODO: Consider another way other than hard coding, to generate keys' prefix
+        // of test data.
         let test_data = vec![
             (b"r\0a".to_vec(), b"aa".to_vec(), 10),
             (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),

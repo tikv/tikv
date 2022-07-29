@@ -48,7 +48,8 @@ pub struct CachedReadDelegate<E>
 where
     E: KvEngine,
 {
-    // The reason for this to be Arc, see the comment on get_delegate in raftstore/src/store/worker/read.rs
+    // The reason for this to be Arc, see the comment on get_delegate in
+    // raftstore/src/store/worker/read.rs
     delegate: Arc<ReadDelegate>,
     cached_tablet: CachedTablet<E>,
 }
@@ -76,20 +77,25 @@ where
     }
 }
 
-/// ReadDelegateExt is a wrapper of ReadMetrics (now, only ReadMetrics, it can has other fields in the future) and
-/// v2's ReadDelegate which is a wrapper of v1's ReadDelegate and CachedTablet which will be used as a temporay
+/// ReadDelegateExt is a wrapper of ReadMetrics (now, only ReadMetrics, it can
+/// has other fields in the future) and v2's ReadDelegate which is a wrapper of
+/// v1's ReadDelegate and CachedTablet which will be used as a temporay
 /// local variable to complete each execution.
 ///
 /// The reasons for the wrappings are:
-/// 1. For v2's ReadDelegate (the wrapper of v1's ReadDelegate and CachedTablet): Unlike v1, which uses a single
-/// global kv rocksdb, each region in v2 has it's own kv rocksdb, namely the tablet. Equipping ReadDelegate with a
-/// CachedTablet makes tablet/snapshot acquisition very quickly. But CachedTablet requires &mut self to acquire tablet
-/// as sometimes tablet may be updated which makes CachedTablet to mutate itself. ReadDelegate is read only, so wrapping them
-/// together to workaround this.
+/// 1. For v2's ReadDelegate (the wrapper of v1's ReadDelegate and
+/// CachedTablet): Unlike v1, which uses a single global kv rocksdb, each region
+/// in v2 has it's own kv rocksdb, namely the tablet. Equipping ReadDelegate
+/// with a CachedTablet makes tablet/snapshot acquisition very quickly. But
+/// CachedTablet requires &mut self to acquire tablet as sometimes tablet may be
+/// updated which makes CachedTablet to mutate itself. ReadDelegate is read
+/// only, so wrapping them together to workaround this.
 ///
-/// 2. For ReadDelgateWithMetric (the wrapper of ReadMetrics and v2's ReadDelegate): Unlike v1 where the LocalReader implements
-/// ReadExecutor, in v2, we use ReadDelegateExt to implement ReadDelegateExt so that each delegate can get its
-/// tablet/snapshot very quickly. But we also need to update some metrics which is a field of LocalReader, so we use this wrapper
+/// 2. For ReadDelgateWithMetric (the wrapper of ReadMetrics and v2's
+/// ReadDelegate): Unlike v1 where the LocalReader implements ReadExecutor, in
+/// v2, we use ReadDelegateExt to implement ReadDelegateExt so that each
+/// delegate can get its tablet/snapshot very quickly. But we also need to
+/// update some metrics which is a field of LocalReader, so we use this wrapper
 /// which will be used as a temporary local variable to make compiler happy.
 // pub struct ReadDelegateExt<'a, E>
 // where
@@ -166,14 +172,17 @@ mod tests {
     use std::{borrow::Borrow, sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use engine_rocks::raw::Writable;
-    use engine_test::kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2};
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
+    };
     use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
         RaftCommand,
     };
+    use rocksdb::rocksdb::Writable;
     use tempfile::{Builder, TempDir};
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -240,12 +249,14 @@ mod tests {
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db = engine_test::kv::new_engine(path_str, None, ALL_CFS, None).unwrap();
+        let db = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
         let mut reader = LocalReader::new(db, StoreMetaDelegate::new(store_meta), ch);
         reader.store_id = Cell::new(Some(store_id));
 
-        let factory = Arc::new(TestTabletFactoryV2::new(path_str, None, ALL_CFS, None));
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(path_str, ops, cf_opts));
 
         (path, reader, rx, factory)
     }
@@ -259,7 +270,7 @@ mod tests {
         let mut read_delegate_core = ReadDelegate::mock(region.id);
         read_delegate_core.peer_id = peer_id;
         read_delegate_core.term = term;
-        read_delegate_core.applied_index_term = applied_index_term;
+        read_delegate_core.applied_term = applied_index_term;
         read_delegate_core.region = Arc::new(region.clone());
         read_delegate_core
     }
@@ -317,7 +328,8 @@ mod tests {
 
     #[test]
     fn test_read() {
-        // This test is almost the same with test_read in v1 with some adaptive modification to v2.
+        // This test is almost the same with test_read in v1 with some adaptive
+        // modification to v2.
         let store_id = 2;
         let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         let (_tmp, mut reader, rx, factory) =
@@ -381,8 +393,8 @@ mod tests {
         assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
         assert_eq!(reader.metrics.rejected_by_applied_term, 1);
 
-        // Make the applied_index_term matches current term.
-        let pg = ReadProgress::applied_index_term(term6);
+        // Make the applied_term matches current term.
+        let pg = ReadProgress::applied_term(term6);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
@@ -480,8 +492,8 @@ mod tests {
             previous_lease_rejection + 1
         );
 
-        // Channel full. The channel bound is set to 1 in this case, so the second request makes
-        // channel full.
+        // Channel full. The channel bound is set to 1 in this case, so the second
+        // request makes channel full.
         reader.propose_raft_command(None, cmd.clone(), Callback::None);
         reader.propose_raft_command(
             None,
@@ -509,7 +521,7 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .update(ReadProgress::applied_index_term(term6 + 3));
+                .update(ReadProgress::applied_term(term6 + 3));
         }
         reader.propose_raft_command(
             None,
@@ -688,7 +700,8 @@ mod tests {
         );
         must_not_redirect(&mut reader, &rx, task);
 
-        // Now open a tablet with a higher suffix, delete the old key and put a new key, and change the cached_tablet
+        // Now open a tablet with a higher suffix, delete the old key and put a new key,
+        // and change the cached_tablet
         let tablet_path = factory.tablet_path(1, 0);
         let tablet1 = factory.load_tablet(&tablet_path, 1, 10).unwrap();
         let db = tablet1.get_sync_db();
@@ -734,7 +747,7 @@ mod tests {
         let d = reader.get_delegate(1).unwrap();
         assert_eq!(&*d.delegate.region, &region);
         assert_eq!(d.delegate.term, 1);
-        assert_eq!(d.delegate.applied_index_term, 1);
+        assert_eq!(d.delegate.applied_term, 1);
         assert!(d.delegate.leader_lease.is_none());
         drop(d);
 
@@ -762,12 +775,9 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .update(ReadProgress::applied_index_term(2));
+                .update(ReadProgress::applied_term(2));
         }
-        assert_eq!(
-            reader.get_delegate(1).unwrap().delegate.applied_index_term,
-            2
-        );
+        assert_eq!(reader.get_delegate(1).unwrap().delegate.applied_term, 2);
 
         {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.

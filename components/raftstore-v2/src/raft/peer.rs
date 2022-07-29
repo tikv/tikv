@@ -25,7 +25,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Creates a new peer.
     ///
-    /// If peer is destroyed, None is returned.
+    /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
         region_id: u64,
@@ -60,8 +60,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let tablet_index = s.region_state().get_tablet_index();
-        // Another option is always create tablet even if tablet index is 0. But this can
-        // introduce race when gc old tablet and create new peer.
+        // Another option is always create tablet even if tablet index is 0. But this
+        // can introduce race when gc old tablet and create new peer.
         let tablet = if tablet_index != 0 {
             if !tablet_factory.exists(region_id, tablet_index) {
                 return Err(box_err!(

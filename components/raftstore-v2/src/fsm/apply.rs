@@ -26,7 +26,8 @@ impl<EK: KvEngine> ApplyFsm<EK> {
         )
     }
 
-    /// Fetches tasks to `apply_task_buf`. It will stop when the buffer is full.
+    /// Fetches messages to `apply_task_buf`. It will stop when the buffer
+    /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
     pub fn recv(&mut self, apply_task_buf: &mut Vec<ApplyTask>) -> usize {

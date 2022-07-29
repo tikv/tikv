@@ -7,9 +7,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
-};
+use engine_traits::{CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -321,8 +319,8 @@ mod tests {
         assert!(!factory.is_tombstoned(1, 10));
         assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
         assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
-        // After we load it as with the new id or suffix, we should be unable to get it with
-        // the old id and suffix in the cache.
+        // After we load it as with the new id or suffix, we should be unable to get it
+        // with the old id and suffix in the cache.
         assert!(factory.open_tablet_cache(1, 10).is_none());
         assert!(factory.open_tablet_cache(1, 20).is_some());
 
