@@ -1348,7 +1348,6 @@ pub struct RaftDbConfig {
     pub info_log_dir: String,
     #[online_config(skip)]
     pub info_log_level: RocksLogLevel,
-    #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[online_config(skip)]
@@ -1714,6 +1713,14 @@ impl<T: TabletAccessor<RocksEngine> + Send + Sync> ConfigManager for DBConfigMan
         {
             let max_background_jobs = background_jobs_config.1.into();
             self.set_max_background_jobs(max_background_jobs)?;
+        }
+
+        if let Some(background_subcompactions_config) = change
+            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .next()
+        {
+            let max_subcompactions = background_subcompactions_config.1.into();
+            self.set_max_subcompactions(max_subcompactions)?;
         }
 
         if let Some(background_flushes_config) = change
