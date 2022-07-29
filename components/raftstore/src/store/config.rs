@@ -480,6 +480,16 @@ impl Config {
             ));
         }
 
+        if self.raft_max_size_per_msg.0
+            < txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
+                * self.in_memory_pessimistic_locks_capacity.0
+        {
+            return Err(box_err!(
+                "raft_max_size_per_msg should be at least {}x as large as in_memory_pessimistic_locks_capacity",
+                txn_types::Lock::max_size_amplification_from_pes_lock_to_lock(),
+            ));
+        }
+
         if self.raft_entry_max_size.0 == 0 || self.raft_entry_max_size.0 > ReadableSize::gb(3).0 {
             return Err(box_err!(
                 "raft entry max size should be greater than 0 and less than or equal to 3GiB"

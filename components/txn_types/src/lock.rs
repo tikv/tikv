@@ -220,6 +220,14 @@ impl Lock {
         size
     }
 
+    // returns the max size ratio of a Lock to a PessimisticLock, where the lock is obtained by pes_lock.to_lock()
+    pub fn max_size_amplification_from_pes_lock_to_lock() -> f64 {
+        // pes lock: 32 bytes + len(primary)
+        // lock from the pes lock: 59 bytes + len
+        // So the size of the lock should be less than 2x the size of the pessimistic lock
+        2
+    }
+
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
             return Err(Error::from(ErrorInner::BadFormatLock));
