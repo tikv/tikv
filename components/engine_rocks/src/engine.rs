@@ -32,7 +32,7 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
-            db: db.clone(),
+            db,
             shared_block_cache: false,
             support_multi_batch_write: false,
         }
