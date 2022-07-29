@@ -49,15 +49,17 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let mut reg = self.registry.lock().unwrap();
-        if let Some(db) = reg.get(&(id, suffix)) {
-            return Ok(db.clone());
+        {
+            let reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Ok(db.clone());
+            }
         }
 
         let db_path = self.tablet_path(id, suffix);
         let db = self.open_tablet_raw(db_path.as_path(), false)?;
-        debug!("open tablet"; "key" => ?(id, suffix));
-        reg.insert((id, suffix), db.clone());
+        // debug!("open tablet"; "key" => ?(id, suffix));
+        // reg.insert((id, suffix), db.clone());
         Ok(db)
     }
 
@@ -273,14 +275,20 @@ mod tests {
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
         let tablet = factory.create_tablet(1, 10);
-        assert!(tablet.is_ok());
-        let tablet = tablet.unwrap();
+        // assert!(tablet.is_ok());
+        // let tablet = tablet.unwrap();
+        // let tablet2 = factory.open_tablet(1, 10).unwrap();
+        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        // let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
+        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        // let tablet2 = factory.open_tablet_cache_any(1).unwrap();
+        // assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+
+        // DB exists but not in the registry
+        let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache_any(1).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
         assert!(result.is_err());
@@ -309,6 +317,25 @@ mod tests {
         let result = factory.open_tablet(1, 20);
         assert!(result.is_err());
         assert!(!factory.is_single_engine());
+    }
+
+    #[test]
+    fn test_something() {
+        let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
+        let env = cfg.build_shared_rocks_env(None, None).unwrap();
+
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
+        let inner_factory = builder.build();
+        let factory = KvEngineFactoryV2::new(inner_factory);
+        let tablet = factory.create_tablet(1, 10).unwrap();
+        let tablet2 = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
+        let _ = factory.open_tablet(1, 10).unwrap();
     }
 
     #[test]
