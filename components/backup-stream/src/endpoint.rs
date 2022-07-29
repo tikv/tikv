@@ -63,7 +63,8 @@ use crate::{
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
-/// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if task has fatal error.
+/// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
+/// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
 
 pub struct Endpoint<S, R, E, RT, PDC> {
@@ -255,7 +256,8 @@ where
     async fn starts_flush_ticks(router: Router) {
         loop {
             // check every 5s.
-            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of enabling timing in the current runtime)?
+            // TODO: maybe use global timer handle in the `tikv_utils::timer` (instead of
+            // enabling timing in the current runtime)?
             tokio::time::sleep(Duration::from_secs(5)).await;
             debug!("backup stream trigger flush tick");
             router.tick().await;
@@ -415,7 +417,8 @@ where
         }
     }
 
-    /// Convert a batch of events to the cmd batch, and update the resolver status.
+    /// Convert a batch of events to the cmd batch, and update the resolver
+    /// status.
     fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
         let region_id = batch.region_id;
         let mut resolver = match subs.get_subscription_of(region_id) {
@@ -425,7 +428,9 @@ where
                 return None;
             }
         };
-        // Stale data is accpetable, while stale locks may block the checkpoint advancing.
+        // Stale data is acceptable, while stale locks may block the checkpoint
+        // advancing.
+        // ```text
         // Let L be the instant some key locked, U be the instant it unlocked,
         // +---------*-------L-----------U--*-------------+
         //           ^   ^----(1)----^      ^ We get the snapshot for initial scanning at here.
@@ -434,6 +439,7 @@ where
         //              ...note that (1) is the last cmd batch of first observing, so the unlock event would never be sent to us.
         //              ...then the lock would get an eternal life in the resolver :|
         //                 (Before we refreshing the resolver for this region again)
+        // ```
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
             return None;
@@ -529,8 +535,10 @@ where
                 "end_key" => utils::redact(&end_key),
             );
         }
-        // Assuming the `region info provider` would read region info form `StoreMeta` directly and this would be fast.
-        // If this gets slow, maybe make it async again. (Will that bring race conditions? say `Start` handled after `ResfreshResolver` of some region.)
+        // Assuming the `region info provider` would read region info form `StoreMeta`
+        // directly and this would be fast. If this gets slow, maybe make it async
+        // again. (Will that bring race conditions? say `Start` handled after
+        // `ResfreshResolver` of some region.)
         let range_init_result = init.initialize_range(start_key.clone(), end_key.clone());
         match range_init_result {
             Ok(()) => {
@@ -680,7 +688,8 @@ where
         );
     }
 
-    /// unload a task from memory: this would stop observe the changes required by the task temporarily.
+    /// unload a task from memory: this would stop observe the changes required
+    /// by the task temporarily.
     fn unload_task(&self, task: &str) -> Option<StreamBackupTaskInfo> {
         let router = self.range_router.clone();
 
@@ -988,8 +997,9 @@ pub enum Task {
     /// FatalError pauses the task and set the error.
     FatalError(TaskSelector, Box<Error>),
     /// Run the callback when see this message. Only for test usage.
-    /// NOTE: Those messages for testing are not guared by `#[cfg(test)]` for now, because
-    ///       the integration test would not enable test config when compiling (why?)
+    /// NOTE: Those messages for testing are not guarded by `#[cfg(test)]` for
+    /// now, because the integration test would not enable test config when
+    /// compiling (why?)
     Sync(
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
@@ -998,8 +1008,9 @@ pub enum Task {
     ),
     /// Mark the store as a failover store.
     /// This would prevent store from updating its checkpoint ts for a while.
-    /// Because we are not sure whether the regions in the store have new leader --
-    /// we keep a safe checkpoint so they can choose a safe `from_ts` for initial scanning.
+    /// Because we are not sure whether the regions in the store have new leader
+    /// -- we keep a safe checkpoint so they can choose a safe `from_ts` for
+    /// initial scanning.
     MarkFailover(Instant),
     /// Flush the task with name.
     Flush(String),
@@ -1032,8 +1043,8 @@ pub enum ObserveOp {
     },
     /// Destroy the region subscription.
     /// Unlike `Stop`, this will assume the region would never go back.
-    /// For now, the effect of "never go back" is that we won't try to hint other store
-    /// the checkpoint ts of this region.
+    /// For now, the effect of "never go back" is that we won't try to hint
+    /// other store the checkpoint ts of this region.
     Destroy {
         region: Region,
     },

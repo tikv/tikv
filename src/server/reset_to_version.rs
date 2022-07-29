@@ -22,7 +22,8 @@ const BATCH_SIZE: usize = 256;
 /// todo: Report this to the user.
 #[derive(Debug, Clone)]
 pub enum ResetToVersionState {
-    /// `RemovingWrite` means we are removing stale data in the `WRITE` and `DEFAULT` cf
+    /// `RemovingWrite` means we are removing stale data in the `WRITE` and
+    /// `DEFAULT` cf
     RemovingWrite { scanned: usize },
     /// `RemovingWrite` means we are removing stale data in the `LOCK` cf
     RemovingLock { scanned: usize },
@@ -40,7 +41,8 @@ impl ResetToVersionState {
     }
 }
 
-/// `ResetToVersionWorker` is the worker that does the actual reset-to-version work.
+/// `ResetToVersionWorker` is the worker that does the actual reset-to-version
+/// work.
 pub struct ResetToVersionWorker {
     /// `ts` is the timestamp to reset to.
     ts: TimeStamp,
@@ -168,8 +170,9 @@ impl ResetToVersionWorker {
     }
 }
 
-/// `ResetToVersionManager` is the manager that manages the reset-to-version process.
-/// User should interact with `ResetToVersionManager` instead of using `ResetToVersionWorker` directly.  
+/// `ResetToVersionManager` is the manager that manages the reset-to-version
+/// process. User should interact with `ResetToVersionManager` instead of using
+/// `ResetToVersionWorker` directly.
 pub struct ResetToVersionManager {
     /// Current state of the reset-to-version process.
     state: Arc<Mutex<ResetToVersionState>>,

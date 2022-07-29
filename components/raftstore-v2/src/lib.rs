@@ -2,10 +2,11 @@
 
 //! Raftstore is the place where we implement multi-raft.
 //!
-//! The thread module of raftstore is batch-system, more check components/batch-system.
-//! All state machines are defined in [`fsm`] module. Everything that wrapping raft is
-//! implemented in [`raft`] module. And the commands, including split/merge/confchange/read/write,
-//! are implemented in [`operation`] module. All state machines are expected to communicate with
+//! The thread module of raftstore is batch-system, more check
+//! components/batch-system. All state machines are defined in [`fsm`] module.
+//! Everything that wrapping raft is implemented in [`raft`] module. And the
+//! commands, including split/merge/confchange/read/write, are implemented in
+//! [`operation`] module. All state machines are expected to communicate with
 //! messages. They are defined in [`router`] module.
 
 #![allow(unused)]

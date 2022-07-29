@@ -5,7 +5,7 @@ use std::{collections::HashMap, fs, path::Path, sync::Arc};
 use engine_rocks::{
     raw::{DBEntryType, Env, TablePropertiesCollector, TablePropertiesCollectorFactory},
     util::new_engine_opt,
-    RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
 };
 pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
 use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
@@ -47,8 +47,8 @@ where
         })
         .collect();
 
-    let db_opts = env.map_or_else(RocksDBOptions::default, |e| {
-        let mut opts = RocksDBOptions::default();
+    let db_opts = env.map_or_else(RocksDbOptions::default, |e| {
+        let mut opts = RocksDbOptions::default();
         opts.set_env(e);
         opts
     });

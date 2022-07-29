@@ -9,9 +9,10 @@ pub type PluginResult<T> = std::result::Result<T, PluginError>;
 
 /// Error returned by operations on [`RawStorage`].
 ///
-/// If a plugin wants to return a custom error, e.g. an error in the business logic, the plugin should
-/// return an appropriately encoded error in [`RawResponse`]; in other words, plugins are responsible
-/// for their error handling by themselves.
+/// If a plugin wants to return a custom error, e.g. an error in the business
+/// logic, the plugin should return an appropriately encoded error in
+/// [`RawResponse`]; in other words, plugins are responsible for their error
+/// handling by themselves.
 #[derive(Debug)]
 pub enum PluginError {
     KeyNotInRegion {
@@ -23,11 +24,12 @@ pub enum PluginError {
     Timeout(Duration),
     Canceled,
 
-    /// Errors that can not be handled by a coprocessor plugin but should instead be returned to the
-    /// client.
+    /// Errors that can not be handled by a coprocessor plugin but should
+    /// instead be returned to the client.
     ///
-    /// If such an error appears, plugins can run some cleanup code and return early from the
-    /// request. The error will be passed to the client and the client might retry the request.
+    /// If such an error appears, plugins can run some cleanup code and return
+    /// early from the request. The error will be passed to the client and
+    /// the client might retry the request.
     Other(String, Box<dyn Any>),
 }
 

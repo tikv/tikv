@@ -15,7 +15,7 @@ use crate::{
 };
 
 macro_rules! report_write_perf_context {
-    ($ctx: expr, $metric: ident) => {
+    ($ctx:expr, $metric:ident) => {
         if $ctx.perf_level != PerfLevel::Disable {
             $ctx.write = WritePerfContext::capture();
             observe_write_time!($ctx, $metric, write_wal_time);
@@ -31,7 +31,7 @@ macro_rules! report_write_perf_context {
 }
 
 macro_rules! observe_write_time {
-    ($ctx:expr, $metric: expr, $v:ident) => {
+    ($ctx:expr, $metric:expr, $v:ident) => {
         $metric.$v.observe(($ctx.write.$v) as f64 / 1e9);
     };
 }
@@ -169,7 +169,8 @@ pub struct PerfContextStatistics {
 const FLUSH_METRICS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl PerfContextStatistics {
-    /// Create an instance which stores instant statistics values, retrieved at creation.
+    /// Create an instance which stores instant statistics values, retrieved at
+    /// creation.
     pub fn new(perf_level: PerfLevel, kind: PerfContextKind) -> Self {
         PerfContextStatistics {
             perf_level,

@@ -11,7 +11,7 @@ use engine_rocks::{
     RocksSstWriterBuilder,
 };
 use engine_traits::{
-    CFOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
+    CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
     SstWriterBuilder, SyncMutable, CF_DEFAULT, CF_WRITE,
 };
 use keys::data_key;

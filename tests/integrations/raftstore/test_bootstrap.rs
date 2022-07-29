@@ -21,10 +21,11 @@ use tikv_util::{
 };
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
-    // assume that there is a node  bootstrap the cluster and add region in pd successfully
+    // assume that there is a node  bootstrap the cluster and add region in pd
+    // successfully
     cluster.add_first_region().unwrap();
-    // now at same time start the another node, and will recive cluster is not bootstrap
-    // it will try to bootstrap with a new region, but will failed
+    // now at same time start the another node, and will receive `cluster is not
+    // bootstrap` it will try to bootstrap with a new region, but will failed
     // the region number still 1
     cluster.start().unwrap();
     cluster.check_regions_number(1);
@@ -64,11 +65,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = LazyWorker::new("test-pd-worker");
 
-    // assume there is a node has bootstrapped the cluster and add region in pd successfully
+    // assume there is a node has bootstrapped the cluster and add region in pd
+    // successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
 
-    // now another node at same time begin bootstrap node, but panic after prepared bootstrap
-    // now rocksDB must have some prepare data
+    // now another node at same time begin bootstrap node, but panic after prepared
+    // bootstrap now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(

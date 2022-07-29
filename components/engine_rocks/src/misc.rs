@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
+    CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
@@ -19,8 +19,8 @@ impl RocksEngine {
         self.as_inner().is_titan()
     }
 
-    // We store all data which would be deleted in memory at first because the data of region will never be larger than
-    // max-region-size.
+    // We store all data which would be deleted in memory at first because the data
+    // of region will never be larger than max-region-size.
     fn delete_all_in_range_cf_by_ingest(
         &self,
         cf: &str,
@@ -36,8 +36,8 @@ impl RocksEngine {
         let end = KeyBuilder::from_slice(max_end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
         if self.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
+            // Titan to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
 
@@ -103,8 +103,8 @@ impl RocksEngine {
         let end = KeyBuilder::from_slice(range.end_key, 0, 0);
         let mut opts = IterOptions::new(Some(start), Some(end), false);
         if self.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
-            // to avoid referring to missing blob files.
+            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
+            // Titan to avoid referring to missing blob files.
             opts.set_key_only(true);
         }
         let mut it = self.iterator_opt(cf, opts)?;
@@ -343,7 +343,7 @@ mod tests {
     use crate::{
         engine::RocksEngine,
         util::{new_engine, new_engine_opt},
-        RocksCfOptions, RocksDBOptions,
+        RocksCfOptions, RocksDbOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
@@ -520,7 +520,7 @@ mod tests {
                 (*cf, cf_opts)
             })
             .collect();
-        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
@@ -552,7 +552,7 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let mut opts = RocksDBOptions::default();
+        let mut opts = RocksDbOptions::default();
         opts.create_if_missing(true);
         opts.enable_multi_batch_write(true);
 
