@@ -1071,6 +1071,7 @@ where
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
+            PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
         }
     }
 
@@ -1929,8 +1930,6 @@ where
             self.register_raft_base_tick();
             return;
         }
-
-        self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
 
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
@@ -5045,6 +5044,19 @@ where
         {
             self.register_entry_cache_evict_tick();
         }
+    }
+
+    fn register_check_long_uncommitted_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckLongUncommitted)
+    }
+
+    fn on_check_long_uncommitted_tick(&mut self) {
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+        self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
+        self.register_check_long_uncommitted_tick();
     }
 
     fn register_check_leader_lease_tick(&mut self) {

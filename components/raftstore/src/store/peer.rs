@@ -109,12 +109,6 @@ use crate::{
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
-/// Base threshold for long uncommitted proposal.
-///
-/// In some cases, such as rolling upgrade, some regions' commit log duration can be
-/// 12 seconds. Before #13078 is merged, the commit log duration can be 2.8 minutes.
-/// So maybe 20s is a relatively reasonable threshold.
-const LONG_UNCOMMITTED_BASE_THRESHOLD: Duration = Duration::from_secs(20);
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
@@ -943,7 +937,7 @@ where
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
-            long_uncommitted_threshold: LONG_UNCOMMITTED_BASE_THRESHOLD,
+            long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -2830,6 +2824,7 @@ where
     /// and reset the threshold when there is no long uncommitted proposal.
     fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         let mut has_long_uncommitted = false;
+        let base_threshold = ctx.cfg.long_uncommitted_base_threshold.0;
         if let Some(propose_time) = self.proposals.oldest().and_then(|p| p.propose_time) {
             // When a proposal was proposed with this ctx before, the current_time can be some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
@@ -2840,12 +2835,12 @@ where
             // Increase the threshold for next turn when a long uncommitted proposal is detected.
             if elapsed >= self.long_uncommitted_threshold {
                 has_long_uncommitted = true;
-                self.long_uncommitted_threshold += LONG_UNCOMMITTED_BASE_THRESHOLD;
-            } else if elapsed < LONG_UNCOMMITTED_BASE_THRESHOLD {
-                self.long_uncommitted_threshold = LONG_UNCOMMITTED_BASE_THRESHOLD;
+                self.long_uncommitted_threshold += base_threshold;
+            } else if elapsed < base_threshold {
+                self.long_uncommitted_threshold = base_threshold;
             }
         } else {
-            self.long_uncommitted_threshold = LONG_UNCOMMITTED_BASE_THRESHOLD
+            self.long_uncommitted_threshold = base_threshold;
         }
         has_long_uncommitted
     }
