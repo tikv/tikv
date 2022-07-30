@@ -1275,4 +1275,48 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_is_raw_region() {
+        let region_id = 10;
+        let mut region = Region::default();
+        region.set_id(region_id);
+        region.set_start_key(vec![b'r', 0, 0, 0, b'a']);
+        region.set_end_key(vec![b'r', 0, 0, 0, b'z']);
+        let resolver = Resolver::new(region_id);
+        let mut delegate = Delegate::new(region_id, Default::default());
+        assert!(
+            delegate
+                .on_region_ready(resolver, region.clone())
+                .is_empty()
+        );
+        assert!(delegate.is_raw_region());
+        region.set_end_key(vec![b'z', 0, 0, 0, b'z']);
+        let mut delegate = Delegate::new(region_id, Default::default());
+        let resolver = Resolver::new(region_id);
+        assert!(
+            delegate
+                .on_region_ready(resolver, region.clone())
+                .is_empty()
+        );
+        assert!(!delegate.is_raw_region());
+        region.set_end_key(vec![]);
+        let mut delegate = Delegate::new(region_id, Default::default());
+        let resolver = Resolver::new(region_id);
+        assert!(
+            delegate
+                .on_region_ready(resolver, region.clone())
+                .is_empty()
+        );
+        assert!(!delegate.is_raw_region());
+        region.set_end_key(vec![b's']);
+        let mut delegate = Delegate::new(region_id, Default::default());
+        let resolver = Resolver::new(region_id);
+        assert!(
+            delegate
+                .on_region_ready(resolver, region.clone())
+                .is_empty()
+        );
+        assert!(delegate.is_raw_region());
+    }
 }

@@ -1529,7 +1529,7 @@ mod tests {
                     .unwrap()
                     .kv_engine()
             }),
-            CdcObserver::new(task_sched),
+            CdcObserver::new(task_sched, api_version),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -2049,7 +2049,6 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
         );
-        downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -2114,7 +2113,6 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
         );
-        downstream.get_state().store(DownstreamState::Normal);
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
         suite.run(Task::Register {
@@ -2133,6 +2131,13 @@ mod tests {
             let ts = TimeStamp::compose(i, 0);
             suite.run(Task::RawTrackTs { region_id, ts });
         }
+        suite.run(Task::RawUntrackTs {
+            raw_region_ts: vec![RawRegionTs {
+                region_id,
+                cdc_id: observe_id,
+                max_ts: TimeStamp::compose(125, 0),
+            }],
+        }); // untrack ts before 125
         let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
         // region is not ready, so raw lock in resolver, raw ts is added to
         // delegate.pending.
@@ -2155,7 +2160,7 @@ mod tests {
         let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
         let resolver = delegate.resolver.as_mut().unwrap();
         let raw_resolved_ts = resolver.resolve(TimeStamp::compose(200, 0)).min();
-        assert_eq!(raw_resolved_ts, TimeStamp::compose(100, 0));
+        assert_eq!(raw_resolved_ts, TimeStamp::compose(125, 0));
     }
 
     #[test]
@@ -2190,7 +2195,6 @@ mod tests {
                 conn_id,
                 ChangeDataRequestKvApi::RawKv,
             );
-            downstream.get_state().store(DownstreamState::Normal);
             // Enable batch resolved ts in the test.
             let version = FeatureGate::batch_resolved_ts();
             suite.run(Task::Register {
@@ -2210,6 +2214,8 @@ mod tests {
             let mut region = Region::default();
             region.id = region_id;
             region.set_region_epoch(region_epoch);
+            region.set_start_key(vec![b'r', 0, 0, 0, b'a']);
+            region.set_end_key(vec![b'r', 0, 0, 0, b'z']);
             let resolver = Resolver::new(region_id);
             suite.run(Task::ResolverReady {
                 observe_id,
@@ -2227,11 +2233,15 @@ mod tests {
             } else {
                 TimeStamp::compose(start_ts + 1, 0)
             };
-            suite.run(Task::RawTrackTs { region_id, ts });
-            let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-            let resolver = delegate.resolver.as_mut().unwrap();
-            let raw_resolved_ts = resolver.resolve(cur_tso).min();
-            assert_eq!(raw_resolved_ts, ts);
+            // Only 9 region is min_ts_from_raw, but other regions are raw regions,
+            // Them can also be counted.
+            if region_id < 10 {
+                suite.run(Task::RawTrackTs { region_id, ts });
+                let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
+                let resolver = delegate.resolver.as_mut().unwrap();
+                let raw_resolved_ts = resolver.resolve(cur_tso).min();
+                assert_eq!(raw_resolved_ts, ts);
+            }
         }
         let ob_id = suite
             .endpoint
