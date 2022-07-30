@@ -614,11 +614,7 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_raw_downstream(raw_rows, index)
-    }
-
-    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
-        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
+        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
     }
 
     pub fn raw_untrack_ts(&mut self, cdc_id: ObserveID, max_ts: TimeStamp) {
