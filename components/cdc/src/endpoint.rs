@@ -56,11 +56,10 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, MemoryQuota, SendError},
-    delegate::{
-        on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState, RawRegionTs,
-    },
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState},
     initializer::Initializer,
     metrics::*,
+    observer::RawRegionTs,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnID, FeatureGate},
     CdcObserver, Error,
@@ -976,7 +975,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     // The judge of raw region is not accuracy here, and we may miss at most one
                     // "normal" raw region. But this will not break the correctness of outlier
                     // detection.
-                    if resolved_ts.is_min_ts_from_raw() {
+                    if resolved_ts.is_min_ts_from_raw() || delegate.is_raw_region() {
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }
 

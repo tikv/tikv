@@ -2,23 +2,34 @@
 
 use std::sync::{Arc, RwLock};
 
+use api_version::{ApiV2, KeyMode, KvFormat};
 use causal_ts::{Error as CausalTsError, RawTsTracker, Result as CausalTsResult};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use kvproto::metapb::{Peer, Region};
+use kvproto::{
+    metapb::{Peer, Region},
+    raft_cmdpb::CmdType,
+};
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
 use tikv_util::{box_err, error, warn, worker::Scheduler};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::{
-    delegate::get_max_raw_ts,
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
     Error as CdcError,
 };
+
+// max_ts presents the max ts in one batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawRegionTs {
+    pub region_id: u64,
+    pub cdc_id: ObserveID,
+    pub max_ts: TimeStamp,
+}
 
 /// An Observer for CDC.
 ///
@@ -95,21 +106,58 @@ impl CdcObserver {
 
     // Ignore err result, raw dead lock is detected in `Endpoint::on_min_ts`
     // TODO: optimize this if cdc is not registered.
-    fn untrack_raw_ts(&self, cmd_batches: &mut Vec<CmdBatch>) {
-        match get_max_raw_ts(cmd_batches) {
-            Ok(region_ts) => {
-                if !region_ts.is_empty() {
-                    if let Err(e) = self.sched.schedule(Task::RawUntrackTs {
-                        raw_track_ts: region_ts,
-                    }) {
-                        warn!("cdc schedule task failed"; "error" => ?e);
+    fn untrack_raw_ts(&self, raw_region_ts: Vec<RawRegionTs>) {
+        if raw_region_ts.is_empty() {
+            return;
+        }
+        if let Err(e) = self.sched.schedule(Task::RawUntrackTs {
+            raw_track_ts: raw_region_ts,
+        }) {
+            warn!("cdc schedule task failed"; "error" => ?e);
+        }
+    }
+
+    // parse rawkv cmd from CmdBatch Vec and return the max ts of every region.
+    pub fn get_raw_region_ts(&self, cmd_batches: &Vec<CmdBatch>) -> Vec<RawRegionTs> {
+        let mut region_ts = vec![];
+        for batch in cmd_batches {
+            if batch.is_empty() {
+                continue;
+            }
+            let region_id = batch.region_id;
+            let cdc_id = batch.cdc_id;
+            if let Some(ob_id) = self.is_subscribed(region_id) {
+                if ob_id != cdc_id {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            let cmd = &batch.cmds.last().unwrap();
+            if let Some(last_key) = cmd
+                .request
+                .get_requests()
+                .iter()
+                .rev()
+                .find(|req| {
+                    CmdType::Put == req.get_cmd_type()
+                        && ApiV2::parse_key_mode(req.get_put().get_key()) == KeyMode::Raw
+                })
+                .map(|req| req.get_put().get_key())
+            {
+                match ApiV2::decode_raw_key_owned(Key::from_encoded_slice(last_key), true) {
+                    Ok((_, ts)) => {
+                        region_ts.push(RawRegionTs {
+                            region_id,
+                            cdc_id,
+                            max_ts: ts.unwrap(),
+                        });
                     }
+                    Err(e) => warn!("decode raw key fails"; "err" => ?e),
                 }
             }
-            Err(e) => {
-                warn!("get region raw ts from CmdBatch fail"; "errr" => ?e);
-            }
         }
+        region_ts
     }
 }
 
@@ -126,9 +174,12 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     ) {
         assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
-        // Untrack raw ts here because it's tracked in CausalObserver::pre_propose_query.
-        self.untrack_raw_ts(cmd_batches);
+        // Untrack raw ts regardless of the ob level
+        // Because RawTrackTask cannot get the ob level in
+        // CausalObserver::pre_propose_query
+        let raw_region_ts = self.get_raw_region_ts(cmd_batches);
         if max_level < ObserveLevel::All {
+            self.untrack_raw_ts(raw_region_ts);
             return;
         }
         let cmd_batches: Vec<_> = cmd_batches
@@ -137,6 +188,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             .cloned()
             .collect();
         if cmd_batches.is_empty() {
+            self.untrack_raw_ts(raw_region_ts);
             return;
         }
         let mut region = Region::default();
@@ -157,6 +209,8 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         }) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
+        // untrack raw ts after MultiBatch task to avoid incorrect min ts advance.
+        self.untrack_raw_ts(raw_region_ts);
     }
 
     fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
@@ -241,7 +295,11 @@ mod tests {
     use std::time::Duration;
 
     use engine_rocks::RocksEngine;
-    use kvproto::metapb::Region;
+    use engine_traits::CF_WRITE;
+    use kvproto::{
+        metapb::Region,
+        raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request},
+    };
     use raftstore::{coprocessor::RoleChange, store::util::new_peer};
     use tikv::storage::kv::TestEngineBuilder;
 
@@ -389,5 +447,138 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+    }
+
+    fn put_cf(cf: &str, key: &[u8], value: &[u8]) -> Request {
+        let mut cmd = Request::default();
+        cmd.set_cmd_type(CmdType::Put);
+        cmd.mut_put().set_cf(cf.to_owned());
+        cmd.mut_put().set_key(key.to_vec());
+        cmd.mut_put().set_value(value.to_vec());
+        cmd
+    }
+
+    #[test]
+    fn test_get_raw_region_ts() {
+        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
+        let observer = CdcObserver::new(scheduler);
+        let region_id = 1;
+        let mut cmd = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        cmd.request.mut_requests().clear();
+        // Both cdc and resolved-ts worker are observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
+        let mut cb = CmdBatch::new(&observe_info, region_id);
+        cb.push(&observe_info, region_id, cmd.clone());
+        let cmd_batches = vec![cb];
+        let ret = observer.get_raw_region_ts(&cmd_batches);
+        assert!(ret.is_empty());
+
+        let data = vec![put_cf(CF_WRITE, b"k7", b"v"), put_cf(CF_WRITE, b"k8", b"v")];
+        for put in &data {
+            cmd.request.mut_requests().push(put.clone());
+        }
+        let mut cb = CmdBatch::new(&observe_info, region_id);
+        cb.push(&observe_info, region_id, cmd.clone());
+        let cmd_batches = vec![cb];
+        let ret = observer.get_raw_region_ts(&cmd_batches);
+        assert!(ret.is_empty()); // no apiv2 key
+        cmd.request.mut_requests().clear();
+        let data = vec![
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"ra", Some(TimeStamp::from(100))).as_encoded(),
+                b"v1",
+            ),
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"rb", Some(TimeStamp::from(200))).as_encoded(),
+                b"v2",
+            ),
+        ];
+        for put in &data {
+            cmd.request.mut_requests().push(put.clone());
+        }
+        let mut cb1 = CmdBatch::new(&observe_info, region_id);
+        cb1.push(&observe_info, region_id, cmd.clone());
+        let mut cmd2 = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        cmd2.request.mut_requests().clear();
+        let data2 = vec![
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"ra", Some(TimeStamp::from(300))).as_encoded(),
+                b"v1",
+            ),
+            put_cf(
+                CF_WRITE,
+                ApiV2::encode_raw_key(b"rb", Some(TimeStamp::from(400))).as_encoded(),
+                b"v2",
+            ),
+        ];
+        for put in &data2 {
+            cmd2.request.mut_requests().push(put.clone());
+        }
+        let mut cb2 = CmdBatch::new(&observe_info, region_id + 1);
+        cb2.push(&observe_info, region_id + 1, cmd2.clone());
+        let mut cmd_batches = vec![cb1, cb2];
+        let ret = observer.get_raw_region_ts(&cmd_batches);
+        assert_eq!(ret.len(), 0); // region is not subscribed.
+        observer.subscribe_region(region_id, observe_info.cdc_id.id);
+        observer.subscribe_region(region_id + 1, observe_info.cdc_id.id);
+        let ret = observer.get_raw_region_ts(&cmd_batches);
+        assert_eq!(ret.len(), 2); // two batch and both subscribed.
+        assert_eq!(
+            ret[0],
+            RawRegionTs {
+                region_id,
+                cdc_id: observe_info.cdc_id.id,
+                max_ts: TimeStamp::from(200)
+            }
+        );
+        assert_eq!(
+            ret[1],
+            RawRegionTs {
+                region_id: region_id + 1,
+                cdc_id: observe_info.cdc_id.id,
+                max_ts: TimeStamp::from(400)
+            }
+        );
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
+            &observer,
+            ObserveLevel::LockRelated,
+            &mut cmd_batches,
+            &engine,
+        );
+        // schedule task even if max level is not `All`.
+        match rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .unwrap()
+        {
+            Task::RawUntrackTs { raw_track_ts } => {
+                assert_eq!(raw_track_ts.len(), 2); // two batch and both subscribed.
+                assert_eq!(
+                    raw_track_ts[0],
+                    RawRegionTs {
+                        region_id,
+                        cdc_id: observe_info.cdc_id.id,
+                        max_ts: TimeStamp::from(200)
+                    }
+                );
+                assert_eq!(
+                    raw_track_ts[1],
+                    RawRegionTs {
+                        region_id: region_id + 1,
+                        cdc_id: observe_info.cdc_id.id,
+                        max_ts: TimeStamp::from(400)
+                    }
+                );
+            }
+            _ => panic!("unexpected task"),
+        };
     }
 }
