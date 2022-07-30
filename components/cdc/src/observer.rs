@@ -104,15 +104,11 @@ impl CdcObserver {
             .cloned()
     }
 
-    // Ignore err result, raw dead lock is detected in `Endpoint::on_min_ts`
-    // TODO: optimize this if cdc is not registered.
     fn untrack_raw_ts(&self, raw_region_ts: Vec<RawRegionTs>) {
         if raw_region_ts.is_empty() {
             return;
         }
-        if let Err(e) = self.sched.schedule(Task::RawUntrackTs {
-            raw_track_ts: raw_region_ts,
-        }) {
+        if let Err(e) = self.sched.schedule(Task::RawUntrackTs { raw_region_ts }) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
@@ -559,10 +555,10 @@ mod tests {
             .unwrap()
             .unwrap()
         {
-            Task::RawUntrackTs { raw_track_ts } => {
-                assert_eq!(raw_track_ts.len(), 2); // two batch and both subscribed.
+            Task::RawUntrackTs { raw_region_ts } => {
+                assert_eq!(raw_region_ts.len(), 2); // two batch and both subscribed.
                 assert_eq!(
-                    raw_track_ts[0],
+                    raw_region_ts[0],
                     RawRegionTs {
                         region_id,
                         cdc_id: observe_info.cdc_id.id,
@@ -570,7 +566,7 @@ mod tests {
                     }
                 );
                 assert_eq!(
-                    raw_track_ts[1],
+                    raw_region_ts[1],
                     RawRegionTs {
                         region_id: region_id + 1,
                         cdc_id: observe_info.cdc_id.id,

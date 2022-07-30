@@ -179,7 +179,7 @@ pub enum Task {
         ts: TimeStamp,
     },
     RawUntrackTs {
-        raw_track_ts: Vec<RawRegionTs>,
+        raw_region_ts: Vec<RawRegionTs>,
     },
 }
 
@@ -260,9 +260,9 @@ impl fmt::Debug for Task {
                 .field("region_id", &region_id)
                 .field("ts", &ts)
                 .finish(),
-            Task::RawUntrackTs { ref raw_track_ts } => de
-                .field("type", &"raw_track_ts")
-                .field("raw_track_ts", raw_track_ts)
+            Task::RawUntrackTs { ref raw_region_ts } => de
+                .field("type", &"raw_untrack_ts")
+                .field("raw_ts", raw_region_ts)
                 .finish(),
         }
     }
@@ -1356,7 +1356,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
             Task::RawTrackTs { region_id, ts } => self.on_raw_track_ts(region_id, ts),
-            Task::RawUntrackTs { raw_track_ts } => self.on_raw_untrack_ts(raw_track_ts),
+            Task::RawUntrackTs { raw_region_ts } => self.on_raw_untrack_ts(raw_region_ts),
         }
     }
 }
@@ -2283,7 +2283,7 @@ mod tests {
             max_ts: TimeStamp::compose(1000, 0),
         };
         suite.run(Task::RawUntrackTs {
-            raw_track_ts: vec![region_ts],
+            raw_region_ts: vec![region_ts],
         });
         suite
             .task_rx
