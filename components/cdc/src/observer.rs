@@ -181,11 +181,13 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     ) {
         assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
-        // Untrack raw ts regardless of the ob level
-        // Because RawTrackTask cannot get the ob level in
-        // CausalObserver::pre_propose_query
+
+        // Untrack raw ts regardless of the ob level.
+        // Because RawKV locks is tracked regardless of observe level as it is in Raft
+        // propose procedure and can not get an accurate observe level.
         let raw_region_ts = self.get_raw_region_ts(cmd_batches);
         defer!(self.untrack_raw_ts(raw_region_ts));
+
         if max_level < ObserveLevel::All {
             return;
         }
@@ -593,7 +595,7 @@ mod tests {
                 b"v1",
             ),
             put_cf(
-                CF_WRITE, // this is onn-rawkv
+                CF_WRITE, // this is non-rawkv
                 ApiV2::encode_raw_key(b"b", Some(TimeStamp::from(600))).as_encoded(),
                 b"v2",
             ),
