@@ -28,8 +28,9 @@ use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
 
-// When leader broadcasts a ComputeHash command to followers, it's possible that the safe point
-// becomes stale when the command reaches followers. So use a 2 minutes window to reduce this.
+// When leader broadcasts a ComputeHash command to followers, it's possible that
+// the safe point becomes stale when the command reaches followers. So use a 2
+// minutes window to reduce this.
 fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point >>= PHYSICAL_SHIFT_BITS;
     safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.
@@ -480,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -493,12 +494,12 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_test::kv::new_engine_opt(
             path,
-            DBOptions::default(),
+            DbOptions::default(),
             vec![
-                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, CfOptions::new()),
+                (CF_WRITE, CfOptions::new()),
+                (CF_LOCK, CfOptions::new()),
+                (CF_RAFT, CfOptions::new()),
             ],
         )
         .unwrap();
@@ -566,7 +567,7 @@ mod tests {
 
         let mut count = 0;
         for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
-            assert!(key_and_mvcc.is_ok());
+            key_and_mvcc.unwrap();
             count += 1;
         }
         assert_eq!(count, 7);

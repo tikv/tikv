@@ -11,7 +11,8 @@ use rand::prelude::*;
 use txn_types::{Key, Lock, LockType};
 
 // This test is heavy so we shouldn't run it daily.
-// Run it with the following command (recommending release mode) and see the printed stats:
+// Run it with the following command (recommending release mode) and see the
+// printed stats:
 //
 // ```
 // cargo test --package concurrency_manager --test memory_usage --features jemalloc --release -- test_memory_usage --exact --ignored --nocapture

@@ -125,8 +125,8 @@ pub struct RequestMetrics {
     pub block_read_nanos: u64,
     pub internal_key_skipped_count: u64,
     pub deleted_key_skipped_count: u64,
-    // temp instant used in raftstore metrics, first be the instant when creating the write callback,
-    // then reset when it is ready to apply
+    // temp instant used in raftstore metrics, first be the instant when creating the write
+    // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,
     pub wf_batch_wait_nanos: u64,
     pub wf_send_to_queue_nanos: u64,

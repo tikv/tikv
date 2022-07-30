@@ -399,8 +399,8 @@ pub struct Endpoint<T, E> {
     timer: SteadyTimer,
     tso_worker: Runtime,
     store_meta: Arc<StdMutex<StoreMeta>>,
-    /// The concurrency manager for transactions. It's needed for CDC to check locks when
-    /// calculating resolved_ts.
+    /// The concurrency manager for transactions. It's needed for CDC to check
+    /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
@@ -467,7 +467,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             .build()
             .unwrap();
 
-        // Initialized for the first time, subsequent adjustments will be made based on configuration updates.
+        // Initialized for the first time, subsequent adjustments will be made based on
+        // configuration updates.
         let scan_concurrency_semaphore =
             Arc::new(Semaphore::new(config.incremental_scan_concurrency));
         let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
@@ -543,7 +544,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             "current config" => ?self.config,
             "change" => ?change
         );
-        // Update the config here. The following adjustments will all use the new values.
+        // Update the config here. The following adjustments will all use the new
+        // values.
         self.config.update(change.clone()).unwrap();
 
         // Maybe the cache will be lost due to smaller capacity,
@@ -553,8 +555,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 .resize(self.config.old_value_cache_memory_quota);
         }
 
-        // Maybe the limit will be exceeded for a while after the concurrency becomes smaller,
-        // but it is acceptable.
+        // Maybe the limit will be exceeded for a while after the concurrency becomes
+        // smaller, but it is acceptable.
         if change.get("incremental_scan_concurrency").is_some() {
             self.scan_concurrency_semaphore =
                 Arc::new(Semaphore::new(self.config.incremental_scan_concurrency))
@@ -946,7 +948,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         // Reset resolved_regions to empty.
         let resolved_regions = &mut self.resolved_region_heap;
         resolved_regions.clear();
-        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be empty.
+        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be
+        // empty.
         let mut raw_resolved_regions = ResolvedRegionVec { vec: vec![] };
 
         let total_region_count = regions.len();
@@ -971,8 +974,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     }
                     resolved_regions.push(region_id, resolved_ts.min());
                     // The judge of raw region is not accuracy here, and we may miss at most one
-                    // "normal" raw region. But this will not break the correctness of outlier detection.
-                    if resolved_ts.is_min_ts_from_raw() || delegate.is_raw_region() {
+                    // "normal" raw region. But this will not break the correctness of outlier
+                    // detection.
+                    if resolved_ts.is_min_ts_from_raw() {
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }
 
@@ -1019,7 +1023,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
         self.broadcast_resolved_ts(normal_min_resolved_ts, normal_regions);
 
-        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be empty.
+        // rawkv only, if user does not use rawkv apiv2, raw_resolved_regions should be
+        // empty.
         self.handle_raw_outlier_regions(&mut raw_resolved_regions, min_ts);
     }
 
@@ -1146,8 +1151,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
 
-            // Sync with concurrency manager so that it can work correctly when optimizations
-            // like async commit is enabled.
+            // Sync with concurrency manager so that it can work correctly when
+            // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTS` task, and the
             // resolver must be checked in or after `Task::MinTS`' execution.
             cm.update_max_ts(min_ts);
@@ -1730,7 +1735,8 @@ mod tests {
             let mut updated_cfg = cfg.clone();
             {
                 // Update it to be smaller than incremental_scan_threads,
-                // which will be an invalid change and will modified to incremental_scan_threads.
+                // which will be an invalid change and will modified to
+                // incremental_scan_threads.
                 updated_cfg.incremental_scan_concurrency = 2;
             }
             let diff = cfg.diff(&updated_cfg);
@@ -2129,7 +2135,8 @@ mod tests {
             suite.run(Task::RawTrackTs { region_id, ts });
         }
         let delegate = suite.endpoint.capture_regions.get_mut(&region_id).unwrap();
-        // region is not ready, so raw lock in resolver, raw ts is added to delegate.pending.
+        // region is not ready, so raw lock in resolver, raw ts is added to
+        // delegate.pending.
         assert_eq!(delegate.resolver.is_none(), true);
         // Schedule resolver ready (resolver is built by conn a).
         let mut region = Region::default();
@@ -2244,7 +2251,7 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .unwrap()
             .unwrap();
-        assert_matches!(task_recv, 
+        assert_matches!(task_recv,
             Task::Deregister(Deregister::Delegate {region_id, observe_id, ..}) if
                 region_id == dead_lock_region && observe_id == ob_id);
         let gap = Duration::from_millis(cur_tso.physical() - dead_lock_ts.physical()).as_secs_f64();
@@ -2926,7 +2933,8 @@ mod tests {
                 .is_none(),
             true
         );
-        // count become 1002, boundary: 2248 - 3 * 502 = 742, but ts gap is not larger than 60s.
+        // count become 1002, boundary: 2248 - 3 * 502 = 742, but ts gap is not larger
+        // than 60s.
         region_vec2.push(741, TimeStamp::compose(741, 0));
         assert_eq!(
             region_vec2
