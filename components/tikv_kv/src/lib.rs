@@ -156,9 +156,8 @@ impl From<Modify> for raft_cmdpb::Request {
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
-            engine_traits::name_to_cf(name).or_else(|| {
-                TEST_ENGINE_CFS.iter().copied().find(|c| name == *c)
-            })
+            engine_traits::name_to_cf(name)
+                .or_else(|| TEST_ENGINE_CFS.iter().copied().find(|c| name == *c))
         };
 
         match req.get_cmd_type() {

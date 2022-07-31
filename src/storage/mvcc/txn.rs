@@ -793,13 +793,14 @@ pub(crate) mod tests {
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
         prewrite(
-                &mut txn,
-                &mut reader,
-                &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
-                Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                &None,
-                false,
-            ).unwrap_err();
+            &mut txn,
+            &mut reader,
+            &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            &None,
+            false,
+        )
+        .unwrap_err();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(5.into(), cm);

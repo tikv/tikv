@@ -628,6 +628,7 @@ where
         info!("shutdown batch system {}", name_prefix);
         self.router.broadcast_shutdown();
         let mut last_error = None;
+        #[allow(clippy::significant_drop_in_scrutinee)]
         for h in self.workers.lock().unwrap().drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
             if let Err(e) = h.join() {

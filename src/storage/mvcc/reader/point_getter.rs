@@ -396,7 +396,7 @@ mod tests {
     use crate::storage::{
         kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder},
         txn::tests::{
-            must_acquire_pessimistic_lock, must_commit, must_gc,
+            must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
             must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
             must_prewrite_put, must_prewrite_put_impl, must_rollback,
         },
@@ -1152,15 +1152,15 @@ mod tests {
             (b"k9", None),
         ];
 
-        for (k, v) in &expected_results {
+        for (k, v) in expected_results.iter().copied() {
             let mut single_getter = new_point_getter(&engine, 40.into());
-            let value = single_getter.get(&Key::from_raw(*k)).unwrap();
+            let value = single_getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
 
         let mut getter = new_point_getter(&engine, 40.into());
-        for (k, v) in &expected_results {
-            let value = getter.get(&Key::from_raw(*k)).unwrap();
+        for (k, v) in expected_results {
+            let value = getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
     }

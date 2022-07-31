@@ -1200,11 +1200,11 @@ mod tests {
 
         let overflow = vec![(f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
-                RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::DivideReal)
-                    .unwrap_err();
+            RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .unwrap_err();
         }
     }
 

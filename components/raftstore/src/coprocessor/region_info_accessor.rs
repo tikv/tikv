@@ -1166,8 +1166,8 @@ mod tests {
         ];
 
         for index in indices {
-            for order in orders {
-                test_split_impl(*index, *order);
+            for &order in orders {
+                test_split_impl(*index, order);
             }
         }
     }

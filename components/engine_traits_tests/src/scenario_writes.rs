@@ -279,9 +279,9 @@ scenario_test! { delete_range_reverse_range {
     db.put(b"c", b"").unwrap();
     db.put(b"d", b"").unwrap();
 
-    assert!(recover_safe(|| {
+    recover_safe(|| {
         db.delete_range(b"d", b"b").unwrap();
-    }).is_err());
+    }).unwrap_err();
 
     assert!(db.get_value(b"b").unwrap().is_some());
     assert!(db.get_value(b"c").unwrap().is_some());

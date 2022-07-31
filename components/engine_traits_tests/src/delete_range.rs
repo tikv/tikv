@@ -9,6 +9,7 @@ use super::default_engine;
 fn delete_range_cf_bad_cf() {
     let db = default_engine();
     recover_safe(|| {
-            db.engine.delete_range_cf("bogus", b"a", b"b").unwrap();
-        }).unwrap_err();
+        db.engine.delete_range_cf("bogus", b"a", b"b").unwrap();
+    })
+    .unwrap_err();
 }

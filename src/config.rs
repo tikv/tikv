@@ -4611,11 +4611,14 @@ mod tests {
 
         // Return error if try to update not support config or unknow config
         cfg_controller
-                .update_config("resolved-ts.enable", "false").unwrap_err();
+            .update_config("resolved-ts.enable", "false")
+            .unwrap_err();
         cfg_controller
-                .update_config("resolved-ts.scan-lock-pool-size", "10").unwrap_err();
+            .update_config("resolved-ts.scan-lock-pool-size", "10")
+            .unwrap_err();
         cfg_controller
-                .update_config("resolved-ts.xxx", "false").unwrap_err();
+            .update_config("resolved-ts.xxx", "false")
+            .unwrap_err();
 
         let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
         // Default value
@@ -4636,7 +4639,8 @@ mod tests {
 
         // Return error if try to update `advance-ts-interval` to an invalid value
         cfg_controller
-                .update_config("resolved-ts.advance-ts-interval", "0m").unwrap_err();
+            .update_config("resolved-ts.advance-ts-interval", "0m")
+            .unwrap_err();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
@@ -4727,7 +4731,8 @@ mod tests {
         // Can not update block cache through storage module
         // when shared block cache is disabled
         cfg_controller
-                .update_config("storage.block-cache.capacity", "512MB").unwrap_err();
+            .update_config("storage.block-cache.capacity", "512MB")
+            .unwrap_err();
     }
 
     #[test]
@@ -4764,7 +4769,8 @@ mod tests {
 
         // Can not update shared block cache through rocksdb module
         cfg_controller
-                .update_config("rocksdb.defaultcf.block-cache-size", "256MB").unwrap_err();
+            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+            .unwrap_err();
 
         cfg_controller
             .update_config("storage.block-cache.capacity", "256MB")
@@ -4792,7 +4798,8 @@ mod tests {
         );
 
         cfg_controller
-                .update_config("log.level", "invalid").unwrap_err();
+            .update_config("log.level", "invalid")
+            .unwrap_err();
         assert_eq!(
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
@@ -4918,7 +4925,8 @@ mod tests {
 
         // u64::MAX ns casts to 213503d.
         cfg_controller
-                .update_config("quota.max-delay-duration", "213504d").unwrap_err();
+            .update_config("quota.max-delay-duration", "213504d")
+            .unwrap_err();
         assert_eq!(cfg_controller.get_current(), cfg);
 
         cfg_controller

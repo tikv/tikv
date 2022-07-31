@@ -63,7 +63,7 @@ const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
 const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
@@ -119,7 +119,7 @@ pub struct PeerPessimisticLocks {
     pub memory_size: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocksStatus {
     Normal,
     TransferringLeader,
@@ -408,7 +408,7 @@ mod tests {
         // Not exceeding the region limit, but exceeding the global limit
         GLOBAL_MEM_SIZE.set(101 << 20);
         let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
-        assert!(res.is_err());
+        res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
     }
 

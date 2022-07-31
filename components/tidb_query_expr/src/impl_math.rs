@@ -1318,8 +1318,9 @@ mod tests {
             assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
         RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::new(0.0_f64).unwrap()))
-                .evaluate::<Real>(ScalarFuncSig::Cot).unwrap_err();
+            .push_param(Some(Real::new(0.0_f64).unwrap()))
+            .evaluate::<Real>(ScalarFuncSig::Cot)
+            .unwrap_err();
     }
 
     #[test]
@@ -1372,9 +1373,10 @@ mod tests {
 
         for (lhs, rhs) in invalid_cases {
             RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::Pow).unwrap_err();
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .unwrap_err();
         }
     }
 

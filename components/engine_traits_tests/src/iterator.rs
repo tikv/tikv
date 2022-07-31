@@ -18,11 +18,13 @@ where
     iter.prev().unwrap_err();
     iter.next().unwrap_err();
     recover_safe(|| {
-            iter.key();
-        }).unwrap_err();
+        iter.key();
+    })
+    .unwrap_err();
     recover_safe(|| {
-            iter.value();
-        }).unwrap_err();
+        iter.value();
+    })
+    .unwrap_err();
 
     assert_eq!(iter.seek_to_first().unwrap(), false);
     assert_eq!(iter.seek_to_last().unwrap(), false);
@@ -79,11 +81,13 @@ where
     assert!(!iter.valid().unwrap());
 
     recover_safe(|| {
-            iter.key();
-        }).unwrap_err();
+        iter.key();
+    })
+    .unwrap_err();
     recover_safe(|| {
-            iter.value();
-        }).unwrap_err();
+        iter.value();
+    })
+    .unwrap_err();
 }
 
 #[test]
@@ -135,11 +139,13 @@ where
     assert!(!iter.valid().unwrap());
 
     recover_safe(|| {
-            iter.key();
-        }).unwrap_err();
+        iter.key();
+    })
+    .unwrap_err();
     recover_safe(|| {
-            iter.value();
-        }).unwrap_err();
+        iter.value();
+    })
+    .unwrap_err();
 }
 
 #[test]

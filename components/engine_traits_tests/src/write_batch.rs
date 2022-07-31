@@ -718,8 +718,9 @@ fn write_batch_delete_range_backward_range() {
 
     wb.delete_range(b"c", b"a").unwrap();
     recover_safe(|| {
-            wb.write().unwrap();
-        }).unwrap_err();
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -743,8 +744,9 @@ fn write_batch_delete_range_backward_range() {
         .unwrap();
 
     recover_safe(|| {
-            wb.write().unwrap();
-        }).unwrap_err();
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -782,8 +784,9 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     wb.delete(b"a").unwrap();
 
     recover_safe(|| {
-            wb.write().unwrap();
-        }).unwrap_err();
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -827,8 +830,9 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     }
 
     recover_safe(|| {
-            wb.write().unwrap();
-        }).unwrap_err();
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());

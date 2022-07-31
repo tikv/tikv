@@ -453,8 +453,9 @@ mod tests {
 
         for len in overflow_tests {
             RpnFnScalarEvaluator::new()
-                    .push_param(len)
-                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes).unwrap_err();
+                .push_param(len)
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap_err();
         }
 
         // test NULL case

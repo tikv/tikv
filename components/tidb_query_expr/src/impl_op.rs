@@ -403,14 +403,15 @@ mod tests {
             assert_eq!(output, expect_output, "{:?}", arg);
         }
         RpnFnScalarEvaluator::new()
-                .push_param_with_field_type(
-                    Some((i64::MAX as u64 + 2) as i64),
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::LongLong)
-                        .flag(FieldTypeFlag::UNSIGNED)
-                        .build()
-                )
-                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt).unwrap_err();
+            .push_param_with_field_type(
+                Some((i64::MAX as u64 + 2) as i64),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .build(),
+            )
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .unwrap_err();
 
         let signed_test_cases = vec![
             (None, None),
@@ -427,8 +428,9 @@ mod tests {
             assert_eq!(output, expect_output, "{:?}", arg);
         }
         RpnFnScalarEvaluator::new()
-                .push_param(i64::MIN)
-                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt).unwrap_err();
+            .push_param(i64::MIN)
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .unwrap_err();
     }
 
     #[test]

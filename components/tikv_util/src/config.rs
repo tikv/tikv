@@ -66,7 +66,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -937,14 +937,14 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            assert!(f2.is_err());
+            f2.unwrap_err();
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            assert!(ret.is_err());
+            ret.unwrap_err();
         }
 
         #[test]
@@ -1823,7 +1823,7 @@ mod tests {
         {
             File::create(&path2).unwrap();
         }
-        assert!(canonicalize_path(&path2).is_err());
+        canonicalize_path(&path2).unwrap_err();
         assert!(Path::new(&path2).exists());
     }
 

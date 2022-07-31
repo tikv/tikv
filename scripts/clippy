@@ -15,6 +15,9 @@ if [[ -n "$SHELL_DEBUG" ]] ; then
   set -x
 fi
 
+# TODOs:
+# - Enables `significant_drop_in_scrutinee` after
+#   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
 CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
 	-A clippy::too_many_arguments \
@@ -30,8 +33,11 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::bool_assert_comparison \
 	-A clippy::self_named_constructors \
 	-A clippy::enum_variant_names \
+	-A clippy::type_complexity \
+	-A clippy::significant_drop_in_scrutinee \
         -W clippy::dbg_macro \
         -W clippy::todo \
+        -D clippy::assertions_on_result_states \
 		-D clippy::upper_case_acronyms \
         -D clippy::disallowed-methods \
         -D rust-2018-idioms)

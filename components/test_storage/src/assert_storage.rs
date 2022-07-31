@@ -240,7 +240,9 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
 
     pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
-        self.store.get(self.ctx.clone(), &key, ts.into()).unwrap_err();
+        self.store
+            .get(self.ctx.clone(), &key, ts.into())
+            .unwrap_err();
     }
 
     pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
@@ -272,7 +274,8 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     pub fn batch_get_err(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         self.store
-                .batch_get(self.ctx.clone(), &keys, ts.into()).unwrap_err();
+            .batch_get(self.ctx.clone(), &keys, ts.into())
+            .unwrap_err();
     }
 
     pub fn batch_get_command_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
@@ -291,7 +294,8 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
 
     pub fn batch_get_command_err(&self, keys: &[&[u8]], ts: u64) {
         self.store
-                .batch_get_command(self.ctx.clone(), keys, ts).unwrap_err();
+            .batch_get_command(self.ctx.clone(), keys, ts)
+            .unwrap_err();
     }
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
@@ -379,12 +383,13 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     ) {
         let start_ts = start_ts.into();
         self.store
-                .prewrite(
-                    self.ctx.clone(),
-                    vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
-                    key.to_vec(),
-                    start_ts,
-                ).unwrap_err();
+            .prewrite(
+                self.ctx.clone(),
+                vec![Mutation::make_put(Key::from_raw(key), value.to_vec())],
+                key.to_vec(),
+                start_ts,
+            )
+            .unwrap_err();
     }
 
     pub fn delete_ok(
@@ -675,12 +680,13 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         current_ts: impl Into<TimeStamp>,
     ) {
         self.store
-                .cleanup(
-                    self.ctx.clone(),
-                    Key::from_raw(key),
-                    start_ts.into(),
-                    current_ts.into()
-                ).unwrap_err();
+            .cleanup(
+                self.ctx.clone(),
+                Key::from_raw(key),
+                start_ts.into(),
+                current_ts.into(),
+            )
+            .unwrap_err();
     }
 
     pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
@@ -693,7 +699,8 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         self.store
-                .rollback(self.ctx.clone(), keys, start_ts.into()).unwrap_err();
+            .rollback(self.ctx.clone(), keys, start_ts.into())
+            .unwrap_err();
     }
 
     pub fn scan_locks_ok(
@@ -876,7 +883,8 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
 
     pub fn raw_batch_get_command_err(&self, cf: String, keys: Vec<Vec<u8>>) {
         self.store
-                .raw_batch_get_command(self.ctx.clone(), cf, keys).unwrap_err();
+            .raw_batch_get_command(self.ctx.clone(), cf, keys)
+            .unwrap_err();
     }
 
     pub fn raw_put_ok(&self, cf: String, key: Vec<u8>, value: Vec<u8>) {

@@ -192,7 +192,6 @@ impl GlobalReplicationState {
 
 #[cfg(test)]
 mod tests {
-    
 
     use kvproto::{
         metapb,

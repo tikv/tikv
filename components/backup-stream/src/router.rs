@@ -652,7 +652,6 @@ impl TempFileKey {
     }
 
     fn get_file_type(&self) -> FileType {
-        
         match self.cmd_type {
             CmdType::Put => FileType::Put,
             CmdType::Delete => FileType::Delete,

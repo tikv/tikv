@@ -2516,7 +2516,7 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).unwrap_err();
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2566,7 +2566,7 @@ pub mod tests {
         s5.apply(options).unwrap_err();
 
         corrupt_snapshot_size_in(dst_dir.path());
-        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).unwrap_err();
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta).unwrap_err();
         Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
     }
 
@@ -2607,7 +2607,7 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).unwrap_err();
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2637,8 +2637,9 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,).unwrap_err();
-        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),).unwrap_err();
+        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta())
+            .unwrap_err();
     }
 
     #[test]

@@ -1975,10 +1975,14 @@ where
                             unix_secs_now.into_inner() - last_report_ts.into_inner();
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
-                        if interval_second > 0 { {
+                        if interval_second > 0 {
+                            {
                                 ((cpu_time_duration.as_secs_f64() * 100.0) / interval_second as f64)
                                     as u64
-                            } } else { 0 }
+                            }
+                        } else {
+                            0
+                        }
                     };
                     (
                         read_bytes_delta,

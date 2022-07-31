@@ -3794,7 +3794,7 @@ where
                 } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(_, f) => {
-                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
+                    let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
                 }
             }

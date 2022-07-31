@@ -464,8 +464,9 @@ mod tests {
         for (s, expected, err) in cs {
             if err {
                 BinaryLiteral::from_hex_str(s)
-                        .unwrap()
-                        .to_uint(&mut ctx).unwrap_err();
+                    .unwrap()
+                    .to_uint(&mut ctx)
+                    .unwrap_err();
             } else {
                 let lit = BinaryLiteral::from_hex_str(s).unwrap();
                 assert_eq!(lit.to_uint(&mut ctx).unwrap(), expected)

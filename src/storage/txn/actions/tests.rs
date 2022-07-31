@@ -487,13 +487,14 @@ pub fn must_prewrite_lock_err<E: Engine>(
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
     prewrite(
-            &mut txn,
-            &mut reader,
-            &default_txn_props(ts, pk, TimeStamp::zero()),
-            Mutation::make_lock(Key::from_raw(key)),
-            &None,
-            false,
-        ).unwrap_err();
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, TimeStamp::zero()),
+        Mutation::make_lock(Key::from_raw(key)),
+        &None,
+        false,
+    )
+    .unwrap_err();
 }
 
 pub fn must_pessimistic_prewrite_lock<E: Engine>(
@@ -537,10 +538,11 @@ pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
     txn::cleanup(
-            &mut txn,
-            &mut reader,
-            Key::from_raw(key),
-            TimeStamp::zero(),
-            false,
-        ).unwrap_err();
+        &mut txn,
+        &mut reader,
+        Key::from_raw(key),
+        TimeStamp::zero(),
+        false,
+    )
+    .unwrap_err();
 }
