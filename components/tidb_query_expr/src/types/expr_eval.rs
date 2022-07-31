@@ -43,7 +43,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn as_ref(&self) -> &VectorValue {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value, .. } => physical_value,
-            RpnStackNodeVectorValue::Ref { physical_value, .. } => physical_value,
+            RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
         }
     }
 
@@ -425,7 +425,7 @@ mod tests {
             // smaller row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
         });
-        hooked_eval.unwrap_err();
+        assert!(hooked_eval.is_err());
 
         let mut c = columns;
         let exp = RpnExpressionBuilder::new_for_test()
@@ -436,7 +436,7 @@ mod tests {
             // larger row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
         });
-        hooked_eval.unwrap_err();
+        assert!(hooked_eval.is_err());
     }
 
     /// Single function call node (i.e. nullary function)
@@ -930,7 +930,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        hooked_eval.unwrap_err();
+        assert!(hooked_eval.is_err());
     }
 
     /// Irregular RPN expression (contains unused node). Should panic.
@@ -954,7 +954,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        hooked_eval.unwrap_err();
+        assert!(hooked_eval.is_err());
     }
 
     /// Eval type does not match. Should panic.
@@ -976,7 +976,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        hooked_eval.unwrap_err();
+        assert!(hooked_eval.is_err());
     }
 
     /// Parse from an expression tree then evaluate.
@@ -1246,14 +1246,15 @@ mod tests {
 
         profiler::start("./bench_eval_plus_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            result.unwrap();
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1283,14 +1284,15 @@ mod tests {
 
         profiler::start("./eval_compare_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            result.unwrap();
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1320,14 +1322,15 @@ mod tests {
 
         profiler::start("./bench_eval_compare_5_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(5),
-            );
-            result.unwrap();
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(5),
+                )
+                .unwrap();
         });
         profiler::stop();
     }

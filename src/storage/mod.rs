@@ -8661,7 +8661,7 @@ mod tests {
                 assert!(res.is_err(), "case {}", i);
                 assert_eq!(res.unwrap_err().error_code(), err, "case {}", i);
             } else {
-                assert!(res.is_ok(), "case {}", i);
+                assert!(res.is_ok(), "case {} {:?}", i, res);
             }
         }
     }

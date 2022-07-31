@@ -66,7 +66,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -937,14 +937,14 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            f2.unwrap_err();
+            assert!(f2.is_err());
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            ret.unwrap_err();
+            assert!(ret.is_err());
         }
 
         #[test]
@@ -1823,7 +1823,7 @@ mod tests {
         {
             File::create(&path2).unwrap();
         }
-        canonicalize_path(&path2).unwrap_err();
+        assert!(canonicalize_path(&path2).is_err());
         assert!(Path::new(&path2).exists());
     }
 
@@ -1933,25 +1933,20 @@ mod tests {
     #[test]
     fn test_check_data_dir_empty() {
         // test invalid data_path
-        let ret = check_data_dir_empty("/sys/invalid", "txt");
-        ret.unwrap();
+        check_data_dir_empty("/sys/invalid", "txt").unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
             .tempdir()
             .unwrap()
             .into_path();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        ret.unwrap();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        ret.unwrap_err();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        ret.unwrap_err();
-        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        ret.unwrap();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "txt").unwrap_err();
+        check_data_dir_empty(tmp_path.to_str().unwrap(), "xt").unwrap();
     }
 
     #[test]

@@ -240,9 +240,8 @@ mod tests {
 
         let observer = SplitObserver;
 
-        let resp = observer.pre_propose_admin(&mut ctx, &mut req);
         // since no split is defined, actual coprocessor won't be invoke.
-        resp.unwrap();
+        observer.pre_propose_admin(&mut ctx, &mut req).unwrap();
         assert!(!req.has_split(), "only split req should be handle.");
 
         req = new_split_request(new_row_key(1, 2, 0));

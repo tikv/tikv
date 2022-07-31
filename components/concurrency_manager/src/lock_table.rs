@@ -57,7 +57,7 @@ impl LockTable {
     ) -> Result<(), E> {
         if let Some(lock_ref) = self.get(key) {
             return lock_ref.with_lock(|lock| {
-                if let Some(lock) = lock {
+                if let Some(lock) = &*lock {
                     return check_fn(lock);
                 }
                 Ok(())
@@ -232,15 +232,17 @@ mod test {
 
         // no lock found
         lock_table
-                .check_range(
-                    Some(&Key::from_raw(b"m")),
-                    Some(&Key::from_raw(b"n")),
-                    |_, _| Err(())
-                ).unwrap();
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(()),
+            )
+            .unwrap();
 
         // lock passes check_fn
         lock_table
-                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5)).unwrap();
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+            .unwrap();
 
         // first lock does not pass check_fn
         assert_eq!(

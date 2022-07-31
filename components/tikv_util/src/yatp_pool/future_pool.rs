@@ -285,11 +285,11 @@ mod tests {
             .unwrap()
         };
 
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted because long enough time has elapsed since pool is created
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
@@ -297,30 +297,30 @@ mod tests {
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
 
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         // Even if long enough time has elapsed, tick is not emitted until next task
         // arrives
         thread::sleep(TICK_INTERVAL * 2);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 0);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         // Tick is not emitted if there is no task
         thread::sleep(TICK_INTERVAL * 2);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted since long enough time has passed
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
         assert_eq!(try_recv_tick().unwrap(), 1);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
 
         // Tick is emitted immediately after a long task
         spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
         assert_eq!(try_recv_tick().unwrap(), 2);
-        try_recv_tick().unwrap_err();
+        assert!(try_recv_tick().is_err());
     }
 
     #[test]
@@ -337,18 +337,18 @@ mod tests {
             .thread_count(2, 2, 2)
             .build_future_pool();
 
-        rx.try_recv().unwrap_err();
+        assert!(rx.try_recv().is_err());
 
         // Spawn two tasks, each will be processed in one worker thread.
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
         spawn_future_without_wait(&pool, TICK_INTERVAL / 2);
 
-        rx.try_recv().unwrap_err();
+        assert!(rx.try_recv().is_err());
 
         // Wait long enough time to trigger a tick.
         thread::sleep(TICK_INTERVAL * 2);
 
-        rx.try_recv().unwrap_err();
+        assert!(rx.try_recv().is_err());
 
         // These two tasks should both trigger a tick.
         spawn_future_without_wait(&pool, TICK_INTERVAL);
@@ -359,7 +359,7 @@ mod tests {
 
         assert_eq!(rx.try_recv().unwrap(), 0);
         assert_eq!(rx.try_recv().unwrap(), 1);
-        rx.try_recv().unwrap_err();
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -457,7 +457,7 @@ mod tests {
             spawn_long_time_future(&read_pool, 4, 400).unwrap(),
         );
         // no available results (running = 4)
-        rx.recv_timeout(Duration::from_millis(50)).unwrap_err();
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
 
         // full
         assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
@@ -474,13 +474,13 @@ mod tests {
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        let _ = rx.recv().unwrap();
-        let _ = rx.recv().unwrap();
-        let _ = rx.recv().unwrap();
-        let _ = rx.recv().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
 
         // no more results
-        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     }
 
     #[test]

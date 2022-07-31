@@ -24,7 +24,7 @@ use crate::{
     expr::EvalContext,
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Res<T> {
     Ok(T),
     Truncated(T),
@@ -3045,7 +3045,7 @@ mod tests {
         // error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
-            Decimal::from_bytes(case).unwrap_err();
+            assert!(Decimal::from_bytes(case).is_err());
         }
     }
 
@@ -3735,7 +3735,8 @@ mod tests {
         let truncated_res = Res::Truncated(2333);
 
         truncated_res
-                .into_result_impl(&mut ctx, Some(Error::truncated()), None).unwrap();
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .unwrap();
 
         // Overflow cases
         let mut ctx = EvalContext::default();
@@ -3755,6 +3756,7 @@ mod tests {
         )));
         let error = Error::overflow("", "");
         overflow_res
-                .into_result_impl(&mut ctx, None, Some(error)).unwrap();
+            .into_result_impl(&mut ctx, None, Some(error))
+            .unwrap();
     }
 }

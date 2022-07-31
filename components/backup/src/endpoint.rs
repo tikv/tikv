@@ -1676,8 +1676,7 @@ pub mod tests {
                 dst_user_key.as_encoded(),
                 dst_value,
             );
-            let ret = engine.put(&ctx, key, value);
-            ret.unwrap();
+            engine.put(&ctx, key, value).unwrap();
             i += 1;
         }
         // flush to disk so that read requests can be traced by TiKV limiter.

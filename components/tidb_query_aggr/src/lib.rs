@@ -417,15 +417,17 @@ mod tests {
 
         // Update using `Int` should success.
         update!(
-                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-                &mut ctx,
-                Some(&1)
-            ).unwrap();
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .unwrap();
         update!(
-                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-                &mut ctx,
-                Some(&3)
-            ).unwrap();
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&3)
+        )
+        .unwrap();
 
         // Update using other data type should panic.
         let result = panic_hook::recover_safe(|| {
@@ -436,7 +438,7 @@ mod tests {
                 Real::new(1.0).ok().as_ref()
             );
         });
-        result.unwrap_err();
+        assert!(result.is_err());
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
@@ -446,23 +448,26 @@ mod tests {
                 Some(&[1u8] as BytesRef<'_>)
             );
         });
-        result.unwrap_err();
+        assert!(result.is_err());
 
         // Push result to Real VectorValue should success.
         let mut target = vec![VectorValue::with_capacity(0, EvalType::Real)];
 
         (&mut s as &mut dyn AggrFunctionState)
-                .push_result(&mut ctx, &mut target).unwrap();
+            .push_result(&mut ctx, &mut target)
+            .unwrap();
         assert_eq!(target[0].to_real_vec(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
         update!(
-                &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
-                &mut ctx,
-                Some(&1)
-            ).unwrap();
+            &mut s as &mut dyn AggrFunctionStateUpdatePartial<_>,
+            &mut ctx,
+            Some(&1)
+        )
+        .unwrap();
         (&mut s as &mut dyn AggrFunctionState)
-                .push_result(&mut ctx, &mut target).unwrap();
+            .push_result(&mut ctx, &mut target)
+            .unwrap();
         assert_eq!(
             target[0].to_real_vec(),
             &[Real::new(4.0).ok(), Real::new(5.0).ok()]
@@ -474,13 +479,13 @@ mod tests {
             let mut target: Vec<VectorValue> = Vec::new();
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        result.unwrap_err();
+        assert!(result.is_err());
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let mut target: Vec<VectorValue> = vec![VectorValue::with_capacity(0, EvalType::Int)];
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        result.unwrap_err();
+        assert!(result.is_err());
     }
 }

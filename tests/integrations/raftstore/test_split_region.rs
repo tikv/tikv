@@ -973,14 +973,12 @@ fn test_split_with_in_memory_pessimistic_locks() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        assert!(
-            locks
-                .insert(vec![
-                    (Key::from_raw(b"a"), lock_a.clone()),
-                    (Key::from_raw(b"c"), lock_c.clone())
-                ])
-                .is_ok()
-        );
+        locks
+            .insert(vec![
+                (Key::from_raw(b"a"), lock_a.clone()),
+                (Key::from_raw(b"c"), lock_c.clone()),
+            ])
+            .unwrap();
     }
 
     let region = cluster.get_region(b"");

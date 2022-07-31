@@ -133,7 +133,7 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TxnEntry {
     Prewrite {
         default: KvPair,
@@ -972,13 +972,14 @@ mod tests {
         let bound_d = Key::from_encoded(b"d".to_vec());
         store.scanner(false, false, false, None, None).unwrap();
         store
-                .scanner(
-                    false,
-                    false,
-                    false,
-                    Some(bound_b.clone()),
-                    Some(bound_c.clone())
-                ).unwrap();
+            .scanner(
+                false,
+                false,
+                false,
+                Some(bound_b.clone()),
+                Some(bound_c.clone()),
+            )
+            .unwrap();
         assert!(
             store
                 .scanner(
@@ -1020,11 +1021,14 @@ mod tests {
         );
         store2.scanner(false, false, false, None, None).unwrap();
         store2
-                .scanner(false, false, false, Some(bound_a.clone()), None).unwrap();
+            .scanner(false, false, false, Some(bound_a.clone()), None)
+            .unwrap();
         store2
-                .scanner(false, false, false, Some(bound_a), Some(bound_b)).unwrap();
+            .scanner(false, false, false, Some(bound_a), Some(bound_b))
+            .unwrap();
         store2
-                .scanner(false, false, false, None, Some(bound_c)).unwrap();
+            .scanner(false, false, false, None, Some(bound_c))
+            .unwrap();
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -1080,7 +1084,7 @@ mod tests {
             store.get(&Key::from_raw(b"ca"), &mut statistics).unwrap(),
             Some(b"hello".to_vec())
         );
-        store.get(&Key::from_raw(b"bba"), &mut statistics).unwrap_err();
+        assert!(store.get(&Key::from_raw(b"bba"), &mut statistics).is_err());
         assert_eq!(
             store.get(&Key::from_raw(b"bbaa"), &mut statistics).unwrap(),
             None
@@ -1111,7 +1115,7 @@ mod tests {
             store.get(&Key::from_raw(b"ab"), &mut statistics).unwrap(),
             Some(b"bar".to_vec())
         );
-        store.get(&Key::from_raw(b"zz"), &mut statistics).unwrap_err();
+        assert!(store.get(&Key::from_raw(b"zz"), &mut statistics).is_err());
         assert_eq!(
             store.get(&Key::from_raw(b"z"), &mut statistics).unwrap(),
             Some(b"beta".to_vec())
@@ -1143,7 +1147,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), b"alphaalpha".to_vec()))
         );
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), b"hello".to_vec()))
@@ -1152,13 +1156,13 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"z"), b"beta".to_vec()))
         );
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store.scanner(true, false, false, None, None).unwrap();
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(
@@ -1169,7 +1173,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), b"hello".to_vec()))
         );
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), b"alphaalpha".to_vec()))
@@ -1210,13 +1214,13 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))
         );
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), vec![]))
         );
         assert_eq!(scanner.next().unwrap(), Some((Key::from_raw(b"z"), vec![])));
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(scanner.next().unwrap(), None);
@@ -1274,7 +1278,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))
         );
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store
@@ -1312,7 +1316,7 @@ mod tests {
                 Some(Key::from_raw(b"bba")),
             )
             .unwrap();
-        scanner.next().unwrap_err();
+        assert!(scanner.next().is_err());
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))

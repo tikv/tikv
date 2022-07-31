@@ -1574,7 +1574,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        block_on(f).unwrap();
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]

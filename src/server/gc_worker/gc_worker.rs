@@ -2052,38 +2052,43 @@ mod tests {
         // Before starting gc_worker, fill the scheduler to full.
         for _ in 0..GC_MAX_PENDING_TASKS {
             gc_worker
-                    .scheduler()
-                    .schedule(GcTask::Gc {
-                        region_id: 0,
-                        start_key: vec![],
-                        end_key: vec![],
-                        safe_point: TimeStamp::from(100),
-                        callback: Box::new(|_res| {})
-                    }).unwrap();
+                .scheduler()
+                .schedule(GcTask::Gc {
+                    region_id: 0,
+                    start_key: vec![],
+                    end_key: vec![],
+                    safe_point: TimeStamp::from(100),
+                    callback: Box::new(|_res| {}),
+                })
+                .unwrap();
         }
         // Then, it will fail to schedule another gc command.
         let (tx, rx) = mpsc::channel();
-        gc_worker
+        assert!(
+            gc_worker
                 .gc(
                     TimeStamp::from(1),
                     Box::new(move |res| {
                         tx.send(res).unwrap();
                     })
-                ).unwrap_err();
-        rx.recv().unwrap().unwrap_err();
+                )
+                .is_err()
+        );
+        assert!(rx.recv().unwrap().is_err());
 
         let (tx, rx) = mpsc::channel();
         // When the gc_worker is full, scheduling an unsafe destroy range task should be
         // still allowed.
         gc_worker
-                .unsafe_destroy_range(
-                    Context::default(),
-                    Key::from_raw(b"a"),
-                    Key::from_raw(b"z"),
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    })
-                ).unwrap();
+            .unsafe_destroy_range(
+                Context::default(),
+                Key::from_raw(b"a"),
+                Key::from_raw(b"z"),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
 
         gc_worker.start().unwrap();
 

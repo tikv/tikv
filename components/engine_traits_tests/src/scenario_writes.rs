@@ -213,8 +213,7 @@ scenario_test! { put_get {
 
 scenario_test! { delete_none {
     let db = write_scenario_engine();
-    let res = db.delete(b"foo");
-    res.unwrap();
+    db.delete(b"foo").unwrap();
 }}
 
 scenario_test! { delete {
@@ -280,9 +279,9 @@ scenario_test! { delete_range_reverse_range {
     db.put(b"c", b"").unwrap();
     db.put(b"d", b"").unwrap();
 
-    recover_safe(|| {
+    assert!(recover_safe(|| {
         db.delete_range(b"d", b"b").unwrap();
-    }).unwrap_err();
+    }).is_err());
 
     assert!(db.get_value(b"b").unwrap().is_some());
     assert!(db.get_value(b"c").unwrap().is_some());

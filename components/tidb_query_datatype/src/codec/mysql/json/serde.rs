@@ -240,8 +240,7 @@ mod tests {
         ];
 
         for json_str in legal_cases {
-            let resp = Json::from_str(json_str);
-            resp.unwrap();
+            Json::from_str(json_str).unwrap();
         }
 
         let cases = vec![
@@ -256,15 +255,14 @@ mod tests {
         ];
 
         for (json_str, json) in cases {
-            let resp = Json::from_str(json_str);
-            assert!(resp.is_ok());
-            assert_eq!(resp.unwrap(), json.unwrap());
+            let resp = Json::from_str(json_str).unwrap();
+            assert_eq!(resp, json.unwrap());
         }
 
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];
         for json_str in illegal_cases {
             let resp = Json::from_str(json_str);
-            resp.unwrap_err();
+            assert!(resp.is_err());
         }
     }
 }
