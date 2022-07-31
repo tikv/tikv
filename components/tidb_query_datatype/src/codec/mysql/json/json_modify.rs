@@ -3,7 +3,7 @@
 use super::{super::Result, modifier::BinaryModifier, path_expr::PathExpression, Json, JsonRef};
 
 /// `ModifyType` is for modify a JSON.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModifyType {
     /// `Insert` is for inserting a new element into a JSON.
     Insert,

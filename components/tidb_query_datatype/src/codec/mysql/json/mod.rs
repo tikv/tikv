@@ -536,7 +536,7 @@ mod tests {
             ],
         ];
         for d in cases {
-            assert!(json_object(d).is_err());
+            json_object(d).unwrap_err();
         }
 
         let cases = vec![

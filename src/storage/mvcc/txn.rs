@@ -31,7 +31,7 @@ impl GcInfo {
 /// `ReleasedLock` contains the information of the lock released by `commit`,
 /// `rollback` and so on. It's used by `LockManager` to wake up transactions
 /// waiting for locks.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ReleasedLock {
     /// The hash value of the lock.
     pub hash: u64,
@@ -413,7 +413,7 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 6).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 6).unwrap();
         must_commit(&engine, k1, 6, 7);
 
         // Rollback
@@ -434,7 +434,7 @@ pub(crate) mod tests {
         must_rollback(&engine, k1, 12, false);
 
         // After delete "k1", insert returns ok.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 13).unwrap();
         must_commit(&engine, k1, 13, 14);
     }
 
@@ -446,22 +446,22 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 3).is_err());
+        try_prewrite_check_not_exists(&engine, k1, k1, 3).unwrap_err();
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", check_not_exists returns ok.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 6).is_ok());
+        try_prewrite_check_not_exists(&engine, k1, k1, 6).unwrap();
 
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 7).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 7).unwrap();
         must_commit(&engine, k1, 7, 8);
 
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 9);
         must_rollback(&engine, k1, 9, false);
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
+        try_prewrite_check_not_exists(&engine, k1, k1, 10).unwrap_err();
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 11);
@@ -472,14 +472,14 @@ pub(crate) mod tests {
         must_rollback(&engine, k1, 13, false);
 
         // After delete "k1", check_not_exists returns ok.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 14).is_ok());
+        try_prewrite_check_not_exists(&engine, k1, k1, 14).unwrap();
     }
 
     #[test]
     fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
-        assert!(try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).is_err())
+        try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).unwrap_err();
     }
 
     #[test]
@@ -792,17 +792,14 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
-        assert!(
-            prewrite(
+        prewrite(
                 &mut txn,
                 &mut reader,
                 &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
                 Mutation::make_put(Key::from_raw(key), value.to_vec()),
                 &None,
                 false,
-            )
-            .is_err()
-        );
+            ).unwrap_err();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(5.into(), cm);
@@ -990,7 +987,7 @@ pub(crate) mod tests {
         // start_ts = 5,  commit_ts = 15, Lock
 
         must_get(&engine, k, 19, v);
-        assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
+        try_prewrite_insert(&engine, k, v, k, 20).unwrap_err();
     }
 
     #[test]

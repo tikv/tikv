@@ -87,7 +87,7 @@ impl Display for Id {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TraceEvent {
     Add(usize),
     Sub(usize),

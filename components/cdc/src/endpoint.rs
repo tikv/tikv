@@ -2506,7 +2506,7 @@ mod tests {
             err: Some(Error::request(err_header.clone())),
         };
         suite.run(Task::Deregister(deregister));
-        assert!(channel::recv_timeout(&mut rx, Duration::from_millis(200)).is_err());
+        channel::recv_timeout(&mut rx, Duration::from_millis(200)).unwrap_err();
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
         let deregister = Deregister::Downstream {

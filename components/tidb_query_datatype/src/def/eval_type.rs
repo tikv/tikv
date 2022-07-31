@@ -7,7 +7,7 @@ use std::fmt;
 /// It is similar to the `EvalType` in TiDB, but doesn't provide type
 /// `Timestamp`, which is handled by the same type as `DateTime` here, instead
 /// of a new type. Also, `String` is called `Bytes` here to be less confusing.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum EvalType {
     Int,
     Real,
@@ -137,7 +137,7 @@ mod tests {
             if let Some(etype) = etype {
                 assert_eq!(ftt.unwrap(), etype);
             } else {
-                assert!(ftt.is_err());
+                ftt.unwrap_err();
             }
         }
     }

@@ -13,7 +13,7 @@ use crate::impl_chunked_vec_common;
 /// in `data`. Otherwise, a one byte `json_type` and variable size json data is
 /// stored in `data`, and `var_offset` indicates the starting position of each
 /// element.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ChunkedVecJson {
     data: Vec<u8>,
     bitmap: BitVec,

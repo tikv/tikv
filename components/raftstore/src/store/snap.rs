@@ -1329,7 +1329,7 @@ impl Drop for Snapshot {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum SnapEntry {
     Generating = 1,
     Sending = 2,
@@ -2516,7 +2516,7 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2563,11 +2563,11 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        assert!(s5.apply(options).is_err());
+        s5.apply(options).unwrap_err();
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).is_err());
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).is_err());
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).unwrap_err();
+        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
     }
 
     #[test]
@@ -2607,7 +2607,7 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2637,11 +2637,8 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,).is_err());
-        assert!(
-            Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),)
-                .is_err()
-        );
+        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,).unwrap_err();
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),).unwrap_err();
     }
 
     #[test]
@@ -2663,7 +2660,7 @@ pub mod tests {
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
         mgr = SnapManager::new(path2);
-        assert!(mgr.init().is_err());
+        mgr.init().unwrap_err();
     }
 
     #[test]

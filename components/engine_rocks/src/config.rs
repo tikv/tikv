@@ -10,7 +10,7 @@ use rocksdb::{
 use serde::{Deserialize, Serialize};
 use tikv_util::numeric_enum_serializing_mod;
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogLevel {
     Error,
@@ -32,7 +32,7 @@ impl From<LogLevel> for DBInfoLogLevel {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompressionType {
     No,
@@ -329,7 +329,7 @@ pub mod prepopulate_block_cache_serde {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BlobRunMode {
     Normal,

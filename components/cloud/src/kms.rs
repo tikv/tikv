@@ -32,7 +32,7 @@ impl Config {
     }
 }
 
-#[derive(PartialEq, Debug, Clone, Deref)]
+#[derive(PartialEq, Eq, Debug, Clone, Deref)]
 pub struct KeyId(String);
 
 // KeyID is a newtype to mark a String as an ID of a key
@@ -51,7 +51,7 @@ impl KeyId {
 
 // EncryptedKey is a newtype used to mark data as an encrypted key
 // It requires the vec to be non-empty
-#[derive(PartialEq, Clone, Debug, Deref)]
+#[derive(PartialEq, Eq, Clone, Debug, Deref)]
 pub struct EncryptedKey(Vec<u8>);
 
 impl EncryptedKey {

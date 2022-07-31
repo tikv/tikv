@@ -157,12 +157,7 @@ impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
             engine_traits::name_to_cf(name).or_else(|| {
-                for c in TEST_ENGINE_CFS {
-                    if name == *c {
-                        return Some(c);
-                    }
-                }
-                None
+                TEST_ENGINE_CFS.iter().copied().find(|c| name == *c)
             })
         };
 
@@ -434,7 +429,7 @@ pub trait Iterator: Send {
     fn value(&self) -> &[u8];
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ScanMode {
     Forward,
     Backward,

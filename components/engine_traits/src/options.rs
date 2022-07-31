@@ -61,7 +61,7 @@ impl WriteOptions {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SeekMode {
     TotalOrder,
     Prefix,

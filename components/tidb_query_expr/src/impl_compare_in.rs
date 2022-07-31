@@ -65,11 +65,11 @@ pub trait Extract: Sized {
 
 #[inline]
 fn type_error(eval_type: EvalType, expr_type: ExprType) -> Error {
-    return other_err!(
+    other_err!(
         "Unexpected ExprType {:?} and EvalType {:?}",
         expr_type,
         eval_type
-    );
+    )
 }
 
 impl Extract for Int {
@@ -828,7 +828,7 @@ mod tests {
                 black_box(logical_rows),
                 black_box(1024),
             );
-            assert!(result.is_ok());
+            result.unwrap();
         });
         profiler::stop();
     }

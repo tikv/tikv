@@ -192,7 +192,7 @@ bitfield! {
     u8, get_fsp_tt, set_fsp_tt: 3, 0;
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum TimeType {
     Date,
     DateTime,
@@ -2044,7 +2044,7 @@ mod tests {
 
         let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
-            assert!(Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+            Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).unwrap_err();
         }
         Ok(())
     }
@@ -2079,9 +2079,7 @@ mod tests {
         ];
         for case in should_fail {
             let case: Decimal = case.parse().unwrap();
-            assert!(
-                Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).is_err()
-            );
+            Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
     }
@@ -2155,7 +2153,7 @@ mod tests {
         ];
 
         for case in should_fail {
-            assert!(Time::parse_date(&mut ctx, case).is_err());
+            Time::parse_date(&mut ctx, case).unwrap_err();
         }
         Ok(())
     }
@@ -2287,7 +2285,7 @@ mod tests {
         ];
 
         for (case, fsp) in should_fail {
-            assert!(Time::parse_datetime(&mut ctx, case, fsp, false).is_err());
+            Time::parse_datetime(&mut ctx, case, fsp, false).unwrap_err();
         }
         Ok(())
     }
@@ -2583,7 +2581,7 @@ mod tests {
             ..TimeEnv::default()
         });
 
-        assert!(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).is_err());
+        Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 0, false).unwrap_err();
 
         // Enable NO_ZERO_DATE, STRICT_MODE and IGNORE_TRUNCATE.
         // If zero-date is encountered, an error is returned.
@@ -2616,7 +2614,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            Time::parse_datetime(&mut ctx, case, 0, false).unwrap_err();
         }
 
         Ok(())
@@ -2663,7 +2661,7 @@ mod tests {
                 strict_mode: true,
                 ..TimeEnv::default()
             });
-            assert!(Time::parse_datetime(&mut ctx, case, 0, false).is_err());
+            Time::parse_datetime(&mut ctx, case, 0, false).unwrap_err();
         }
 
         Ok(())

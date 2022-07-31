@@ -158,20 +158,14 @@ fn delete() -> Result<()> {
 
     assert_eq!(iter.valid()?, false);
 
-    assert!(iter.prev().is_err());
-    assert!(iter.next().is_err());
-    assert!(
-        recover_safe(|| {
+    iter.prev().unwrap_err();
+    iter.next().unwrap_err();
+    recover_safe(|| {
             iter.key();
-        })
-        .is_err()
-    );
-    assert!(
-        recover_safe(|| {
+        }).unwrap_err();
+    recover_safe(|| {
             iter.value();
-        })
-        .is_err()
-    );
+        }).unwrap_err();
 
     assert_eq!(iter.seek_to_first()?, false);
     assert_eq!(iter.seek_to_last()?, false);

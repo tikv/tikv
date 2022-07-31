@@ -16,7 +16,7 @@ use crate::error::DataTypeError;
 /// Semantically these fields are identical.
 ///
 /// Please refer to [mysql/type.go](https://github.com/pingcap/parser/blob/master/mysql/type.go).
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 #[repr(i32)]
 pub enum FieldTypeTp {
     Unspecified = 0, // Default
@@ -102,7 +102,7 @@ impl From<FieldTypeTp> for ColumnInfo {
 /// all new collation with padding behavior is negative.
 ///
 /// Please refer to [mysql/charset.go](https://github.com/pingcap/parser/blob/master/mysql/charset.go).
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 #[repr(i32)]
 pub enum Collation {
     Binary = 63,
@@ -146,7 +146,7 @@ impl fmt::Display for Collation {
     }
 }
 
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Charset {
     UTF8,
     UTF8Mb4,
@@ -548,7 +548,7 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(coll.unwrap(), c);
             } else {
-                assert!(coll.is_err());
+                coll.unwrap_err();
             }
         }
     }
@@ -574,7 +574,7 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(charset.unwrap(), c);
             } else {
-                assert!(charset.is_err());
+                charset.unwrap_err();
             }
         }
     }

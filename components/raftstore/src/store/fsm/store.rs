@@ -1131,7 +1131,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 region,
             ));
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -1171,7 +1171,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 &region,
             )?;
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -2152,7 +2152,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // Now all checking passed
 
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
 
         peer.peer.local_first_replicate = is_local_first;
@@ -2773,7 +2773,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
         };
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
         peer.peer.activate(self.ctx);
 

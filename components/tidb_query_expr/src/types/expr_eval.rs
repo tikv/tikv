@@ -43,7 +43,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn as_ref(&self) -> &VectorValue {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value, .. } => physical_value,
-            RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
+            RpnStackNodeVectorValue::Ref { physical_value, .. } => physical_value,
         }
     }
 
@@ -425,7 +425,7 @@ mod tests {
             // smaller row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
 
         let mut c = columns;
         let exp = RpnExpressionBuilder::new_for_test()
@@ -436,7 +436,7 @@ mod tests {
             // larger row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Single function call node (i.e. nullary function)
@@ -930,7 +930,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Irregular RPN expression (contains unused node). Should panic.
@@ -954,7 +954,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Eval type does not match. Should panic.
@@ -976,7 +976,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Parse from an expression tree then evaluate.
@@ -1253,7 +1253,7 @@ mod tests {
                 black_box(&logical_rows),
                 black_box(1024),
             );
-            assert!(result.is_ok());
+            result.unwrap();
         });
         profiler::stop();
     }
@@ -1290,7 +1290,7 @@ mod tests {
                 black_box(&logical_rows),
                 black_box(1024),
             );
-            assert!(result.is_ok());
+            result.unwrap();
         });
         profiler::stop();
     }
@@ -1327,7 +1327,7 @@ mod tests {
                 black_box(&logical_rows),
                 black_box(5),
             );
-            assert!(result.is_ok());
+            result.unwrap();
         });
         profiler::stop();
     }

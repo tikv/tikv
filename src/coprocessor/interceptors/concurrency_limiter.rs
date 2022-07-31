@@ -151,13 +151,10 @@ mod tests {
 
         // Light tasks should run without any semaphore permit
         let smp2 = smp.clone();
-        assert!(
-            tokio::spawn(timeout(Duration::from_millis(250), async move {
-                limit_concurrency(work(2), &*smp2, Duration::from_millis(500)).await
+        tokio::spawn(timeout(Duration::from_millis(250), async move {
+                limit_concurrency(work(2), &smp2, Duration::from_millis(500)).await
             }))
-            .await
-            .is_ok()
-        );
+            .await.unwrap();
 
         // Both t1 and t2 need a semaphore permit to finish. Although t2 is much shorter
         // than t1, it starts with t1
@@ -165,7 +162,7 @@ mod tests {
         let smp2 = smp.clone();
         let mut t1 =
             tokio::spawn(
-                async move { limit_concurrency(work(8), &*smp2, Duration::default()).await },
+                async move { limit_concurrency(work(8), &smp2, Duration::default()).await },
             )
             .fuse();
 
@@ -173,7 +170,7 @@ mod tests {
         let smp2 = smp.clone();
         let mut t2 =
             tokio::spawn(
-                async move { limit_concurrency(work(2), &*smp2, Duration::default()).await },
+                async move { limit_concurrency(work(2), &smp2, Duration::default()).await },
             )
             .fuse();
 

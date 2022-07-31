@@ -27,7 +27,7 @@ impl MockEngine {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExpectedWrite {
     // if the following `Option`s are None, it means we just don't care
     modify: Option<Modify>,

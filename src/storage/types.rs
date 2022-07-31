@@ -80,7 +80,7 @@ impl MvccInfo {
 }
 
 /// Represents the status of a transaction.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum TxnStatus {
     /// The txn was already rolled back before.
     RolledBack,
@@ -121,7 +121,7 @@ pub struct PrewriteResult {
     pub one_pc_commit_ts: TimeStamp,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PessimisticLockRes {
     /// The previous value is loaded while handling the `AcquirePessimisticLock`
     /// command. The i-th item is the value of the i-th key in the

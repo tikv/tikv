@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     use crate as online_config;
 
-    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq, Eq)]
     pub struct TestConfig {
         field1: usize,
         field2: String,
@@ -152,7 +152,7 @@ mod tests {
         submodule_field: SubConfig,
     }
 
-    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq, Eq)]
     pub struct SubConfig {
         field1: u64,
         field2: bool,
@@ -332,7 +332,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, OnlineConfig, Debug, PartialEq)]
+    #[derive(Clone, OnlineConfig, Debug, PartialEq, Eq)]
     pub struct TestEnumConfig {
         f1: u64,
         e: TestEnum,
@@ -364,6 +364,6 @@ mod tests {
 
         let mut diff = HashMap::new();
         diff.insert("e".to_owned(), ConfigValue::String("invalid".into()));
-        assert!(config.update(diff).is_err());
+        config.update(diff).unwrap_err();
     }
 }

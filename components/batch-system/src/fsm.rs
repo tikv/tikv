@@ -155,7 +155,7 @@ impl<N: Fsm> FsmState<N> {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
             unsafe {
-                Box::from_raw(ptr);
+                let _ = Box::from_raw(ptr);
             }
         }
     }

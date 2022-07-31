@@ -3,7 +3,7 @@
 use super::{bit_vec::BitVec, Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ChunkedVecBytes {
     data: Vec<u8>,
     bitmap: BitVec,
@@ -177,7 +177,7 @@ impl BytesWriter {
     }
 }
 
-impl<'a> PartialBytesWriter {
+impl PartialBytesWriter {
     pub fn partial_write(&mut self, data: BytesRef<'_>) {
         self.chunked_vec.data.extend_from_slice(data);
     }

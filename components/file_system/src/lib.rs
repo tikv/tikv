@@ -189,7 +189,7 @@ impl<'de> Deserialize<'de> for IoPriority {
             where
                 E: Error,
             {
-                let p = match IoPriority::from_str(&*value.trim().to_lowercase()) {
+                let p = match IoPriority::from_str(&value.trim().to_lowercase()) {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(
@@ -483,7 +483,7 @@ mod tests {
 
         // Ensure it works for non-existent file.
         let non_existent_file = dir_path.join("non_existent_file");
-        assert!(get_file_size(&non_existent_file).is_err());
+        get_file_size(&non_existent_file).unwrap_err();
     }
 
     #[test]

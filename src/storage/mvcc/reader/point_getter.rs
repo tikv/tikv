@@ -396,7 +396,7 @@ mod tests {
     use crate::storage::{
         kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder},
         txn::tests::{
-            must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
+            must_acquire_pessimistic_lock, must_commit, must_gc,
             must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
             must_prewrite_put, must_prewrite_put_impl, must_rollback,
         },
@@ -465,7 +465,7 @@ mod tests {
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).is_err());
+        point_getter.get(&Key::from_raw(key)).unwrap_err();
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {

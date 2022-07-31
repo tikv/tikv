@@ -1012,7 +1012,7 @@ pub mod tests {
             assert_eq!(e, cache.entry(e.get_index()).unwrap());
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

@@ -286,7 +286,7 @@ mod test {
             let result: Result<()> = Ok(());
             let lucky_number = rand::random::<u8>();
             let result = result.context_with(|| format!("lucky: the number is {}", lucky_number));
-            assert!(result.is_ok());
+            result.unwrap();
         })
     }
 }

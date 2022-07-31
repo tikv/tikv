@@ -232,7 +232,7 @@ pub trait RoleObserver: Coprocessor {
     fn on_role_change(&self, _: &mut ObserverContext<'_>, _: &RoleChange) {}
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionChangeReason {
     ChangePeer,
     Split,
@@ -241,7 +241,7 @@ pub enum RegionChangeReason {
     RollbackMerge,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegionChangeEvent {
     Create,
     Update(RegionChangeReason),

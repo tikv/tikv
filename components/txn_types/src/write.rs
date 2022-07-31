@@ -12,7 +12,7 @@ use crate::{
     Error, ErrorInner, Result,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteType {
     Put,
     Delete,
@@ -63,7 +63,7 @@ impl WriteType {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct Write {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
@@ -235,7 +235,7 @@ impl Write {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,

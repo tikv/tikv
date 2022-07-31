@@ -40,7 +40,7 @@ pub const PATH_EXPR_ASTERISK: &str = "*";
 const PATH_EXPR_LEG_RE_STR: &str =
     r#"(\.\s*([a-zA-Z_][a-zA-Z0-9_]*|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)"#;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PathLeg {
     /// `Key` indicates the path leg  with '.key'.
     Key(String),
@@ -59,7 +59,7 @@ pub type PathExpressionFlag = u8;
 pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
 pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
 
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct PathExpression {
     pub legs: Vec<PathLeg>,
     pub flags: PathExpressionFlag,

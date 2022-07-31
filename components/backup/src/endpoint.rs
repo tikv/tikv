@@ -1677,7 +1677,7 @@ pub mod tests {
                 dst_value,
             );
             let ret = engine.put(&ctx, key, value);
-            assert!(ret.is_ok());
+            ret.unwrap();
             i += 1;
         }
         // flush to disk so that read requests can be traced by TiKV limiter.

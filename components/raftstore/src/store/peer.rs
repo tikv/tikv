@@ -5302,7 +5302,7 @@ where
 }
 
 /// `RequestPolicy` decides how we handle a request.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
@@ -5746,7 +5746,7 @@ mod tests {
                 applied_to_index_term: true,
                 lease_state: LeaseState::Valid,
             };
-            assert!(inspector.inspect(&req).is_err());
+            inspector.inspect(&req).unwrap_err();
         }
     }
 

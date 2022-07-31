@@ -658,7 +658,7 @@ mod tests {
                 magic_contents.len() as u64,
             )
             .await;
-        assert!(resp.is_ok());
+        resp.unwrap();
         assert_eq!(
             CLOUD_REQUEST_HISTOGRAM_VEC
                 .get_metric_with_label_values(&["s3", "upload_part"])

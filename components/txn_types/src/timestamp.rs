@@ -118,7 +118,7 @@ impl slog::Value for TimeStamp {
 const TS_SET_USE_VEC_LIMIT: usize = 8;
 
 /// A hybrid immutable set for timestamps.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsSet {
     /// When the set is empty, avoid the useless cloning of Arc.
     Empty,
@@ -211,7 +211,7 @@ mod tests {
     fn test_split_ts() {
         let k = b"k";
         let ts = TimeStamp(123);
-        assert!(Key::split_on_ts_for(k).is_err());
+        Key::split_on_ts_for(k).unwrap_err();
         let enc = Key::from_encoded_slice(k).append_ts(ts);
         let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
         assert_eq!(res, (k.as_ref(), ts));

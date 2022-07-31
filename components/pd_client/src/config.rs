@@ -8,7 +8,7 @@ use tikv_util::config::ReadableDuration;
 ///
 /// By default during initialization the client will attempt to reconnect every
 /// 300s for infinity, logging only every 10th duplicate error.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

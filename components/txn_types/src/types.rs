@@ -254,7 +254,7 @@ impl Display for Key {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MutationType {
     Put,
     Delete,
@@ -435,7 +435,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
 
 /// `OldValue` is used by cdc to read the previous value associated with some
 /// key during the prewrite process.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OldValue {
     /// A real `OldValue`.
     Value { value: Value },
@@ -572,17 +572,14 @@ mod tests {
     #[test]
     fn test_flags_panic() {
         for _ in 0..100 {
-            assert!(
-                panic_hook::recover_safe(|| {
+            panic_hook::recover_safe(|| {
                     // r must be an invalid flags if it is not zero
                     let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
                     WriteBatchFlags::from_bits_check(r);
                     if r == 0 {
                         panic!("panic for zero");
                     }
-                })
-                .is_err()
-            );
+                }).unwrap_err();
         }
     }
 

@@ -251,7 +251,7 @@ impl Samples {
         if best_index >= 0 {
             return self.0[best_index as usize].key.clone();
         }
-        return vec![];
+        vec![]
     }
 }
 
@@ -552,7 +552,7 @@ impl SplitInfo {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum SplitConfigChange {
     Noop,
     UpdateRegionCPUCollector(bool),

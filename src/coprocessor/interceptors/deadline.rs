@@ -58,9 +58,9 @@ mod tests {
         }
 
         let res = check_deadline(work(5), Deadline::from_now(Duration::from_millis(500))).await;
-        assert!(res.is_ok());
+        res.unwrap();
 
         let res = check_deadline(work(100), Deadline::from_now(Duration::from_millis(500))).await;
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 }

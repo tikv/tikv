@@ -816,8 +816,7 @@ impl IndexScanExecutorImpl {
 
     #[inline]
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
-        if value
-            .get(0)
+        if value.first()
             .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
@@ -838,8 +837,7 @@ impl IndexScanExecutorImpl {
 
     #[inline]
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
-        if value
-            .get(0)
+        if value.first()
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
@@ -857,8 +855,7 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn split_restore_data(value: &[u8]) -> Result<(&[u8], &[u8])> {
         Ok(
-            if value
-                .get(0)
+            if value.first()
                 .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
@@ -1106,17 +1103,11 @@ mod tests {
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
-            assert!(
-                result.physical_columns[0]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
-                    .is_err()
-            );
+            result.physical_columns[0]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[1]).unwrap_err();
             assert!(result.physical_columns[1].is_raw());
-            assert!(
-                result.physical_columns[1]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[0])
-                    .is_err()
-            );
+            result.physical_columns[1]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[0]).unwrap_err();
         }
 
         {
@@ -1163,17 +1154,11 @@ mod tests {
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.physical_columns[1].is_raw());
-            assert!(
-                result.physical_columns[1]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[3])
-                    .is_err()
-            );
+            result.physical_columns[1]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[3]).unwrap_err();
             assert!(result.physical_columns[2].is_raw());
-            assert!(
-                result.physical_columns[2]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
-                    .is_err()
-            );
+            result.physical_columns[2]
+                    .ensure_all_decoded_for_test(&mut ctx, &schema[1]).unwrap_err();
         }
 
         {

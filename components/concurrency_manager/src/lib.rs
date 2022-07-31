@@ -135,9 +135,9 @@ mod tests {
     #[tokio::test]
     async fn test_lock_keys_order() {
         let concurrency_manager = ConcurrencyManager::new(1.into());
-        let keys: Vec<_> = [b"c", b"a", b"b"]
-            .iter()
-            .map(|k| Key::from_raw(*k))
+        let keys: Vec<_> = vec![b"c", b"a", b"b"]
+            .into_iter()
+            .map(|k| Key::from_raw(k))
             .collect();
         let guards = concurrency_manager.lock_keys(keys.iter()).await;
         for (key, guard) in keys.iter().zip(&guards) {

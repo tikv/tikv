@@ -2,7 +2,7 @@
 use tikv_util::numeric_enum_serializing_mod;
 use tracker::TrackerToken;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PerfLevel {
     Uninitialized,
     Disable,

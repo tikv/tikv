@@ -66,7 +66,7 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {
@@ -937,14 +937,14 @@ securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
 
             // not found
             let f2 = get_fs_info("/tmp", &mnt_file);
-            assert!(f2.is_err());
+            f2.unwrap_err();
         }
 
         #[test]
         fn test_get_rotational_info() {
             // test device not exist
             let ret = get_rotational_info("/dev/invalid");
-            assert!(ret.is_err());
+            ret.unwrap_err();
         }
 
         #[test]
@@ -1823,7 +1823,7 @@ mod tests {
         {
             File::create(&path2).unwrap();
         }
-        assert!(canonicalize_path(&path2).is_err());
+        canonicalize_path(&path2).unwrap_err();
         assert!(Path::new(&path2).exists());
     }
 
@@ -1934,7 +1934,7 @@ mod tests {
     fn test_check_data_dir_empty() {
         // test invalid data_path
         let ret = check_data_dir_empty("/sys/invalid", "txt");
-        assert!(ret.is_ok());
+        ret.unwrap();
         // test empty data_path
         let tmp_path = Builder::new()
             .prefix("test-get-file-count")
@@ -1942,16 +1942,16 @@ mod tests {
             .unwrap()
             .into_path();
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_ok());
+        ret.unwrap();
         // test non-empty data_path
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
         create_file(&tmp_file, b"");
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
-        assert!(ret.is_err());
+        ret.unwrap_err();
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
-        assert!(ret.is_err());
+        ret.unwrap_err();
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
-        assert!(ret.is_ok());
+        ret.unwrap();
     }
 
     #[test]

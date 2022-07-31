@@ -4,7 +4,7 @@ use std::{error::Error, result::Result};
 
 use tikv_util::config::ReadableDuration;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

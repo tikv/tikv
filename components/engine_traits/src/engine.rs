@@ -309,7 +309,7 @@ mod tests {
     fn test_tablet_error_collector_ok() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        assert!(err.take_result().is_ok());
+        err.take_result().unwrap();
         assert_eq!(err.get_error_count(), 0);
     }
 
@@ -320,8 +320,7 @@ mod tests {
         err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
         err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
-        let r = err.take_result();
-        assert!(r.is_err());
+        err.take_result().unwrap_err();
         assert_eq!(err.get_error_count(), 2);
     }
 }

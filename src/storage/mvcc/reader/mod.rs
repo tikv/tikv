@@ -17,7 +17,7 @@ pub use self::{
     },
 };
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum NewerTsCheckState {
     Unknown,
     Met,

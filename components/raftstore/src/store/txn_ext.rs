@@ -63,7 +63,7 @@ const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
 const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
@@ -119,7 +119,7 @@ pub struct PeerPessimisticLocks {
     pub memory_size: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocksStatus {
     Normal,
     TransferringLeader,
@@ -338,10 +338,10 @@ mod tests {
         let k3 = Key::from_raw(b"k333");
 
         // Test the memory size of peer pessimistic locks after inserting.
-        assert!(locks1.insert(vec![(k1.clone(), lock(b"k1"))]).is_ok());
+        locks1.insert(vec![(k1.clone(), lock(b"k1"))]).unwrap();
         assert_eq!(locks1.get(&k1), Some(&(lock(b"k1"), false)));
         assert_eq!(locks1.memory_size, k1.len() + lock(b"k1").memory_size());
-        assert!(locks1.insert(vec![(k2.clone(), lock(b"k1"))]).is_ok());
+        locks1.insert(vec![(k2.clone(), lock(b"k1"))]).unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k1"), false)));
         assert_eq!(
             locks1.memory_size,
@@ -349,7 +349,7 @@ mod tests {
         );
 
         // Test the global memory size after inserting.
-        assert!(locks2.insert(vec![(k3.clone(), lock(b"k1"))]).is_ok());
+        locks2.insert(vec![(k3.clone(), lock(b"k1"))]).unwrap();
         assert_eq!(locks2.get(&k3), Some(&(lock(b"k1"), false)));
         assert_eq!(
             GLOBAL_MEM_SIZE.get() as usize,
@@ -357,7 +357,7 @@ mod tests {
         );
 
         // Test the memory size after replacing, it should not change.
-        assert!(locks1.insert(vec![(k2.clone(), lock(b"k2"))]).is_ok());
+        locks1.insert(vec![(k2.clone(), lock(b"k2"))]).unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k2"), false)));
         assert_eq!(
             locks1.memory_size,
@@ -396,17 +396,17 @@ mod tests {
 
         let mut locks = PeerPessimisticLocks::default();
         let res = locks.insert(vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))]);
-        assert!(res.is_ok());
+        res.unwrap();
 
         // Exceeding the region limit
         let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))]);
-        assert!(res.is_err());
+        res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
 
         // Not exceeding the region limit, but exceeding the global limit
         GLOBAL_MEM_SIZE.set(101 << 20);
         let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
-        assert!(res.is_err());
+        res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
     }
 

@@ -192,7 +192,7 @@ impl GlobalReplicationState {
 
 #[cfg(test)]
 mod tests {
-    use std::panic;
+    
 
     use kvproto::{
         metapb,
@@ -334,6 +334,6 @@ mod tests {
                 .group
                 .register_store(1, vec![label1.clone(), label3.clone()])
         });
-        assert!(res.is_err(), "existing group id can't be changed.");
+        res.unwrap_err();
     }
 }

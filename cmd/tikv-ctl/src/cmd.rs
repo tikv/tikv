@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{borrow::ToOwned, lazy::SyncLazy, str, string::ToString, u64};
+use std::{borrow::ToOwned, sync::LazyLock, str, string::ToString, u64};
 
 use clap::{crate_authors, AppSettings};
 use engine_traits::CF_DEFAULT;
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
-static VERSION_INFO: SyncLazy<String> = SyncLazy::new(|| {
+static VERSION_INFO: LazyLock<String> = LazyLock::new(|| {
     let build_timestamp = option_env!("TIKV_BUILD_TIME");
     tikv::tikv_version_info(build_timestamp)
 });

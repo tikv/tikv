@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for IoRateLimitMode {
             where
                 E: Error,
             {
-                let p = match IoRateLimitMode::from_str(&*value.trim().to_lowercase()) {
+                let p = match IoRateLimitMode::from_str(&value.trim().to_lowercase()) {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(

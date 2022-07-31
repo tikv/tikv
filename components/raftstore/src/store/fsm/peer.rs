@@ -3741,7 +3741,7 @@ where
                 }
             };
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            new_peer.peer.init_replication_mode(&mut *replication_state);
+            new_peer.peer.init_replication_mode(&mut replication_state);
             drop(replication_state);
 
             let meta_peer = new_peer.peer.peer.clone();

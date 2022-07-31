@@ -494,7 +494,7 @@ impl DataKeyManager {
             Dicts::open(
                 &args.dict_path,
                 args.rotation_period,
-                &*master_key,
+                master_key,
                 args.enable_file_dictionary_log,
                 args.file_dictionary_rewrite_threshold,
             ),
@@ -560,7 +560,7 @@ impl DataKeyManager {
             ))
         })?;
         // Rewrite key_dict after replace master key.
-        dicts.save_key_dict(&*master_key)?;
+        dicts.save_key_dict(master_key)?;
 
         info!("encryption: persisted result after replace master key.");
         Ok(dicts)
@@ -1300,7 +1300,7 @@ mod tests {
         assert!(result.is_err());
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
         let result = new_key_manager(&tmp_dir, None, right_key, previous);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]

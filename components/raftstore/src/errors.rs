@@ -14,7 +14,7 @@ use super::{coprocessor::Error as CopError, store::SnapError};
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
 /// Describes why a message is discarded.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum DiscardReason {
     /// Channel is disconnected, message can't be delivered.
     Disconnected,
