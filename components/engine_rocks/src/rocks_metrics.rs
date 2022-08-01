@@ -934,8 +934,8 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
 pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
     for cf in engine.cf_names() {
         let handle = crate::util::get_cf_handle(engine, cf).unwrap();
-        // It is important to monitor each cf's size, especially the "raft" and "lock" column
-        // families.
+        // It is important to monitor each cf's size, especially the "raft" and "lock"
+        // column families.
         let cf_used_size = crate::util::get_engine_cf_used_size(engine, handle);
         STORE_ENGINE_SIZE_GAUGE_VEC
             .with_label_values(&[name, cf])
@@ -1111,8 +1111,8 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
     }
 
     if shared_block_cache {
-        // Since block cache is shared, getting cache size from any CF is fine. Here we get from
-        // default CF.
+        // Since block cache is shared, getting cache size from any CF is fine. Here we
+        // get from default CF.
         let handle = crate::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
         let block_cache_usage = engine.get_block_cache_usage_cf(handle);
         STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
@@ -1618,8 +1618,7 @@ mod tests {
     #[test]
     fn test_flush() {
         let dir = Builder::new().prefix("test-flush").tempdir().unwrap();
-        let engine =
-            crate::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let engine = crate::util::new_engine(dir.path().to_str().unwrap(), ALL_CFS).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "kv");
         }

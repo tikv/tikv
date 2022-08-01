@@ -13,11 +13,11 @@ pub struct ChunkedVecBytes {
 
 /// A vector storing `Option<Bytes>` with a compact layout.
 ///
-/// Inside `ChunkedVecBytes`, `bitmap` indicates if an element at given index is null,
-/// and `data` stores actual data. Bytes data are stored adjacent to each other in
-/// `data`. If element at a given index is null, then it takes no space in `data`.
-/// Otherwise, contents of the `Bytes` are stored, and `var_offset` indicates the starting
-/// position of each element.
+/// Inside `ChunkedVecBytes`, `bitmap` indicates if an element at given index is
+/// null, and `data` stores actual data. Bytes data are stored adjacent to each
+/// other in `data`. If element at a given index is null, then it takes no space
+/// in `data`. Otherwise, contents of the `Bytes` are stored, and `var_offset`
+/// indicates the starting position of each element.
 impl ChunkedVecBytes {
     #[inline]
     pub fn push_data_ref(&mut self, value: BytesRef<'_>) {

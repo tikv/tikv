@@ -14,7 +14,7 @@ use engine_rocks::{
     },
 };
 use engine_traits::PerfLevel;
-use file_system::{IOPriority, IORateLimitMode};
+use file_system::{IoPriority, IoRateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
 use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
@@ -32,7 +32,7 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IoRateLimitConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
@@ -64,7 +64,7 @@ fn read_file_in_project_dir(path: &str) -> String {
 fn test_serde_custom_tikv_config() {
     let mut value = TiKvConfig::default();
     value.log_rotation_timespan = ReadableDuration::days(1);
-    value.log.level = Level::Critical;
+    value.log.level = Level::Critical.into();
     value.log.file.filename = "foo".to_owned();
     value.log.format = LogFormat::Json;
     value.log.file.max_size = 1;
@@ -261,7 +261,7 @@ fn test_serde_custom_tikv_config() {
         max_sorted_runs: 100,
         gc_merge_rewrite: false,
     };
-    let titan_db_config = TitanDBConfig {
+    let titan_db_config = TitanDbConfig {
         enabled: true,
         dirname: "bar".to_owned(),
         disable_gc: false,
@@ -681,21 +681,21 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         },
-        io_rate_limit: IORateLimitConfig {
+        io_rate_limit: IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(1000),
-            mode: IORateLimitMode::AllIo,
+            mode: IoRateLimitMode::AllIo,
             strict: true,
-            foreground_read_priority: IOPriority::Low,
-            foreground_write_priority: IOPriority::Low,
-            flush_priority: IOPriority::Low,
-            level_zero_compaction_priority: IOPriority::Low,
-            compaction_priority: IOPriority::High,
-            replication_priority: IOPriority::Low,
-            load_balance_priority: IOPriority::Low,
-            gc_priority: IOPriority::High,
-            import_priority: IOPriority::High,
-            export_priority: IOPriority::High,
-            other_priority: IOPriority::Low,
+            foreground_read_priority: IoPriority::Low,
+            foreground_write_priority: IoPriority::Low,
+            flush_priority: IoPriority::Low,
+            level_zero_compaction_priority: IoPriority::Low,
+            compaction_priority: IoPriority::High,
+            replication_priority: IoPriority::Low,
+            load_balance_priority: IoPriority::Low,
+            gc_priority: IoPriority::High,
+            import_priority: IoPriority::High,
+            export_priority: IoPriority::High,
+            other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),
     };
@@ -748,7 +748,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 8,
+        num_threads: 12,
         ..Default::default()
     };
     value.import = ImportConfig {
@@ -891,12 +891,12 @@ fn test_block_cache_backward_compatible() {
 fn test_log_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-log-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
-    assert_eq!(cfg.log.level, slog::Level::Info);
+    assert_eq!(cfg.log.level, slog::Level::Info.into());
     assert_eq!(cfg.log.file.filename, "");
     assert_eq!(cfg.log.format, LogFormat::Text);
     assert_eq!(cfg.log.file.max_size, 300);
     cfg.logger_compatible_adjust();
-    assert_eq!(cfg.log.level, slog::Level::Critical);
+    assert_eq!(cfg.log.level, slog::Level::Critical.into());
     assert_eq!(cfg.log.file.filename, "foo");
     assert_eq!(cfg.log.format, LogFormat::Json);
     assert_eq!(cfg.log.file.max_size, 1024);
