@@ -452,7 +452,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
-        apply_ctx: &mut ApplyCtxInfo,
+        apply_ctx: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.response.has_admin_response() {
