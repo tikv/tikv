@@ -52,7 +52,7 @@ fn test_region_meta_endpoint() {
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());
-    assert!(status_server.start(addr).is_ok());
+    status_server.start(addr).unwrap();
     let check_task = check(status_server.listening_addr(), region_id);
     let rt = tokio::runtime::Runtime::new().unwrap();
     if let Err(err) = rt.block_on(check_task) {

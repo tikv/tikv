@@ -14,7 +14,7 @@ file_system = { path = "../file_system", default-features = false }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"
 log_wrappers = { path = "../log_wrappers" }
-match_template = { path = "../match_template" }
+match-template = "0.0.1"
 num = { version = "0.3", default-features = false }
 num-traits = "0.2"
 openssl = { version = "0.10" }

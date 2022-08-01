@@ -16,10 +16,11 @@ thread_local! {
     pub static STORAGE: RefCell<LocalStorage> = RefCell::new(LocalStorage::default());
 }
 
-/// `LocalStorage` is a thread-local structure that contains all necessary data of submodules.
+/// `LocalStorage` is a thread-local structure that contains all necessary data
+/// of submodules.
 ///
-/// In order to facilitate mutual reference, the thread-local data of all sub-modules
-/// need to be stored centrally in `LocalStorage`.
+/// In order to facilitate mutual reference, the thread-local data of all
+/// sub-modules need to be stored centrally in `LocalStorage`.
 #[derive(Clone, Default)]
 pub struct LocalStorage {
     pub registered: bool,

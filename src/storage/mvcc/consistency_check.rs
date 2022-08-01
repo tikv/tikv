@@ -12,8 +12,8 @@ use std::{
 };
 
 use engine_traits::{
-    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, SeekKey, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    IterOptions, Iterable, Iterator as EngineIterator, KvEngine, Peekable, CF_DEFAULT, CF_LOCK,
+    CF_RAFT, CF_WRITE,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use raftstore::{
@@ -28,8 +28,9 @@ use crate::storage::mvcc::{Lock, LockType, WriteRef, WriteType};
 const PHYSICAL_SHIFT_BITS: usize = 18;
 const SAFE_POINT_WINDOW: usize = 120;
 
-// When leader broadcasts a ComputeHash command to followers, it's possible that the safe point
-// becomes stale when the command reaches followers. So use a 2 minutes window to reduce this.
+// When leader broadcasts a ComputeHash command to followers, it's possible that
+// the safe point becomes stale when the command reaches followers. So use a 2
+// minutes window to reduce this.
 fn get_safe_point_for_check(mut safe_point: u64) -> u64 {
     safe_point >>= PHYSICAL_SHIFT_BITS;
     safe_point += (SAFE_POINT_WINDOW * 1000) as u64; // 120s * 1000ms/s.
@@ -105,7 +106,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
         }
 
         let mut scanner = MvccInfoScanner::new(
-            |cf, opts| snap.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+            |cf, opts| snap.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
             Some(&keys::data_key(region.get_start_key())),
             Some(&keys::data_end_key(region.get_end_key())),
             MvccChecksum::new(safe_point),
@@ -162,7 +163,7 @@ impl<Iter: EngineIterator, Ob: MvccInfoObserver> MvccInfoScanner<Iter, Ob> {
         let iter_opts = IterOptions::new(key_builder(from)?, key_builder(to)?, false);
         let gen_iter = |cf: &str| -> Result<Iter> {
             let mut iter = f(cf, iter_opts.clone())?;
-            box_try!(iter.seek(SeekKey::Key(from)));
+            box_try!(iter.seek(from));
             Ok(iter)
         };
 
@@ -464,7 +465,7 @@ mod tests {
         for &safe_point in &[150, 160, 100] {
             let raw = engine.get_rocksdb();
             let mut scanner = MvccInfoScanner::new(
-                |cf, opts| raw.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| raw.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 Some(&keys::data_key(b"")),
                 Some(&keys::data_end_key(b"")),
                 MvccChecksum::new(safe_point),
@@ -480,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -493,12 +494,12 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_test::kv::new_engine_opt(
             path,
-            DBOptions::default(),
+            DbOptions::default(),
             vec![
-                CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, CfOptions::new()),
+                (CF_WRITE, CfOptions::new()),
+                (CF_LOCK, CfOptions::new()),
+                (CF_RAFT, CfOptions::new()),
             ],
         )
         .unwrap();
@@ -556,7 +557,7 @@ mod tests {
 
         let scan_mvcc = |start: &[u8], end: &[u8], limit: u64| {
             MvccInfoIterator::new(
-                |cf, opts| engine.iterator_cf_opt(cf, opts).map_err(|e| box_err!(e)),
+                |cf, opts| engine.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
                 if start.is_empty() { None } else { Some(start) },
                 if end.is_empty() { None } else { Some(end) },
                 limit as usize,
@@ -566,7 +567,7 @@ mod tests {
 
         let mut count = 0;
         for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
-            assert!(key_and_mvcc.is_ok());
+            key_and_mvcc.unwrap();
             count += 1;
         }
         assert_eq!(count, 7);
