@@ -3331,7 +3331,7 @@ where
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag);
         }
-        if meta.regions.remove(&region_id).is_none() && !merged_by_target {
+        if meta.remove_region(region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
@@ -3738,7 +3738,7 @@ where
             }
 
             new_peer.peer.activate(self.ctx);
-            meta.regions.insert(new_region_id, new_region.clone());
+            meta.insert_region(&new_region);
             let not_exist = meta
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
@@ -4193,7 +4193,7 @@ where
 
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
-        assert!(meta.regions.remove(&source.get_id()).is_some());
+        assert!(meta.remove_region(source.get_id()).is_some());
         meta.set_region(
             &self.ctx.coprocessor_host,
             region,
@@ -4451,7 +4451,7 @@ where
         for r in &persist_res.destroy_regions {
             let prev = meta.region_ranges.remove(&enc_end_key(r));
             assert_eq!(prev, Some(r.get_id()));
-            assert!(meta.regions.remove(&r.get_id()).is_some());
+            assert!(meta.remove_region(r.get_id()).is_some());
             if let Some(d) = meta.readers.get_mut(&r.get_id()) {
                 d.mark_pending_remove();
             }
@@ -4500,7 +4500,7 @@ where
         {
             panic!("{} unexpected region {:?}", self.fsm.peer.tag, r);
         }
-        let prev = meta.regions.insert(region.get_id(), region.clone());
+        let prev = meta.insert_region(&region);
         assert_eq!(prev, Some(prev_region));
         drop(meta);
 

@@ -122,6 +122,8 @@ pub struct StoreMeta {
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
+    /// store_id -> region_id
+    pub store_regions: HashMap<u64, HashSet<u64>>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly split Regions shouldn't be
@@ -156,6 +158,7 @@ impl StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
+            store_regions: HashMap::default(),
             readers: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
@@ -168,6 +171,38 @@ impl StoreMeta {
         }
     }
 
+    pub fn insert_region(&mut self, region: &Region) -> Option<Region> {
+        let prev = self.regions.insert(region.get_id(), region.clone());
+        if let Some(prev) = &prev {
+            for peer in prev.get_peers() {
+                self.store_regions
+                    .get_mut(&peer.get_store_id())
+                    .unwrap()
+                    .remove(&region.get_id());
+            }
+        }
+        for peer in region.get_peers() {
+            self.store_regions
+                .entry(peer.store_id)
+                .or_insert_with(HashSet::default)
+                .insert(region.get_id());
+        }
+        prev
+    }
+
+    pub fn remove_region(&mut self, region_id: u64) -> Option<Region> {
+        let region = self.regions.remove(&region_id);
+        if let Some(region) = &region {
+            for peer in region.get_peers() {
+                self.store_regions
+                    .get_mut(&peer.get_store_id())
+                    .unwrap()
+                    .remove(&region_id);
+            }
+        }
+        region
+    }
+
     #[inline]
     pub fn set_region<EK: KvEngine, ER: RaftEngine>(
         &mut self,
@@ -176,7 +211,7 @@ impl StoreMeta {
         peer: &mut crate::store::Peer<EK, ER>,
         reason: RegionChangeReason,
     ) {
-        let prev = self.regions.insert(region.get_id(), region.clone());
+        let prev = self.insert_region(&region);
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
@@ -379,6 +414,16 @@ where
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
         });
+    }
+
+    fn report_unreachable_to_region(&self, region_id: u64, store_id: u64) {
+        if let Err(e) = BatchRouter::send(
+            self,
+            region_id,
+            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id }),
+        ) {
+            info!("report unreachable to region"; "region_id" => region_id, "err" => ?e);
+        }
     }
 
     fn report_status_update(&self) {
@@ -1130,7 +1175,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
-            meta.regions.insert(region_id, region.clone());
+            meta.insert_region(&region);
             meta.region_read_progress
                 .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key
@@ -1169,7 +1214,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .insert(enc_end_key(&region), region.get_id());
             meta.region_read_progress
                 .insert(region.get_id(), peer.peer.read_progress.clone());
-            meta.regions.insert(region.get_id(), region);
+            meta.insert_region(&region);
             region_peers.push((tx, peer));
         }
 
@@ -2681,7 +2726,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
-        self.ctx.router.report_unreachable(store_id);
+        let regions = {
+            let meta = self.ctx.store_meta.lock().unwrap();
+            meta.store_regions.get(&store_id).unwrap().clone()
+        };
+        for region_id in regions {
+            self.ctx
+                .router
+                .report_unreachable_to_region(region_id, store_id);
+        }
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
