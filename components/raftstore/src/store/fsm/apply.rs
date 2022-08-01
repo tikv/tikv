@@ -644,6 +644,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+            fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -1273,7 +1274,7 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -4728,7 +4729,7 @@ mod tests {
         });
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
-        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         // Make sure Apply and Snapshot are in the same batch.
         let (snap_tx, _) = mpsc::sync_channel(0);
@@ -5000,7 +5001,13 @@ mod tests {
             }
         }
 
-        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+        fn pre_exec_admin(
+            &self,
+            _: &mut ObserverContext<'_>,
+            req: &AdminRequest,
+            _: u64,
+            _: u64,
+        ) -> bool {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog
                 && self.filter_compact_log.deref().load(Ordering::SeqCst)

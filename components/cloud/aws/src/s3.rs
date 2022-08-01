@@ -651,14 +651,13 @@ mod tests {
 
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
 
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
-        assert!(resp.is_ok());
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             CLOUD_REQUEST_HISTOGRAM_VEC
                 .get_metric_with_label_values(&["s3", "upload_part"])
@@ -739,17 +738,15 @@ mod tests {
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap();
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
-        // no timeout
-        assert!(resp.is_ok());
     }
 
     #[test]

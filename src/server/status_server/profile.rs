@@ -409,7 +409,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         drop(tx);
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
 
         // Test activated profiling can be stopped by the handle.
         let (tx, rx) = sync_channel::<i32>(1);
@@ -424,7 +424,7 @@ mod tests {
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
     }
 
     #[test]
@@ -454,6 +454,6 @@ mod tests {
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
     }
 }
