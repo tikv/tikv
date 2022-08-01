@@ -452,7 +452,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     .inner
                     .get_task_slot(cid)
                     .get_mut(&cid)
-                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
+                    .and_then(|tctx| if tctx.try_own() {
+                        info!("(cosven) command timeout 1"; "cid" => cid, "cmd" => ?tctx.task.as_ref().unwrap().cmd);
+
+                        // Print lock owner info.
+                        match sched.inner.latches.get_lock_owner(&tctx.lock) {
+                            Some(cid2) => {
+                                info!("(cosven) lock is owned by others"; "cid"=>cid2);
+                            },
+                            None => {
+                                info!("(cosven) lock has no owner, strange!");
+                            }
+                        };
+
+                        tctx.cb.take()
+                    } else {
+                        info!("(cosven) command timeout 2"; "cid" => cid, "cmd" => ?tctx.task.as_ref().unwrap().cmd);
+                        None
+                    });
                 if let Some(cb) = cb {
                     cb.execute(ProcessResult::Failed {
                         err: StorageErrorInner::DeadlineExceeded.into(),
@@ -1056,6 +1073,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
+                    info!("(cosven) on_write_finished"; "cid"=>cid, "result"=>?result, "tag"=>?tag);
                     sched.on_write_finished(
                         cid,
                         pr,

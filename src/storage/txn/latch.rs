@@ -205,6 +205,17 @@ impl Latches {
     fn lock_latch(&self, hash: u64) -> MutexGuard<'_, Latch> {
         self.slots[(hash as usize) & (self.size - 1)].lock()
     }
+
+    pub fn get_lock_owner(&self, lock: &Lock) -> Option<u64> {
+        for &key_hash in &lock.required_hashes[lock.owned_count..] {
+            let latch = self.lock_latch(key_hash);
+            match latch.get_first_req_by_hash(key_hash) {
+                Some(cid2) => return Some(cid2),
+                None => continue,
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

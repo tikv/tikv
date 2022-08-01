@@ -2107,6 +2107,13 @@ where
         state_role: Option<StateRole>,
         dry_run: bool,
     ) {
+        use std::env;
+
+        match env::var("ENABLE_BUGFIX") {
+            Ok(_) => {}
+            Err(_) => return,
+        };
+
         if let Some(state_role) = state_role {
             info!(
                 "role changed";
@@ -2124,14 +2131,17 @@ where
                             "dry_run" => dry_run,
                         );
                         if !dry_run {
+                            let mut i = 0;
                             while let Some(p) = self.proposals.queue.pop_front() {
                                 apply::notify_stale_req_with_msg(
                                     self.term(),
-                                    String::from(
-                                        "request is staled due to role changed to follower",
+                                    format!(
+                                        "request is staled due to role changed to follower, index={}",
+                                        i,
                                     ),
                                     p.cb,
                                 );
+                                i = i + 1;
                             }
                         }
                     }
