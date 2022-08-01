@@ -287,7 +287,7 @@ mod tests {
         if let Some(cache) = cache {
             builder = builder.block_cache(cache);
         }
-        
+
         let factory = builder.buildv2();
         let tablet = factory.create_tablet(1, 10).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
