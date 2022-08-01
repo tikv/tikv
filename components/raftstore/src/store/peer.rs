@@ -2844,19 +2844,22 @@ where
 
     /// Check if there is long uncommitted proposal.
     ///
-    /// This will increase the threshold when a long uncommitted proposal is detected,
-    /// and reset the threshold when there is no long uncommitted proposal.
+    /// This will increase the threshold when a long uncommitted proposal is
+    /// detected, and reset the threshold when there is no long uncommitted
+    /// proposal.
     fn has_long_uncommitted_proposals<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         let mut has_long_uncommitted = false;
         let base_threshold = ctx.cfg.long_uncommitted_base_threshold.0;
         if let Some(propose_time) = self.proposals.oldest().and_then(|p| p.propose_time) {
-            // When a proposal was proposed with this ctx before, the current_time can be some.
+            // When a proposal was proposed with this ctx before, the current_time can be
+            // some.
             let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
             let elapsed = match (current_time - propose_time).to_std() {
                 Ok(elapsed) => elapsed,
                 Err(_) => return false,
             };
-            // Increase the threshold for next turn when a long uncommitted proposal is detected.
+            // Increase the threshold for next turn when a long uncommitted proposal is
+            // detected.
             if elapsed >= self.long_uncommitted_threshold {
                 has_long_uncommitted = true;
                 self.long_uncommitted_threshold += base_threshold;

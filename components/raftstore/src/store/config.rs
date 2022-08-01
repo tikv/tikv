@@ -371,10 +371,12 @@ impl Default for Config {
             reactive_memory_lock_tick_interval: ReadableDuration::secs(2),
             reactive_memory_lock_timeout_tick: 5,
             check_long_uncommitted_interval: ReadableDuration::secs(10),
-            /// In some cases, such as rolling upgrade, some regions' commit log duration can be
-            /// 12 seconds. Before #13078 is merged, the commit log duration can be 2.8 minutes.
-            /// So maybe 20s is a relatively reasonable base threshold. Generally,
-            /// the log commit duration is less than 1s. Feel free to adjust this config :)
+            /// In some cases, such as rolling upgrade, some regions' commit log
+            /// duration can be 12 seconds. Before #13078 is merged,
+            /// the commit log duration can be 2.8 minutes. So maybe
+            /// 20s is a relatively reasonable base threshold. Generally,
+            /// the log commit duration is less than 1s. Feel free to adjust
+            /// this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
 
             // They are preserved for compatibility check.
