@@ -208,6 +208,7 @@ fn test_serde_custom_tikv_config() {
         apply_yield_duration: ReadableDuration::millis(333),
         raft_log_compact_sync_interval: ReadableDuration::secs(60),
         perf_level: PerfLevel::EnableTime,
+        unreachable_backoff: ReadableDuration::secs(111),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

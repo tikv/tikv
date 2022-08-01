@@ -193,6 +193,8 @@ pub struct Config {
     #[serde(with = "engine_config::perf_level_serde")]
     #[config(skip)]
     pub perf_level: PerfLevel,
+
+    pub unreachable_backoff: ReadableDuration,
 }
 
 impl Default for Config {
@@ -264,6 +266,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             perf_level: PerfLevel::Disable,
+            unreachable_backoff: ReadableDuration::secs(10),
         }
     }
 }
