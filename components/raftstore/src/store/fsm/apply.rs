@@ -438,7 +438,6 @@ where
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
-
         ApplyContext {
             tag,
             timer: None,
