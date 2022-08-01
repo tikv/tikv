@@ -275,6 +275,6 @@ mod tests {
         r.set_start_key(start_key);
         let peers = vec![Peer::default()];
         r.set_peers(peers.into());
-        meta.insert_region(&r);
+        meta.regions.insert(&r);
     }
 }

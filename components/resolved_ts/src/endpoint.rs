@@ -475,7 +475,7 @@ where
             let region;
             {
                 let meta = self.store_meta.lock().unwrap();
-                match meta.regions.get(&region_id) {
+                match meta.regions.get(region_id) {
                     Some(r) => region = r.clone(),
                     None => return,
                 }

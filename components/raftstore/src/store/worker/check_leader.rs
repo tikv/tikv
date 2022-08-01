@@ -83,7 +83,7 @@ impl Runner {
                 meta.region_ranges
                 // get overlapped regions
                 .range((Excluded(start_key), Unbounded))
-                .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+                .take_while(|(_, id)| end_key > enc_start_key(meta.regions.get(**id).unwrap()))
                 // get the min `safe_ts`
                 .map(|(_, id)| {
                     registry.get(id).unwrap().safe_ts()
@@ -143,7 +143,7 @@ mod tests {
             rrp.update_safe_ts(1, safe_ts);
             assert_eq!(rrp.safe_ts(), safe_ts);
             meta.region_ranges.insert(enc_end_key(&region), id);
-            meta.insert_region(&region);
+            meta.regions.insert(&region);
             meta.region_read_progress.insert(id, Arc::new(rrp));
         }
 

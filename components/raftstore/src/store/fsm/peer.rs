@@ -2667,7 +2667,7 @@ where
             }
         }
 
-        if let Some(r) = meta.regions.get(&target_region_id) {
+        if let Some(r) = meta.regions.get(target_region_id) {
             // In the case that the source peer's range isn't overlapped with target's
             // anymore:
             //     | region 2 | region 3 | region 1 |
@@ -2797,7 +2797,7 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if meta.regions[&self.region_id()] != *self.region() {
+        if meta.regions.get(self.region_id()).unwrap() != self.region() {
             if !self.fsm.peer.is_initialized() {
                 info!(
                     "stale delegate detected, skip";
@@ -2810,7 +2810,7 @@ where
                 panic!(
                     "{} meta corrupted: {:?} != {:?}",
                     self.fsm.peer.tag,
-                    meta.regions[&self.region_id()],
+                    meta.regions.get(self.region_id()).unwrap(),
                     self.region()
                 );
             }
@@ -2862,7 +2862,7 @@ where
         for exist_region in meta
             .region_ranges
             .range((Excluded(snap_enc_start_key), Unbounded::<Vec<u8>>))
-            .map(|(_, &region_id)| &meta.regions[&region_id])
+            .map(|(_, &region_id)| meta.regions.get(region_id).unwrap())
             .take_while(|r| enc_start_key(r) < snap_enc_end_key)
             .filter(|r| r.get_id() != region_id)
         {
@@ -2941,7 +2941,7 @@ where
         let mut meta = self.ctx.store_meta.lock().unwrap();
         assert!(!meta.atomic_snap_regions.contains_key(&self.fsm.region_id()));
         for (source_region_id, merge_to_this_peer) in regions_to_destroy {
-            if !meta.regions.contains_key(&source_region_id) {
+            if meta.regions.get(source_region_id).is_none() {
                 if merge_to_this_peer {
                     drop(meta);
                     panic!(
@@ -3357,7 +3357,7 @@ where
         {
             panic!("{} meta corruption detected", self.fsm.peer.tag);
         }
-        if meta.remove_region(region_id).is_none() && !merged_by_target {
+        if meta.regions.remove(region_id).is_none() && !merged_by_target {
             panic!("{} meta corruption detected", self.fsm.peer.tag)
         }
 
@@ -3391,7 +3391,7 @@ where
                 // peer decide to destroy by itself. Without target, the
                 // `pending_merge_targets` for target won't be removed, so here source peer help
                 // target to clear.
-                if meta.regions.get(&target).is_none()
+                if meta.regions.get(target).is_none()
                     && meta.pending_merge_targets.get(&target).unwrap().is_empty()
                 {
                     meta.pending_merge_targets.remove(&target);
@@ -3709,7 +3709,7 @@ where
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
-            if let Some(r) = meta.regions.get(&new_region_id) {
+            if let Some(r) = meta.regions.get(new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
                 // before the old snapshot, which will create an uninitialized peer on the
@@ -3769,7 +3769,7 @@ where
             }
 
             new_peer.peer.activate(self.ctx);
-            meta.insert_region(&new_region);
+            meta.regions.insert(&new_region);
             let not_exist = meta
                 .region_ranges
                 .insert(enc_end_key(&new_region), new_region_id)
@@ -3906,7 +3906,7 @@ where
         let target_region_id = target_region.get_id();
         let exist_region = {
             let meta = self.ctx.store_meta.lock().unwrap();
-            meta.regions.get(&target_region_id).cloned()
+            meta.regions.get(target_region_id).cloned()
         };
         if let Some(r) = exist_region {
             let exist_epoch = r.get_region_epoch();
@@ -4228,7 +4228,7 @@ where
 
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
-        assert!(meta.remove_region(source.get_id()).is_some());
+        assert!(meta.regions.remove(source.get_id()).is_some());
         meta.set_region(
             &self.ctx.coprocessor_host,
             region,
@@ -4487,7 +4487,7 @@ where
         for r in &persist_res.destroy_regions {
             let prev = meta.region_ranges.remove(&enc_end_key(r));
             assert_eq!(prev, Some(r.get_id()));
-            assert!(meta.remove_region(r.get_id()).is_some());
+            assert!(meta.regions.remove(r.get_id()).is_some());
             if let Some(d) = meta.readers.get_mut(&r.get_id()) {
                 d.mark_pending_remove();
             }
@@ -4537,7 +4537,7 @@ where
         {
             panic!("{} unexpected region {:?}", self.fsm.peer.tag, r);
         }
-        let prev = meta.insert_region(&region);
+        let prev = meta.regions.insert(&region);
         assert_eq!(prev, Some(prev_region));
         drop(meta);
 
@@ -4642,7 +4642,7 @@ where
             let target_region = msg.get_admin_request().get_prepare_merge().get_target();
             {
                 let meta = self.ctx.store_meta.lock().unwrap();
-                match meta.regions.get(&target_region.get_id()) {
+                match meta.regions.get(target_region.get_id()) {
                     Some(r) => {
                         if r != target_region {
                             return Err(box_err!(
@@ -4912,7 +4912,7 @@ where
                 ranges.next()
             };
             if let Some((_, id)) = res {
-                let r = &meta.regions[id];
+                let r = meta.regions.get(*id).unwrap();
                 collect_cnt -= 1;
                 // For example, A is split into B, A, and then B is split into C, B.
                 if r.get_region_epoch().version >= max_version {

@@ -105,7 +105,6 @@ use crate::{
 type Key = Vec<u8>;
 
 pub const PENDING_MSG_CAP: usize = 100;
-const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
@@ -115,15 +114,77 @@ pub struct StoreInfo<EK, ER> {
     pub capacity: u64,
 }
 
+#[derive(Default)]
+pub struct StoreMetaRegions {
+    /// region_id -> region
+    regions: HashMap<u64, Region>,
+    /// store_id -> region_id set
+    regions_on_store: HashMap<u64, HashSet<u64>>,
+}
+
+impl StoreMetaRegions {
+    pub fn insert(&mut self, region: &Region) -> Option<Region> {
+        let prev = self.regions.insert(region.get_id(), region.clone());
+        if let Some(prev) = &prev {
+            self.remove_region_on_store(prev);
+        }
+        self.add_region_on_store(region);
+        prev
+    }
+
+    pub fn remove(&mut self, region_id: u64) -> Option<Region> {
+        let region = self.regions.remove(&region_id);
+        if let Some(r) = &region {
+            self.remove_region_on_store(r);
+        }
+        region
+    }
+
+    pub fn get(&self, region_id: u64) -> Option<&Region> {
+        self.regions.get(&region_id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.regions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+
+    pub fn region_ids(&self) -> Vec<u64> {
+        self.regions.keys().cloned().collect()
+    }
+
+    pub fn regions_on_store(&self, store_id: u64) -> Option<HashSet<u64>> {
+        self.regions_on_store.get(&store_id).cloned()
+    }
+
+    fn remove_region_on_store(&mut self, region: &Region) {
+        for peer in region.get_peers() {
+            self.regions_on_store
+                .get_mut(&peer.get_store_id())
+                .unwrap()
+                .remove(&region.get_id());
+        }
+    }
+
+    fn add_region_on_store(&mut self, region: &Region) {
+        for peer in region.get_peers() {
+            self.regions_on_store
+                .entry(peer.get_store_id())
+                .or_insert_with(HashSet::default)
+                .insert(region.get_id());
+        }
+    }
+}
+
 pub struct StoreMeta {
     /// store id
     pub store_id: Option<u64>,
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
-    /// region_id -> region
-    pub regions: HashMap<u64, Region>,
-    /// store_id -> region_id
-    pub store_regions: HashMap<u64, HashSet<u64>>,
+    pub regions: StoreMetaRegions,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
@@ -162,8 +223,7 @@ impl StoreMeta {
         StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
-            regions: HashMap::default(),
-            store_regions: HashMap::default(),
+            regions: StoreMetaRegions::default(),
             readers: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
@@ -176,38 +236,6 @@ impl StoreMeta {
         }
     }
 
-    pub fn insert_region(&mut self, region: &Region) -> Option<Region> {
-        let prev = self.regions.insert(region.get_id(), region.clone());
-        if let Some(prev) = &prev {
-            for peer in prev.get_peers() {
-                self.store_regions
-                    .get_mut(&peer.get_store_id())
-                    .unwrap()
-                    .remove(&region.get_id());
-            }
-        }
-        for peer in region.get_peers() {
-            self.store_regions
-                .entry(peer.store_id)
-                .or_insert_with(HashSet::default)
-                .insert(region.get_id());
-        }
-        prev
-    }
-
-    pub fn remove_region(&mut self, region_id: u64) -> Option<Region> {
-        let region = self.regions.remove(&region_id);
-        if let Some(region) = &region {
-            for peer in region.get_peers() {
-                self.store_regions
-                    .get_mut(&peer.get_store_id())
-                    .unwrap()
-                    .remove(&region_id);
-            }
-        }
-        region
-    }
-
     #[inline]
     pub fn set_region<EK: KvEngine, ER: RaftEngine>(
         &mut self,
@@ -216,7 +244,7 @@ impl StoreMeta {
         peer: &mut crate::store::Peer<EK, ER>,
         reason: RegionChangeReason,
     ) {
-        let prev = self.insert_region(&region);
+        let prev = self.regions.insert(&region);
         if prev.map_or(true, |r| r.get_id() != region.get_id()) {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
@@ -238,7 +266,7 @@ impl StoreMeta {
             .range((Excluded(start.to_owned()), Unbounded::<Vec<u8>>))
             .next()
         {
-            let region = &self.regions[id];
+            let region = self.regions.get(*id).unwrap();
             if keys::enc_start_key(region).as_slice() <= end {
                 if let HashMapEntry::Vacant(v) = self.damaged_ranges.entry(fname.to_owned()) {
                     v.insert((start.to_owned(), end.to_owned()));
@@ -260,7 +288,7 @@ impl StoreMeta {
                 .region_ranges
                 .range((Excluded(start.clone()), Unbounded::<Vec<u8>>))
             {
-                let region = &self.regions[id];
+                let region = self.regions.get(*id).unwrap();
                 if &keys::enc_start_key(region) <= end {
                     ids.insert(*id);
                 } else {
@@ -419,12 +447,6 @@ where
             }
             _ => unreachable!(),
         }
-    }
-
-    fn report_unreachable(&self, store_id: u64) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
-        });
     }
 
     fn report_unreachable_to_region(&self, region_id: u64, store_id: u64) {
@@ -1189,7 +1211,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
-            meta.insert_region(&region);
+            meta.regions.insert(region);
             meta.region_read_progress
                 .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key
@@ -1228,7 +1250,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .insert(enc_end_key(&region), region.get_id());
             meta.region_read_progress
                 .insert(region.get_id(), peer.peer.read_progress.clone());
-            meta.insert_region(&region);
+            meta.regions.insert(&region);
             region_peers.push((tx, peer));
         }
 
@@ -1271,7 +1293,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut ranges = Vec::new();
         let mut last_start_key = keys::data_key(b"");
         for region_id in meta.region_ranges.values() {
-            let region = &meta.regions[region_id];
+            let region = meta.regions.get(*region_id).unwrap();
             let start_key = keys::enc_start_key(region);
             ranges.push((last_start_key, start_key));
             last_start_key = keys::enc_end_key(region);
@@ -1988,7 +2010,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if is_first_request {
             // To void losing messages, either put it to pending_msg or force send.
             let mut store_meta = self.ctx.store_meta.lock().unwrap();
-            if !store_meta.regions.contains_key(&region_id) {
+            if store_meta.regions.get(region_id).is_none() {
                 // Save one pending message for a peer is enough, remove
                 // the previous pending message of this peer
                 store_meta
@@ -2073,7 +2095,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let target = msg.get_to_peer();
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if meta.regions.contains_key(&region_id) {
+        if meta.regions.get(region_id).is_some() {
             return Ok(true);
         }
         fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");
@@ -2112,7 +2134,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             Excluded(data_key(msg.get_start_key())),
             Unbounded::<Vec<u8>>,
         )) {
-            let exist_region = match meta.regions.get(id) {
+            let exist_region = match meta.regions.get(*id) {
                 Some(r) => r,
                 None => panic!(
                     "meta corrupted: no region for {} {} when creating {} {:?}",
@@ -2210,8 +2232,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         // Following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
-        meta.regions
-            .insert(region_id, peer.get_peer().region().to_owned());
+        meta.regions.insert(peer.get_peer().region());
         meta.region_read_progress
             .insert(region_id, peer.peer.read_progress.clone());
 
@@ -2540,7 +2561,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if !meta.regions.contains_key(&sst.get_region_id()) {
+                if meta.regions.get(sst.get_region_id()).is_none() {
                     delete_ssts.push(sst);
                 }
             }
@@ -2574,7 +2595,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if let Some(r) = meta.regions.get(&sst.get_region_id()) {
+                if let Some(r) = meta.regions.get(sst.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
                     if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
@@ -2641,16 +2662,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let (mut target_region_id, mut oldest) = (0, Instant::now());
         let target_peer = {
             let meta = self.ctx.store_meta.lock().unwrap();
-            for region_id in meta.regions.keys() {
-                match self.fsm.store.consistency_check_time.get(region_id) {
+            for region_id in meta.regions.region_ids() {
+                match self.fsm.store.consistency_check_time.get(&region_id) {
                     Some(time) => {
                         if *time < oldest {
                             oldest = *time;
-                            target_region_id = *region_id;
+                            target_region_id = region_id;
                         }
                     }
                     None => {
-                        target_region_id = *region_id;
+                        target_region_id = region_id;
                         break;
                     }
                 }
@@ -2658,7 +2679,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if target_region_id == 0 {
                 return;
             }
-            match util::find_peer(&meta.regions[&target_region_id], self.ctx.store_id()) {
+            match util::find_peer(
+                meta.regions.get(target_region_id).unwrap(),
+                self.ctx.store_id(),
+            ) {
                 None => return,
                 Some(p) => p.clone(),
             }
@@ -2727,13 +2751,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
     fn on_store_unreachable(&mut self, store_id: u64) {
         let now = Instant::now();
+        let unreachable_backoff = self.ctx.cfg.unreachable_backoff.0;
         if self
             .fsm
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(UNREACHABLE_BACKOFF, |t| now.saturating_duration_since(*t))
-            < UNREACHABLE_BACKOFF
+            .map_or(unreachable_backoff, |t| now.saturating_duration_since(*t))
+            < unreachable_backoff
         {
             return;
         }
@@ -2748,7 +2773,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // lot of time, which may block other operations.
         let regions = {
             let meta = self.ctx.store_meta.lock().unwrap();
-            meta.store_regions.get(&store_id).unwrap().clone()
+            meta.regions.regions_on_store(store_id).unwrap()
         };
         for region_id in regions {
             self.ctx
@@ -2794,7 +2819,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             ))
             .next()
         {
-            let exist_region = &meta.regions[id];
+            let exist_region = meta.regions.get(*id).unwrap();
             if enc_start_key(exist_region) < data_end_key(region.get_end_key()) {
                 if exist_region.get_id() == region.get_id() {
                     warn!(
@@ -2838,10 +2863,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
-        if meta
-            .regions
-            .insert(region.get_id(), region.clone())
-            .is_some()
+        if meta.regions.insert(&region).is_some()
             || meta
                 .region_ranges
                 .insert(end_key.clone(), region.get_id())
