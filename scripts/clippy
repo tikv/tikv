@@ -18,7 +18,8 @@ fi
 # TODOs:
 # - Enables `significant_drop_in_scrutinee` after
 #   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
-CLIPPY_LINTS=(-A clippy::module_inception  \
+CLIPPY_LINTS=(
+	-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
 	-A clippy::too_many_arguments \
 	-A clippy::blacklisted_name \
@@ -35,12 +36,13 @@ CLIPPY_LINTS=(-A clippy::module_inception  \
 	-A clippy::enum_variant_names \
 	-A clippy::type_complexity \
 	-A clippy::significant_drop_in_scrutinee \
-        -W clippy::dbg_macro \
-        -W clippy::todo \
-        -D clippy::assertions_on_result_states \
-		-D clippy::upper_case_acronyms \
-        -D clippy::disallowed-methods \
-        -D rust-2018-idioms)
+	-W clippy::dbg_macro \
+	-W clippy::todo \
+	-D clippy::upper_case_acronyms \
+	-D clippy::disallowed-methods \
+	-D rust-2018-idioms \
+	-D clippy::assertions_on_result_states \
+)
 
 cargo clippy --workspace \
 	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
