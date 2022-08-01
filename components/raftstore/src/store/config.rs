@@ -283,6 +283,11 @@ pub struct Config {
 
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
+
+    /// The capacity of in-memory pessimistic locks. Make it smaller than
+    /// `raft-max-size-per-msg` so that locks in one region can be proposed
+    /// in a single command.
+    pub in_memory_pessimistic_locks_capacity: ReadableSize,
 }
 
 impl Default for Config {
@@ -372,6 +377,7 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
+            in_memory_pessimistic_locks_capacity: ReadableSize(512 * 1024),
         }
     }
 }
@@ -477,6 +483,16 @@ impl Config {
         {
             return Err(box_err!(
                 "raft max size per message should be greater than 0 and less than or equal to 3GiB"
+            ));
+        }
+
+        if self.raft_max_size_per_msg.0
+            < (txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
+                * self.in_memory_pessimistic_locks_capacity.0 as f64) as u64
+        {
+            return Err(box_err!(
+                "raft_max_size_per_msg should be at least {}x as large as in_memory_pessimistic_locks_capacity",
+                txn_types::Lock::max_size_amplification_from_pes_lock_to_lock()
             ));
         }
 
