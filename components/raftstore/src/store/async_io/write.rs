@@ -16,8 +16,7 @@ use std::{
 use collections::HashMap;
 use crossbeam::channel::{bounded, Receiver, Sender, TryRecvError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch,
-    WriteOptions,
+    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -53,11 +52,11 @@ const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
-pub trait Notifier: Clone + Send + 'static {
+pub trait PersistedNotifier: Clone + Send + 'static {
     fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64);
 }
 
-impl<EK, ER> Notifier for RaftRouter<EK, ER>
+impl<EK, ER> PersistedNotifier for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -201,6 +200,11 @@ where
             && self.cut_logs.is_none()
             && self.extra_write.is_empty()
             && self.raft_wb.as_ref().map_or(true, |wb| wb.is_empty()))
+    }
+
+    #[inline]
+    pub fn ready_number(&self) -> u64 {
+        self.ready_number
     }
 
     /// Sanity check for robustness.
@@ -499,11 +503,12 @@ pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    N: Notifier,
+    N: PersistedNotifier,
 {
     store_id: u64,
     tag: String,
-    engines: Engines<EK, ER>,
+    raft_engine: ER,
+    kv_engine: Option<EK>,
     receiver: Receiver<WriteMsg<EK, ER>>,
     notifier: N,
     trans: T,
@@ -520,27 +525,28 @@ impl<EK, ER, N, T> Worker<EK, ER, N, T>
 where
     EK: KvEngine,
     ER: RaftEngine,
-    N: Notifier,
+    N: PersistedNotifier,
     T: Transport,
 {
     pub fn new(
         store_id: u64,
         tag: String,
-        engines: Engines<EK, ER>,
+        raft_engine: ER,
+        kv_engine: Option<EK>,
         receiver: Receiver<WriteMsg<EK, ER>>,
         notifier: N,
         trans: T,
         cfg: &Arc<VersionTrack<Config>>,
     ) -> Self {
-        let batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE));
-        let perf_context = engines
-            .raft
-            .get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
+        let batch = WriteTaskBatch::new(raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE));
+        let perf_context =
+            raft_engine.get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
         let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
             store_id,
             tag,
-            engines,
+            raft_engine,
+            kv_engine,
             receiver,
             notifier,
             trans,
@@ -664,7 +670,11 @@ where
                     );
                 });
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
-                    *kv_wb = self.engines.kv.write_batch_with_cap(KV_WB_DEFAULT_SIZE);
+                    *kv_wb = self
+                        .kv_engine
+                        .as_ref()
+                        .unwrap()
+                        .write_batch_with_cap(KV_WB_DEFAULT_SIZE);
                 }
                 write_kv_time = duration_to_sec(now.saturating_elapsed());
                 STORE_WRITE_KVDB_DURATION_HISTOGRAM.observe(write_kv_time);
@@ -681,8 +691,7 @@ where
 
             let now = Instant::now();
             self.perf_context.start_observe();
-            self.engines
-                .raft
+            self.raft_engine
                 .consume_and_shrink(
                     &mut self.batch.raft_wb,
                     true,
@@ -823,26 +832,29 @@ where
     handlers: Vec<JoinHandle<()>>,
 }
 
-impl<EK, ER> StoreWriters<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    pub fn new() -> Self {
+impl<EK: KvEngine, ER: RaftEngine> Default for StoreWriters<EK, ER> {
+    fn default() -> Self {
         Self {
             writers: vec![],
             handlers: vec![],
         }
     }
+}
 
+impl<EK, ER> StoreWriters<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub fn senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>> {
         &self.writers
     }
 
-    pub fn spawn<T: Transport + 'static, N: Notifier>(
+    pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(
         &mut self,
         store_id: u64,
-        engines: &Engines<EK, ER>,
+        raft_engine: ER,
+        kv_engine: Option<EK>,
         notifier: &N,
         trans: &T,
         cfg: &Arc<VersionTrack<Config>>,
@@ -854,7 +866,8 @@ where
             let mut worker = Worker::new(
                 store_id,
                 tag.clone(),
-                engines.clone(),
+                raft_engine.clone(),
+                kv_engine.clone(),
                 rx,
                 notifier.clone(),
                 trans.clone(),
@@ -884,8 +897,10 @@ where
 
 /// Used for test to write task to kv db and raft db.
 #[cfg(test)]
-pub fn write_to_db_for_test<EK, ER>(engines: &Engines<EK, ER>, task: WriteTask<EK, ER>)
-where
+pub fn write_to_db_for_test<EK, ER>(
+    engines: &engine_traits::Engines<EK, ER>,
+    task: WriteTask<EK, ER>,
+) where
     EK: KvEngine,
     ER: RaftEngine,
 {

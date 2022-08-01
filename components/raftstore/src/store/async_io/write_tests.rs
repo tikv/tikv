@@ -5,7 +5,7 @@ use std::time::Duration;
 use collections::HashSet;
 use crossbeam::channel::unbounded;
 use engine_test::{kv::KvTestEngine, new_temp_engine, raft::RaftTestEngine};
-use engine_traits::{Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
+use engine_traits::{Engines, Mutable, Peekable, RaftEngineReadOnly, WriteBatchExt};
 use kvproto::raft_serverpb::RaftMessage;
 use tempfile::Builder;
 
@@ -59,7 +59,7 @@ struct TestNotifier {
     tx: Sender<(u64, (u64, u64))>,
 }
 
-impl Notifier for TestNotifier {
+impl PersistedNotifier for TestNotifier {
     fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64) {
         self.tx.send((region_id, (peer_id, ready_number))).unwrap()
     }
@@ -203,7 +203,8 @@ impl TestWorker {
             worker: Worker::new(
                 1,
                 "writer".to_string(),
-                engines.clone(),
+                engines.raft.clone(),
+                Some(engines.kv.clone()),
                 task_rx,
                 notifier,
                 trans,
@@ -227,11 +228,12 @@ impl TestWriters {
         let trans = TestTransport { tx: msg_tx };
         let (notify_tx, notify_rx) = unbounded();
         let notifier = TestNotifier { tx: notify_tx };
-        let mut writers = StoreWriters::new();
+        let mut writers = StoreWriters::default();
         writers
             .spawn(
                 1,
-                engines,
+                engines.raft.clone(),
+                Some(engines.kv.clone()),
                 &notifier,
                 &trans,
                 &Arc::new(VersionTrack::new(cfg.clone())),

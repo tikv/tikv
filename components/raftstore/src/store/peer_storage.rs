@@ -1205,7 +1205,8 @@ pub mod tests {
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(region_scheduler, raftlog_fetch_scheduler, path);
-        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
+        let mut write_task: WriteTask<KvTestEngine, _> =
+            WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
         store.update_cache_persisted(ents.last().unwrap().get_index());
         store
