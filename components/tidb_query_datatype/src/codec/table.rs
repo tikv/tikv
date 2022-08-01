@@ -790,7 +790,7 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
-        assert!(check_table_ranges(&[range]).is_ok());
+        check_table_ranges(&[range]).unwrap();
         // test range.start > range.end
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
@@ -819,13 +819,13 @@ mod tests {
     #[test]
     fn test_check_key_type() {
         let record_key = encode_row_key(TABLE_ID, 1);
-        assert!(check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
+        check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).unwrap();
         assert!(check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
 
         let (_, index_key) =
             generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
         assert!(check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+        check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).unwrap();
 
         let too_small_key = vec![0];
         assert!(check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());

@@ -227,18 +227,15 @@ mod tests {
         let filename = "existed.file";
         let buf1: &[u8] = b"pingcap";
         let buf2: &[u8] = b"tikv";
-        let r = ls
-            .write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
-            .await;
-        assert!(r.is_ok());
-        let r = ls
-            .write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
-            .await;
-        assert!(r.is_ok());
+        ls.write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
+            .await
+            .unwrap();
+        ls.write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
+            .await
+            .unwrap();
 
         let mut read_buff: Vec<u8> = Vec::new();
-        let r = ls.read(filename).read_to_end(&mut read_buff).await;
-        assert!(r.is_ok());
+        ls.read(filename).read_to_end(&mut read_buff).await.unwrap();
         assert_eq!(read_buff.len(), 4);
         assert_eq!(&read_buff, buf2);
     }
