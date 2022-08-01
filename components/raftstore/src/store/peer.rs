@@ -2441,7 +2441,7 @@ where
                         );
                         return None;
                     }
-                    destroy_regions.push(meta.regions.get(*source_region_id).unwrap().clone());
+                    destroy_regions.push(meta.regions[source_region_id].clone());
                 }
             }
         }
