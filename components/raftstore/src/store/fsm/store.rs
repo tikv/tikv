@@ -782,17 +782,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, StoreFsm<EK>>
     for RaftPoller<EK, ER, T>
 {
-<<<<<<< HEAD
     fn begin(&mut self, _batch_size: usize) {
-        self.previous_metrics = self.poll_ctx.raft_metrics.clone();
-=======
-    fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
-    where
-        for<'a> F: FnOnce(&'a BatchSystemConfig),
-    {
         fail_point!("begin_raft_poller");
-        self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
->>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
+        self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;

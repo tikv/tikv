@@ -12,14 +12,12 @@ pub mod batch;
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-<<<<<<< HEAD
+use fail::fail_point;
+
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-=======
-use fail::fail_point;
->>>>>>> 940e13958... raftstore: use force_send to send ApplyRes (#13168)
 
 struct State {
     sender_cnt: AtomicIsize,
