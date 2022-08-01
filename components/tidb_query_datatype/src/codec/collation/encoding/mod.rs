@@ -17,7 +17,9 @@ use crate::codec::{
 };
 
 fn format_invalid_char(data: BytesRef<'_>) -> String {
-    let mut buf = String::with_capacity(50);
+    // Max length of the invalid string is '\x00\x00\x00\x00\x00...'(25) we set 32
+    // here.
+    let mut buf = String::with_capacity(32);
     const MAX_BYTES_TO_SHOW: usize = 5;
     buf.push('\'');
     for i in 0..data.len() {

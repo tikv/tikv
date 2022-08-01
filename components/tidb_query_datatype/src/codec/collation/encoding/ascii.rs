@@ -18,8 +18,7 @@ pub struct EncodingAscii;
 impl Encoding for EncodingAscii {
     #[inline]
     fn decode(data: BytesRef<'_>) -> Result<Bytes> {
-        for i in 0..data.len() {
-            let x = data[i];
+        for x in data {
             if !x.is_ascii() {
                 return Err(Error::cannot_convert_string(
                     format_invalid_char(data).as_str(),
