@@ -36,8 +36,8 @@ use crate::{
         cmd_resp,
         fsm::store::StoreMeta,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, RaftPeer,
+        ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
     },
     Error, Result,
 };

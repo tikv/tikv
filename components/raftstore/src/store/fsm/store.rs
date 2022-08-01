@@ -85,6 +85,7 @@ use crate::{
         local_metrics::{RaftMetrics, RaftReadyMetrics},
         memory::*,
         metrics::*,
+        peer::RaftPeer,
         peer_storage,
         transport::Transport,
         util,

@@ -2,6 +2,7 @@
 
 use batch_system::Fsm;
 use crossbeam::channel::TryRecvError;
+use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb::Store;
 use raftstore::store::Config;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -48,13 +49,13 @@ impl Fsm for StoreFsm {
     }
 }
 
-pub struct StoreFsmDelegate<'a, T> {
+pub struct StoreFsmDelegate<'a, EK: KvEngine, ER: RaftEngine, T> {
     fsm: &'a mut StoreFsm,
-    store_ctx: &'a mut StoreContext<T>,
+    store_ctx: &'a mut StoreContext<EK, ER, T>,
 }
 
-impl<'a, T> StoreFsmDelegate<'a, T> {
-    pub fn new(fsm: &'a mut StoreFsm, store_ctx: &'a mut StoreContext<T>) -> Self {
+impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
+    pub fn new(fsm: &'a mut StoreFsm, store_ctx: &'a mut StoreContext<EK, ER, T>) -> Self {
         Self { fsm, store_ctx }
     }
 

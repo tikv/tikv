@@ -78,7 +78,7 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, RaftPeer, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
@@ -991,7 +991,7 @@ where
                     // FIXME: should use `bcast_check_stale_peer_message` instead.
                     // Sending a new enum type msg to a old tikv may cause panic during rolling update
                     // we should change the protobuf behavior and check if properly handled in all place
-                    self.fsm.peer.bcast_wake_up_message(self.ctx);
+                    self.fsm.peer.bcast_wake_up_message(&mut self.ctx.trans);
                 }
             }
             CasualMessage::SnapshotGenerated => {
@@ -1022,7 +1022,9 @@ where
                     .iter()
                     .any(|p| p.get_id() == self.fsm.peer_id())
                 {
-                    self.fsm.peer.send_wake_up_message(self.ctx, &leader);
+                    self.fsm
+                        .peer
+                        .send_wake_up_message(&mut self.ctx.trans, &leader);
                 }
             }
             CasualMessage::RenewLease => {

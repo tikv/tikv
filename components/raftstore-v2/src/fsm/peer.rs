@@ -96,11 +96,11 @@ impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
 
 pub struct PeerFsmDelegate<'a, EK: KvEngine, ER: RaftEngine, T> {
     fsm: &'a mut PeerFsm<EK, ER>,
-    store_ctx: &'a mut StoreContext<T>,
+    store_ctx: &'a mut StoreContext<EK, ER, T>,
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
-    pub fn new(fsm: &'a mut PeerFsm<EK, ER>, store_ctx: &'a mut StoreContext<T>) -> Self {
+    pub fn new(fsm: &'a mut PeerFsm<EK, ER>, store_ctx: &'a mut StoreContext<EK, ER, T>) -> Self {
         Self { fsm, store_ctx }
     }
 

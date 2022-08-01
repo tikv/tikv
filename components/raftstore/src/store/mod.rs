@@ -8,6 +8,8 @@ pub mod memory;
 pub mod metrics;
 pub mod msg;
 pub mod transport;
+pub mod read_queue;
+pub mod peer;
 #[macro_use]
 pub mod util;
 
@@ -16,14 +18,12 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 mod local_metrics;
-mod peer;
 mod peer_storage;
-mod read_queue;
 mod region_snapshot;
 mod replication_mode;
 mod snap;
 mod txn_ext;
-mod worker;
+pub mod worker;
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::msg::PeerInternalStat;
@@ -48,7 +48,9 @@ pub use self::{
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
-    peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
+    peer::{
+        AbstractPeer, Peer, PeerStat, ProposalContext, RaftPeer, RequestInspector, RequestPolicy,
+    },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,

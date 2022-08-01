@@ -9,9 +9,12 @@ use raft::{
     eraftpb::{Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util::find_peer, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use raftstore::store::{
+    util::find_peer, worker::RaftlogFetchTask, EntryStorage, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
+};
 use slog::{o, Logger};
-use tikv_util::box_err;
+use tikv_util::{box_err, worker::Scheduler};
 
 use crate::{Error, Result};
 
@@ -45,14 +48,12 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 /// A storage for raft.
 ///
 /// It's similar to `PeerStorage` in v1.
-#[derive(Debug)]
 pub struct Storage<ER> {
     engine: ER,
     peer: metapb::Peer,
     region_state: RegionLocalState,
-    raft_state: RaftLocalState,
-    apply_state: RaftApplyState,
     logger: Logger,
+    entry_storage: EntryStorage<ER>,
 }
 
 impl<ER: RaftEngine> Storage<ER> {
@@ -65,6 +66,7 @@ impl<ER: RaftEngine> Storage<ER> {
         store_id: u64,
         engine: ER,
         logger: &Logger,
+        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Result<Option<Storage<ER>>> {
         let region_state = match engine.get_region_state(region_id) {
             Ok(Some(s)) => s,
@@ -101,13 +103,22 @@ impl<ER: RaftEngine> Storage<ER> {
             }
         };
 
+        let peer_id = peer.get_id();
         let mut s = Storage {
-            engine,
+            engine: engine.clone(),
             peer: peer.clone(),
             region_state,
-            raft_state,
-            apply_state,
             logger,
+            entry_storage: EntryStorage::new(
+                region_id,
+                peer_id,
+                engine,
+                raft_state,
+                apply_state,
+                0, /*last_term*/
+                0, /*applied_term*/
+                raftlog_fetch_scheduler,
+            ),
         };
         s.validate_state()?;
         Ok(Some(s))
@@ -124,12 +135,12 @@ impl<ER: RaftEngine> Storage<ER> {
 
     #[inline]
     pub fn raft_state(&self) -> &RaftLocalState {
-        &self.raft_state
+        &self.entry_storage.raft_state()
     }
 
     #[inline]
     pub fn apply_state(&self) -> &RaftApplyState {
-        &self.apply_state
+        &self.entry_storage.apply_state()
     }
 
     #[inline]
@@ -140,6 +151,21 @@ impl<ER: RaftEngine> Storage<ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    #[inline]
+    pub fn applied_index(&self) -> u64 {
+        self.entry_storage.apply_state().get_applied_index()
+    }
+
+    #[inline]
+    pub fn applied_term(&self) -> u64 {
+        self.entry_storage.applied_term()
+    }
+
+    #[inline]
+    pub fn commit_index(&self) -> u64 {
+        self.raft_state().get_hard_state().get_commit()
     }
 }
 
@@ -172,6 +198,16 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         unimplemented!()
+    }
+}
+
+impl<ER: RaftEngine> std::fmt::Debug for Storage<ER> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage")
+            .field("peer", &self.peer)
+            .field("region_state", &self.region_state)
+            .field("raft_state", &self.entry_storage.raft_state())
+            .finish()
     }
 }
 
