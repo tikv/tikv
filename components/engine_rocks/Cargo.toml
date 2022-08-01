@@ -55,10 +55,10 @@ tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]
-git = "https://github.com/tikv/rust-rocksdb.git"
+git = "https://github.com/ethercflow/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
-branch = "tikv-6.1"
+branch = "revert-opt"
 
 [dev-dependencies]
 rand = "0.8"
