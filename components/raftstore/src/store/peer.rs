@@ -79,7 +79,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob, ReadDelegateExt,
+    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -5430,7 +5430,7 @@ where
     fn get_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        _: &mut Option<ReadDelegateExt<'_, EK>>,
+        _: &mut Option<LocalReadContext<'_, EK>>,
     ) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }

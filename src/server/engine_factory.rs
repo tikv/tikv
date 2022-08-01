@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use collections::HashMap;
 use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
@@ -92,16 +91,12 @@ impl KvEngineFactoryBuilder {
         }
     }
 
-    pub fn buildv2(self) -> KvEngineFactoryV2 {
+    pub fn build_v2(self) -> KvEngineFactoryV2 {
         let factory = KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
         };
-        KvEngineFactoryV2 {
-            inner: factory,
-            registry: Arc::new(Mutex::new(HashMap::default())),
-            registry_latest: Arc::new(Mutex::new(HashMap::default())),
-        }
+        KvEngineFactoryV2::new(factory)
     }
 }
 

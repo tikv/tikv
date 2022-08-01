@@ -29,7 +29,7 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        DelegateStore, ReadDelegate, ReadExecutor, ReadMetrics, ReadProgress, ReadResponse,
+        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadResponse,
         RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
@@ -92,7 +92,7 @@ where
     fn get_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        _: &mut Option<raftstore::store::ReadDelegateExt<'_, E>>,
+        _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
@@ -126,7 +126,7 @@ where
     }
 }
 
-impl<E> DelegateStore<E> for StoreMetaDelegate<E>
+impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {

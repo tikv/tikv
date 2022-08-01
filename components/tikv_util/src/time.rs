@@ -512,13 +512,6 @@ pub struct ThreadReadId {
     pub create_time: Timespec,
 }
 
-impl ThreadReadId {
-    pub fn update(&mut self, read_id: ThreadReadId) {
-        self.sequence = read_id.sequence;
-        self.create_time = read_id.create_time;
-    }
-}
-
 thread_local!(static READ_SEQUENCE: RefCell<u64> = RefCell::new(0));
 
 impl ThreadReadId {

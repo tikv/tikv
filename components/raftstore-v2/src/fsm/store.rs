@@ -14,7 +14,6 @@ pub struct StoreMeta<E>
 where
     E: KvEngine,
 {
-    /// store id
     pub store_id: Option<u64>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
