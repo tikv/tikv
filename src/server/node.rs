@@ -115,7 +115,7 @@ where
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
         let mut store = match default_store {
-            None => matapb::Store::default(),
+            None => metapb::Store::default(),
             Some(s) => s,
         };
         store.set_id(INVALID_ID);
