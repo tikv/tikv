@@ -229,6 +229,16 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
         raft_msg_flush_interval: ReadableDuration::micros(250),
+<<<<<<< HEAD
+=======
+        check_leader_lease_interval: ReadableDuration::millis(123),
+        renew_leader_lease_advance_duration: ReadableDuration::millis(456),
+        reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
+        reactive_memory_lock_timeout_tick: 8,
+        report_region_buckets_tick_interval: ReadableDuration::secs(1234),
+        max_snapshot_file_raw_size: ReadableSize::gb(10),
+        unreachable_backoff: ReadableDuration::secs(111),
+>>>>>>> 677548c4e... raftstore: make `UNREACHABLE_BACKOFF` configurable (#13193)
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {

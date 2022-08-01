@@ -212,6 +212,17 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+<<<<<<< HEAD
+=======
+check-leader-lease-interval = "123ms"
+renew-leader-lease-advance-duration = "456ms"
+reactive-memory-lock-tick-interval = "566ms"
+reactive-memory-lock-timeout-tick = 8
+report-min-resolved-ts-interval = "233ms"
+report-region-buckets-tick-interval = "1234s"
+max-snapshot-file-raw-size = "10GB"
+unreachable-backoff = "111s"
+>>>>>>> 677548c4e... raftstore: make `UNREACHABLE_BACKOFF` configurable (#13193)
 
 [coprocessor]
 split-region-on-table = false
