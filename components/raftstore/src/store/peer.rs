@@ -2102,6 +2102,45 @@ where
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
+    fn clear_pending_proposals_on_role_changed(
+        &mut self,
+        state_role: Option<StateRole>,
+        dry_run: bool,
+    ) {
+        if let Some(state_role) = state_role {
+            info!(
+                "role changed";
+                "proposals_len" => self.proposals.queue.len(),
+                "targer_role" => ?state_role,
+                "current_role" => ?self.raft_group.status().ss.raft_state,
+            );
+            match state_role {
+                // Role changes to follower, drop the stal proposals since these proposals
+                // can't be committed anymore.
+                StateRole::Follower => {
+                    if !self.proposals.is_empty() {
+                        info!(
+                            "requests are staled due to role changed to follower";
+                            "dry_run" => dry_run,
+                        );
+                        if !dry_run {
+                            while let Some(p) = self.proposals.queue.pop_front() {
+                                apply::notify_stale_req_with_msg(
+                                    self.term(),
+                                    String::from(
+                                        "request is staled due to role changed to follower",
+                                    ),
+                                    p.cb,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Correctness depends on the order between calling this function and notifying other peers
     /// the new commit index.
     /// It is due to the interaction between lease and split/merge.(details are decribed below)
@@ -2503,6 +2542,7 @@ where
         if !ready.committed_entries().is_empty() {
             self.handle_raft_committed_entries(ctx, ready.take_committed_entries());
         }
+
         // Check whether there is a pending generate snapshot task, the task
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
@@ -2515,6 +2555,7 @@ where
         }
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
+        self.clear_pending_proposals_on_role_changed(state_role, true);
         let has_new_entries = !ready.entries().is_empty();
         let mut trackers = vec![];
         if ctx.raft_metrics.waterfall_metrics {
@@ -2665,6 +2706,7 @@ where
             // Pause `read_progress` to prevent serving stale read while applying snapshot
             self.read_progress.pause();
         }
+        self.clear_pending_proposals_on_role_changed(state_role, false);
 
         Some(ReadyResult {
             state_role,
