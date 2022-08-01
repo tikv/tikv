@@ -970,14 +970,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     }
                     resolved_regions.push(region_id, resolved_ts.min());
                     // The judge of raw region is not accuracy here, and we may miss at most one
-<<<<<<< HEAD
-                    // "normal" raw region. But this will not break the correctness of outlier detection.
-                    if resolved_ts.is_min_ts_from_raw() {
-=======
                     // "normal" raw region. But this will not break the correctness of outlier
                     // detection.
                     if resolved_ts.is_min_ts_from_raw() || delegate.is_raw_region() {
->>>>>>> 9120fe675... CDC: fix rawkv resolved ts issue (#13142)
                         raw_resolved_regions.push(region_id, resolved_ts.raw_ts)
                     }
 
