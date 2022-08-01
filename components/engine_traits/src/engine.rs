@@ -324,7 +324,7 @@ mod tests {
     fn test_tablet_error_collector_ok() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        assert!(err.take_result().is_ok());
+        err.take_result().unwrap();
         assert_eq!(err.get_error_count(), 0);
     }
 
