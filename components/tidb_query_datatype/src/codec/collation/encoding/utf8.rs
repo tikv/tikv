@@ -11,7 +11,10 @@ impl<T: Utf8CompatibleEncoding> Encoding for T {
     fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         match str::from_utf8(data) {
             Ok(v) => Ok(Bytes::from(v)),
-            Err(_) => Err(Error::cannot_convert_string(T::NAME)),
+            Err(_) => Err(Error::cannot_convert_string(
+                format_invalid_char(data).as_str(),
+                T::NAME,
+            )),
         }
     }
 }
