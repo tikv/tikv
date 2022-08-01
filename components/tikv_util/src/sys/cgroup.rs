@@ -37,18 +37,20 @@ use procfs::process::{MountInfo, Process};
 // For more details about cgrop v2, PTAL
 // https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html.
 //
-// The above examples are implicitly based on a premise that paths in `/proc/self/cgroup`
-// can be appended to `/sys/fs/cgroup` directly to get the final paths. Generally it's
-// correct for Linux hosts but maybe wrong for containers. For containers, cgroup file systems
-// can be based on other mount points. For example:
+// The above examples are implicitly based on a premise that paths in
+// `/proc/self/cgroup` can be appended to `/sys/fs/cgroup` directly to get the
+// final paths. Generally it's correct for Linux hosts but maybe wrong for
+// containers. For containers, cgroup file systems can be based on other mount
+// points. For example:
 //
 // /proc/self/cgroup:
 //   4:memory:/path/to/the/controller
 // /proc/self/mountinfo:
-//   34 25 0:30 /path/to/the/controller /sys/fs/cgroup/memory relatime - cgroup cgroup memory
-// `path/to/the/controller` is possible to be not accessable in the container. However from the
-// `mountinfo` file we can know the path is mounted on `sys/fs/cgroup/memory`, then we can build
-// the absolute path based on the mountinfo file.
+//   34 25 0:30 /path/to/the/controller /sys/fs/cgroup/memory relatime - cgroup
+// cgroup memory `path/to/the/controller` is possible to be not accessable in
+// the container. However from the `mountinfo` file we can know the path is
+// mounted on `sys/fs/cgroup/memory`, then we can build the absolute path based
+// on the mountinfo file.
 //
 // For the format of the mountinfo file, PTAL https://man7.org/linux/man-pages/man5/proc.5.html.
 
@@ -175,10 +177,12 @@ fn is_cgroup2_unified_mode() -> Result<bool, String> {
 }
 
 // From cgroup spec:
-// "/proc/$PID/cgroup" lists a process’s cgroup membership. If legacy cgroup is in use in
-// the system, this file may contain multiple lines, one for each hierarchy.
+// "/proc/$PID/cgroup" lists a process’s cgroup membership. If legacy cgroup is
+// in use in the system, this file may contain multiple lines, one for each
+// hierarchy.
 //
-// The format is "<id>:<hierarchy>:<path>". For example, "10:cpuset:/test-cpuset".
+// The format is "<id>:<hierarchy>:<path>". For example,
+// "10:cpuset:/test-cpuset".
 fn parse_proc_cgroup_v1(lines: &str) -> HashMap<String, String> {
     let mut subsystems = HashMap::new();
     for line in lines.lines().map(|s| s.trim()).filter(|s| !s.is_empty()) {

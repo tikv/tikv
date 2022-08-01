@@ -92,8 +92,8 @@ impl<S: Snapshot> EventLoader<S> {
         let region_id = region.get_id();
         let scanner = ScannerBuilder::new(snapshot, to_ts)
             .range(
-                Some(Key::from_encoded_slice(&region.start_key)),
-                Some(Key::from_encoded_slice(&region.end_key)),
+                (!region.start_key.is_empty()).then(|| Key::from_encoded_slice(&region.start_key)),
+                (!region.end_key.is_empty()).then(|| Key::from_encoded_slice(&region.end_key)),
             )
             .hint_min_ts(Some(from_ts))
             .fill_cache(false)
@@ -110,7 +110,8 @@ impl<S: Snapshot> EventLoader<S> {
         })
     }
 
-    /// Scan a batch of events from the snapshot, and save them into the internal buffer.
+    /// Scan a batch of events from the snapshot, and save them into the
+    /// internal buffer.
     fn fill_entries(&mut self) -> Result<Statistics> {
         assert!(
             self.entry_batch.is_empty(),
@@ -123,7 +124,7 @@ impl<S: Snapshot> EventLoader<S> {
 
     /// Drain the internal buffer, converting them to the [`ApplyEvents`],
     /// and tracking the locks at the same time.
-    fn omit_entries_to(
+    fn emit_entries_to(
         &mut self,
         result: &mut ApplyEvents,
         resolver: &mut TwoPhaseResolver,
@@ -178,19 +179,22 @@ impl<S: Snapshot> EventLoader<S> {
 /// The context for loading incremental data between range.
 /// Like [`cdc::Initializer`], but supports initialize over range.
 /// Note: maybe we can merge those two structures?
+/// Note': maybe extract more fields to trait so it would be easier to test.
 #[derive(Clone)]
 pub struct InitialDataLoader<E, R, RT> {
-    pub(crate) router: RT,
-    pub(crate) regions: R,
     // Note: maybe we can make it an abstract thing like `EventSink` with
     //       method `async (KvEvent) -> Result<()>`?
     pub(crate) sink: Router,
     pub(crate) tracing: SubscriptionTracer,
     pub(crate) scheduler: Scheduler<Task>,
+    // Note: this is only for `init_range`, maybe make it an argument?
+    pub(crate) regions: R,
+    // Note: Maybe move those fields about initial scanning into some trait?
+    pub(crate) router: RT,
     pub(crate) quota: PendingMemoryQuota,
-    pub(crate) handle: Handle,
     pub(crate) limit: Limiter,
 
+    pub(crate) handle: Handle,
     _engine: PhantomData<E>,
 }
 
@@ -275,11 +279,13 @@ where
     /// and return the current snapshot of that region.
     fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
-        //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
-        //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
-        //      register the region to CDC observer and get a snapshot at the same time.
-        // Registering the observer to the raftstore is necessary because we should only listen events from leader.
-        // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
+        // - the BR method: use the interface in the RaftKv interface, read the
+        //   key-values directly.
+        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
+        //   to register the region to CDC observer and get a snapshot at the same time.
+        // Registering the observer to the raftstore is necessary because we should only
+        // listen events from leader. In CDC, the change observer is
+        // per-delegate(i.e. per-region), we can create the command per-region here too.
 
         let (callback, fut) =
             tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
@@ -348,7 +354,8 @@ where
                 raftstore::store::util::compare_region_epoch(
                     region.get_region_epoch(),
                     &v.value().meta,
-                    // No need for checking conf version because conf change won't cancel the observation.
+                    // No need for checking conf version because conf change won't cancel the
+                    // observation.
                     false,
                     true,
                     false,
@@ -356,8 +363,8 @@ where
                 Ok(v)
             })
             .map_err(|err| Error::Contextual {
-                // Both when we cannot find the region in the track and
-                // the epoch has changed means that we should cancel the current turn of initial scanning.
+                // Both when we cannot find the region in the track and the epoch has changed means
+                // that we should cancel the current turn of initial scanning.
                 inner_error: Box::new(Error::ObserveCanceled(
                     region_id,
                     region.get_region_epoch().clone(),
@@ -381,14 +388,12 @@ where
                 "{:?}", msg
             ))));
             let mut events = ApplyEvents::with_capacity(1024, region.id);
-            let stat = event_loader.fill_entries()?;
-            let disk_read = self.with_resolver(region, |r| {
-                let (result, byte_size) = utils::with_record_read_throughput(|| {
-                    event_loader.omit_entries_to(&mut events, r)
-                });
-                result?;
-                Result::Ok(byte_size)
-            })?;
+            // Note: the call of `fill_entries` is the only step which would read the disk.
+            //       we only need to record the disk throughput of this.
+            let (stat, disk_read) =
+                utils::with_record_read_throughput(|| event_loader.fill_entries());
+            let stat = stat?;
+            self.with_resolver(region, |r| event_loader.emit_entries_to(&mut events, r))?;
             if events.is_empty() {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
@@ -402,6 +407,7 @@ where
             self.limit.blocking_consume(disk_read as _);
             debug!("sending events to router"; "size" => %event_size, "region" => %region_id);
             metrics::INCREMENTAL_SCAN_SIZE.observe(event_size as f64);
+            metrics::INCREMENTAL_SCAN_DISK_READ.inc_by(disk_read as f64);
             metrics::HEAP_MEMORY.add(event_size as _);
             join_handles.push(tokio::spawn(async move {
                 utils::handle_on_event_result(&sched, sink.on_events(events).await);
@@ -444,7 +450,8 @@ where
         Ok(stats)
     }
 
-    /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].
+    /// initialize a range: it simply scan the regions with leader role and send
+    /// them to [`initialize_region`].
     pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         loop {
@@ -454,10 +461,11 @@ where
                 break;
             }
             for r in regions {
-                // Note: Even we did the initial scanning, and blocking resolved ts from advancing,
-                //       if the next_backup_ts was updated in some extreme condition, there is still little chance to lost data:
-                //       For example, if a region cannot elect the leader for long time. (say, net work partition)
-                //       At that time, we have nowhere to record the lock status of this region.
+                // Note: Even we did the initial scanning, and blocking resolved ts from
+                // advancing, if the next_backup_ts was updated in some extreme condition, there
+                // is still little chance to lost data: For example, if a region cannot elect
+                // the leader for long time. (say, net work partition) At that time, we have
+                // nowhere to record the lock status of this region.
                 let success = try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::Start { region: r.region })
@@ -468,5 +476,49 @@ where
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kvproto::metapb::*;
+    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use txn_types::TimeStamp;
+
+    use super::EventLoader;
+    use crate::{
+        router::ApplyEvents, subscription_track::TwoPhaseResolver,
+        utils::with_record_read_throughput,
+    };
+
+    #[test]
+    fn test_disk_read() {
+        let engine = TestEngineBuilder::new().build_without_cache().unwrap();
+        for i in 0..100 {
+            let owned_key = format!("{:06}", i);
+            let key = owned_key.as_bytes();
+            let owned_value = [i as u8; 512];
+            let value = owned_value.as_slice();
+            must_prewrite_put(&engine, key, value, key, i * 2);
+            must_commit(&engine, key, i * 2, i * 2 + 1);
+        }
+        // let compact the memtable to disk so we can see the disk read.
+        engine.get_rocksdb().as_inner().compact_range(None, None);
+
+        let mut r = Region::new();
+        r.set_id(42);
+        r.set_start_key(b"".to_vec());
+        r.set_end_key(b"".to_vec());
+        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+        let mut loader =
+            EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
+
+        let (r, data_load) = with_record_read_throughput(|| loader.fill_entries());
+        r.unwrap();
+        let mut events = ApplyEvents::with_capacity(1024, 42);
+        let mut res = TwoPhaseResolver::new(42, None);
+        loader.emit_entries_to(&mut events, &mut res).unwrap();
+        assert_ne!(events.len(), 0);
+        assert_ne!(data_load, 0);
     }
 }

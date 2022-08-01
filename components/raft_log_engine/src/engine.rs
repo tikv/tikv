@@ -11,9 +11,9 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGCTask, Result,
+    RaftLogGcTask, Result,
 };
-use file_system::{IOOp, IORateLimiter, IOType};
+use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
@@ -47,7 +47,7 @@ pub struct ManagedReader {
         <DefaultFileSystem as FileSystem>::Reader,
         DecrypterReader<<DefaultFileSystem as FileSystem>::Reader>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedReader {
@@ -63,7 +63,7 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundRead, IOOp::Read, size);
+            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -77,7 +77,7 @@ pub struct ManagedWriter {
         <DefaultFileSystem as FileSystem>::Writer,
         EncrypterWriter<<DefaultFileSystem as FileSystem>::Writer>,
     >,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl Seek for ManagedWriter {
@@ -93,7 +93,7 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IOType::ForegroundWrite, IOOp::Write, size);
+            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -133,13 +133,13 @@ impl WriteExt for ManagedWriter {
 pub struct ManagedFileSystem {
     base_file_system: DefaultFileSystem,
     key_manager: Option<Arc<DataKeyManager>>,
-    rate_limiter: Option<Arc<IORateLimiter>>,
+    rate_limiter: Option<Arc<IoRateLimiter>>,
 }
 
 impl ManagedFileSystem {
     pub fn new(
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Self {
         Self {
             base_file_system: DefaultFileSystem,
@@ -256,7 +256,7 @@ impl RaftLogEngine {
     pub fn new(
         config: RaftEngineConfig,
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<Self> {
         let file_system = Arc::new(ManagedFileSystem::new(key_manager, rate_limiter));
         Ok(RaftLogEngine(Arc::new(
@@ -311,7 +311,8 @@ impl RaftLogBatchTrait for RaftLogBatch {
     }
 
     fn cut_logs(&mut self, _: u64, _: u64, _: u64) {
-        // It's unnecessary because overlapped entries can be handled in `append`.
+        // It's unnecessary because overlapped entries can be handled in
+        // `append`.
     }
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()> {
@@ -515,14 +516,14 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize> {
-        self.batch_gc(vec![RaftLogGCTask {
+        self.batch_gc(vec![RaftLogGcTask {
             raft_group_id,
             from,
             to,
         }])
     }
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut batch = self.log_batch(tasks.len());
         let mut old_first_index = Vec::with_capacity(tasks.len());
         for task in &tasks {
@@ -547,12 +548,6 @@ impl RaftEngine for RaftLogEngine {
     fn purge_expired_files(&self) -> Result<Vec<u64>> {
         self.0.purge_expired_files().map_err(transfer_error)
     }
-
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
 
     /// Flush current cache stats.
     fn flush_stats(&self) -> Option<CacheStats> {

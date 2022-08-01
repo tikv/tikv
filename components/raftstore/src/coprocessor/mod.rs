@@ -94,13 +94,21 @@ pub trait AdminObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 
-    /// Hook before exec admin request, returns whether we should skip this admin.
-    fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) -> bool {
+    /// Hook before exec admin request, returns whether we should skip this
+    /// admin.
+    fn pre_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
         false
     }
 
     /// Hook to call immediately after exec command
-    /// Will be a special persistence after this exec if a observer returns true.
+    /// Will be a special persistence after this exec if a observer returns
+    /// true.
     fn post_exec_admin(
         &self,
         _: &mut ObserverContext<'_>,
@@ -113,7 +121,8 @@ pub trait AdminObserver: Coprocessor {
 }
 
 pub trait QueryObserver: Coprocessor {
-    /// Hook when observe applying empty cmd, probably caused by leadership change.
+    /// Hook when observe applying empty cmd, probably caused by leadership
+    /// change.
     fn on_empty_cmd(&self, _: &mut ObserverContext<'_>, _index: u64, _term: u64) {}
 
     /// Hook to call before proposing write request.
@@ -130,13 +139,15 @@ pub trait QueryObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 
-    /// Hook before exec write request, returns whether we should skip this write.
-    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) -> bool {
+    /// Hook before exec write request, returns whether we should skip this
+    /// write.
+    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
         false
     }
 
     /// Hook to call immediately after exec command.
-    /// Will be a special persistence after this exec if a observer returns true.
+    /// Will be a special persistence after this exec if a observer returns
+    /// true.
     fn post_exec_query(
         &self,
         _: &mut ObserverContext<'_>,
@@ -150,12 +161,12 @@ pub trait QueryObserver: Coprocessor {
 
 pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call after applying key from plain file.
-    /// This may be invoked multiple times for each plain file, and each time a batch of key-value
-    /// pairs will be passed to the function.
+    /// This may be invoked multiple times for each plain file, and each time a
+    /// batch of key-value pairs will be passed to the function.
     fn apply_plain_kvs(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[(Vec<u8>, Vec<u8>)]) {}
 
-    /// Hook to call after applying sst file. Currently the content of the snapshot can't be
-    /// passed to the observer.
+    /// Hook to call after applying sst file. Currently the content of the
+    /// snapshot can't be passed to the observer.
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 }
 
@@ -228,8 +239,8 @@ pub trait RoleObserver: Coprocessor {
     /// Hook to call when role of a peer changes.
     ///
     /// Please note that, this hook is not called at realtime. There maybe a
-    /// situation that the hook is not called yet, however the role of some peers
-    /// have changed.
+    /// situation that the hook is not called yet, however the role of some
+    /// peers have changed.
     fn on_role_change(&self, _: &mut ObserverContext<'_>, _: &RoleChange) {}
 }
 
@@ -286,8 +297,9 @@ impl ObserveID {
     }
 }
 
-/// ObserveHandle is the status of a term of observing, it contains the `ObserveID`
-/// and the `observing` flag indicate whether the observing is ongoing
+/// ObserveHandle is the status of a term of observing, it contains the
+/// `ObserveID` and the `observing` flag indicate whether the observing is
+/// ongoing
 #[derive(Clone, Default, Debug)]
 pub struct ObserveHandle {
     pub id: ObserveID,
@@ -338,14 +350,15 @@ impl CmdObserveInfo {
         }
     }
 
-    /// Get the max observe level of the observer info by the observers currently registered.
-    /// Currently, TiKV uses a static strategy for managing observers.
-    /// There are a fixed number type of observer being registered in each TiKV node,
-    /// and normally, observers are singleton.
+    /// Get the max observe level of the observer info by the observers
+    /// currently registered. Currently, TiKV uses a static strategy for
+    /// managing observers. There are a fixed number type of observer being
+    /// registered in each TiKV node, and normally, observers are singleton.
     /// The types are:
     /// CDC: Observer supports the `ChangeData` service.
     /// PiTR: Observer supports the `backup-log` function.
-    /// RTS: Observer supports the `resolved-ts` advancing (and follower read, etc.).
+    /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
+    /// etc.).
     fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
@@ -461,7 +474,8 @@ pub trait CmdObserver<E>: Coprocessor {
         cmd_batches: &mut Vec<CmdBatch>,
         engine: &E,
     );
-    // TODO: maybe shoulde move `on_applied_current_term` to a separated `Coprocessor`
+    // TODO: maybe should move `on_applied_current_term` to a separated
+    // `Coprocessor`
     /// Hook to call at the first time the leader applied on its term
     fn on_applied_current_term(&self, role: StateRole, region: &Region);
 }

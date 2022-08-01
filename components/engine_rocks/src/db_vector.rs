@@ -5,20 +5,20 @@ use std::{
     ops::Deref,
 };
 
-use engine_traits::DBVector;
+use engine_traits::DbVector;
 use rocksdb::DBVector as RawDBVector;
 
-pub struct RocksDBVector(RawDBVector);
+pub struct RocksDbVector(RawDBVector);
 
-impl RocksDBVector {
-    pub fn from_raw(raw: RawDBVector) -> RocksDBVector {
-        RocksDBVector(raw)
+impl RocksDbVector {
+    pub fn from_raw(raw: RawDBVector) -> RocksDbVector {
+        RocksDbVector(raw)
     }
 }
 
-impl DBVector for RocksDBVector {}
+impl DbVector for RocksDbVector {}
 
-impl Deref for RocksDBVector {
+impl Deref for RocksDbVector {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -26,13 +26,13 @@ impl Deref for RocksDBVector {
     }
 }
 
-impl Debug for RocksDBVector {
+impl Debug for RocksDbVector {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         write!(formatter, "{:?}", &**self)
     }
 }
 
-impl<'a> PartialEq<&'a [u8]> for RocksDBVector {
+impl<'a> PartialEq<&'a [u8]> for RocksDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         **rhs == **self
     }

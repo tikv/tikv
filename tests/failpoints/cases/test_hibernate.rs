@@ -19,7 +19,8 @@ fn test_break_leadership_on_restart() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
-    // So the random election timeout will always be 10, which makes the case more stable.
+    // So the random election timeout will always be 10, which makes the case more
+    // stable.
     cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
     cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
     configure_for_hibernate(&mut cluster);
@@ -38,8 +39,8 @@ fn test_break_leadership_on_restart() {
 
     // Peer 3 will:
     // 1. steps a heartbeat message from its leader and then ticks 1 time.
-    // 2. ticks a peer_stale_state_check, which will change state from Idle to PreChaos.
-    // 3. continues to tick until it hibernates totally.
+    // 2. ticks a peer_stale_state_check, which will change state from Idle to
+    // PreChaos. 3. continues to tick until it hibernates totally.
     let (tx, rx) = mpsc::sync_channel(128);
     fail::cfg_callback("on_raft_base_tick_idle", move || tx.send(0).unwrap()).unwrap();
     let mut raft_msg = RaftMessage::default();
@@ -65,8 +66,8 @@ fn test_break_leadership_on_restart() {
     // Until here, peer 3 will be like `election_elapsed=3 && missing_ticks=6`.
     thread::sleep(Duration::from_millis(base_tick_ms * 10));
 
-    // Restart the peer 2 and it will broadcast `MsgRequestPreVote` later, which will wake up
-    // peer 1 and 3.
+    // Restart the peer 2 and it will broadcast `MsgRequestPreVote` later, which
+    // will wake up peer 1 and 3.
     let (tx, rx) = mpsc::sync_channel(128);
     let filter = RegionPacketFilter::new(1, 3)
         .direction(Direction::Send)
@@ -76,6 +77,7 @@ fn test_break_leadership_on_restart() {
     cluster.add_send_filter(CloneFilterFactory(filter));
     cluster.run_node(2).unwrap();
 
-    // Peer 3 shouldn't start a new election, otherwise the leader may step down incorrectly.
+    // Peer 3 shouldn't start a new election, otherwise the leader may step down
+    // incorrectly.
     assert!(rx.recv_timeout(Duration::from_secs(2)).is_err());
 }

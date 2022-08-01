@@ -1101,8 +1101,9 @@
 ## Configurations for encryption at rest. Experimental.
 [security.encryption]
 ## Encryption method to use for data files.
-## Possible values are "plaintext", "aes128-ctr", "aes192-ctr" and "aes256-ctr". Value other than
-## "plaintext" means encryption is enabled, in which case master key must be specified.
+## Possible values are "plaintext", "aes128-ctr", "aes192-ctr", "aes256-ctr" and "sm4-ctr".
+## Value other than "plaintext" means encryption is enabled, in which case
+## master key must be specified.
 # data-encryption-method = "plaintext"
 
 ## Specifies how often TiKV rotates data encryption key.
@@ -1188,7 +1189,7 @@
 
 [log-backup] 
 ## Number of threads to perform backup stream tasks.
-## The default value is set to min(CPU_NUM * 0.5, 8).
+## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.

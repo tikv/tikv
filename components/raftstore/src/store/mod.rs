@@ -2,6 +2,7 @@
 
 pub mod cmd_resp;
 pub mod config;
+pub mod entry_storage;
 pub mod fsm;
 pub mod memory;
 pub mod metrics;
@@ -27,13 +28,18 @@ mod worker;
 #[cfg(any(test, feature = "testexport"))]
 pub use self::msg::PeerInternalStat;
 pub use self::{
+    async_io::{
+        write::{Worker as WriteWorker, WriteMsg, WriteTask},
+        write_router::WriteRouter,
+    },
     bootstrap::{
         bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,
         initial_region, prepare_bootstrap_cluster,
     },
     compaction_guard::CompactionGuardGeneratorFactory,
     config::Config,
-    fsm::{DestroyPeerJob, RaftRouter, StoreInfo},
+    entry_storage::{EntryStorage, RaftlogFetchResult, MAX_INIT_ENTRY_COUNT},
+    fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter, StoreInfo},
     hibernate_state::{GroupState, HibernateState},
     memory::*,
     metrics::RAFT_ENTRY_FETCHES_VEC,
@@ -45,8 +51,8 @@ pub use self::{
     peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
-        write_peer_state, PeerStorage, RaftlogFetchResult, SnapState, INIT_EPOCH_CONF_VER,
-        INIT_EPOCH_VER, MAX_INIT_ENTRY_COUNT, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
     read_queue::ReadIndexContext,
     region_snapshot::{RegionIterator, RegionSnapshot},

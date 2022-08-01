@@ -7,6 +7,7 @@ use std::{
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
+use engine_traits::MiscExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
