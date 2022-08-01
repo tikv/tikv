@@ -302,7 +302,8 @@ impl ImportDir {
         for meta in metas {
             match (api_version, meta.api_version) {
                 (cur_version, meta_version) if cur_version == meta_version => continue,
-                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted as V1ttl
+                // sometimes client do not know whether ttl is enabled, so a general V1 is accepted
+                // as V1ttl
                 (ApiVersion::V1ttl, ApiVersion::V1) => continue,
                 // import V1ttl as V1 will immediatly be rejected because it is never correct.
                 (ApiVersion::V1, ApiVersion::V1ttl) => return Ok(false),
@@ -316,7 +317,8 @@ impl ImportDir {
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
                         let mut unexpected_data_key = None;
-                        sst_reader.scan(start, end, false, |key, _| {
+                        // No CF in sst.
+                        sst_reader.scan("", start, end, false, |key, _| {
                             unexpected_data_key = Some(key.to_vec());
                             Ok(false)
                         })?;
@@ -450,8 +452,9 @@ pub fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
     meta.mut_region_epoch().set_conf_ver(elems[2].parse()?);
     meta.mut_region_epoch().set_version(elems[3].parse()?);
     if elems.len() > 4 {
-        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read cf_name from
-        // the file path, because TiKV 3.0.x does not encode cf_name to path.
+        // If we upgrade TiKV from 3.0.x to 4.0.x and higher version, we can not read
+        // cf_name from the file path, because TiKV 3.0.x does not encode
+        // cf_name to path.
         meta.set_cf_name(elems[4].to_owned());
     }
     Ok(meta)

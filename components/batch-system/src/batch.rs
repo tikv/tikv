@@ -1,9 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This is the core implementation of a batch system. Generally there will be two
-//! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
-//! represents a peer, the other is control FSM, which usually represents something
-//! that controls how the former is created or metrics are collected.
+//! This is the core implementation of a batch system. Generally there will be
+//! two different kind of FSMs in TiKV's FSM system. One is normal FSM, which
+//! usually represents a peer, the other is control FSM, which usually
+//! represents something that controls how the former is created or metrics are
+//! collected.
 
 // #[PerformanceCriticalPath]
 use std::{
@@ -16,7 +17,7 @@ use std::{
 
 use crossbeam::channel::{self, SendError};
 use fail::fail_point;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use tikv_util::{
     debug, error, info, mpsc, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name,
     time::Instant, warn,
@@ -39,7 +40,7 @@ pub enum FsmTypes<N, C> {
 
 // A macro to introduce common definition of scheduler.
 macro_rules! impl_sched {
-    ($name:ident, $ty:path, Fsm = $fsm:tt) => {
+    ($name:ident, $ty:path,Fsm = $fsm:tt) => {
         pub struct $name<N, C> {
             sender: channel::Sender<FsmTypes<N, C>>,
             low_sender: channel::Sender<FsmTypes<N, C>>,
@@ -205,8 +206,9 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     /// Schedule the normal FSM located at `index`.
     ///
-    /// If `inplace`, the relative position of all fsm will not be changed; otherwise, the fsm
-    /// will be popped and the last fsm will be swap in to reduce memory copy.
+    /// If `inplace`, the relative position of all fsm will not be changed;
+    /// otherwise, the fsm will be popped and the last fsm will be swap in
+    /// to reduce memory copy.
     pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize, inplace: bool) {
         let to_schedule = match self.normals[index].take() {
             Some(f) => f,
@@ -267,8 +269,8 @@ pub enum HandleResult {
     KeepProcessing,
     /// The Fsm should stop at the progress.
     StopAt {
-        /// The count of messages that have been acknowledged by handler. The fsm should be
-        /// released until new messages arrive.
+        /// The count of messages that have been acknowledged by handler. The
+        /// fsm should be released until new messages arrive.
         progress: usize,
         /// Whether the fsm should be released before `end`.
         skip_end: bool,
@@ -307,7 +309,7 @@ pub trait PollHandler<N, C>: Send + 'static {
     /// This function is called when handling readiness for control FSM.
     ///
     /// If returned value is Some, then it represents a length of channel. This
-    /// function will only be called for the same fsm after channel's lengh is
+    /// function will only be called for the same fsm after channel's length is
     /// larger than the value. If it returns None, then this function will
     /// still be called for the same FSM in the next loop unless the FSM is
     /// stopped.
@@ -318,8 +320,8 @@ pub trait PollHandler<N, C>: Send + 'static {
     /// The returned value is handled in the same way as `handle_control`.
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = N>) -> HandleResult;
 
-    /// This function is called after `handle_normal` is called for all fsm and before calling
-    /// `end`. The function is expected to run lightweight work.
+    /// This function is called after `handle_normal` is called for all fsm and
+    /// before calling `end`. The function is expected to run lightweight work.
     fn light_end(&mut self, _batch: &mut [Option<impl DerefMut<Target = N>>]) {}
 
     /// This function is called at the end of every round.
@@ -389,13 +391,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut to_skip_end = Vec::with_capacity(self.max_batch_size);
 
         // Fetch batch after every round is finished. It's helpful to protect regions
-        // from becoming hungry if some regions are hot points. Since we fetch new fsm every time
-        // calling `poll`, we do not need to configure a large value for `self.max_batch_size`.
+        // from becoming hungry if some regions are hot points. Since we fetch new fsm
+        // every time calling `poll`, we do not need to configure a large value for
+        // `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
-            // If there is some region wait to be deal, we must deal with it even if it has overhead
-            // max size of batch. It's helpful to protect regions from becoming hungry
-            // if some regions are hot points.
+            // If there is some region wait to be deal, we must deal with it even if it has
+            // overhead max size of batch. It's helpful to protect regions from becoming
+            // hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // update some online config if needed.
             {
@@ -454,9 +457,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
-                // If we receive a ControlFsm, break this cycle and call `end`. Because ControlFsm
-                // may change state of the handler, we shall deal with it immediately after
-                // calling `begin` of `Handler`.
+                // If we receive a ControlFsm, break this cycle and call `end`. Because
+                // ControlFsm may change state of the handler, we shall deal with it immediately
+                // after calling `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
@@ -586,7 +589,7 @@ where
             .name(name)
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
                 poller.poll();
             })
             .unwrap();

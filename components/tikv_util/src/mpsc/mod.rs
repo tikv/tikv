@@ -1,12 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-/*!
-
-This module provides an implementation of mpsc channel based on
-crossbeam_channel. Comparing to the crossbeam_channel, this implementation
-supports closed detection and try operations.
-
-*/
+//! This module provides an implementation of mpsc channel based on
+//! crossbeam_channel. Comparing to the crossbeam_channel, this implementation
+//! supports closed detection and try operations.
 pub mod batch;
 
 use std::{
@@ -21,6 +17,7 @@ use std::{
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
+use fail::fail_point;
 
 struct State {
     sender_cnt: AtomicIsize,
@@ -99,7 +96,8 @@ impl<T> Sender<T> {
         self.sender.is_empty()
     }
 
-    /// Blocks the current thread until a message is sent or the channel is disconnected.
+    /// Blocks the current thread until a message is sent or the channel is
+    /// disconnected.
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if self.state.is_sender_connected() {
@@ -239,7 +237,11 @@ impl<T> LooseBoundedSender<T> {
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         let cnt = self.tried_cnt.get();
-        if cnt < CHECK_INTERVAL {
+        let check_interval = || {
+            fail_point!("loose_bounded_sender_check_interval", |_| 0);
+            CHECK_INTERVAL
+        };
+        if cnt < check_interval() {
             self.tried_cnt.set(cnt + 1);
         } else if self.len() < self.limit {
             self.tried_cnt.set(1);

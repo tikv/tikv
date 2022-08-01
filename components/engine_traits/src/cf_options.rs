@@ -1,17 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{db_options::TitanDBOptions, sst_partitioner::SstPartitionerFactory, Result};
+use crate::{db_options::TitanDbOptions, sst_partitioner::SstPartitionerFactory, Result};
 
 /// Trait for engines with column family options
-pub trait CFOptionsExt {
-    type ColumnFamilyOptions: ColumnFamilyOptions;
+pub trait CfOptionsExt {
+    type CfOptions: CfOptions;
 
-    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions>;
+    fn get_options_cf(&self, cf: &str) -> Result<Self::CfOptions>;
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()>;
 }
 
-pub trait ColumnFamilyOptions {
-    type TitanDBOptions: TitanDBOptions;
+pub trait CfOptions {
+    type TitanDbOptions: TitanDbOptions;
 
     fn new() -> Self;
     fn get_max_write_buffer_number(&self) -> u32;
@@ -21,8 +21,8 @@ pub trait ColumnFamilyOptions {
     fn get_soft_pending_compaction_bytes_limit(&self) -> u64;
     fn get_hard_pending_compaction_bytes_limit(&self) -> u64;
     fn get_block_cache_capacity(&self) -> u64;
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String>;
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions);
+    fn set_block_cache_capacity(&self, capacity: u64) -> Result<()>;
+    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions);
     fn get_target_file_size_base(&self) -> u64;
     fn set_disable_auto_compactions(&mut self, v: bool);
     fn get_disable_auto_compactions(&self) -> bool;

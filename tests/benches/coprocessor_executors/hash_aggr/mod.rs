@@ -40,8 +40,8 @@ fn bench_hash_aggr_count_1_group_by_int_col_2_groups<M>(
 }
 
 /// COUNT(1) GROUP BY COL > X.
-/// Half of the row belong to one group and the rest belong to another group. Thus there are
-/// totally two groups.
+/// Half of the row belong to one group and the rest belong to another group.
+/// Thus there are totally two groups.
 fn bench_hash_aggr_count_1_group_by_fn_2_groups<M>(
     b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
@@ -94,8 +94,8 @@ fn bench_hash_aggr_count_1_group_by_decimal_col_2_groups<M>(
     input.bencher.bench(b, &fb, &group_by, &[expr]);
 }
 
-/// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
-/// Each row is a new group.
+/// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real
+/// column. Each row is a new group.
 fn bench_hash_aggr_count_1_group_by_int_col_real_col<M>(
     b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,
@@ -115,8 +115,8 @@ fn bench_hash_aggr_count_1_group_by_int_col_real_col<M>(
     input.bencher.bench(b, &fb, &group_by, &[expr]);
 }
 
-/// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
-/// There will be two groups totally.
+/// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real
+/// column. There will be two groups totally.
 fn bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups<M>(
     b: &mut criterion::Bencher<'_, M>,
     input: &Input<M>,

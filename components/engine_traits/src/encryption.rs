@@ -53,4 +53,5 @@ pub enum EncryptionMethod {
     Aes128Ctr = 2,
     Aes192Ctr = 3,
     Aes256Ctr = 4,
+    Sm4Ctr = 5,
 }
