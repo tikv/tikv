@@ -2320,7 +2320,8 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
                 .get_engine_size()
                 .expect("raft engine used size");
         let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available here.
+        // We only care about rocksdb SST file size, so we should check disk available
+        // here.
         available = cmp::min(available, disk_stats.available_space());
         Some((capacity, used_size, available))
     }
@@ -2520,7 +2521,7 @@ mod tests {
     use metapb::Peer;
     use resource_metering::{RawRecord, TagInfos};
 
-    use crate::coprocessor::{BoxPdTaskObserver, Coprocessor, EngineSize, PdTaskObserver};
+    use crate::coprocessor::{BoxPdTaskObserver, Coprocessor, PdTaskObserver, StoreSizeInfo};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2632,8 +2633,8 @@ mod tests {
     impl Coprocessor for PdObserver {}
 
     impl PdTaskObserver for PdObserver {
-        fn on_compute_engine_size(&self, s: &mut Option<EngineSize>) {
-            let _ = s.insert(EngineSize {
+        fn on_compute_engine_size(&self, s: &mut Option<StoreSizeInfo>) {
+            let _ = s.insert(StoreSizeInfo {
                 capacity: 444,
                 used: 111,
                 avail: 333,

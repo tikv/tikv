@@ -204,7 +204,7 @@ pub trait SplitCheckObserver<E>: Coprocessor {
 }
 
 #[derive(Debug, Default)]
-pub struct EngineSize {
+pub struct StoreSizeInfo {
     pub capacity: u64,
     pub used: u64,
     pub avail: u64,
@@ -212,7 +212,7 @@ pub struct EngineSize {
 
 pub trait PdTaskObserver: Coprocessor {
     /// Compute capacity/used/available size of this store.
-    fn on_compute_engine_size(&self, _: &mut Option<EngineSize>) {}
+    fn on_compute_engine_size(&self, _: &mut Option<StoreSizeInfo>) {}
 }
 
 pub struct RoleChange {

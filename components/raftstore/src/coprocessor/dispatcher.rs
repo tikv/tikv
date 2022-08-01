@@ -555,7 +555,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         Ok(hashes)
     }
 
-    pub fn on_compute_engine_size(&self) -> Option<EngineSize> {
+    pub fn on_compute_engine_size(&self) -> Option<StoreSizeInfo> {
         let mut store_size = None;
         for observer in &self.registry.pd_task_observers {
             let observer = observer.observer.inner();
@@ -738,7 +738,7 @@ mod tests {
     }
 
     impl PdTaskObserver for TestCoprocessor {
-        fn on_compute_engine_size(&self, _: &mut Option<EngineSize>) {
+        fn on_compute_engine_size(&self, _: &mut Option<StoreSizeInfo>) {
             self.called.fetch_add(19, Ordering::SeqCst);
         }
     }
