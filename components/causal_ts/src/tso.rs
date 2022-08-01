@@ -166,11 +166,11 @@ struct TsoBatchList {
 /// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
 ///
 /// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
-/// after the it is removed,    which would violate the causality requirement.
-/// The `RwLock<BTreeMap>` avoid this scenario    by lock synchronization.
+/// after the it is removed, which would violate the causality requirement.
+/// The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
 ///
-/// 2. It is a scenario with much more reads than writes. The `RwLock` would be
-/// no less efficient    than lock free implementation.
+/// 2. It is a scenario with much more reads than writes. The `RwLock` would not
+/// be less efficient than lock free implementation.
 type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
 
 enum TsoBatchListIter<'a> {
@@ -446,11 +446,10 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
                     "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);
 
                 // Should only be invoked after successful renew. Otherwise the TSO usage will
-                // be lost, and batch size requirement will be less than
-                // expected. Note that invoked here is not precise. There would
-                // be `get_ts()` before here after above
-                // `tso_batch_list.push()`, and make `tso_usage` a little bigger.
-                // This error is acceptable.
+                // be lost, and batch size requirement will be less than expected. Note that
+                // invoked here is not precise. There would be `get_ts()` before here after
+                // above `tso_batch_list.push()`, and make `tso_usage` a little bigger. This
+                // error is acceptable.
                 tso_batch_list.take_and_report_usage();
 
                 Ok(())
