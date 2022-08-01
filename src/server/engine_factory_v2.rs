@@ -288,7 +288,7 @@ mod tests {
             builder = builder.block_cache(cache);
         }
 
-        let factory = builder.buildv2();
+        let factory = builder.build_v2();
         let tablet = factory.create_tablet(1, 10).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
@@ -333,7 +333,7 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let factory = builder.buildv2();
+        let factory = builder.build_v2();
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
@@ -357,7 +357,7 @@ mod tests {
         if let Some(cache) = cache {
             builder = builder.block_cache(cache);
         }
-        let factory = builder.buildv2();
+        let factory = builder.build_v2();
         let tablet = factory.create_tablet(1, 10).unwrap();
         let tablet_latest_cache = factory.open_tablet_cache_latest(1).unwrap();
         assert_eq!(

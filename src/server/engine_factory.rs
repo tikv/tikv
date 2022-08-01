@@ -92,7 +92,7 @@ impl KvEngineFactoryBuilder {
         }
     }
 
-    pub fn buildv2(self) -> KvEngineFactoryV2 {
+    pub fn build_v2(self) -> KvEngineFactoryV2 {
         let factory = KvEngineFactory {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
