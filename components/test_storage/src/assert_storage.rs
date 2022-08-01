@@ -330,7 +330,6 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
     ) where
         T: std::fmt::Debug,
     {
-        assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
             StorageError(box StorageErrorInner::Txn(TxnError(
