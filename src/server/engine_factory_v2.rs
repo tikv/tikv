@@ -229,9 +229,7 @@ mod tests {
         }
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
-        let tablet = TabletFactory::create_tablet(&factory, 1, 10);
-        assert!(tablet.is_ok());
-        let tablet = tablet.unwrap();
+        let tablet = TabletFactory::create_tablet(&factory, 1, 10).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
         assert_eq!(tablet.as_inner().path(), shared_db.as_inner().path());
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
@@ -272,9 +270,7 @@ mod tests {
         }
         let inner_factory = builder.build();
         let factory = KvEngineFactoryV2::new(inner_factory);
-        let tablet = factory.create_tablet(1, 10);
-        assert!(tablet.is_ok());
-        let tablet = tablet.unwrap();
+        let tablet = factory.create_tablet(1, 10).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
         let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
@@ -296,8 +292,8 @@ mod tests {
         assert!(!factory.exists(2, 11));
         assert!(factory.exists_raw(&tablet_path));
         assert!(!factory.is_tombstoned(1, 10));
-        assert!(factory.load_tablet(&tablet_path, 1, 10).is_err());
-        assert!(factory.load_tablet(&tablet_path, 1, 20).is_ok());
+        factory.load_tablet(&tablet_path, 1, 10).unwrap_err();
+        factory.load_tablet(&tablet_path, 1, 20).unwrap();
         // After we load it as with the new id or suffix, we should be unable to get it
         // with the old id and suffix in the cache.
         assert!(factory.open_tablet_cache(1, 10).is_none());

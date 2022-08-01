@@ -413,7 +413,7 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", insert returns ok.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 6).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 6).unwrap();
         must_commit(&engine, k1, 6, 7);
 
         // Rollback
@@ -434,7 +434,7 @@ pub(crate) mod tests {
         must_rollback(&engine, k1, 12, false);
 
         // After delete "k1", insert returns ok.
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 13).unwrap();
         must_commit(&engine, k1, 13, 14);
     }
 
@@ -453,9 +453,9 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 4, 5);
 
         // After delete "k1", check_not_exists returns ok.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 6).is_ok());
+        try_prewrite_check_not_exists(&engine, k1, k1, 6).unwrap();
 
-        assert!(try_prewrite_insert(&engine, k1, v2, k1, 7).is_ok());
+        try_prewrite_insert(&engine, k1, v2, k1, 7).unwrap();
         must_commit(&engine, k1, 7, 8);
 
         // Rollback
@@ -472,7 +472,7 @@ pub(crate) mod tests {
         must_rollback(&engine, k1, 13, false);
 
         // After delete "k1", check_not_exists returns ok.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 14).is_ok());
+        try_prewrite_check_not_exists(&engine, k1, k1, 14).unwrap();
     }
 
     #[test]

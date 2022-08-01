@@ -1420,7 +1420,7 @@ mod tests {
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
-        assert!(String::from_utf8(body_bytes.as_ref().to_owned()).is_ok());
+        String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
 
         // test gzip
         let handle = status_server.thread_pool.spawn(async move {
@@ -1440,7 +1440,7 @@ mod tests {
         GzDecoder::new(body_bytes.reader())
             .read_to_end(&mut decoded_bytes)
             .unwrap();
-        assert!(String::from_utf8(decoded_bytes).is_ok());
+        String::from_utf8(decoded_bytes).unwrap();
 
         status_server.stop();
     }
