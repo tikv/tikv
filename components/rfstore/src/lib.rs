@@ -1,7 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(in_band_lifetimes)]
-#![feature(backtrace)]
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;

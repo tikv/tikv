@@ -1347,7 +1347,11 @@ impl CompactRunner {
         }
     }
 
-    fn pick_highest_pri_pending_shard(&self) -> Option<IDVer> {
+    fn pick_highest_pri_pending_shard(&mut self) -> Option<IDVer> {
+        let engine = self.engine.clone();
+        self.pending
+            .retain(|id_ver| engine.get_shard_with_ver(id_ver.id, id_ver.ver).is_ok());
+
         // Pick the shard that ready to destroy range.
         if let Some(id_ver) = self.pending.iter().find(|id_ver| {
             self.engine

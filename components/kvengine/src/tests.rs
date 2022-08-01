@@ -383,7 +383,7 @@ impl MetaApplier {
     fn run(&self) {
         loop {
             let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
-            self.engine.meta_committed(&cs);
+            self.engine.meta_committed(&cs, false);
             unwrap_or_return!(
                 self.engine
                     .apply_change_set(self.engine.prepare_change_set(cs, false).unwrap()),

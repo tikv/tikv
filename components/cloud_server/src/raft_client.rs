@@ -210,6 +210,7 @@ impl BatchMessageBuffer {
     }
 
     #[cfg(test)]
+    #[allow(unused)]
     fn clear(&mut self) {
         self.batch = BatchRaftMessage::default();
         self.size = 0;

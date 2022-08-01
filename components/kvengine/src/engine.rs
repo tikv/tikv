@@ -274,8 +274,9 @@ impl EngineCore {
         let shard = self.get_shard(shard_id).ok_or(Error::ShardNotFound)?;
         if shard.ver != shard_ver {
             warn!(
-                "shard {} version not match, current {}, request {}",
-                shard_id, shard.ver, shard_ver
+                "shard {} version not match, request {}",
+                shard.tag(),
+                shard_ver,
             );
             return Err(Error::ShardNotMatch);
         }
@@ -460,12 +461,18 @@ impl EngineCore {
     }
 
     // meta_committed should be called when a change set is committed in the raft group.
-    pub fn meta_committed(&self, cs: &kvenginepb::ChangeSet) {
+    pub fn meta_committed(&self, cs: &kvenginepb::ChangeSet, rejected: bool) {
         if cs.has_flush() || cs.has_initial_flush() {
             let table_version = change_set_table_version(cs);
             let id_ver = IDVer::new(cs.shard_id, cs.shard_ver);
             self.flush_tx
                 .send(FlushMsg::Committed((id_ver, table_version)))
+                .unwrap();
+        }
+        if rejected && (cs.has_compaction() || cs.has_destroy_range()) {
+            // Notify the compaction runner otherwise the shard can't be compacted any more.
+            self.compact_tx
+                .send(CompactMsg::Applied(IDVer::new(cs.shard_id, cs.shard_ver)))
                 .unwrap();
         }
     }

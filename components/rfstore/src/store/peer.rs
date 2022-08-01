@@ -1343,7 +1343,6 @@ impl Peer {
         let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
         let mut cs = custom_log.get_change_set().unwrap();
         cs.set_sequence(entry.get_index());
-        ctx.global.engines.kv.meta_committed(&cs);
         let region_id = self.region_id;
         let tag = self.tag();
         let opt_parent_id = self.mut_store().parent_id();
@@ -1365,6 +1364,7 @@ impl Peer {
                 "seq" => cs.get_sequence(),
             );
         }
+        ctx.global.engines.kv.meta_committed(&cs, rejected);
         if rejected {
             return;
         }
