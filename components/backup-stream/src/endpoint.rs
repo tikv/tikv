@@ -222,7 +222,7 @@ where
                     let safepoint = meta_cli.global_progress_of_task(&task).await?;
                     pdc.update_service_safe_point(
                         safepoint_name,
-                        TimeStamp::new(safepoint - 1),
+                        TimeStamp::new(safepoint.saturating_sub(1)),
                         safepoint_ttl,
                     )
                     .await?;
