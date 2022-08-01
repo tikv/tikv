@@ -129,7 +129,7 @@ where
         } else {
             store.set_status_address(cfg.advertise_status_addr.clone())
         }
-        if !store.hash_version() {
+        if store.get_version() == "" {
             store.set_version(env!("CARGO_PKG_VERSION").to_string());
         }
 
@@ -140,7 +140,7 @@ where
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
-        if !store.has_git_hash() {
+        if store.get_git_hash() == "" {
             store.set_git_hash(
                 option_env!("TIKV_BUILD_GIT_HASH")
                     .unwrap_or("Unknown git hash")
