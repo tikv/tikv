@@ -83,8 +83,8 @@ where
 /// Extra writes besides raft engine.
 ///
 /// For now, applying snapshot needs to persist some extra states. For v1,
-/// these states are written to KvEngine. For v2, they are written to raft
-/// engine.
+/// these states are written to KvEngine. For v2, they are written to
+/// RaftEngine.
 // TODO: perhaps we should always pass states instead of a write batch even
 // for v1.
 pub enum ExtraWrite<W> {

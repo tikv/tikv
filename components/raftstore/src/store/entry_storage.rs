@@ -546,7 +546,6 @@ pub struct EntryStorage<ER> {
 
 impl<ER: RaftEngine> EntryStorage<ER> {
     pub fn new(
-        region_id: u64,
         peer_id: u64,
         raft_engine: ER,
         mut raft_state: RaftLocalState,
@@ -554,12 +553,10 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         region: &metapb::Region,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Result<Self> {
-        if let Err(e) =
-            validate_states(region.get_id(), &raft_engine, &mut raft_state, &apply_state)
-        {
+        if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
                 "[region {}] {} validate state fail: {:?}",
-                region_id,
+                region.id,
                 peer_id,
                 e
             ));
@@ -567,7 +564,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
         let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
         Ok(Self {
-            region_id,
+            region_id: region.id,
             peer_id,
             raft_engine,
             cache: EntryCache::default(),

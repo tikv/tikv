@@ -303,7 +303,6 @@ where
         let apply_state = init_apply_state(&engines, region)?;
 
         let entry_storage = EntryStorage::new(
-            region.id,
             peer_id,
             engines.raft.clone(),
             raft_state,
