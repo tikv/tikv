@@ -2105,13 +2105,13 @@ where
     fn clear_pending_proposals_on_role_changed(
         &mut self,
         state_role: Option<StateRole>,
-        dry_run: bool,
+        mut dry_run: bool,
     ) {
         use std::env;
 
         match env::var("ENABLE_BUGFIX") {
             Ok(_) => {}
-            Err(_) => return,
+            Err(_) => dry_run = true,
         };
 
         if let Some(state_role) = state_role {
@@ -2121,32 +2121,29 @@ where
                 "targer_role" => ?state_role,
                 "current_role" => ?self.raft_group.status().ss.raft_state,
             );
-            match state_role {
+            if state_role == StateRole::Follower {
                 // Role changes to follower, drop the stal proposals since these proposals
                 // can't be committed anymore.
-                StateRole::Follower => {
-                    if !self.proposals.is_empty() {
-                        info!(
-                            "requests are staled due to role changed to follower";
-                            "dry_run" => dry_run,
-                        );
-                        if !dry_run {
-                            let mut i = 0;
-                            while let Some(p) = self.proposals.queue.pop_front() {
-                                apply::notify_stale_req_with_msg(
-                                    self.term(),
-                                    format!(
-                                        "request is staled due to role changed to follower, index={}",
-                                        i,
-                                    ),
-                                    p.cb,
-                                );
-                                i = i + 1;
-                            }
+                if !self.proposals.is_empty() {
+                    info!(
+                        "requests are staled due to role changed to follower";
+                        "dry_run" => dry_run,
+                    );
+                    if !dry_run {
+                        let mut i = 0;
+                        while let Some(p) = self.proposals.queue.pop_front() {
+                            apply::notify_stale_req_with_msg(
+                                self.term(),
+                                format!(
+                                    "request is staled due to role changed to follower, index={}",
+                                    i,
+                                ),
+                                p.cb,
+                            );
+                            i += 1;
                         }
                     }
                 }
-                _ => {}
             }
         }
     }
