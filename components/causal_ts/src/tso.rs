@@ -51,22 +51,24 @@ use crate::{
     CausalTsProvider,
 };
 
-// Renew on every 100ms, to adjust batch size rapidly enough.
+/// Renew on every 100ms, to adjust batch size rapidly enough.
 pub(crate) const DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS: u64 = 100;
-// Minimal batch size of TSO requests. This is an empirical value.
+/// Minimal batch size of TSO requests. This is an empirical value.
 pub(crate) const DEFAULT_TSO_BATCH_MIN_SIZE: u32 = 100;
-// Maximum batch size of TSO requests. As PD provides 262144 TSO per 50ms,
-// conservatively set to 1/16 of 262144. Exceed this space will cause PD to
-// sleep for 50ms, waiting for physical update interval. The 50ms limitation can
-// not be broken through now (see `tso-update-physical-interval`).
+/// Maximum batch size of TSO requests.
+/// As PD provides 262144 TSO per 50ms, conservatively set to 1/16 of 262144.
+/// Exceed this space will cause PD to sleep for 50ms, waiting for physical
+/// update interval. The 50ms limitation can not be broken through now (see
+/// `tso-update-physical-interval`).
 pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
-// Maximum available interval of TSO cache.
-// It means the duration that TSO we cache would be available despite failure of
-// PD. The longer of the value can provide better "High-Availability" against PD
-// failure, but more overhead of `TsoBatchList` & pressure to TSO service.
+/// Maximum available interval of TSO cache.
+/// It means the duration that TSO we cache would be available despite failure
+/// of PD. The longer of the value can provide better "High-Availability"
+/// against PD failure, but more overhead of `TsoBatchList` & pressure to TSO
+/// service.
 pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
-// Just a limitation for safty, in case user specify a too big
-// `available_interval`.
+/// Just a limitation for safety, in case user specify a too big
+/// `available_interval`.
 const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
 const TSO_BATCH_RENEW_ON_INITIALIZE: &str = "init";
@@ -136,11 +138,13 @@ impl TsoBatch {
 }
 
 /// `TsoBatchList` is a ordered list of `TsoBatch`. It aims to:
+///
 /// 1. Cache more number of TSO to improve high availability. See issue #12794.
-///    `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
+/// `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
+///
 /// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
-/// the scenario of leader transfer).    Other regions without the requirement
-/// can still use older TSO cache.
+/// the scenario of leader transfer). Other regions without the requirement can
+/// still use older TSO cache.
 #[derive(Default)]
 struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
@@ -158,13 +162,15 @@ struct TsoBatchList {
     capacity: u32,
 }
 
-// Inner data structure of batch list.
-// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
-// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
-// after the it is removed,    which would violate the causality requirement.
-// The `RwLock<BTreeMap>` avoid this scenario    by lock synchronization.
-// 2. It is a scenario with much more reads than writes. The `RwLock` would be
-// no less efficient    than lock free implementation.
+/// Inner data structure of batch list.
+/// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
+///
+/// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
+/// after the it is removed,    which would violate the causality requirement.
+/// The `RwLock<BTreeMap>` avoid this scenario    by lock synchronization.
+///
+/// 2. It is a scenario with much more reads than writes. The `RwLock` would be
+/// no less efficient    than lock free implementation.
 type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
 
 enum TsoBatchListIter<'a> {
@@ -509,9 +515,8 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         need_flush: bool,
     ) -> u32 {
         // The expected number of TSO is `cache_multiplier` times on latest usage.
-        // Note:
-        //   There is a `batch_max_size` limitation, so the request batch size will be
-        // less   than expected, and will be fulfill in next renew.
+        // Note: There is a `batch_max_size` limitation, so the request batch size will
+        // be less than expected, and will be fulfill in next renew.
         // TODO: consider schedule TSO requests exceed `batch_max_size` limitation to
         // fulfill requirement in time.
         let mut new_batch_size = tso_batch_list.usage() * renew_parameter.cache_multiplier;

@@ -27,7 +27,6 @@ pub struct Config {
     /// will cause PD to sleep for 50ms, waiting for physical update
     /// interval. The 50ms limitation can not be broken through now (see
     /// `tso-update-physical-interval`).
-    #[doc(hidden)]
     pub renew_batch_max_size: u32,
     /// The available interval of BatchTsoProvider.
     ///
@@ -35,7 +34,6 @@ pub struct Config {
     /// The longer of the value can provide better "high-availability" against
     /// PD failure, but more overhead of `TsoBatchList` & pressure to TSO
     /// service.
-    #[doc(hidden)]
     pub available_interval: ReadableDuration,
 }
 
