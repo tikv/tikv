@@ -221,6 +221,7 @@ long-uncommitted-base-threshold = "1s"
 report-min-resolved-ts-interval = "233ms"
 report-region-buckets-tick-interval = "1234s"
 max-snapshot-file-raw-size = "10GB"
+unreachable-backoff = "111s"
 
 [coprocessor]
 split-region-on-table = false

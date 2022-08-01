@@ -246,6 +246,7 @@ fn test_serde_custom_tikv_config() {
         check_long_uncommitted_interval: ReadableDuration::secs(1),
         long_uncommitted_base_threshold: ReadableDuration::secs(1),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
+        unreachable_backoff: ReadableDuration::secs(111),
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
