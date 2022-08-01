@@ -72,8 +72,8 @@ impl FuturePool {
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
         self.inner.get_running_task_count()
     }
 
@@ -85,7 +85,8 @@ impl FuturePool {
         self.inner.spawn(TrackedFuture::new(future))
     }
 
-    /// Spawns a future in the pool and returns a handle to the result of the future.
+    /// Spawns a future in the pool and returns a handle to the result of the
+    /// future.
     ///
     /// The future will not be executed if the handle is not polled.
     pub fn spawn_handle<F>(
@@ -116,8 +117,8 @@ impl PoolInner {
     }
 
     fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
         self.env.metrics_running_task_count.get() as usize
     }
 
@@ -298,7 +299,8 @@ mod tests {
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
         assert!(try_recv_tick().is_err());
 
-        // Even if long enough time has elapsed, tick is not emitted until next task arrives
+        // Even if long enough time has elapsed, tick is not emitted until next task
+        // arrives
         thread::sleep(TICK_INTERVAL * 2);
         assert!(try_recv_tick().is_err());
 
@@ -472,10 +474,10 @@ mod tests {
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
 
         // no more results
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());

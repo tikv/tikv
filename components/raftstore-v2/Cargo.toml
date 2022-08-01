@@ -29,11 +29,13 @@ cloud-gcp = ["raftstore/cloud-gcp"]
 cloud-azure = ["raftstore/cloud-azure"]
 
 [dependencies]
+batch-system = { path = "../batch-system", default-features = false }
 collections = { path = "../collections" }
 crossbeam = "0.8"
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.5"
+futures-util = { version = "0.3", features = ["compat"] }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 pd_client = { path = "../pd_client" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }

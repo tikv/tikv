@@ -44,7 +44,8 @@ impl ThreadLoadPool {
         })
     }
 
-    /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
+    /// Gets the current load. For example, 200 means the threads consuming 200%
+    /// of the CPU resources.
     pub fn total_load(&self) -> usize {
         self.total_load.load(Ordering::Relaxed)
     }
