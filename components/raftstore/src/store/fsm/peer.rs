@@ -5081,9 +5081,9 @@ where
 
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
-        // call evict directly here, no need to recheck the memory usage condition.
-        self.fsm.peer.evict_cache(self.ctx);
-
+        if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
+            self.fsm.peer.evict_cache(self.ctx);
+        }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)
             && !self.fsm.peer.get_store().is_entry_cache_empty()
