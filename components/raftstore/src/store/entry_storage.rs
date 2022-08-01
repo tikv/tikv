@@ -851,14 +851,11 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.cache.is_empty()
     }
 
-    /// Evict entries from the cache.
-    pub fn evict_entry_cache(&mut self, half: bool) {
-        if !self.is_entry_cache_empty() {
+    /// Evict applied entries to save more memory.
+    pub fn evict_cache(&mut self, index: u64) {
+        if !self.cache.cache.is_empty() {
             let cache = &mut self.cache;
-            let cache_len = cache.cache.len();
-            let drain_to = if half { cache_len / 2 } else { cache_len - 1 };
-            let idx = cache.cache[drain_to].index;
-            let mem_size_change = cache.compact_to(idx + 1);
+            let mem_size_change = cache.compact_to(index);
             RAFT_ENTRIES_EVICT_BYTES.inc_by(mem_size_change);
         }
     }

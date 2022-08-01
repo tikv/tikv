@@ -460,6 +460,19 @@
 ## threads to generate raft snapshots
 # snap-generator-pool-size = 2
 
+## When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
+## increasing. For raftstore layer entries that have been applied will be evicted from
+## entry cache as soon as possible, if they utilize memory more than
+## `evict_cache_on_memory_ratio` * total.
+## Set it to 0 can disable cache evict. By default it's 0.15. The recommended
+## configuration values for different memory specifications are as follows:
+## total memory    suggested value
+##     (0,  32]         0.15
+##     (32, 128]        0.20
+##     (128, )          0.25
+## Too huge value will not always get a better performance.
+# evict-cache-on-memory-ratio = 0.15
+
 [coprocessor]
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.

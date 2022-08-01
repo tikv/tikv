@@ -84,6 +84,9 @@ pub struct Config {
     pub raft_engine_purge_interval: ReadableDuration,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
+    // when memory insufficient, while some peer hearbeat missing for this time,
+    // leader will not keep entry cache for it.
+    pub raft_entry_cache_reclaim_time: ReadableDuration,
     // Deprecated! The configuration has no effect.
     // They are preserved for compatibility check.
     // When a peer is newly added, reject transferring leader to the peer for a while.
@@ -214,17 +217,17 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// Disable this feature by set to 0, logic will be removed in other pr.
     /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
-    /// limit memory increasing. For raftstore layer entries will be evicted
-    /// from entry cache, if they utilize memory more than
-    /// `evict_cache_on_memory_ratio` * total.
-    ///
-    /// Set it to 0 can disable cache evict.
-    // By default it's 0.2. So for different system memory capacity, cache evict happens:
-    // * system=8G,  memory_usage_limit=6G,  evict=1.2G
-    // * system=16G, memory_usage_limit=12G, evict=2.4G
-    // * system=32G, memory_usage_limit=24G, evict=4.8G
+    /// limit memory increasing. For raftstore layer entries that have been
+    /// applied will be evicted from entry cache as soon as possible, if
+    /// they utilize memory more than `evict_cache_on_memory_ratio` * total.
+    /// Set it to 0 can disable cache evict. By default it's 0.15. The
+    /// recommended configuration values for different memory specifications
+    /// are as follows: total memory    suggested value
+    ///     (0,  32]         0.15
+    ///     (32, 128]        0.20
+    ///     (128, )          0.25
+    /// Too huge value will not always get a better performance.
     pub evict_cache_on_memory_ratio: f64,
 
     pub cmd_batch: bool,
@@ -309,6 +312,7 @@ impl Default for Config {
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
             raft_entry_cache_life_time: ReadableDuration::secs(30),
+            raft_entry_cache_reclaim_time: ReadableDuration::secs(5),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: None,
@@ -353,7 +357,7 @@ impl Default for Config {
             dev_assert: false,
             apply_yield_duration: ReadableDuration::millis(500),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.15,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -623,12 +627,6 @@ impl Config {
                 self.max_peer_down_duration,
                 self.peer_stale_state_check_interval * 2,
             );
-        }
-
-        if self.evict_cache_on_memory_ratio < 0.0 {
-            return Err(box_err!(
-                "evict_cache_on_memory_ratio must be greater than 0"
-            ));
         }
 
         if self.snap_generator_pool_size == 0 {

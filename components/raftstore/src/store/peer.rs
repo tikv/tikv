@@ -2801,13 +2801,49 @@ where
             self.mut_store()
                 .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
-                // Compact all cached entries instead of half evict.
-                self.mut_store().evict_entry_cache(false);
+                self.evict_cache(ctx);
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
+    }
+
+    // Evict the alively replicated, but must be applied log.
+    // It's similar to raft gc log tick, but with 2 diffs:
+    // 1. only compact memory.
+    // 2. should deal with the replication flow control cases.
+
+    pub fn evict_cache<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        // under the normal gc case, we use the raft_entry_cache_life_time to limit the
+        // entry cache lifetime. But when memory is insufficient, we should use
+        // a more positive lifetime.
+        let drop_cache_duration =
+            ctx.cfg.raft_heartbeat_interval() + ctx.cfg.raft_entry_cache_reclaim_time.0;
+        let cache_alive_limit = Instant::now() - drop_cache_duration; // > means up healthy node.
+        let last_idx = self.get_store().last_index();
+        let applied_idx = self.get_store().applied_index();
+        let truncated_idx = self.get_store().truncated_index();
+        let mut alive_cache_idx = last_idx;
+        for (peer_id, p) in self.raft_group.raft.prs().iter() {
+            if let Some(last_heartbeat) = self.peer_heartbeats.get(peer_id) {
+                if alive_cache_idx > p.matched
+                    && p.matched >= truncated_idx
+                    && *last_heartbeat > cache_alive_limit
+                    && !matches!(p.state, ProgressState::Probe)
+                {
+                    alive_cache_idx = p.matched;
+                }
+            }
+        }
+
+        let evict_idx = if applied_idx > alive_cache_idx {
+            alive_cache_idx
+        } else {
+            applied_idx + 1
+        };
+
+        self.mut_store().evict_cache(evict_idx);
     }
 
     fn on_persist_snapshot<T>(

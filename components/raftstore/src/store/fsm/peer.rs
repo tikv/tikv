@@ -1824,12 +1824,19 @@ where
         }
         self.ctx.pending_count += 1;
         self.ctx.has_ready = true;
+
+        // follower will clean it as soon as applied.
+        if self.fsm.peer.is_leader()
+            && self.ctx.need_reclaim_entry_cache
+            && !self.fsm.peer.get_store().is_entry_cache_empty()
+        {
+            self.register_entry_cache_evict_tick();
+        }
         let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
         if let Some(r) = res {
             self.on_role_changed(r.state_role);
             if r.has_new_entries {
                 self.register_raft_gc_log_tick();
-                self.register_entry_cache_evict_tick();
             }
             self.ctx.ready_count += 1;
             self.ctx.raft_metrics.ready.has_ready_region += 1;
@@ -4946,7 +4953,7 @@ where
         if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
-        fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
+        fail_point!("on_raft_gc_log_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
         debug_assert!(!self.fsm.stopped);
 
@@ -5011,12 +5018,6 @@ where
             .peer
             .mut_store()
             .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
-        if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_entry_cache(true);
-            if !self.fsm.peer.get_store().is_entry_cache_empty() {
-                self.register_entry_cache_evict_tick();
-            }
-        }
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
@@ -5081,7 +5082,7 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_entry_cache(true);
+            self.fsm.peer.evict_cache(self.ctx);
         }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)

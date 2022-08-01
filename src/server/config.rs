@@ -255,7 +255,7 @@ impl Default for Config {
             heavy_load_wait_duration: None,
             enable_request_batch: true,
             raft_client_backoff_step: ReadableDuration::secs(1),
-            reject_messages_on_memory_ratio: 0.2,
+            reject_messages_on_memory_ratio: 0.20,
             background_thread_count,
             end_point_slow_log_threshold: ReadableDuration::secs(1),
             // Go tikv client uses 4 as well.
