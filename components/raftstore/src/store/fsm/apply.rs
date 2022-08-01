@@ -5846,7 +5846,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_term, 1);
-        let (_, r8) = if let ExecResult::SplitRegion {
+        let (r1, r8) = if let ExecResult::SplitRegion {
             regions,
             derived: _,
             new_split_regions: _,

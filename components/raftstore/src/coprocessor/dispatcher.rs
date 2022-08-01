@@ -446,13 +446,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// execution of the next command, including req/resp, apply state,
     /// modified region state, etc. Return true observers think a
     /// persistence is necessary.
-    pub fn post_exec<'a>(
+    pub fn post_exec(
         &self,
         region: &Region,
         cmd: &Cmd,
         apply_state: &RaftApplyState,
         region_state: &RegionState,
-        apply_ctx: &mut ApplyCtxInfo<'a>,
+        apply_ctx: &mut ApplyCtxInfo,
     ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.response.has_admin_response() {
