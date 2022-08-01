@@ -3,12 +3,18 @@
 //! ## The algorithm to make the TSO cache tolerate failure of TSO service
 //!
 //! 1. The scale of High-Available is specified by config item
-//! `causal-ts.available-interval`. 2. Count usage of TSO on every renew
-//! interval. 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
-//! causal-ts.renew-interval`. 4. Then `tso_usage x cache_multiplier` is the
-//! expected number of TSO should be cached. 5. And `tso_usage x
-//! cache_multiplier - tso_remain` is the expected number of TSO to be requested
-//! from TSO service (if it's not a flush).
+//! `causal-ts.available-interval`.
+//!
+//! 2. Count usage of TSO on every renew interval.
+//!
+//! 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
+//! causal-ts.renew-interval`.
+//!
+//! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
+//! be cached.
+//!
+//! 5. And `tso_usage x cache_multiplier - tso_remain` is the expected number of
+//! TSO to be requested from TSO service (if it's not a flush).
 //!
 //! Others:
 //! * `cache_multiplier` is also used as capacity of TSO batch list, as we
