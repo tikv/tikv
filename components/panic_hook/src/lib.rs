@@ -55,7 +55,8 @@ fn track_hook(p: &PanicInfo<'_>) {
 
 /// Recover from closure which may panic.
 ///
-/// This function assumes the closure is able to be forced to implement `UnwindSafe`.
+/// This function assumes the closure is able to be forced to implement
+/// `UnwindSafe`.
 ///
 /// Also see [`AssertUnwindSafe`](https://doc.rust-lang.org/std/panic/struct.AssertUnwindSafe.html).
 pub fn recover_safe<F, R>(f: F) -> std::thread::Result<R>

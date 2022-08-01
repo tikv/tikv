@@ -31,7 +31,8 @@ impl Deadline {
         Self { deadline }
     }
 
-    /// Creates a new `Deadline` that will reach after specified amount of time in future.
+    /// Creates a new `Deadline` that will reach after specified amount of time
+    /// in future.
     pub fn from_now(after_duration: Duration) -> Self {
         let deadline = Instant::now_coarse() + after_duration;
         Self { deadline }

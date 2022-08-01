@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This module contains the implementation of the `EntryStorage`, which covers a subset of
-//! raft storage. This module will be shared between raftstore v1 and v2.
+//! This module contains the implementation of the `EntryStorage`, which covers
+//! a subset of raft storage. This module will be shared between raftstore v1
+//! and v2.
 
 use std::{
     cell::{Cell, RefCell},
@@ -60,7 +61,8 @@ impl CachedEntries {
         }
     }
 
-    /// Take cached entries and dangle size for them. `dangle` means not in entry cache.
+    /// Take cached entries and dangle size for them. `dangle` means not in
+    /// entry cache.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
@@ -119,8 +121,8 @@ impl EntryCache {
                 }
             })
             .count();
-        // Cache either is empty or contains latest log. Hence we don't need to fetch log
-        // from rocksdb anymore.
+        // Cache either is empty or contains latest log. Hence we don't need to fetch
+        // log from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
         let (first, second) = tikv_util::slices_in_range(&self.cache, start_idx, end_idx);
         ents.extend_from_slice(first);
@@ -172,10 +174,10 @@ impl EntryCache {
             self.cache.push_back(e.to_owned());
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
-        // In the past, the entry cache will be truncated if its size exceeds a certain number.
-        // However, after introducing async write io, the entry must stay in cache if it's not
-        // persisted to raft db because the raft-rs may need to read entries.(e.g. leader sends
-        // MsgAppend to followers)
+        // In the past, the entry cache will be truncated if its size exceeds a certain
+        // number. However, after introducing async write io, the entry must stay in
+        // cache if it's not persisted to raft db because the raft-rs may need to read
+        // entries.(e.g. leader sends MsgAppend to followers)
 
         mem_size_change
     }
@@ -198,9 +200,9 @@ impl EntryCache {
 
         let mut mem_size_change = 0;
 
-        // Clean cached entries which have been already sent to apply threads. For example,
-        // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
-        // is called, only [20, 30) will still be kept in cache.
+        // Clean cached entries which have been already sent to apply threads. For
+        // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
+        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             if cached_entries.range.start >= idx {
@@ -227,7 +229,8 @@ impl EntryCache {
         }
 
         let cache_last_idx = self.cache.back().unwrap().get_index();
-        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if necessary.
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if
+        // necessary.
         let compact_to = (cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize;
         for e in self.cache.drain(..compact_to) {
             mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
@@ -579,7 +582,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                     return Ok(count);
                 }
 
-                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                // the count of left entries isn't too large, fetch the remaining entries
+                // synchronously one by one
                 for idx in last + 1..high {
                     let ent = self.raft_engine.get_entry(region_id, idx)?;
                     match ent {
@@ -612,7 +616,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 "max_size" => max_size,
                 "res_max_size" => res.max_size,
             );
-            // low index or max size is changed, the result is not fit for the current range, so refetch again.
+            // low index or max size is changed, the result is not fit for the current
+            // range, so refetch again.
             self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
             res.tried_cnt + 1
         } else {
@@ -621,7 +626,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
         // the first/second try: get [low, high) asynchronously
         // the third try:
-        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
+        //  - if term and low are matched: use result of [low, persisted) and get
+        //    [persisted, high) synchronously
         //  - else: get [low, high) synchronously
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
@@ -822,7 +828,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.apply_state.get_truncated_state().get_term()
     }
 
-    // Append the given entries to the raft log using previous last index or self.last_index.
+    // Append the given entries to the raft log using previous last index or
+    // self.last_index.
     pub fn append<EK: KvEngine>(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
         if entries.is_empty() {
             return;

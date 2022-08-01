@@ -81,7 +81,8 @@ where
     }
 }
 
-/// WriteTask contains write tasks which need to be persisted to kv db and raft db.
+/// WriteTask contains write tasks which need to be persisted to kv db and raft
+/// db.
 pub struct WriteTask<EK, ER>
 where
     EK: KvEngine,
@@ -273,7 +274,8 @@ where
     }
 
     fn clear(&mut self) {
-        // raft_wb doesn't have clear interface and it should be consumed by raft db before
+        // raft_wb doesn't have clear interface and it should be consumed by raft db
+        // before
         self.kv_wb.clear();
         self.raft_states.clear();
         self.state_size = 0;
@@ -582,11 +584,12 @@ where
                         "error_code" => %e.error_code(),
                     );
                     self.message_metrics.add(msg_type, false);
-                    // If this msg is snapshot, it is unnecessary to send snapshot
-                    // status to this peer because it has already become follower.
-                    // (otherwise the snapshot msg should be sent in store thread other than here)
-                    // Also, the follower don't need flow control, so don't send
-                    // unreachable msg here.
+                    // If this msg is snapshot, it is unnecessary to send
+                    // snapshot status to this peer because it has already
+                    // become follower. (otherwise the snapshot msg should be
+                    // sent in store thread other than here) Also, the follower
+                    // don't need flow control, so don't send unreachable msg
+                    // here.
                 } else {
                     self.message_metrics.add(msg_type, true);
                 }

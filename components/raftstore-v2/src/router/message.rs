@@ -60,9 +60,9 @@ where
 
 /// Variants of channels for `Msg`.
 ///  - `Read`: a channel for read only requests including `StatusRequest`,
-///         `GetRequest` and `SnapRequest`
+///    `GetRequest` and `SnapRequest`
 ///  - `Write`: a channel for write only requests including `AdminRequest`
-///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///    `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
 /// Prefer channel rather than callback because:
 /// 1. channel can be reused, hence reduce allocations.
 /// 2. channel may not need dynamic dispatch.
@@ -237,8 +237,8 @@ pub enum PeerMsg<EK: KvEngine> {
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
     RaftCommand(RaftCommand<EK::Snapshot>),
-    /// Tick is periodical task. If target peer doesn't exist there is a potential
-    /// that the raft node will not work anymore.
+    /// Tick is periodical task. If target peer doesn't exist there is a
+    /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {

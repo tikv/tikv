@@ -22,7 +22,8 @@ pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp>;
 
-    /// Flush (cached) timestamps to keep causality on some events, such as "leader transfer".
+    /// Flush (cached) timestamps to keep causality on some events, such as
+    /// "leader transfer".
     fn flush(&self) -> Result<()> {
         Ok(())
     }

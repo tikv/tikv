@@ -5,8 +5,8 @@ use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
 
-/// A scanner that scans over multiple ranges. Each range can be a point range containing only
-/// one row, or an interval range containing multiple rows.
+/// A scanner that scans over multiple ranges. Each range can be a point range
+/// containing only one row, or an interval range containing multiple rows.
 pub struct RangesScanner<T> {
     storage: T,
     ranges_iter: RangesIterator,
@@ -69,7 +69,8 @@ impl<T: Storage> RangesScanner<T> {
     }
 
     /// Fetches next row.
-    /// Note: `update_scanned_range` can control whether update the scanned range when `is_scanned_range_aware` is true.
+    /// Note: `update_scanned_range` can control whether update the scanned
+    /// range when `is_scanned_range_aware` is true.
     pub fn next_opt(
         &mut self,
         update_scanned_range: bool,
@@ -119,14 +120,14 @@ impl<T: Storage> RangesScanner<T> {
         }
     }
 
-    /// Appends storage statistics collected so far to the given container and clears the
-    /// collected statistics.
+    /// Appends storage statistics collected so far to the given container and
+    /// clears the collected statistics.
     pub fn collect_storage_stats(&mut self, dest: &mut T::Statistics) {
         self.storage.collect_statistics(dest)
     }
 
-    /// Appends scanned rows of each range so far to the given container and clears the
-    /// collected statistics.
+    /// Appends scanned rows of each range so far to the given container and
+    /// clears the collected statistics.
     pub fn collect_scanned_rows_per_range(&mut self, dest: &mut Vec<usize>) {
         dest.append(&mut self.scanned_rows_per_range);
         self.scanned_rows_per_range.push(0);
@@ -503,8 +504,8 @@ mod tests {
         assert_eq!(&r.upper_exclusive, b"foo_8");
 
         // Multiple ranges
-        // TODO: caller should not pass in unordered ranges otherwise scanned ranges would be
-        // unsound.
+        // TODO: caller should not pass in unordered ranges otherwise scanned ranges
+        // would be unsound.
         let ranges = vec![
             IntervalRange::from(("foo", "foo_3")).into(),
             IntervalRange::from(("foo_5", "foo_50")).into(),
@@ -718,8 +719,8 @@ mod tests {
         assert_eq!(&r.upper_exclusive, b"foo_8");
 
         // Multiple ranges
-        // TODO: caller should not pass in unordered ranges otherwise scanned ranges would be
-        // unsound.
+        // TODO: caller should not pass in unordered ranges otherwise scanned ranges
+        // would be unsound.
         let ranges = vec![
             IntervalRange::from(("foo", "foo_3")).into(),
             IntervalRange::from(("foo_5", "foo_50")).into(),
