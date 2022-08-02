@@ -2575,11 +2575,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             "store_id" => self.fsm.store.id,
             "unreachable_store_id" => store_id,
         );
-        self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // involved regions. However loop over all the regions can take a
         // lot of time, which may block other operations.
         self.ctx.router.report_unreachable(store_id);
+        self.fsm
+            .store
+            .last_unreachable_report
+            .insert(store_id, Instant::now());
     }
 
     fn on_update_replication_mode(&mut self, status: ReplicationStatus) {
