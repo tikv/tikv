@@ -1343,6 +1343,7 @@ impl CompactRunner {
             if self.is_full() {
                 break;
             }
+            self.pending.remove(&id_ver);
             self.compact(id_ver);
         }
     }
