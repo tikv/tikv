@@ -48,12 +48,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         debug!("inserting tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), kv_engine.clone());
 
-        if let Some((old_suffix, _)) = reg_latest.get(&id) {
-            if *old_suffix < suffix {
-                reg_latest.insert(id, (suffix, kv_engine.clone()));
-            }
-        } else {
-            reg_latest.insert(id, (suffix, kv_engine.clone()));
+        let (may_old_suffix, tablet) = reg_latest.entry(id).or_insert((suffix, kv_engine.clone()));
+        if *may_old_suffix < suffix {
+            *may_old_suffix = suffix;
+            *tablet = kv_engine.clone();
         }
 
         self.inner.on_tablet_created(id, suffix);
@@ -91,10 +89,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
     fn open_tablet_cache_latest(&self, id: u64) -> Option<RocksEngine> {
         let reg_latest = self.registry_latest.lock().unwrap();
-        if let Some((_, tablet)) = reg_latest.get(&id) {
-            return Some(tablet.clone());
-        }
-        None
+        reg_latest.get(&id).map(|(_, tablet)| tablet.clone())
     }
 
     fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<RocksEngine> {

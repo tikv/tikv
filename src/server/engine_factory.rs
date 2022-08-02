@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use collections::HashMap;
 use engine_rocks::{
     raw::{Cache, Env},
     CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
@@ -99,8 +98,8 @@ impl KvEngineFactoryBuilder {
         };
         KvEngineFactoryV2 {
             inner: factory,
-            registry: Arc::new(Mutex::new(HashMap::default())),
-            registry_latest: Arc::new(Mutex::new(HashMap::default())),
+            registry: Arc::default(),
+            registry_latest: Arc::default(),
         }
     }
 }
@@ -234,17 +233,15 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
 
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
         if let Ok(db) = self.inner.root_db.lock() {
-            let cp = db.as_ref().unwrap().clone();
-            return Ok(cp);
+            if let Some(cp) = db.as_ref() {
+                return Ok(cp.clone());
+            }
         }
         self.create_shared_db()
     }
 
     fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
-            return Some(engine);
-        }
-        None
+        self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
     }
 
     fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {

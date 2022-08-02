@@ -154,17 +154,15 @@ pub mod kv {
 
         fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
             if let Ok(db) = self.root_db.lock() {
-                let cp = db.as_ref().unwrap().clone();
-                return Ok(cp);
+                if let Some(cp) = db.as_ref() {
+                    return Ok(cp.clone());
+                }
             }
             self.create_shared_db()
         }
 
         fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<KvTestEngine> {
-            if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
-                return Some(engine);
-            }
-            None
+            self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
         }
 
         fn open_tablet_cache_any(&self, _id: u64) -> Option<KvTestEngine> {
@@ -209,10 +207,9 @@ pub mod kv {
 
     impl TabletAccessor<KvTestEngine> for TestTabletFactory {
         fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
-            if let Ok(db) = self.root_db.lock() {
-                let db = db.as_ref().unwrap();
-                f(0, 0, db);
-            }
+            let db = self.root_db.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            f(0, 0, db);
         }
 
         fn is_single_engine(&self) -> bool {
@@ -236,8 +233,8 @@ pub mod kv {
         ) -> Self {
             Self {
                 inner: TestTabletFactory::new(root_path, db_opt, cf_opts),
-                registry: Arc::new(Mutex::new(HashMap::default())),
-                registry_latest: Arc::new(Mutex::new(HashMap::default())),
+                registry: Arc::default(),
+                registry_latest: Arc::default(),
             }
         }
     }
@@ -268,12 +265,11 @@ pub mod kv {
             let kv_engine = self.inner.create_tablet(&tablet_path)?;
             reg.insert((id, suffix), kv_engine.clone());
 
-            if let Some((old_suffix, _)) = reg_latest.get(&id) {
-                if *old_suffix < suffix {
-                    reg_latest.insert(id, (suffix, kv_engine.clone()));
-                }
-            } else {
-                reg_latest.insert(id, (suffix, kv_engine.clone()));
+            let (may_old_suffix, tablet) =
+                reg_latest.entry(id).or_insert((suffix, kv_engine.clone()));
+            if *may_old_suffix < suffix {
+                *may_old_suffix = suffix;
+                *tablet = kv_engine.clone();
             }
 
             Ok(kv_engine)
@@ -308,10 +304,7 @@ pub mod kv {
 
         fn open_tablet_cache_latest(&self, id: u64) -> Option<KvTestEngine> {
             let reg_latest = self.registry_latest.lock().unwrap();
-            if let Some((_, tablet)) = reg_latest.get(&id) {
-                return Some(tablet.clone());
-            }
-            None
+            reg_latest.get(&id).map(|(_, tablet)| tablet.clone())
         }
 
         fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<KvTestEngine> {
