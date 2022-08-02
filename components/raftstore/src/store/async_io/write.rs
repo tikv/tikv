@@ -303,6 +303,47 @@ impl<W: WriteBatch> ExtraBatchWrite<W> {
             ExtraBatchWrite::V2(m) => m.clear(),
         }
     }
+
+    /// Merge the extra_write with this batch.
+    ///
+    /// If there is any new states inserted, return the size of the state.
+    fn merge(&mut self, region_id: u64, extra_write: &mut ExtraWrite<W>) -> usize {
+        let mut inserted = false;
+        match mem::replace(extra_write, ExtraWrite::None) {
+            ExtraWrite::None => (),
+            ExtraWrite::V1(wb) => match self {
+                ExtraBatchWrite::None => *self = ExtraBatchWrite::V1(wb),
+                ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(wb).unwrap(),
+                ExtraBatchWrite::V2(_) => unreachable!("v2 and v1 are mixed used"),
+            },
+            ExtraWrite::V2(extra_states) => match self {
+                ExtraBatchWrite::None => {
+                    let mut map = HashMap::default();
+                    map.insert(region_id, extra_states);
+                    *self = ExtraBatchWrite::V2(map);
+                    inserted = true;
+                }
+                ExtraBatchWrite::V1(_) => unreachable!("v2 and v1 are mixed used"),
+                ExtraBatchWrite::V2(extra_states_map) => match extra_states_map.entry(region_id) {
+                    collections::HashMapEntry::Occupied(mut slot) => {
+                        slot.get_mut().apply_state = extra_states.apply_state;
+                        if let Some(region_state) = extra_states.region_state {
+                            slot.get_mut().region_state = Some(region_state);
+                        }
+                    }
+                    collections::HashMapEntry::Vacant(slot) => {
+                        slot.insert(extra_states);
+                        inserted = true;
+                    }
+                },
+            },
+        };
+        if inserted {
+            std::mem::size_of::<ExtraStates>()
+        } else {
+            0
+        }
+    }
 }
 
 /// WriteTaskBatch is used for combining several WriteTask into one.
@@ -362,39 +403,9 @@ where
             }
         }
 
-        match mem::replace(&mut task.extra_write, ExtraWrite::None) {
-            ExtraWrite::None => {}
-            ExtraWrite::V1(wb) => match &mut self.extra_batch_write {
-                ExtraBatchWrite::None => {
-                    self.extra_batch_write = ExtraBatchWrite::V1(wb);
-                }
-                ExtraBatchWrite::V1(kv_wb) => kv_wb.merge(wb).unwrap(),
-                ExtraBatchWrite::V2(_) => unreachable!("v2 and v1 are mixed used"),
-            },
-            ExtraWrite::V2(extra_states) => match &mut self.extra_batch_write {
-                ExtraBatchWrite::None => {
-                    let mut map = HashMap::default();
-                    map.insert(task.region_id, extra_states);
-                    self.state_size += std::mem::size_of::<ExtraStates>();
-                    self.extra_batch_write = ExtraBatchWrite::V2(map);
-                }
-                ExtraBatchWrite::V1(_) => unreachable!("v2 and v1 are mixed used"),
-                ExtraBatchWrite::V2(extra_states_map) => {
-                    match extra_states_map.entry(task.region_id) {
-                        collections::HashMapEntry::Occupied(mut slot) => {
-                            slot.get_mut().apply_state = extra_states.apply_state;
-                            if let Some(region_state) = extra_states.region_state {
-                                slot.get_mut().region_state = Some(region_state);
-                            }
-                        }
-                        collections::HashMapEntry::Vacant(slot) => {
-                            slot.insert(extra_states);
-                            self.state_size += std::mem::size_of::<ExtraStates>();
-                        }
-                    }
-                }
-            },
-        }
+        self.state_size += self
+            .extra_batch_write
+            .merge(task.region_id, &mut task.extra_write);
 
         if let Some(prev_readies) = self
             .readies
