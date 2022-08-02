@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::{Arc},
+    sync::Arc,
     time::Duration,
 };
 
