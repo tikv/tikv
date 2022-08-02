@@ -2118,15 +2118,12 @@ where
     ) {
         use std::env;
 
-        match env::var("ENABLE_BUGFIX") {
-            Ok(val) => {
-                // Only disable this bugfix if it is explicitly turned off.
-                // So that unit tests can cover this branch.
-                if val == "no" || val == "off" {
-                    dry_run = true;
-                }
+        if let Ok(val) = env::var("ENABLE_BUGFIX") {
+            // Only disable this bugfix if it is explicitly turned off.
+            // So that unit tests can cover this branch.
+            if val == "no" || val == "off" {
+                dry_run = true;
             }
-            Err(_) => {}
         };
 
         if let Some(state_role) = state_role {
