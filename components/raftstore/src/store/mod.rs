@@ -7,9 +7,9 @@ pub mod fsm;
 pub mod memory;
 pub mod metrics;
 pub mod msg;
-pub mod transport;
-pub mod read_queue;
 pub mod peer;
+pub mod read_queue;
+pub mod transport;
 #[macro_use]
 pub mod util;
 

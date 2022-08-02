@@ -135,12 +135,12 @@ impl<ER: RaftEngine> Storage<ER> {
 
     #[inline]
     pub fn raft_state(&self) -> &RaftLocalState {
-        &self.entry_storage.raft_state()
+        self.entry_storage.raft_state()
     }
 
     #[inline]
     pub fn apply_state(&self) -> &RaftApplyState {
-        &self.entry_storage.apply_state()
+        self.entry_storage.apply_state()
     }
 
     #[inline]

@@ -347,12 +347,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // ctx.raft_metrics.propose.local_read += 1;
         let commit_index = self.get_store().commit_index();
         let mut reader = self.tablet.clone();
-        cb.invoke_read(self.handle_read(
-            &mut reader,
-            req,
-            false,
-            Some(commit_index),
-        ))
+        cb.invoke_read(self.handle_read(&mut reader, req, false, Some(commit_index)))
     }
 
     /*
@@ -506,7 +501,7 @@ where
     fn get_engine(&self) -> &EK {
         // TODO: should check the cache is latest here?
         // If that, get_engine should sue &mut self instead
-        &self.cache().unwrap()
+        self.cache().unwrap()
     }
 
     fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<EK::Snapshot> {

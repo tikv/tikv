@@ -10,7 +10,9 @@ use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures_util::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raftstore::store::{
-    fsm::store::PeerTickBatch, worker::{RaftlogFetchTask, RaftlogFetchRunner}, Config, PdTask, RaftRouter, Transport,
+    fsm::store::PeerTickBatch,
+    worker::{RaftlogFetchRunner, RaftlogFetchTask},
+    Config, PdTask, RaftRouter, Transport,
 };
 use slog::Logger;
 use tikv_util::{
