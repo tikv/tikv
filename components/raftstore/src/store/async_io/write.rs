@@ -53,7 +53,7 @@ const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
-    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64);
+    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64);
 }
 
 impl<EK, ER> PersistedNotifier for RaftRouter<EK, ER>
@@ -61,7 +61,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn notify_persisted(&self, region_id: u64, peer_id: u64, ready_number: u64) {
+    fn notify(&self, region_id: u64, peer_id: u64, ready_number: u64) {
         if let Err(e) = self.force_send(
             region_id,
             PeerMsg::Persisted {
@@ -446,16 +446,14 @@ where
             self.raft_wb.put_raft_state(region_id, &state).unwrap();
         }
         if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
-            if !extra_states_map.is_empty() {
-                for (region_id, state) in extra_states_map.drain() {
+            for (region_id, state) in extra_states_map.drain() {
+                self.raft_wb
+                    .put_apply_state(region_id, &state.apply_state)
+                    .unwrap();
+                if let Some(region_state) = state.region_state {
                     self.raft_wb
-                        .put_apply_state(region_id, &state.apply_state)
+                        .put_region_state(region_id, &region_state)
                         .unwrap();
-                    if let Some(region_state) = state.region_state {
-                        self.raft_wb
-                            .put_region_state(region_id, &region_state)
-                            .unwrap();
-                    }
                 }
             }
         }
@@ -774,7 +772,7 @@ where
         if notify {
             for (region_id, (peer_id, ready_number)) in &self.batch.readies {
                 self.notifier
-                    .notify_persisted(*region_id, *peer_id, *ready_number);
+                    .notify(*region_id, *peer_id, *ready_number);
             }
             now = Instant::now();
             callback_time = duration_to_sec(now.saturating_duration_since(now2));
