@@ -71,7 +71,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<RocksEngine> {
-        self.registry.lock().unwrap().get(&(id, suffix)).ok()
+        self.registry.lock().unwrap().get(&(id, suffix)).cloned()
     }
 
     fn open_tablet_cache_any(&self, id: u64) -> Option<RocksEngine> {
