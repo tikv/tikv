@@ -1592,12 +1592,11 @@ impl PdClient for TestPdClient {
         }
 
         // Must ConfVer and Version be same?
-        let cur_region = self
-            .cluster
-            .rl()
-            .get_region_by_id(region.get_id())
-            .unwrap()
-            .unwrap();
+        let cur_region = self.cluster.rl().get_region_by_id(region.get_id()).unwrap();
+        if cur_region.is_none() {
+            return Box::pin(err(box_err!("region not found")));
+        }
+        let cur_region = cur_region.unwrap();
         if let Err(e) = check_stale_region(&cur_region, &region) {
             return Box::pin(err(e));
         }

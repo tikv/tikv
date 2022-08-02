@@ -707,24 +707,31 @@ impl<'a> StoreMsgHandler<'a> {
                 }
                 None => return Ok(CheckMsgStatus::NewPeerFirst),
             };
+        let tag = PeerTag::new(
+            self.store.id,
+            RegionIDVer::new(
+                region_id,
+                local_state.get_region().get_region_epoch().get_version(),
+            ),
+        );
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
             if !util::is_first_message(msg.get_message()) {
                 return Err(box_err!(
                     "[region {}] region not exist but not tombstone: {:?}",
-                    region_id,
+                    tag,
                     local_state
                 ));
             }
             info!(
                 "region doesn't exist yet, wait for it to be split";
-                "region_id" => region_id
+                "region" => tag
             );
             return Ok(CheckMsgStatus::FirstRequest);
         }
         debug!(
             "region is in tombstone state";
-            "region_id" => region_id,
+            "region" => tag,
             "region_local_state" => ?local_state,
         );
         let region = local_state.get_region();
@@ -733,7 +740,7 @@ impl<'a> StoreMsgHandler<'a> {
         if util::is_epoch_stale(from_epoch, region_epoch) {
             info!(
                 "tombstone peer receives a stale message";
-                "region_id" => region_id,
+                "region" => tag,
                 "from_region_epoch" => ?from_epoch,
                 "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
@@ -763,7 +770,7 @@ impl<'a> StoreMsgHandler<'a> {
                     if let Err(e) = self.ctx.global.trans.send(send_msg) {
                         error!(?e;
                             "send check stale peer response message failed";
-                            "region_id" => region_id,
+                            "region" => tag,
                         );
                     }
                 }
@@ -781,7 +788,7 @@ impl<'a> StoreMsgHandler<'a> {
                 self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
                 info!(
                     "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
-                    "region_id" => region_id,
+                    "tag" => tag,
                     "local_peer_id" => local_peer_id,
                     "to_peer_id" => to_peer_id,
                     "msg_type" => ?msg_type
@@ -795,21 +802,14 @@ impl<'a> StoreMsgHandler<'a> {
     fn on_raft_message(&mut self, msg: RaftMessage) {
         let region_id = msg.get_region_id();
         let region_ver = msg.get_region_epoch().version;
-        debug!(
-            "handle raft message";
-            "from_peer_id" => msg.get_from_peer().get_id(),
-            "to_peer_id" => msg.get_to_peer().get_id(),
-            "store_id" => self.store.id,
-            "region_id" => region_id,
-            "msg_type" => %util::MsgType(&msg),
-        );
+        let tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, region_ver));
+        info!("{} store handle raft message {}", tag, MsgDebug(&msg));
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
             warn!(
                 "store not match, ignore it";
-                "store_id" => self.ctx.store_id(),
                 "to_store_id" => msg.get_to_peer().get_store_id(),
-                "region_id" => region_id,
+                "tag" => tag,
             );
             return;
         }
@@ -817,7 +817,7 @@ impl<'a> StoreMsgHandler<'a> {
         if !msg.has_region_epoch() {
             error!(
                 "missing epoch in raft message, ignore it";
-                "region_id" => region_id,
+                "tag" => tag,
             );
             return;
         }
@@ -827,7 +827,7 @@ impl<'a> StoreMsgHandler<'a> {
         }
         let check_msg_result = self.check_msg(&msg);
         if let Err(err) = check_msg_result {
-            error!("failed to check message err:{:?}", err);
+            error!("{} failed to check message err:{:?}", tag, err);
             return;
         }
         let check_msg_status = check_msg_result.unwrap();
@@ -893,12 +893,11 @@ impl<'a> StoreMsgHandler<'a> {
     ) -> bool {
         let tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, region_ver));
         if !is_initial_msg(msg.get_message()) {
-            let msg_type = msg.get_message().get_msg_type();
-            debug!(
+            info!(
                 "target peer doesn't exist, stale message";
                 "target_peer" => ?msg.get_to_peer(),
-                "region" => tag,
-                "msg_type" => ?msg_type,
+                "tag" => tag,
+                "msg" => %MsgDebug(msg),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return false;
@@ -1259,7 +1258,6 @@ impl<'a> StoreMsgHandler<'a> {
         self.ctx
             .store_meta
             .set_region(region.clone(), &mut peer_fsm.peer, reason);
-        write_peer_state(&mut self.ctx.raft_wb, &region);
         for peer in region.take_peers().into_iter() {
             if peer_fsm.peer.peer_id() == peer.get_id() {
                 peer_fsm.peer.peer = peer.clone();

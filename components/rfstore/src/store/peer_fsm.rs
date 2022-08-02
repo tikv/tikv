@@ -1154,7 +1154,13 @@ impl<'a> PeerMsgHandler<'a> {
             self.ctx
                 .raft_wb
                 .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
-            debug!("truncate raft logs"; "tag" => self.peer.tag(), "truncate_idx" => to_truncate_idx, "truncated_term" => to_truncate_term);
+            info!(
+                "{} truncate raft logs, idx {}, term {}, raft applied {}",
+                self.peer.tag(),
+                to_truncate_idx,
+                to_truncate_term,
+                self.peer.raft_group.raft.raft_log.applied,
+            );
         }
     }
 }

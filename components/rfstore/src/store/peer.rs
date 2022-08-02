@@ -18,11 +18,11 @@ use fail::fail_point;
 use kvproto::{
     disk_usage::DiskUsage,
     kvrpcpb::ExtraOp as TxnExtraOp,
-    metapb::PeerRole,
+    metapb::{PeerRole, Region},
     pdpb::PeerStats,
     raft_cmdpb::{
-        AdminCmdType, AdminResponse, BatchSplitRequest, ChangePeerRequest, CmdType, CustomRequest,
-        RaftCmdRequest, RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
+        AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CustomRequest, RaftCmdRequest,
+        RaftCmdResponse, TransferLeaderRequest, TransferLeaderResponse,
     },
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     *,
@@ -415,8 +415,10 @@ pub(crate) struct Peer {
     pub(crate) last_urgent_proposal_idx: u64,
     // The index of the latest committed split command.
     pub(crate) last_committed_split_idx: u64,
-    // The index of the latest committed conf change command.
-    pub(crate) last_committed_conf_change_idx: u64,
+    // The preprocessed_region applies all the committed conf change, we should use it instead of
+    // the current region to do preprocessed_split and preprocessed_conf_change because the current
+    // region may be outdated due to slow apply.
+    pub(crate) preprocessed_region: Option<Region>,
 
     pub(crate) pending_remove: bool,
 
@@ -514,7 +516,7 @@ impl Peer {
             last_applying_idx: applied_index,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
-            last_committed_conf_change_idx: 0,
+            preprocessed_region: None,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
@@ -1327,10 +1329,10 @@ impl Peer {
             if cmd.has_custom_request() {
                 self.preprocess_change_set(ctx, entry, cmd.get_custom_request());
             } else {
-                self.preprocess_pending_splits(ctx, entry, cmd.get_admin_request().get_splits());
+                self.preprocess_pending_splits(ctx, entry, &cmd);
             }
         } else if entry.entry_type != eraftpb::EntryType::EntryNormal {
-            self.last_committed_conf_change_idx = entry.index;
+            self.preprocess_conf_change(ctx, entry);
         }
     }
 
@@ -1390,20 +1392,20 @@ impl Peer {
         &mut self,
         ctx: &mut RaftContext,
         entry: &Entry,
-        splits: &BatchSplitRequest,
+        req: &RaftCmdRequest,
     ) {
-        if self.last_committed_conf_change_idx > self.get_store().applied_index() {
-            warn!("{} there is pending conf change skip split", self.tag());
+        if let Err(err) = check_region_epoch(req, self.get_preprocessed_region(), false) {
+            warn!("preprocess pending split failed {:?}", err);
             return;
         }
-        let result = split_gen_new_region_metas(self.get_store().store_id, self.region(), splits);
-        if result.is_err() {
-            warn!("preprocess pending split failed {:?}", result.unwrap_err());
-            return;
-        }
-        let regions = result.unwrap();
+        let regions = split_gen_new_region_metas(
+            self.get_store().store_id,
+            self.get_preprocessed_region(),
+            req.get_admin_request().get_splits(),
+        )
+        .unwrap();
         self.last_committed_split_idx = entry.index;
-        let split = build_split_pb(self.region(), &regions, entry.term);
+        let split = build_split_pb(self.region_id, &regions, entry.term);
         let shard_meta = self.mut_store().mut_engine_meta();
         let new_metas = shard_meta.apply_split(&split, entry.index, RAFT_INIT_LOG_INDEX);
         let mut cs = shard_meta.to_change_set();
@@ -1421,6 +1423,7 @@ impl Peer {
                 store.write_raft_state(ctx);
                 store.shard_meta = Some(new_meta.clone());
                 store.initial_flushed = false;
+                self.preprocessed_region = Some(new_region.clone());
             } else {
                 let raft = &ctx.global.engines.raft;
                 if raft.get_state(new_meta.id, KV_ENGINE_META_KEY).is_none() {
@@ -1429,6 +1432,40 @@ impl Peer {
                 }
             }
         }
+    }
+
+    pub(crate) fn preprocess_conf_change(&mut self, ctx: &mut RaftContext, entry: &Entry) {
+        let (cmd, _) = parse_conf_change_cmd(entry, self.tag());
+        if let Err(err) = check_region_epoch(&cmd, self.get_preprocessed_region(), false) {
+            warn!("preprocess pending conf change failed {:?}", err);
+            return;
+        }
+        let changes = match cmd.get_admin_request().cmd_type {
+            AdminCmdType::ChangePeer => {
+                vec![cmd.get_admin_request().get_change_peer().clone()]
+            }
+            AdminCmdType::ChangePeerV2 => cmd
+                .get_admin_request()
+                .get_change_peer_v2()
+                .get_changes()
+                .to_vec(),
+            _ => unreachable!(),
+        };
+        if let Ok(region) = region_apply_conf_change(
+            self.get_preprocessed_region(),
+            &changes,
+            self.peer_id(),
+            self.tag(),
+        ) {
+            // To be consistent with preprocess_pending_splits, we also need to persist the state
+            // before apply.
+            write_peer_state(&mut ctx.raft_wb, &region);
+            self.preprocessed_region = Some(region);
+        }
+    }
+
+    fn get_preprocessed_region(&self) -> &Region {
+        self.preprocessed_region.as_ref().unwrap_or(self.region())
     }
 
     pub(crate) fn post_apply(&mut self, ctx: &mut RaftContext, apply_result: &MsgApplyResult) {
