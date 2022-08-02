@@ -7,7 +7,7 @@ use bytes::Bytes;
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::{
     util::{AddressingStyle, S3Config},
-    S3,
+    GetObjectError, S3,
 };
 use tikv_util::time::Instant;
 use tokio::{io::AsyncReadExt, runtime::Runtime};
@@ -191,6 +191,9 @@ impl DFS for S3FS {
                 };
             }
             let err = result.unwrap_err();
+            if let RusotoError::Service(GetObjectError::NoSuchKey(key)) = err {
+                panic!("file {} not exist, S3 key {}", file_id, key);
+            }
             if self.is_err_retryable(&err) {
                 if self.sleep_for_retry(&mut retry_cnt, file_id).await {
                     continue;
