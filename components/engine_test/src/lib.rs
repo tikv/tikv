@@ -153,11 +153,11 @@ pub mod kv {
         }
 
         fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
-            if let Ok(db) = self.root_db.lock() {
-                if let Some(cp) = db.as_ref() {
-                    return Ok(cp.clone());
-                }
+            let db = self.root_db.lock().unwrap();
+            if let Some(cp) = db.as_ref() {
+                return Ok(cp.clone());
             }
+
             self.create_shared_db()
         }
 
@@ -197,10 +197,9 @@ pub mod kv {
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-            if let Ok(db) = self.root_db.lock() {
-                let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                opt.set_block_cache_capacity(capacity)?;
-            }
+            let db = self.root_db.lock().unwrap();
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
             Ok(())
         }
     }
@@ -287,11 +286,7 @@ pub mod kv {
         }
 
         fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Some(db.clone());
-            }
-            None
+            self.registry.lock().unwrap().get(&(id, suffix)).ok()
         }
 
         fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
