@@ -285,6 +285,7 @@ impl ClusterClient {
         }
         if region_err.get_message().contains("mismatch peer") {
             sleep(Duration::from_millis(100));
+            self.update_cache_by_id(region_id, None);
             return true;
         }
         false
