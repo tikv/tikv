@@ -2076,6 +2076,15 @@ where
                     }
                 }
                 StateRole::Follower => {
+                    // Maybe the ready has committed entries?
+                    info!(
+                        "on role changed";
+                        "lease"=>?self.leader_lease.inspect(None),
+                        "is_leader"=>self.is_leader(),  // I think it's already not leader.
+                        "leader_id"=>self.leader_id(),
+                        "region_id"=>self.region_id,
+                        "peer_id"=>self.peer_id(),
+                    );
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
@@ -2110,8 +2119,14 @@ where
         use std::env;
 
         match env::var("ENABLE_BUGFIX") {
-            Ok(_) => {}
-            Err(_) => dry_run = true,
+            Ok(val) => {
+                // Only disable this bugfix if it is explicitly turned off.
+                // So that unit tests can cover this branch.
+                if val == "no" || val == "off" {
+                    dry_run = true;
+                }
+            }
+            Err(_) => {}
         };
 
         if let Some(state_role) = state_role {
@@ -2119,7 +2134,10 @@ where
                 "role changed";
                 "proposals_len" => self.proposals.queue.len(),
                 "targer_role" => ?state_role,
-                "current_role" => ?self.raft_group.status().ss.raft_state,
+                "current_role" => ?self.get_role(),  // Maybe it is already the same role as target_role.
+                "leader_id" => self.leader_id(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.id,
             );
             if state_role == StateRole::Follower {
                 // Role changes to follower, drop the stal proposals since these proposals

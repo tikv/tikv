@@ -1073,7 +1073,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .spawn(async move {
                     fail_point!("scheduler_async_write_finish");
 
-                    info!("(cosven) on_write_finished"; "cid"=>cid, "result"=>?result, "tag"=>?tag);
+                    match result {
+                        Ok(_) => {},
+                        Err(_) => {
+                            // Only output this log when the result is err.
+                            info!("(cosven) on_write_finished"; "cid"=>cid, "result"=>?result, "tag"=>?tag);
+                        }
+                    }
+
                     sched.on_write_finished(
                         cid,
                         pr,
