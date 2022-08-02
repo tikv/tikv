@@ -1082,7 +1082,7 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_raft_log_gc_tick(&mut self) {
         self.ticker.schedule(PEER_TICK_RAFT_LOG_GC);
-        if !self.peer.is_initialized() {
+        if !self.peer.is_initialized() || self.peer.is_applying_snapshot() {
             return;
         }
 
@@ -1106,19 +1106,21 @@ impl<'a> PeerMsgHandler<'a> {
             // One solution is that leader propagates truncated index to followers.
             last_idx
         };
-
         let engines = &self.ctx.global.engines;
         let size_limit_index = engines.raft.index_to_truncate_to_size(
             self.region_id(),
             self.ctx.cfg.raft_log_gc_size_limit.unwrap().0 as usize,
         );
+        let applied_idx = self.peer.get_store().applied_index();
+
         // If raft logs occupies too much memory, truncates them regardless of lagged replicas to avoid OOM.
         let mut to_truncate_idx = cmp::max(size_limit_index, replicated_idx);
+        // Shouldn't truncate unapplied logs.
+        to_truncate_idx = cmp::min(to_truncate_idx, applied_idx);
 
         // persisted_log_idx is the upper limit of truncated_idx.
         let mut persisted_log_idx = self.peer.get_store().data_persisted_log_index().unwrap();
         if to_truncate_idx > persisted_log_idx {
-            let applied_idx = self.peer.get_store().applied_index();
             let applied_term = self.peer.get_store().applied_index_term();
             // Try to advance applied_idx.
             if persisted_log_idx < applied_idx {
@@ -1147,6 +1149,7 @@ impl<'a> PeerMsgHandler<'a> {
             }
             to_truncate_idx = cmp::min(to_truncate_idx, persisted_log_idx);
         };
+        assert!(to_truncate_idx <= persisted_log_idx && to_truncate_idx <= applied_idx);
 
         let truncated_idx = self.peer.get_store().truncated_index();
         if to_truncate_idx > truncated_idx {
@@ -1154,13 +1157,6 @@ impl<'a> PeerMsgHandler<'a> {
             self.ctx
                 .raft_wb
                 .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
-            info!(
-                "{} truncate raft logs, idx {}, term {}, raft applied {}",
-                self.peer.tag(),
-                to_truncate_idx,
-                to_truncate_term,
-                self.peer.raft_group.raft.raft_log.applied,
-            );
         }
     }
 }

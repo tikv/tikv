@@ -471,6 +471,8 @@ impl PeerStorage {
         let last_term = snap.get_metadata().get_term();
         self.raft_state.last_index = last_index;
         self.last_term = last_term;
+        self.apply_state.applied_index = last_index;
+        self.apply_state.applied_index_term = last_term;
         ctx.raft_wb.set_state(
             region.get_id(),
             KV_ENGINE_META_KEY,
