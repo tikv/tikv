@@ -204,10 +204,15 @@ pub trait SplitCheckObserver<E>: Coprocessor {
 }
 
 /// Describes size information about all stores.
+/// There is guarantee that capacity >= used + avail.
+/// since some space can be reserved.
 #[derive(Debug, Default)]
 pub struct StoreSizeInfo {
+    /// The capacity of the store.
     pub capacity: u64,
+    /// Size of actual data.
     pub used: u64,
+    /// Available space that can be written with actual data.
     pub avail: u64,
 }
 
