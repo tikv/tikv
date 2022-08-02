@@ -1,25 +1,29 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::codec::{Error, Result};
+use std::{
+    cmp::Ordering::{Equal, Greater, Less},
+    marker::PhantomData,
+};
+
 use codec::prelude::*;
 use num_traits::PrimInt;
-use std::cmp::Ordering::{Equal, Greater, Less};
-use std::marker::PhantomData;
+
+use crate::codec::{Error, Result};
 
 pub enum RowSlice<'a> {
     Small {
         origin: &'a [u8],
-        non_null_ids: LEBytes<'a, u8>,
-        null_ids: LEBytes<'a, u8>,
-        offsets: LEBytes<'a, u16>,
-        values: LEBytes<'a, u8>,
+        non_null_ids: LeBytes<'a, u8>,
+        null_ids: LeBytes<'a, u8>,
+        offsets: LeBytes<'a, u16>,
+        values: LeBytes<'a, u8>,
     },
     Big {
         origin: &'a [u8],
-        non_null_ids: LEBytes<'a, u32>,
-        null_ids: LEBytes<'a, u32>,
-        offsets: LEBytes<'a, u32>,
-        values: LEBytes<'a, u8>,
+        non_null_ids: LeBytes<'a, u32>,
+        null_ids: LeBytes<'a, u32>,
+        offsets: LeBytes<'a, u32>,
+        values: LeBytes<'a, u8>,
     },
 }
 
@@ -41,7 +45,7 @@ impl RowSlice<'_> {
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
-                values: LEBytes::new(data),
+                values: LeBytes::new(data),
             }
         } else {
             RowSlice::Small {
@@ -49,7 +53,7 @@ impl RowSlice<'_> {
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
-                values: LEBytes::new(data),
+                values: LeBytes::new(data),
             }
         };
         Ok(row)
@@ -57,12 +61,13 @@ impl RowSlice<'_> {
 
     /// Search `id` in non-null ids
     ///
-    /// Returns the `start` position and `offset` in `values` field if found, otherwise returns `None`
+    /// Returns the `start` position and `offset` in `values` field if found,
+    /// otherwise returns `None`
     ///
     /// # Errors
     ///
-    /// If the id is found with no offset(It will only happen when the row data is broken),
-    /// `Error::ColumnOffset` will be returned.
+    /// If the id is found with no offset(It will only happen when the row data
+    /// is broken), `Error::ColumnOffset` will be returned.
     pub fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);
@@ -166,10 +171,11 @@ impl RowSlice<'_> {
 /// Decodes `len` number of ints from `buf` in little endian
 ///
 /// Note:
-/// This method is only implemented on little endianness currently, since x86 use little endianness.
+/// This method is only implemented on little endianness currently, since x86
+/// use little endianness.
 #[cfg(target_endian = "little")]
 #[inline]
-fn read_le_bytes<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<LEBytes<'a, T>>
+fn read_le_bytes<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<LeBytes<'a, T>>
 where
     T: PrimInt,
 {
@@ -179,17 +185,17 @@ where
     }
     let slice = &buf[..bytes_len];
     buf.advance(bytes_len);
-    Ok(LEBytes::new(slice))
+    Ok(LeBytes::new(slice))
 }
 
 #[cfg(target_endian = "little")]
-pub struct LEBytes<'a, T: PrimInt> {
+pub struct LeBytes<'a, T: PrimInt> {
     slice: &'a [u8],
     _marker: PhantomData<T>,
 }
 
 #[cfg(target_endian = "little")]
-impl<'a, T: PrimInt> LEBytes<'a, T> {
+impl<'a, T: PrimInt> LeBytes<'a, T> {
     fn new(slice: &'a [u8]) -> Self {
         Self {
             slice,
@@ -246,12 +252,15 @@ impl<'a, T: PrimInt> LEBytes<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoder_for_test::{Column, RowEncoder};
-    use super::{read_le_bytes, RowSlice};
-    use crate::codec::data_type::ScalarValue;
-    use crate::expr::EvalContext;
-    use codec::prelude::NumberEncoder;
     use std::u16;
+
+    use codec::prelude::NumberEncoder;
+
+    use super::{
+        super::encoder_for_test::{Column, RowEncoder},
+        read_le_bytes, RowSlice,
+    };
+    use crate::{codec::data_type::ScalarValue, expr::EvalContext};
 
     #[test]
     fn test_read_le_bytes() {
@@ -273,7 +282,7 @@ mod tests {
         let cols = vec![
             Column::new(1, 1000),
             Column::new(356, 2),
-            Column::new(33, ScalarValue::Int(None)), //0x21
+            Column::new(33, ScalarValue::Int(None)), // 0x21
             Column::new(3, 3),
             Column::new(64123, 5),
         ];
@@ -349,11 +358,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use super::super::encoder_for_test::{Column, RowEncoder};
-    use super::RowSlice;
-    use crate::codec::data_type::ScalarValue;
-    use crate::expr::EvalContext;
     use test::black_box;
+
+    use super::{
+        super::encoder_for_test::{Column, RowEncoder},
+        RowSlice,
+    };
+    use crate::{codec::data_type::ScalarValue, expr::EvalContext};
 
     fn encoded_data(len: usize) -> Vec<u8> {
         let mut cols = vec![];

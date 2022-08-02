@@ -3,15 +3,20 @@
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::commands::{
-    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
-    WriteResult,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        cleanup,
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
 };
-use crate::storage::txn::{cleanup, Result};
-use crate::storage::{ProcessResult, Snapshot};
 
 command! {
     /// Rollback mutations on a single key.
@@ -33,6 +38,7 @@ command! {
 impl CommandExt for Cleanup {
     ctx!();
     tag!(cleanup);
+    request_type!(KvCleanup);
     ts!(start_ts);
     write_bytes!(key);
     gen_lock!(key);
@@ -40,8 +46,8 @@ impl CommandExt for Cleanup {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
+        // It is not allowed for commit to overwrite a protected rollback. So we update
+        // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);

@@ -1,18 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::From;
-use std::fs::{read_dir, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::Path;
+use std::{
+    convert::From,
+    fs::{read_dir, File},
+    io::{BufRead, BufReader, Seek, SeekFrom},
+    path::Path,
+};
 
 use chrono::{DateTime, Local};
 use futures::stream::{self, Stream};
 use itertools::Itertools;
 use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
-use nom::bytes::complete::{tag, take};
-use nom::character::complete::{alpha1, space0, space1};
-use nom::sequence::tuple;
-use nom::*;
+use nom::{
+    bytes::complete::{tag, take},
+    character::complete::{alpha1, space0, space1},
+    sequence::tuple,
+    *,
+};
 
 const TIMESTAMP_LENGTH: usize = 30;
 
@@ -169,7 +173,8 @@ impl Iterator for LogIterator {
                         if self.pre_log.time < self.begin_time {
                             continue;
                         }
-                        // treat the invalid log with the pre valid log time and level but its own whole line content
+                        // treat the invalid log with the pre valid log time and level but its own
+                        // whole line content
                         item.set_time(self.pre_log.time);
                         item.set_level(self.pre_log.get_level());
                         item.set_message(input.to_owned());
@@ -263,8 +268,8 @@ fn parse(input: &str) -> Result<(&str, (i64, LogLevel)), Error> {
     Ok((content, (timestamp, level)))
 }
 
-/// Parses the start time and end time of a log file and return the maximal and minimal
-/// timestamp in unix milliseconds.
+/// Parses the start time and end time of a log file and return the maximal and
+/// minimal timestamp in unix milliseconds.
 fn parse_time_range(file: &std::fs::File) -> Result<(i64, i64), Error> {
     let file_start_time = parse_start_time(file, 10)?;
     let file_end_time = parse_end_time(file, 10)?;
@@ -341,11 +346,12 @@ pub fn search<P: AsRef<Path>>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::executor::block_on;
-    use futures::stream::StreamExt;
     use std::io::Write;
+
+    use futures::{executor::block_on, stream::StreamExt};
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_parse_time() {
@@ -475,7 +481,6 @@ mod tests {
         ];
         for (input, time, level, content) in cs.into_iter() {
             let result = parse(input);
-            assert!(result.is_ok(), "expected OK, but got: {:?}", result);
             let timestamp = timestamp(time);
             let log = result.unwrap();
             assert_eq!(log.0, content);

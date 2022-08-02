@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use serde_derive::{Deserialize, Serialize};
 use std::error::Error;
+
+use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -15,8 +16,9 @@ pub struct Config {
     /// The minimal renew batch size of BatchTsoProvider.
     ///
     /// Default is 100.
-    /// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
-    /// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
+    /// One TSO is required for every batch of Raft put messages, so by default
+    /// 1K tso/s should be enough. Benchmark showed that with a 8.6w raw_put
+    /// per second, the TSO requirement is 600 per second.
     pub renew_batch_min_size: u32,
 }
 

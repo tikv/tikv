@@ -1,48 +1,50 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use std::sync::RwLock;
-use std::thread;
-use std::time::Duration;
+use std::{
+    pin::Pin,
+    sync::{atomic::AtomicU64, Arc, RwLock},
+    thread,
+    time::Duration,
+};
 
-use futures::channel::mpsc::UnboundedSender;
-use futures::compat::Future01CompatExt;
-use futures::executor::block_on;
-use futures::future::{self, TryFutureExt};
-use futures::stream::Stream;
-use futures::stream::TryStreamExt;
-use futures::task::Context;
-use futures::task::Poll;
-use futures::task::Waker;
+use collections::HashSet;
+use fail::fail_point;
+use futures::{
+    channel::mpsc::UnboundedSender,
+    compat::Future01CompatExt,
+    executor::block_on,
+    future::{self, TryFutureExt},
+    stream::{Stream, TryStreamExt},
+    task::{Context, Poll, Waker},
+};
+use grpcio::{
+    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
+    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
+};
+use kvproto::{
+    metapb::BucketStats,
+    pdpb::{
+        ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+        RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
+        ReportBucketsResponse, ResponseHeader,
+    },
+};
+use security::SecurityManager;
+use tikv_util::{
+    box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
+    HandyRwLock,
+};
+use tokio_timer::timer::Handle;
 
 use super::{
     metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
     REQUEST_TIMEOUT,
 };
-use collections::HashSet;
-use fail::fail_point;
-use grpcio::{
-    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
-    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
-};
-use kvproto::metapb::BucketStats;
-use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-    RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest, ReportBucketsResponse,
-    ResponseHeader,
-};
-use security::SecurityManager;
-use tikv_util::time::Instant;
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{box_err, debug, error, info, slow_log, warn};
-use tikv_util::{Either, HandyRwLock};
-use tokio_timer::timer::Handle;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
-// The max duration when retrying to connect to leader. No matter if the MAX_RETRY_TIMES is reached.
+// The max duration when retrying to connect to leader. No matter if the
+// MAX_RETRY_TIMES is reached.
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 
 // FIXME: Use a request-independent way to handle reconnection.
@@ -316,7 +318,8 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
-    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
+    /// Note: Retrying too quickly will return an error due to cancellation.
+    /// Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
@@ -440,11 +443,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
@@ -473,9 +479,10 @@ where
 {
     loop {
         let ret = {
-            // Drop the read lock immediately to prevent the deadlock between the caller thread
-            // which may hold the read lock and wait for PD client thread completing the request
-            // and the PD client thread which may block on acquiring the write lock.
+            // Drop the read lock immediately to prevent the deadlock between the caller
+            // thread which may hold the read lock and wait for PD client thread
+            // completing the request and the PD client thread which may block
+            // on acquiring the write lock.
             let client_stub = client.inner.rl().client_stub.clone();
             func(&client_stub).map_err(Error::Grpc)
         };
@@ -572,6 +579,8 @@ impl PdConnector {
         let addr_trim = trim_http_prefix(addr);
         let channel = {
             let cb = ChannelBuilder::new(self.env.clone())
+                .max_send_message_len(-1)
+                .max_receive_message_len(-1)
                 .keepalive_time(Duration::from_secs(10))
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)
@@ -604,7 +613,8 @@ impl PdConnector {
                     Ok((_, r)) => {
                         let new_cluster_id = r.get_header().get_cluster_id();
                         if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to loop the rest members
+                            // check whether the response have leader info, otherwise continue to
+                            // loop the rest members
                             if r.has_leader() {
                                 return Ok(r);
                             }
@@ -629,9 +639,11 @@ impl PdConnector {
     }
 
     // There are 3 kinds of situations we will return the new client:
-    // 1. the force is true which represents the client is newly created or the original connection has some problem
-    // 2. the previous forwarded host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
-    // 3. the member information of PD has been changed
+    // 1. the force is true which represents the client is newly created or the
+    // original connection has some problem 2. the previous forwarded host is
+    // not empty and it can connect the leader now which represents the network
+    // partition problem to leader may be recovered 3. the member information of
+    // PD has been changed
     async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
@@ -838,8 +850,9 @@ pub fn find_bucket_index<S: AsRef<[u8]>>(key: &[u8], bucket_keys: &[S]) -> Optio
         )
 }
 
-/// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
-/// current buckets, stats of the new range will be added to all stats of current ranges.
+/// Merge incoming bucket stats. If a range in new buckets overlaps with
+/// multiple ranges in current buckets, stats of the new range will be added to
+/// all stats of current ranges.
 pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
     cur: &[C],
     cur_stats: &mut BucketStats,
@@ -922,8 +935,9 @@ pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
 
 #[cfg(test)]
 mod test {
-    use crate::{merge_bucket_stats, util::find_bucket_index};
     use kvproto::metapb::BucketStats;
+
+    use crate::{merge_bucket_stats, util::find_bucket_index};
 
     #[test]
     fn test_merge_bucket_stats() {

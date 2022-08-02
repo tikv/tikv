@@ -6,19 +6,26 @@
 #![feature(min_specialization)]
 #![feature(box_patterns)]
 #![feature(hash_drain_filter)]
+#![feature(let_chains)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]
 extern crate test;
 #[macro_use]
 extern crate derivative;
+#[cfg(feature = "engine_rocks")]
+pub mod compacted_event_sender;
 
 pub mod coprocessor;
 pub mod errors;
 pub mod router;
 pub mod store;
-pub use self::coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
-pub use self::errors::{DiscardReason, Error, Result};
+#[cfg(feature = "engine_rocks")]
+pub use self::compacted_event_sender::RaftRouterCompactedEventSender;
+pub use self::{
+    coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback},
+    errors::{DiscardReason, Error, Result},
+};
 
 // `bytes::Bytes` is generated for `bytes` in protobuf.
 fn bytes_capacity(b: &bytes::Bytes) -> usize {

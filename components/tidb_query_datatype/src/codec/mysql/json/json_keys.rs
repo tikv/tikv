@@ -2,12 +2,11 @@
 
 use std::str;
 
-use super::super::Result;
-use super::path_expr::PathExpression;
-use super::{Json, JsonRef, JsonType};
+use super::{super::Result, path_expr::PathExpression, Json, JsonRef, JsonType};
 
 impl<'a> JsonRef<'a> {
-    /// Evaluates a (possibly empty) list of values and returns a JSON array containing those values specified by `path_expr_list`
+    /// Evaluates a (possibly empty) list of values and returns a JSON array
+    /// containing those values specified by `path_expr_list`
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         if !path_expr_list.is_empty() {
             if path_expr_list.len() > 1 {
@@ -51,9 +50,9 @@ fn json_keys(j: &JsonRef<'_>) -> Result<Option<Json>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::path_expr::parse_json_path_expr;
-    use super::*;
     use std::str::FromStr;
+
+    use super::{super::path_expr::parse_json_path_expr, *};
     #[test]
     fn test_json_keys() {
         let mut test_cases = vec![

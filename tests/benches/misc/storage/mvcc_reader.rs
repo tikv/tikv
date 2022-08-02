@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::Context;
-use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
+use test_storage::{SyncTestStorageApiV1, SyncTestStorageBuilderApiV1};
 use tidb_query_datatype::codec::table;
 use tikv::storage::{kv::RocksEngine, mvcc::SnapshotReader, Engine};
 use txn_types::{Key, Mutation};
 
-fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorage<RocksEngine> {
-    let store = SyncTestStorageBuilder::default().build().unwrap();
+fn prepare_mvcc_data(key: &Key, n: u64) -> SyncTestStorageApiV1<RocksEngine> {
+    let store = SyncTestStorageBuilderApiV1::default().build().unwrap();
     for ts in 1..=n {
         let mutation = Mutation::make_put(key.clone(), b"value".to_vec());
         store

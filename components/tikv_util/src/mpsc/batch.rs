@@ -1,16 +1,22 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    pin::Pin,
+    ptr::null_mut,
+    sync::{
+        atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use crossbeam::channel::{
     self, RecvError, RecvTimeoutError, SendError, TryRecvError, TrySendError,
 };
-use futures::stream::Stream;
-use futures::task::{Context, Poll, Waker};
+use futures::{
+    stream::Stream,
+    task::{Context, Poll, Waker},
+};
 
 struct State {
     // If the receiver can't get any messages temporarily in `poll` context, it will put its
@@ -190,8 +196,9 @@ impl<T> Receiver<T> {
     }
 }
 
-/// Creates a unbounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a unbounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -209,8 +216,9 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     )
 }
 
-/// Creates a bounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a bounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -279,9 +287,10 @@ where
     I: Fn() -> E + Unpin,
     C: BatchCollector<E, T> + Unpin,
 {
-    /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
-    /// used to generate a initial value, and `collector` will collect every (at most
-    /// `max_batch_size`) raw items into the batched value.
+    /// Creates a new `BatchReceiver` with given `initializer` and `collector`.
+    /// `initializer` is used to generate a initial value, and `collector`
+    /// will collect every (at most `max_batch_size`) raw items into the
+    /// batched value.
     pub fn new(rx: Receiver<T>, max_batch_size: usize, initializer: I, collector: C) -> Self {
         BatchReceiver {
             rx,
@@ -344,12 +353,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{mpsc, Mutex};
-    use std::{thread, time};
+    use std::{
+        sync::{mpsc, Mutex},
+        thread, time,
+    };
 
-    use futures::future::{self, BoxFuture, FutureExt};
-    use futures::stream::{self, StreamExt};
-    use futures::task::{self, ArcWake, Poll};
+    use futures::{
+        future::{self, BoxFuture, FutureExt},
+        stream::{self, StreamExt},
+        task::{self, ArcWake, Poll},
+    };
     use tokio::runtime::Builder;
 
     use super::*;
@@ -378,7 +391,7 @@ mod tests {
         }
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -391,7 +404,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..4 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 5);
@@ -429,7 +442,7 @@ mod tests {
         polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -442,7 +455,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..16 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);

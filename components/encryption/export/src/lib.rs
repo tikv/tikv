@@ -1,29 +1,28 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use async_trait::async_trait;
-use derive_more::Deref;
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use std::fmt::Debug;
-use std::path::Path;
-use tikv_util::stream::RetryError;
-use tikv_util::{error, info};
+use std::{fmt::Debug, path::Path};
 
+use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 #[cfg(feature = "cloud-aws")]
 use cloud::kms::Config as CloudConfig;
-use cloud::kms::{EncryptedKey as CloudEncryptedKey, KmsProvider as CloudKmsProvider};
-use cloud::Error as CloudError;
+use cloud::{
+    kms::{EncryptedKey as CloudEncryptedKey, KmsProvider as CloudKmsProvider},
+    Error as CloudError,
+};
+use derive_more::Deref;
 #[cfg(feature = "cloud-aws")]
 pub use encryption::KmsBackend;
 pub use encryption::{
-    encryption_method_from_db_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs,
-    DecrypterReader, EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+    from_engine_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
+    EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{
     DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,
     RetryCodedError,
 };
-use tikv_util::box_err;
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use tikv_util::{box_err, error, info, stream::RetryError};
 
 pub fn data_key_manager_from_config(
     config: &EncryptionConfig,
@@ -83,7 +82,8 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     })
 }
 
-// CloudKMS adapts the KmsProvider definition from the cloud crate to that of the encryption crate
+// CloudKMS adapts the KmsProvider definition from the cloud crate to that of
+// the encryption crate
 #[derive(Debug, Deref)]
 struct CloudKms(Box<dyn CloudKmsProvider>);
 

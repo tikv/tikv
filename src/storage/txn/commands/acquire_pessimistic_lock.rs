@@ -1,27 +1,33 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::{
+    collections::hash_map::DefaultHasher,
+    fmt::Formatter,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use kvproto::kvrpcpb::{Context, ExtraOp};
+use tikv_kv::SnapshotExt;
 use txn_types::{Key, OldValues, TimeStamp, TxnExtra};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::{LockManager, WaitTimeout},
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MvccTxn, SnapshotReader},
+    txn::{
+        acquire_pessimistic_lock,
+        commands::{
+            CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
+            WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
+        },
+        scheduler::PartialPessimisticLockRequestSharedState,
+        Error, Result,
+    },
+    types::PessimisticLockKeyResult,
+    PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot,
 };
-use crate::storage::txn::commands::{
-    CommandExt, PessimisticLockParameters, ReaderWithStats, ResponsePolicy, TypedCommand,
-    WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
-};
-use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
-use crate::storage::txn::{acquire_pessimistic_lock, Error, Result};
-use crate::storage::types::PessimisticLockKeyResult;
-use crate::storage::{PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot};
-use std::collections::hash_map::DefaultHasher;
-use std::fmt::Formatter;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use tikv_kv::SnapshotExt;
 
 pub struct PessimisticLockKeyContext {
     pub index_in_request: usize,
@@ -59,10 +65,14 @@ impl std::fmt::Display for PessimisticLockCmdInner {
             } => {
                 write!(
                     f,
-                    "keys({}) @ {} {} | {:?}{}",
+                    "keys({}) @ {} {} {} {:?} {} {} | {:?}{}",
                     keys.len(),
                     params.start_ts,
+                    params.lock_ttl,
                     params.for_update_ts,
+                    params.wait_timeout,
+                    params.min_commit_ts,
+                    params.check_existence,
                     params.pb_ctx,
                     if !allow_lock_with_conflict {
                         " (legacy mode)"
@@ -107,6 +117,7 @@ impl PessimisticLockKeyContext {
 
 impl CommandExt for AcquirePessimisticLock {
     ctx!();
+    request_type!(KvPessimisticLock);
 
     fn tag(&self) -> crate::storage::metrics::CommandKind {
         match self.inner {
@@ -328,7 +339,8 @@ impl AcquirePessimisticLock {
                     params.start_ts,
                     context.concurrency_manager.clone(),
                 ));
-                // TODO: Is it possible to reuse the same reader but change the start_ts stored in it?
+                // TODO: Is it possible to reuse the same reader but change the start_ts stored
+                // in it?
                 if let Some(mut reader) = reader {
                     context.statistics.add(&reader.take_statistics());
                 }
@@ -571,7 +583,8 @@ mod tests {
     //     info.set_key(raw_key.clone());
     //     info.set_lock_version(ts);
     //     info.set_lock_ttl(100);
-    //     let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+    //     let case =
+    // StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
     //         MvccError::from(MvccErrorInner::KeyIsLocked(info)),
     //     ))));
     //     let lock_info = WriteResultLockInfo::new(

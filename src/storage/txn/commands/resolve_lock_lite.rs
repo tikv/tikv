@@ -1,22 +1,28 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::commands::{
-    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
-    WriteResult,
-};
-use crate::storage::txn::{cleanup, commit, Result};
-use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        cleanup,
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        commit, Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ResolveLockLite:
         cmd_ty => (),
-        display => "kv::resolve_lock_lite", (),
+        display => "kv::resolve_lock_lite resolve_keys({:?}) {} {} | {:?}", (resolve_keys, start_ts, commit_ts, ctx),
         content => {
             /// The transaction timestamp.
             start_ts: TimeStamp,
@@ -30,6 +36,7 @@ command! {
 impl CommandExt for ResolveLockLite {
     ctx!();
     tag!(resolve_lock_lite);
+    request_type!(KvResolveLock);
     ts!(start_ts);
     property!(is_sys_cmd);
     write_bytes!(resolve_keys: multiple);
@@ -45,8 +52,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         );
 
         let rows = self.resolve_keys.len();
-        // ti-client guarantees the size of resolve_keys will not too large, so no necessary
-        // to control the write_size as ResolveLock.
+        // ti-client guarantees the size of resolve_keys will not too large, so no
+        // necessary to control the write_size as ResolveLock.
         let mut released_locks = ReleasedLocks::new();
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {

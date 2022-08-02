@@ -1,18 +1,20 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
+
 use tipb::FieldType;
 
 use super::LazyBatchColumn;
-use crate::codec::data_type::VectorValue;
-use crate::codec::Result;
-use crate::expr::EvalContext;
-
-use std::ops::{Index, IndexMut, Range, RangeFrom, RangeTo};
+use crate::{
+    codec::{data_type::VectorValue, Result},
+    expr::EvalContext,
+};
 
 /// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
-    /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
+    /// Multiple lazy batch columns. Each column is either decoded, or not
+    /// decoded.
     ///
     /// For decoded columns, they may be in different types. If the column is in
     /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
@@ -36,9 +38,11 @@ impl From<Vec<VectorValue>> for LazyBatchColumnVec {
 }
 
 impl LazyBatchColumnVec {
-    /// Creates a new empty `LazyBatchColumnVec`, which does not have columns and rows.
+    /// Creates a new empty `LazyBatchColumnVec`, which does not have columns
+    /// and rows.
     ///
-    /// Because column numbers won't change, it means constructed instance will be always empty.
+    /// Because column numbers won't change, it means constructed instance will
+    /// be always empty.
     #[inline]
     pub fn empty() -> Self {
         Self {
@@ -46,7 +50,8 @@ impl LazyBatchColumnVec {
         }
     }
 
-    /// Creates a new empty `LazyBatchColumnVec` with the same number of columns and schema.
+    /// Creates a new empty `LazyBatchColumnVec` with the same number of columns
+    /// and schema.
     #[inline]
     #[must_use]
     pub fn clone_empty(&self, capacity: usize) -> Self {
@@ -59,7 +64,8 @@ impl LazyBatchColumnVec {
         }
     }
 
-    /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns.
+    /// Creates a new `LazyBatchColumnVec`, which contains `columns_count`
+    /// number of raw columns.
     #[cfg(test)]
     #[must_use]
     pub fn with_raw_columns(columns_count: usize) -> Self {
@@ -159,8 +165,8 @@ impl LazyBatchColumnVec {
         Ok(())
     }
 
-    /// Truncates columns into equal length. The new length of all columns would be the length of
-    /// the shortest column before calling this function.
+    /// Truncates columns into equal length. The new length of all columns would
+    /// be the length of the shortest column before calling this function.
     pub fn truncate_into_equal_length(&mut self) {
         let mut min_len = self.rows_len();
         for col in &self.columns {
@@ -183,8 +189,8 @@ impl LazyBatchColumnVec {
     }
 }
 
-// Do not implement Deref, since we want to forbid some misleading function calls like
-// `LazyBatchColumnVec.len()`.
+// Do not implement Deref, since we want to forbid some misleading function
+// calls like `LazyBatchColumnVec.len()`.
 
 impl Index<usize> for LazyBatchColumnVec {
     type Output = LazyBatchColumn;

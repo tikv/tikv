@@ -3,9 +3,7 @@
 use std::sync::Arc;
 
 use test_raftstore::*;
-
-use tikv_util::config::*;
-use tikv_util::time::Instant;
+use tikv_util::{config::*, time::Instant};
 
 #[test]
 fn test_pending_peers() {
@@ -38,14 +36,14 @@ fn test_pending_peers() {
     assert!(pending_peers.is_empty());
 }
 
-// Tests if raftstore and apply worker write truncated_state concurrently could lead to
-// dirty write.
+// Tests if raftstore and apply worker write truncated_state concurrently could
+// lead to dirty write.
 #[test]
 fn test_pending_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let election_timeout = configure_for_lease_read(&mut cluster, None, Some(15));
-    let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit;
+    let gc_limit = cluster.cfg.raft_store.raft_log_gc_count_limit();
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 
     let handle_snapshot_fp = "apply_on_handle_snapshot_1_1";

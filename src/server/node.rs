@@ -1,45 +1,53 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
-use super::RaftKv;
-use super::Result;
-use crate::import::SSTImporter;
-use crate::read_pool::ReadPoolHandle;
-use crate::server::lock_manager::LockManager;
-use crate::server::Config as ServerConfig;
-use crate::storage::kv::FlowStatsReporter;
-use crate::storage::txn::flow_controller::FlowController;
-use crate::storage::DynamicConfigs as StorageDynamicConfigs;
-use crate::storage::{config::Config as StorageConfig, Storage};
-use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
+use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::metapb;
-use kvproto::raft_serverpb::StoreIdent;
-use kvproto::replication_modepb::ReplicationStatus;
+use grpcio_health::HealthService;
+use kvproto::{
+    kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
+};
 use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::router::{LocalReadRouter, RaftStoreRouter};
-use raftstore::store::fsm::store::StoreMeta;
-use raftstore::store::fsm::{ApplyRouter, RaftBatchSystem, RaftRouter};
-use raftstore::store::AutoSplitController;
-use raftstore::store::{self, initial_region, Config as StoreConfig, SnapManager, Transport};
-use raftstore::store::{GlobalReplicationState, PdTask, RefreshConfigTask, SplitCheckTask};
+use raftstore::{
+    coprocessor::dispatcher::CoprocessorHost,
+    router::{LocalReadRouter, RaftStoreRouter},
+    store::{
+        self,
+        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
+        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+    },
+};
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
-use tikv_util::config::VersionTrack;
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
+use tikv_util::{
+    config::VersionTrack,
+    quota_limiter::QuotaLimiter,
+    worker::{LazyWorker, Scheduler, Worker},
+};
+
+use super::{RaftKv, Result};
+use crate::{
+    import::SstImporter,
+    read_pool::ReadPoolHandle,
+    server::{lock_manager::LockManager, Config as ServerConfig},
+    storage::{
+        config::Config as StorageConfig, kv::FlowStatsReporter,
+        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
+    },
+};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
-const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
+const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -51,7 +59,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter>(
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-) -> Result<Storage<RaftKv<EK, S>, LockManager>>
+) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
@@ -85,6 +93,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
+    health_service: Option<HealthService>,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -102,6 +111,7 @@ where
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
+        health_service: Option<HealthService>,
     ) -> Node<C, EK, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -149,6 +159,7 @@ where
             has_started: false,
             state,
             bg_worker,
+            health_service,
         }
     }
 
@@ -179,7 +190,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
@@ -230,7 +241,8 @@ where
         self.store.get_id()
     }
 
-    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
     }
@@ -240,7 +252,8 @@ where
     pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
-    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    /// Gets a transmission end of a channel which is used send messages to
+    /// apply worker.
     pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
@@ -278,11 +291,12 @@ where
             .kv
             .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
             .expect("Store should have bootstrapped");
-        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
-        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
-        // TiKV, the config switch between V1 and V1ttl are not checked here.
-        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
-        // config check.
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be
+        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading
+        // from legacy V1 TiKV, the config switch between V1 and V1ttl are not checked
+        // here. It's safe to do so because `storage.enable_ttl` is impossible to change
+        // thanks to the config check. let should_check = match (ident.api_version,
+        // self.api_version) {
         let should_check = match (ident.api_version, self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,
@@ -293,7 +307,7 @@ where
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
-                    snapshot.scan_cf(
+                    snapshot.scan(
                         cf,
                         &keys::data_key(start),
                         &keys::data_key(end),
@@ -425,9 +439,7 @@ where
                 Err(e) => error!(?e; "bootstrap cluster"; "cluster_id" => self.cluster_id,),
             }
             retry += 1;
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("bootstrapped cluster failed"))
     }
@@ -440,9 +452,7 @@ where
                     warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
-            thread::sleep(Duration::from_secs(
-                CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
-            ));
+            thread::sleep(CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL);
         }
         Err(box_err!("check cluster bootstrapped failed"))
     }
@@ -457,7 +467,7 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SSTImporter>,
+        importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
@@ -493,6 +503,7 @@ where
             self.state.clone(),
             concurrency_manager,
             collector_reg_handle,
+            self.health_service.clone(),
         )?;
         Ok(())
     }

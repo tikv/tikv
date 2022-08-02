@@ -1,13 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::MvccReader;
-use crate::storage::txn::commands::{Command, CommandExt, ReadCommand, ResolveLock};
-use crate::storage::txn::sched_pool::tls_collect_keyread_histogram_vec;
-use crate::storage::txn::{ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE};
-use crate::storage::{ScanMode, Snapshot, Statistics};
 use collections::HashMap;
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    mvcc::MvccReader,
+    txn::{
+        commands::{Command, CommandExt, ReadCommand, ResolveLock},
+        sched_pool::tls_collect_keyread_histogram_vec,
+        ProcessResult, Result, RESOLVE_LOCK_BATCH_SIZE,
+    },
+    ScanMode, Snapshot, Statistics,
+};
 
 command! {
     /// Scan locks for resolving according to `txn_status`.
@@ -28,6 +33,7 @@ command! {
 impl CommandExt for ResolveLockReadPhase {
     ctx!();
     tag!(resolve_lock);
+    request_type!(KvResolveLock);
     property!(readonly);
 
     fn write_bytes(&self) -> usize {

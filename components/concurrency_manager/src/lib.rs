@@ -15,9 +15,6 @@ use fail::fail_point;
 mod key_handle;
 mod lock_table;
 
-pub use self::key_handle::{KeyHandle, KeyHandleGuard};
-pub use self::lock_table::LockTable;
-
 use std::{
     mem::MaybeUninit,
     sync::{
@@ -25,7 +22,13 @@ use std::{
         Arc,
     },
 };
+
 use txn_types::{Key, Lock, TimeStamp};
+
+pub use self::{
+    key_handle::{KeyHandle, KeyHandleGuard},
+    lock_table::LockTable,
+};
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
@@ -55,8 +58,8 @@ impl ConcurrencyManager {
         }
     }
 
-    /// Acquires a mutex of the key and returns an RAII guard. When the guard goes
-    /// out of scope, the mutex will be unlocked.
+    /// Acquires a mutex of the key and returns an RAII guard. When the guard
+    /// goes out of scope, the mutex will be unlocked.
     ///
     /// The guard can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -64,8 +67,8 @@ impl ConcurrencyManager {
         self.lock_table.lock_key(key).await
     }
 
-    /// Acquires mutexes of the keys and returns the RAII guards. The order of the
-    /// guards is the same with the given keys.
+    /// Acquires mutexes of the keys and returns the RAII guards. The order of
+    /// the guards is the same with the given keys.
     ///
     /// The guards can be used to store Lock in the table. The stored lock
     /// is visible to `read_key_check` and `read_range_check`.
@@ -125,8 +128,9 @@ impl ConcurrencyManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use txn_types::LockType;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_lock_keys_order() {

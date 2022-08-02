@@ -1,32 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use async_trait::async_trait;
-use std::io;
-use std::time::Duration;
-use thiserror::Error;
+use std::{error::Error as StdError, io, time::Duration};
 
+use async_trait::async_trait;
+use cloud::{
+    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
+};
 use fail::fail_point;
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-use rusoto_core::{
-    request::DispatchSignedRequest,
-    {ByteStream, RusotoError},
-};
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
-use std::error::Error as StdError;
-use tokio::time::{sleep, timeout};
-
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+use thiserror::Error;
+use tikv_util::{
+    debug,
+    stream::{error_stream, retry},
+    time::Instant,
 };
-use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
-use tikv_util::time::Instant;
+use tokio::time::{sleep, timeout};
 
 use crate::util;
 
@@ -262,12 +258,34 @@ impl<T: 'static + StdError> From<RusotoError<T>> for UploadError {
     }
 }
 
+/// try_read_exact tries to read exact length data as the buffer size.  
+/// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when
+/// cannot read anything more from the `Read`. once returning a size less than
+/// the buffer length, implies a EOF was meet, or nothing read.
+async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
+    r: &mut R,
+    buf: &mut [u8],
+) -> io::Result<usize> {
+    let mut size_read = 0;
+    loop {
+        let r = r.read(&mut buf[size_read..]).await?;
+        if r == 0 {
+            return Ok(size_read);
+        }
+        size_read += r;
+        if size_read >= buf.len() {
+            return Ok(size_read);
+        }
+    }
+}
+
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
 
 impl<'client> S3Uploader<'client> {
-    /// Creates a new uploader with a given target location and upload configuration.
+    /// Creates a new uploader with a given target location and upload
+    /// configuration.
     fn new(client: &'client S3Client, config: &Config, key: String) -> Self {
         Self {
             client,
@@ -302,7 +320,7 @@ impl<'client> S3Uploader<'client> {
                 let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
                 loop {
-                    let data_size = reader.read(&mut buf).await?;
+                    let data_size = try_read_exact(reader, &mut buf).await?;
                     if data_size == 0 {
                         break;
                     }
@@ -354,7 +372,8 @@ impl<'client> S3Uploader<'client> {
         }
     }
 
-    /// Completes a multipart upload process, asking S3 to join all parts into a single file.
+    /// Completes a multipart upload process, asking S3 to join all parts into a
+    /// single file.
     async fn complete(&self) -> Result<(), RusotoError<CompleteMultipartUploadError>> {
         let res = timeout(
             Self::get_timeout(),
@@ -436,8 +455,8 @@ impl<'client> S3Uploader<'client> {
 
     /// Uploads a file atomically.
     ///
-    /// This should be used only when the data is known to be short, and thus relatively cheap to
-    /// retry the entire upload.
+    /// This should be used only when the data is known to be short, and thus
+    /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RusotoError<PutObjectError>> {
         let res = timeout(Self::get_timeout(), async {
             #[cfg(feature = "failpoints")]
@@ -499,7 +518,7 @@ impl<'client> S3Uploader<'client> {
     }
 }
 
-const STORAGE_NAME: &str = "s3";
+pub const STORAGE_NAME: &str = "s3";
 
 #[async_trait]
 impl BlobStorage for S3Storage {
@@ -524,9 +543,9 @@ impl BlobStorage for S3Storage {
             } else {
                 io::ErrorKind::Other
             };
-            // Even we can check whether there is an `io::Error` internal and extract it directly,
-            // We still need to keep the message 'failed to put object' here for adapting the string-matching based
-            // retry logic in BR :(
+            // Even we can check whether there is an `io::Error` internal and extract it
+            // directly, We still need to keep the message 'failed to put object' here for
+            // adapting the string-matching based retry logic in BR :(
             io::Error::new(error_code, format!("failed to put object {}", e))
         })
     }
@@ -564,10 +583,13 @@ impl BlobStorage for S3Storage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::assert_matches::assert_matches;
+
     use rusoto_core::signature::SignedRequest;
     use rusoto_mock::{MockRequestDispatcher, MultipleMockRequestDispatcher};
     use tikv_util::stream::block_on_external_io;
+
+    use super::*;
 
     #[test]
     fn test_s3_config() {
@@ -609,7 +631,8 @@ mod tests {
         // set multi_part_size to use upload_part function
         config.multi_part_size = multi_part_size;
 
-        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3 part + 1 complete)
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
+        // part + 1 complete)
         let dispatcher = MultipleMockRequestDispatcher::new(vec![
             MockRequestDispatcher::with_status(200).with_body(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -628,14 +651,13 @@ mod tests {
 
         let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
 
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
-        assert!(resp.is_ok());
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             CLOUD_REQUEST_HISTOGRAM_VEC
                 .get_metric_with_label_values(&["s3", "upload_part"])
@@ -716,17 +738,15 @@ mod tests {
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap();
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
-        // no timeout
-        assert!(resp.is_ok());
     }
 
     #[test]
@@ -875,5 +895,32 @@ mod tests {
         cd.set_attrs(attrs);
         cd.set_bucket(bucket);
         cd
+    }
+
+    #[tokio::test]
+    async fn test_try_read_exact() {
+        use std::io::{self, Cursor, Read};
+
+        use futures::io::AllowStdIo;
+
+        use self::try_read_exact;
+
+        /// ThrottleRead throttles a `Read` -- make it emits 2 chars for each
+        /// `read` call.
+        struct ThrottleRead<R>(R);
+        impl<R: Read> Read for ThrottleRead<R> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let idx = buf.len().min(2);
+                self.0.read(&mut buf[..idx])
+            }
+        }
+
+        let mut data = AllowStdIo::new(ThrottleRead(Cursor::new(b"muthologia.")));
+        let mut buf = vec![0u8; 6];
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(6));
+        assert_eq!(buf, b"muthol");
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(5));
+        assert_eq!(&buf[..5], b"ogia.");
+        assert_matches!(try_read_exact(&mut data, &mut buf).await, Ok(0));
     }
 }

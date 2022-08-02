@@ -1,38 +1,49 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Display, Formatter};
-use std::io::{Read, Write};
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    io::{Read, Write},
+    marker::PhantomData,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-use futures::future::{Future, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{Stream, StreamExt, TryStreamExt};
-use futures::task::{Context, Poll};
+use engine_traits::KvEngine;
+use file_system::{IoType, WithIoType};
+use futures::{
+    future::{Future, TryFutureExt},
+    sink::SinkExt,
+    stream::{Stream, StreamExt, TryStreamExt},
+    task::{Context, Poll},
+};
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use kvproto::raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk};
-use kvproto::tikvpb::TikvClient;
+use kvproto::{
+    raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk},
+    tikvpb::TikvClient,
+};
 use protobuf::Message;
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{SnapEntry, SnapKey, SnapManager, Snapshot},
+};
+use security::SecurityManager;
+use tikv_util::{
+    config::{Tracker, VersionTrack},
+    time::Instant,
+    worker::Runnable,
+    DeferContext,
+};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
-use engine_traits::KvEngine;
-use file_system::{IOType, WithIOType};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use security::SecurityManager;
-use tikv_util::config::{Tracker, VersionTrack};
-use tikv_util::time::Instant;
-use tikv_util::worker::Runnable;
-use tikv_util::DeferContext;
-
-use super::metrics::*;
-use super::{Config, Error, Result};
+use super::{metrics::*, Config, Error, Result};
+use crate::tikv_util::sys::thread::ThreadBuildWrapper;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -109,7 +120,8 @@ pub struct SendStat {
 
 /// Send the snapshot to specified address.
 ///
-/// It will first send the normal raft snapshot message and then send the snapshot file.
+/// It will first send the normal raft snapshot message and then send the
+/// snapshot file.
 pub fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
@@ -155,7 +167,9 @@ pub fn send_snap(
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm());
+        .default_compression_algorithm(cfg.grpc_compression_algorithm())
+        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
@@ -192,7 +206,7 @@ struct RecvSnapContext {
     key: SnapKey,
     file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
-    io_type: IOType,
+    io_type: IoType,
 }
 
 impl RecvSnapContext {
@@ -213,11 +227,11 @@ impl RecvSnapContext {
         let mut snapshot = RaftSnapshotData::default();
         snapshot.merge_from_bytes(data)?;
         let io_type = if snapshot.get_meta().get_for_balance() {
-            IOType::LoadBalance
+            IoType::LoadBalance
         } else {
-            IOType::Replication
+            IoType::Replication
         };
-        let _with_io_type = WithIOType::new(io_type);
+        let _with_io_type = WithIoType::new(io_type);
 
         let snap = {
             let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
@@ -243,7 +257,7 @@ impl RecvSnapContext {
     }
 
     fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
-        let _with_io_type = WithIOType::new(self.io_type);
+        let _with_io_type = WithIoType::new(self.io_type);
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -286,7 +300,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
             let f = context.file.as_mut().unwrap();
-            let _with_io_type = WithIOType::new(context.io_type);
+            let _with_io_type = WithIoType::new(context.io_type);
             if let Err(e) = Write::write_all(&mut *f, &data) {
                 let key = &context.key;
                 let path = context.file.as_mut().unwrap().path();
@@ -344,8 +358,8 @@ where
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
                 .worker_threads(DEFAULT_POOL_SIZE)
-                .on_thread_start(tikv_alloc::add_thread_memory_accessor)
-                .on_thread_stop(tikv_alloc::remove_thread_memory_accessor)
+                .after_start_wrapper(tikv_alloc::add_thread_memory_accessor)
+                .before_stop_wrapper(tikv_alloc::remove_thread_memory_accessor)
                 .build()
                 .unwrap(),
             raft_router: r,

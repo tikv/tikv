@@ -6,40 +6,46 @@ pub mod deadlock;
 mod metrics;
 pub mod waiter_manager;
 
-pub use self::config::{Config, LockManagerConfigManager};
-pub use self::deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService};
-pub use self::waiter_manager::Scheduler as WaiterMgrScheduler;
-
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-
-use self::deadlock::Detector;
-use self::waiter_manager::WaiterManager;
-use crate::server::resolve::StoreAddrResolver;
-use crate::server::{Error, Result};
-use crate::storage::DynamicConfigs as StorageDynamicConfigs;
-use crate::storage::{
-    lock_manager::{LockManager as LockManagerTrait, WaitTimeout},
-    Error as StorageError,
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
 };
-use raftstore::coprocessor::CoprocessorHost;
 
-use crate::server::lock_manager::waiter_manager::Waiter;
-use crate::storage::lock_manager::{
-    DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockWaitToken,
-};
 use collections::HashSet;
 use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
 use kvproto::metapb::RegionEpoch;
 use parking_lot::Mutex;
 use pd_client::PdClient;
+use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
 use tikv_util::worker::FutureWorker;
 use txn_types::TimeStamp;
+
+pub use self::{
+    config::{Config, LockManagerConfigManager},
+    deadlock::{Scheduler as DetectorScheduler, Service as DeadlockService},
+    waiter_manager::Scheduler as WaiterMgrScheduler,
+};
+use self::{
+    deadlock::Detector,
+    waiter_manager::{Waiter, WaiterManager},
+};
+use crate::{
+    server::{resolve::StoreAddrResolver, Error, Result},
+    storage::{
+        lock_manager::{
+            DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockManager as LockManagerTrait,
+            LockWaitToken, WaitTimeout,
+        },
+        DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
+    },
+};
 
 const DETECTED_SLOTS_NUM: usize = 128;
 
@@ -52,7 +58,8 @@ fn detected_slot_idx(token: LockWaitToken) -> usize {
 
 /// `LockManager` has two components working in two threads:
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
-///   * The other one is the `Detector` which detects deadlocks between transactions.
+///   * The other one is the `Detector` which detects deadlocks between
+///     transactions.
 pub struct LockManager {
     waiter_mgr_worker: Option<FutureWorker<waiter_manager::Task>>,
     detector_worker: Option<FutureWorker<deadlock::Task>>,
@@ -200,8 +207,9 @@ impl LockManager {
         }
     }
 
-    /// Creates a `RoleChangeNotifier` of the deadlock detector worker and registers it to
-    /// the `CoprocessorHost` to observe the role change events of the leader region.
+    /// Creates a `RoleChangeNotifier` of the deadlock detector worker and
+    /// registers it to the `CoprocessorHost` to observe the role change
+    /// events of the leader region.
     pub fn register_detector_role_change_observer(
         &self,
         host: &mut CoprocessorHost<impl KvEngine>,
@@ -215,7 +223,8 @@ impl LockManager {
         region_cancel_observer.register(host);
     }
 
-    /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
+    /// Creates a `DeadlockService` to handle deadlock detect requests from
+    /// other nodes.
     pub fn deadlock_service(&self) -> DeadlockService {
         DeadlockService::new(
             self.waiter_mgr_scheduler.clone(),
@@ -283,7 +292,9 @@ impl LockManagerTrait for LockManager {
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        // If it is the first lock the transaction tries to lock, it won't cause deadlock.
+
+        // If it is the first lock the transaction tries to lock, it won't cause
+        // deadlock.
         if !is_first_lock {
             self.add_to_detected(token);
             self.detector_scheduler
@@ -313,8 +324,9 @@ impl LockManagerTrait for LockManager {
         if self.has_waiter() {
             self.waiter_mgr_scheduler.remove_lock_wait(token);
         }
-        // If a pessimistic transaction is committed or rolled back and it once sent requests to
-        // detect deadlock, clean up its wait-for entries in the deadlock detector.
+        // If a pessimistic transaction is committed or rolled back and it once
+        // sent requests to detect deadlock, clean up its wait-for
+        // entries in the deadlock detector.
         // if is_pessimistic_txn && self.remove_from_detected(token) {
         //     self.detector_scheduler.clean_up(token);
         // }
@@ -331,22 +343,19 @@ impl LockManagerTrait for LockManager {
 
 #[cfg(test)]
 mod tests {
-    use self::deadlock::tests::*;
-    use self::metrics::*;
-    use self::waiter_manager::tests::*;
-    use super::*;
-    use crate::storage::lock_manager::LockDigest;
+    use std::{thread, time::Duration};
+
     use engine_test::kv::KvTestEngine;
+    use futures::executor::block_on;
+    use kvproto::metapb::{Peer, Region};
+    use raft::StateRole;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
 
-    use std::thread;
-    use std::time::Duration;
-
-    use futures::executor::block_on;
-    use kvproto::metapb::{Peer, Region};
-    use raft::StateRole;
+    use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
+    use super::*;
+    use crate::storage::lock_manager::LockDigest;
 
     fn start_lock_manager() -> LockManager {
         let mut coprocessor_host = CoprocessorHost::<KvTestEngine>::default();

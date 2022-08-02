@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::KvEngine;
-use crate::errors::Result;
-use crate::options::WriteOptions;
-use crate::raft_engine::RaftEngine;
-use crate::write_batch::WriteBatch;
+use crate::{
+    engine::KvEngine, errors::Result, options::WriteOptions, raft_engine::RaftEngine,
+    write_batch::WriteBatch,
+};
 
 #[derive(Clone, Debug)]
 pub struct Engines<K, R> {
+    // kv can be either global kv store, or the tablet in multirocks version.
     pub kv: K,
     pub raft: R,
 }

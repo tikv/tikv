@@ -1,19 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::*;
-
+use kvproto::{
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::Context,
+};
 use protobuf::Message;
-
-use kvproto::coprocessor::{KeyRange, Request};
-use kvproto::kvrpcpb::Context;
-use tipb::ColumnInfo;
-use tipb::{Aggregation, ExecType, Executor, IndexScan, Limit, Selection, TableScan, TopN};
-use tipb::{ByItem, Expr, ExprType};
-use tipb::{Chunk, DagRequest};
-
 use tidb_query_datatype::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv_util::codec::number::NumberEncoder;
+use tipb::{
+    Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
+    IndexScan, Limit, Selection, TableScan, TopN,
+};
+
+use super::*;
 
 pub struct DAGSelect {
     pub execs: Vec<Executor>,
@@ -112,7 +112,8 @@ impl DAGSelect {
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
         let mut expr_ft = col.as_field_type();
-        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a
+        // `Decimal`
         if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
             expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
         }
@@ -276,15 +277,15 @@ impl DAGSelect {
     }
 }
 
-pub struct DAGChunkSpliter {
+pub struct DagChunkSpliter {
     chunks: Vec<Chunk>,
     datums: Vec<Datum>,
     col_cnt: usize,
 }
 
-impl DAGChunkSpliter {
-    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
-        DAGChunkSpliter {
+impl DagChunkSpliter {
+    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DagChunkSpliter {
+        DagChunkSpliter {
             chunks,
             col_cnt,
             datums: Vec::with_capacity(0),
@@ -292,7 +293,7 @@ impl DAGChunkSpliter {
     }
 }
 
-impl Iterator for DAGChunkSpliter {
+impl Iterator for DagChunkSpliter {
     type Item = Vec<Datum>;
 
     fn next(&mut self) -> Option<Vec<Datum>> {

@@ -21,13 +21,13 @@ To build TiKV you'll need to at least have the following installed:
 * `awk` - Pattern scanning/processing language
 * C++ compiler - gcc 5+ (required for gRPC)
 
-If you are targeting platforms other than x86_64/aarch64 linux or MacOS, you'll also need:
+If you are targeting platforms other than x86_64/aarch64 Linux or macOS, you'll also need:
 
 * [`llvm` and `clang`](http://releases.llvm.org/download.html) - Used to generate bindings for different platforms and build native libraries (required for grpcio, rocksdb).
 
 ### Getting the repository
 
-```
+```bash
 git clone https://github.com/tikv/tikv.git
 cd tikv
 # Future instructions assume you are in this directory
@@ -77,6 +77,12 @@ make test
 env EXTRA_CARGO_ARGS=$TESTNAME make test
 ```
 
+Alternatively, you can use [nextest](https://github.com/nextest-rs/nextest) to run tests:
+
+```bash
+env EXTRA_CARGO_ARGS=$TESTNAME make test_with_nextest
+```
+
 TiKV follows the Rust community coding style. We use Rustfmt and [Clippy](https://github.com/Manishearth/rust-clippy) to automatically format and lint our code. Using these tools is checked in our CI. These are as part of `make dev`, you can also run them alone:
 
 ```bash
@@ -92,7 +98,7 @@ Please follow this style to make TiKV easy to review, maintain, and develop.
 
 ### Build issues
 
-To reduce compilation time, TiKV builds do not include full debugging information by default &mdash; `release` and `bench` builds include no debuginfo; `dev` and `test` builds include full debug. To decrease compilation time with another ~5% (around 10 seconds for a 4 min build time), change the `debug = true` to `debug = 1` in the Cargo.toml file to only include line numbers for `dev` and `test`. Another way to change debuginfo is to precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
+To reduce compilation time and disk usage, TiKV builds do not include full debugging information by default &mdash; only tests package will have line debug info enabled. To change debuginfo, just precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,
 
 ```bash
 RUSTFLAGS=-Cdebuginfo=1 make dev
@@ -225,7 +231,7 @@ Use option `git commit -s` to sign off your commits. The bot will group and dist
 
 Testing AWS can be done without an AWS account by using [localstack](https://github.com/localstack/localstack).
 
-```
+```bash
 git clone https://github.com/localstack/localstack.git
 cd localstack
 docker-compose up
@@ -233,14 +239,14 @@ docker-compose up
 
 For example, to test KMS, create a key:
 
-```
+```bash
 pip install awscli-local
 awslocal kms create-key`
 ```
 
 Then add then use the returned ID in key-id:
 
-```
+```bash
 [security.encryption.master-key]
 type = "kms"
 region = "us-west-2"
@@ -250,7 +256,7 @@ key-id = "KMS key id"
 
 When you run TiKV, make sure to set the localstack credentials
 
-```
+```bash
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 ```

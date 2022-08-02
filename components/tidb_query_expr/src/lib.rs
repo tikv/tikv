@@ -1,19 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This crate implements a simple SQL query engine to work with TiDB pushed down executors.
+//! This crate implements a simple SQL query engine to work with TiDB pushed
+//! down executors.
 //!
-//! The query engine is able to scan and understand rows stored by TiDB, run against a
-//! series of executors and then return the execution result. The query engine is provided via
-//! TiKV Coprocessor interface. However standalone UDF functions are also exported and can be used
-//! standalone.
+//! The query engine is able to scan and understand rows stored by TiDB, run
+//! against a series of executors and then return the execution result. The
+//! query engine is provided via TiKV Coprocessor interface. However standalone
+//! UDF functions are also exported and can be used standalone.
 
 #![allow(elided_lifetimes_in_paths)] // Necessary until rpn_fn accepts functions annotated with lifetimes.
 #![allow(incomplete_features)]
 #![feature(proc_macro_hygiene)]
 #![feature(specialization)]
 #![feature(test)]
-#![feature(const_fn_fn_ptr_basics)]
-#![feature(const_fn_trait_bound)]
 #![feature(const_mut_refs)]
 
 #[macro_use(box_err, box_try, try_opt)]
@@ -42,30 +41,19 @@ pub mod impl_other;
 pub mod impl_string;
 pub mod impl_time;
 
-pub use self::types::*;
-
-use tidb_query_datatype::{Charset, Collation, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_common::Result;
+use tidb_query_datatype::{
+    codec::data_type::*, match_template_charset, match_template_collator, Charset, Collation,
+    FieldTypeAccessor, FieldTypeFlag,
+};
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::match_template_charset;
-use tidb_query_datatype::match_template_collator;
-
-use self::impl_arithmetic::*;
-use self::impl_cast::*;
-use self::impl_compare::*;
-use self::impl_compare_in::*;
-use self::impl_control::*;
-use self::impl_encryption::*;
-use self::impl_json::*;
-use self::impl_like::*;
-use self::impl_math::*;
-use self::impl_miscellaneous::*;
-use self::impl_op::*;
-use self::impl_other::*;
-use self::impl_string::*;
-use self::impl_time::*;
+pub use self::types::*;
+use self::{
+    impl_arithmetic::*, impl_cast::*, impl_compare::*, impl_compare_in::*, impl_control::*,
+    impl_encryption::*, impl_json::*, impl_like::*, impl_math::*, impl_miscellaneous::*,
+    impl_op::*, impl_other::*, impl_string::*, impl_time::*,
+};
 
 fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
     let children = expr.get_children();
@@ -154,7 +142,8 @@ fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<
 where
     F: Fn(bool, bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
@@ -233,7 +222,8 @@ fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Res
 where
     F: Fn(bool) -> RpnFnMeta,
 {
-    // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
+    // FIXME: The signature for different signed / unsigned int should be inferred
+    // at TiDB side.
     if children.len() != 2 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",

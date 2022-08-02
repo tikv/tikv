@@ -11,16 +11,16 @@
 //!
 //! Adopted from https://github.com/rust-fuzz/targets
 
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 use anyhow::{anyhow, Context, Result};
 use cargo_metadata::MetadataCommand;
 use lazy_static::lazy_static;
-use structopt::clap::arg_enum;
-use structopt::StructOpt;
+use structopt::{clap::arg_enum, StructOpt};
 
 lazy_static! {
     static ref WORKSPACE_ROOT: PathBuf = MetadataCommand::new()
@@ -212,7 +212,10 @@ fn run_afl(target: &str) -> Result<()> {
         ));
     }
 
-    // 2. cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
+    // 2.
+    // ```
+    // cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
+    // ```
     let instrumented_bin = WORKSPACE_ROOT.join("target/debug").join(target);
     let fuzzer_bin = Command::new("cargo")
         .args(&["afl", "fuzz"])

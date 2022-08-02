@@ -1,13 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::Result;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::Error;
+use tikv_util::{
+    box_err,
+    codec::{
+        number::{self, NumberEncoder},
+        Error,
+    },
+};
 
 use super::*;
 
-impl APIVersion for APIV1TTL {
+impl KvFormat for ApiV1Ttl {
     const TAG: ApiVersion = ApiVersion::V1ttl;
+    #[cfg(any(test, feature = "testexport"))]
+    const CLIENT_TAG: ApiVersion = ApiVersion::V1;
     const IS_TTL_ENABLED: bool = true;
 
     #[inline]
@@ -54,5 +61,27 @@ impl APIVersion for APIV1TTL {
             .encode_u64(value.expire_ts.unwrap_or(0))
             .unwrap();
         value.user_value
+    }
+
+    fn convert_raw_encoded_key_version_from(
+        src_api: ApiVersion,
+        key: &[u8],
+        _ts: Option<TimeStamp>,
+    ) -> Result<Key> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok(Key::from_encoded_slice(key)),
+            ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1ttl")), /* reject apiv2 -> apiv1ttl conversion */
+        }
+    }
+
+    fn convert_raw_user_key_range_version_from(
+        src_api: ApiVersion,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        match src_api {
+            ApiVersion::V1 | ApiVersion::V1ttl => Ok((start_key, end_key)),
+            ApiVersion::V2 => Err(box_err!("unsupported conversion from v2 to v1ttl")), /* reject apiv2 -> apiv1ttl conversion */
+        }
     }
 }

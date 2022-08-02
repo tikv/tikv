@@ -5,16 +5,15 @@
 #![feature(hash_drain_filter)]
 #![feature(core_intrinsics)]
 
-use std::intrinsics::unlikely;
-use std::pin::Pin;
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::Arc;
-use std::task::{Context, Poll};
-
-use recorder::{LocalStorage, LocalStorageRef, STORAGE};
-use tikv_util::sys::thread;
-use tikv_util::warn;
-use tikv_util::worker::{Scheduler, Worker};
+use std::{
+    intrinsics::unlikely,
+    pin::Pin,
+    sync::{
+        atomic::Ordering::{Relaxed, SeqCst},
+        Arc,
+    },
+    task::{Context, Poll},
+};
 
 pub use collector::Collector;
 pub use config::{Config, ConfigManager};
@@ -24,14 +23,19 @@ pub use recorder::{
     CollectorRegHandle, ConfigChangeNotifier as RecorderConfigChangeNotifier, CpuRecorder,
     Recorder, RecorderBuilder, SummaryRecorder,
 };
-pub use reporter::data_sink::DataSink;
-pub use reporter::data_sink_reg::DataSinkRegHandle;
-pub use reporter::pubsub::PubSubService;
-pub use reporter::single_target::{
-    init_single_target, AddressChangeNotifier, SingleTargetDataSink,
-};
+use recorder::{LocalStorage, LocalStorageRef, STORAGE};
 pub use reporter::{
-    init_reporter, ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
+    data_sink::DataSink,
+    data_sink_reg::DataSinkRegHandle,
+    init_reporter,
+    pubsub::PubSubService,
+    single_target::{init_single_target, AddressChangeNotifier, SingleTargetDataSink},
+    ConfigChangeNotifier as ReporterConfigChangeNotifier, Reporter, Task,
+};
+use tikv_util::{
+    sys::thread,
+    warn,
+    worker::{Scheduler, Worker},
 };
 
 mod collector;
@@ -47,9 +51,9 @@ pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
-/// In order to associate `ResourceMeteringTag` with a certain piece of code logic,
-/// we added a function to [Future] to bind `ResourceMeteringTag` to the specified
-/// future context. It is used in the main business logic of TiKV.
+/// In order to associate `ResourceMeteringTag` with a certain piece of code
+/// logic, we added a function to [Future] to bind `ResourceMeteringTag` to the
+/// specified future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
 pub struct ResourceMeteringTag {
@@ -210,14 +214,15 @@ impl ResourceTagFactory {
 
 /// This trait extends the standard [Future].
 ///
-/// When the user imports [FutureExt], all futures in its module (such as async block)
-/// will additionally support the [FutureExt::in_resource_metering_tag] method. This method
-/// can bind a [ResourceMeteringTag] to the scope of this future (actually, it is stored in
-/// the local storage of the thread where `Future` is located). During the polling period of
-/// the future, we can continue to observe the system resources used by the thread in which
-/// it is located, which is associated with `ResourceMeteringTag` and is also stored in thread
-/// local storage. There is a background thread that continuously summarizes the storage of
-/// each thread and reports it regularly.
+/// When the user imports [FutureExt], all futures in its module (such as async
+/// block) will additionally support the [FutureExt::in_resource_metering_tag]
+/// method. This method can bind a [ResourceMeteringTag] to the scope of this
+/// future (actually, it is stored in the local storage of the thread where
+/// `Future` is located). During the polling period of the future, we can
+/// continue to observe the system resources used by the thread in which it is
+/// located, which is associated with `ResourceMeteringTag` and is also stored
+/// in thread local storage. There is a background thread that continuously
+/// summarizes the storage of each thread and reports it regularly.
 ///
 /// [Future]: futures::Future
 pub trait FutureExt: Sized {
@@ -241,8 +246,9 @@ pub trait StreamExt: Sized {
 
 impl<T: futures::Stream> StreamExt for T {}
 
-/// This structure is the return value of the [FutureExt::in_resource_metering_tag] method,
-/// which wraps the original [Future] with a [ResourceMeteringTag].
+/// This structure is the return value of the
+/// [FutureExt::in_resource_metering_tag] method, which wraps the original
+/// [Future] with a [ResourceMeteringTag].
 ///
 /// see [FutureExt] for more information.
 ///

@@ -1,8 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::time::Duration;
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::{
     channel::mpsc::{
@@ -15,8 +20,7 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::time::Instant;
-use tikv_util::{impl_display_as_debug, warn};
+use tikv_util::{impl_display_as_debug, time::Instant, warn};
 
 use crate::metrics::*;
 
@@ -40,8 +44,9 @@ const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
 
 /// Assume the average size of batched `CdcEvent::Event`s is 32KB and
 /// the average count of batched `CdcEvent::Event`s is 64.
-///
+/// ```text
 /// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+/// ```
 const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
 pub enum CdcEvent {
@@ -450,13 +455,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
-    use std::sync::mpsc;
-    use std::time::Duration;
+    use std::{assert_matches::assert_matches, sync::mpsc, time::Duration};
 
     use futures::executor::block_on;
-    use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
-    use kvproto::cdcpb::{EventEntries, EventRow, Event_oneof_event};
+    use kvproto::cdcpb::{
+        ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
+    };
 
     use super::*;
 

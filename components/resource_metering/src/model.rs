@@ -1,17 +1,19 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::TagInfos;
-
-use std::cell::Cell;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    cell::Cell,
+    sync::{
+        atomic::{AtomicU32, Ordering::Relaxed},
+        Arc,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use collections::HashMap;
 use kvproto::resource_usage_agent::{GroupTagRecord, GroupTagRecordItem, ResourceUsageRecord};
 use tikv_util::warn;
+
+use crate::TagInfos;
 
 thread_local! {
     static STATIC_BUF: Cell<Vec<u32>> = Cell::new(vec![]);
@@ -69,7 +71,8 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into returned [RawRecord].
+    /// Keep a maximum of `k` self.records and aggregate the others into
+    /// returned [RawRecord].
     pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
         let mut others = RawRecord::default();
         if self.records.len() <= k {
@@ -335,9 +338,10 @@ impl SummaryRecord {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering::Relaxed;
+
     use super::*;
     use crate::TagInfos;
-    use std::sync::atomic::Ordering::Relaxed;
 
     #[test]
     fn test_summary_record() {

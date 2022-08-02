@@ -1,43 +1,51 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::i32;
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    i32,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
-use futures::compat::Stream01CompatExt;
-use futures::stream::StreamExt;
+use api_version::KvFormat;
+use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
 use kvproto::tikvpb::*;
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{CheckLeaderTask, SnapManager},
+};
+use security::SecurityManager;
+use tikv_util::{
+    config::VersionTrack,
+    sys::{get_global_memory_usage, record_global_memory_usage},
+    timer::GLOBAL_TIMER_HANDLE,
+    worker::{LazyWorker, Scheduler, Worker},
+    Either,
+};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
 
-use crate::coprocessor::Endpoint;
-use crate::coprocessor_v2;
-use crate::server::gc_worker::GcWorker;
-use crate::server::Proxy;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::{Engine, Storage};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::{CheckLeaderTask, SnapManager};
-use security::SecurityManager;
-use tikv_util::config::VersionTrack;
-use tikv_util::sys::{get_global_memory_usage, record_global_memory_usage};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::{LazyWorker, Scheduler, Worker};
-use tikv_util::Either;
-
-use super::load_statistics::*;
-use super::metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC};
-use super::raft_client::{ConnectionBuilder, RaftClient};
-use super::resolve::StoreAddrResolver;
-use super::service::*;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::transport::ServerTransport;
-use super::{Config, Error, Result};
-use crate::read_pool::ReadPool;
+use super::{
+    load_statistics::*,
+    metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
+    raft_client::{ConnectionBuilder, RaftClient},
+    resolve::StoreAddrResolver,
+    service::*,
+    snap::{Runner as SnapHandler, Task as SnapTask},
+    transport::ServerTransport,
+    Config, Error, Result,
+};
+use crate::{
+    coprocessor::Endpoint,
+    coprocessor_v2,
+    read_pool::ReadPool,
+    server::{gc_worker::GcWorker, Proxy},
+    storage::{lock_manager::LockManager, Engine, Storage},
+    tikv_util::sys::thread::ThreadBuildWrapper,
+};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -57,6 +65,7 @@ pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver +
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
+    grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S, E::Local>,
@@ -78,11 +87,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager>(
+    pub fn new<L: LockManager, F: KvFormat>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L>,
+        storage: Storage<E, L, F>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,
@@ -93,6 +102,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
+        health_service: HealthService,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -100,6 +110,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .after_start_wrapper(|| {})
+                    .before_stop_wrapper(|| {})
                     .build()
                     .unwrap(),
             )
@@ -137,13 +149,13 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             .stream_initial_window_size(cfg.value().grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.value().grpc_concurrent_stream)
             .max_receive_message_len(-1)
-            .set_resource_quota(mem_quota)
+            .set_resource_quota(mem_quota.clone())
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(cfg.value().grpc_keepalive_timeout.into())
             .build_args();
-        let health_service = HealthService::default();
+
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
@@ -155,7 +167,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            Arc::new(cfg.value().clone()),
+            Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
             raft_router.clone(),
@@ -170,6 +182,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let svr = Server {
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
+            grpc_mem_quota: mem_quota,
             local_addr: addr,
             trans,
             raft_router,
@@ -200,6 +213,10 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
     pub fn env(&self) -> Arc<Environment> {
         self.env.clone()
+    }
+
+    pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {
+        &self.grpc_mem_quota
     }
 
     /// Register a gRPC service.
@@ -306,8 +323,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             let _ = pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
-        self.health_service
-            .set_serving_status("", ServingStatus::NotServing);
+        self.health_service.shutdown();
         Ok(())
     }
 
@@ -323,14 +339,12 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 pub mod test_router {
     use std::sync::mpsc::*;
 
-    use super::*;
-
-    use raftstore::store::*;
-    use raftstore::Result as RaftStoreResult;
-
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_traits::{KvEngine, Snapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::{store::*, Result as RaftStoreResult};
+
+    use super::*;
 
     #[derive(Clone)]
     pub struct TestRaftStoreRouter {
@@ -399,30 +413,33 @@ pub mod test_router {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::*;
-    use std::sync::*;
-    use std::time::Duration;
+    use std::{
+        sync::{atomic::*, *},
+        time::Duration,
+    };
 
-    use super::*;
-
-    use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
-    use crate::coprocessor::{self, readpool_impl};
-    use crate::server::TestRaftStoreRouter;
-    use crate::storage::TestStorageBuilder;
+    use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
-    use kvproto::kvrpcpb::ApiVersion;
-    use raftstore::store::transport::Transport;
-    use raftstore::store::*;
-
-    use crate::storage::lock_manager::DummyLockManager;
-    use engine_rocks::{PerfLevel, RocksSnapshot};
     use kvproto::raft_serverpb::RaftMessage;
+    use raftstore::store::{transport::Transport, *};
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;
     use tokio::runtime::Builder as TokioBuilder;
+
+    use super::{
+        super::{
+            resolve::{Callback as ResolveCallback, StoreAddrResolver},
+            Config, Result,
+        },
+        *,
+    };
+    use crate::{
+        config::CoprReadPoolConfig,
+        coprocessor::{self, readpool_impl},
+        server::TestRaftStoreRouter,
+        storage::{lock_manager::DummyLockManager, TestStorageBuilderApiV1},
+    };
 
     #[derive(Clone)]
     struct MockResolver {
@@ -460,7 +477,8 @@ mod tests {
         }
     }
 
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    // if this failed, unset the environmental variables 'http_proxy' and
+    // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
         let cfg = Config {
@@ -468,7 +486,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
 
@@ -504,7 +522,6 @@ mod tests {
             &cfg.value().clone(),
             cop_read_pool.handle(),
             storage.get_concurrency_manager(),
-            PerfLevel::EnableCount,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
         );
@@ -513,6 +530,8 @@ mod tests {
             TokioBuilder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .after_start_wrapper(|| {})
+                .before_stop_wrapper(|| {})
                 .build()
                 .unwrap(),
         );
@@ -537,6 +556,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
+            HealthService::default(),
         )
         .unwrap();
 
@@ -561,7 +581,7 @@ mod tests {
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);

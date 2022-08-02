@@ -8,10 +8,11 @@ use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
-use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
-use crate::storage::mvcc::ErrorInner::WriteConflict;
-use crate::storage::mvcc::{Error, NewerTsCheckState, Result};
-use crate::storage::need_check_locks;
+use crate::storage::{
+    kv::{Cursor, Snapshot, Statistics, SEEK_BOUND},
+    mvcc::{Error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    need_check_locks,
+};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -21,11 +22,11 @@ use crate::storage::need_check_locks;
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 16;
 
-/// This struct can be used to scan keys starting from the given user key in the reverse order
-/// (less than).
+/// This struct can be used to scan keys starting from the given user key in the
+/// reverse order (less than).
 ///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
+/// Internally, for each key, rollbacks are ignored and smaller version will be
+/// tried. If the isolation level is SI, locks will be checked first.
 ///
 /// Use `ScannerBuilder` to build `BackwardKvScanner`.
 pub struct BackwardKvScanner<S: Snapshot> {
@@ -80,8 +81,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
                 // timestamp suffix, so currently it is not safe to change write_cursor's
-                // reverse_seek to seek_for_prev. However in future, once we have different types
-                // for them, this can be done safely.
+                // reverse_seek to seek_for_prev. However in future, once we have different
+                // types for them, this can be done safely.
                 self.write_cursor.reverse_seek(
                     self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
@@ -130,9 +131,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                         let write_user_key = Key::truncate_ts_for(wk)?;
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
-                                // We are scanning from largest user key to smallest user key, so this
-                                // indicate that we meet a lock first, thus its corresponding write
-                                // does not exist.
+                                // We are scanning from largest user key to smallest user key, so
+                                // this indicate that we meet a lock first, thus its corresponding
+                                // write does not exist.
                                 (lk, false, true)
                             }
                             Ordering::Greater => {
@@ -144,8 +145,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                     }
                 };
 
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts
+                // to the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
@@ -187,7 +188,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                                 &mut self.statistics,
                             );
                             if has_write {
-                                // Skip current_user_key because this key is either blocked or handled.
+                                // Skip current_user_key because this key is either blocked or
+                                // handled.
                                 has_write = false;
                                 self.move_write_cursor_to_prev_user_key(&current_user_key)?;
                             }
@@ -217,9 +219,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.
-    /// This function requires that the write cursor is currently pointing to the earliest version
-    /// of `user_key`.
+    /// Attempt to get the value of a key specified by `user_key` and
+    /// `self.cfg.ts` in reverse order. This function requires that the write
+    /// cursor is currently pointing to the earliest version of `user_key`.
     #[inline]
     fn reverse_get(
         &mut self,
@@ -231,8 +233,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
         // At first, we try to use several `prev()` to get the desired version.
 
-        // We need to save last desired version, because when we may move to an unwanted version
-        // at any time.
+        // We need to save last desired version, because when we may move to an unwanted
+        // version at any time.
         let mut last_version = None;
         let mut last_checked_commit_ts = TimeStamp::zero();
 
@@ -309,8 +311,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
         assert!(ts > last_checked_commit_ts);
 
-        // After several `prev()`, we still not get the latest version for the specified ts,
-        // use seek to locate the latest version.
+        // After several `prev()`, we still not get the latest version for the specified
+        // ts, use seek to locate the latest version.
 
         // Check whether newer version exists.
         let mut use_near_seek = false;
@@ -335,8 +337,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             }
         }
 
-        // `user_key` must have reserved space here, so its clone `seek_key` has reserved space
-        // too. Thus no reallocation happens in `append_ts`.
+        // `user_key` must have reserved space here, so its clone `seek_key` has
+        // reserved space too. Thus no reallocation happens in `append_ts`.
         seek_key = seek_key.append_ts(ts);
         if use_near_seek {
             self.write_cursor
@@ -348,9 +350,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         assert!(self.write_cursor.valid()?);
 
         loop {
-            // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
-            // means we have checked all versions for this user key. We use `last_version` as
-            // return.
+            // After seek, or after some `next()`, we may reach `last_checked_commit_ts`
+            // again. It means we have checked all versions for this user key.
+            // We use `last_version` as return.
             let current_ts = {
                 let current_key = self.write_cursor.key(&mut self.statistics.write);
                 // We should never reach another user key.
@@ -386,8 +388,8 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
     }
 
-    /// Handle last version. Last version may be PUT or DELETE. If it is a PUT, value should be
-    /// load.
+    /// Handle last version. Last version may be PUT or DELETE. If it is a PUT,
+    /// value should be load.
     #[inline]
     fn handle_last_version(
         &mut self,
@@ -409,8 +411,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
     }
 
-    /// Load the value by the given `some_write`. If value is carried in `some_write`, it will be
-    /// returned directly. Otherwise there will be a default CF look up.
+    /// Load the value by the given `some_write`. If value is carried in
+    /// `some_write`, it will be returned directly. Otherwise there will be a
+    /// default CF look up.
     ///
     /// The implementation is similar to `PointGetter::load_data_by_write`.
     #[inline]
@@ -437,13 +440,13 @@ impl<S: Snapshot> BackwardKvScanner<S> {
         }
     }
 
-    /// After `self.reverse_get()`, our write cursor may be pointing to current user key (if we
-    /// found a desired version), or previous user key (if there is no desired version), or
-    /// out of bound.
+    /// After `self.reverse_get()`, our write cursor may be pointing to current
+    /// user key (if we found a desired version), or previous user key (if there
+    /// is no desired version), or out of bound.
     ///
-    /// If it is pointing to current user key, we need to step it until we meet a new
-    /// key. We first try to `prev()` a few times. If still not reaching another user
-    /// key, we `seek_for_prev()`.
+    /// If it is pointing to current user key, we need to step it until we meet
+    /// a new key. We first try to `prev()` a few times. If still not reaching
+    /// another user key, we `seek_for_prev()`.
     #[inline]
     fn move_write_cursor_to_prev_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {
@@ -483,18 +486,22 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::prepare_test_data_for_check_gc_fence;
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
-        must_prewrite_lock, must_prewrite_put, must_rollback,
-    };
-    use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
+
+    use super::{
+        super::{test_util::prepare_test_data_for_check_gc_fence, ScannerBuilder},
+        *,
+    };
+    use crate::storage::{
+        kv::{Engine, Modify, TestEngineBuilder},
+        mvcc::tests::write,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_commit, must_gc, must_prewrite_delete,
+            must_prewrite_lock, must_prewrite_put, must_rollback,
+        },
+        Scanner,
+    };
 
     #[test]
     fn test_basic() {
@@ -515,7 +522,8 @@ mod tests {
             must_commit(&engine, k, ts, ts);
         }
 
-        // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback for key [8].
+        // Generate REVERSE_SEEK_BOUND / 2 Put and REVERSE_SEEK_BOUND / 2 + 1 Rollback
+        // for key [8].
         let k = &[8_u8];
         for ts in 0..=REVERSE_SEEK_BOUND {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
@@ -535,8 +543,8 @@ mod tests {
             }
         }
 
-        // Generate REVERSE_SEEK_BOUND / 2 Put, 1 Delete and REVERSE_SEEK_BOUND / 2 Rollback
-        // for key [7].
+        // Generate REVERSE_SEEK_BOUND / 2 Put, 1 Delete and REVERSE_SEEK_BOUND / 2
+        // Rollback for key [7].
         let k = &[7_u8];
         for ts in 0..REVERSE_SEEK_BOUND / 2 {
             must_prewrite_put(&engine, k, &[ts as u8], k, ts);
@@ -791,8 +799,8 @@ mod tests {
         assert_eq!(statistics.processed_size, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
-    /// out of bound.
+    /// Check whether everything works as usual when
+    /// `BackwardKvScanner::reverse_get()` goes out of bound.
     ///
     /// Case 1. prev out of bound, next_version is None.
     #[test]
@@ -875,8 +883,8 @@ mod tests {
         assert_eq!(statistics.processed_size, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
-    /// out of bound.
+    /// Check whether everything works as usual when
+    /// `BackwardKvScanner::reverse_get()` goes out of bound.
     ///
     /// Case 2. prev out of bound, next_version is Some.
     #[test]
@@ -968,7 +976,8 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of
+    /// bound.
     ///
     /// Case 1. prev() out of bound
     #[test]
@@ -1049,7 +1058,8 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of
+    /// bound.
     ///
     /// Case 2. seek_for_prev() out of bound
     #[test]
@@ -1136,7 +1146,8 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of
+    /// bound.
     ///
     /// Case 3. a more complicated case
     #[test]
@@ -1162,7 +1173,8 @@ mod tests {
             .build()
             .unwrap();
 
-        // The following illustration comments assume that SEEK_BOUND = 4, REVERSE_SEEK_BOUND = 6.
+        // The following illustration comments assume that SEEK_BOUND = 4,
+        // REVERSE_SEEK_BOUND = 6.
 
         // Initial position: 1 seek_to_last:
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1

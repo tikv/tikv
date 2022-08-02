@@ -1,52 +1,77 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::sync::Arc;
 
+use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
-use engine_rocks::PROP_MAX_TS;
+use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
-    KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection, TablePropertiesExt,
-    UserCollectedProperties, CF_DEFAULT, CF_WRITE,
+    IterOptions, KvEngine, Range, Snapshot as EngineSnapshot, TablePropertiesCollection,
+    TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
 use keys::{data_end_key, data_key};
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb::{Region, RegionEpoch};
-use raftstore::coprocessor::ObserveID;
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::fsm::ChangeObserver;
-use raftstore::store::msg::{Callback, ReadResponse, SignificantMsg};
+use kvproto::{
+    cdcpb::ChangeDataRequestKvApi,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb::{Region, RegionEpoch},
+};
+use raftstore::{
+    coprocessor::ObserveID,
+    router::RaftStoreRouter,
+    store::{
+        fsm::ChangeObserver,
+        msg::{Callback, ReadResponse, SignificantMsg},
+    },
+};
 use resolved_ts::Resolver;
-use tikv::storage::kv::{PerfStatisticsInstant, Snapshot};
-use tikv::storage::mvcc::{DeltaScanner, ScannerBuilder};
-use tikv::storage::txn::{TxnEntry, TxnEntryScanner};
-use tikv::storage::Statistics;
-use tikv_kv::PerfStatisticsDelta;
-use tikv_util::codec::number;
-use tikv_util::sys::inspector::{self_thread_inspector, ThreadInspector};
-use tikv_util::time::{Instant, Limiter};
-use tikv_util::worker::Scheduler;
-use tikv_util::{box_err, debug, error, info, warn, Either};
+use tikv::storage::{
+    kv::Snapshot,
+    mvcc::{DeltaScanner, ScannerBuilder},
+    raw::raw_mvcc::{RawMvccIterator, RawMvccSnapshot},
+    txn::{TxnEntry, TxnEntryScanner},
+    Statistics,
+};
+use tikv_kv::Iterator;
+use tikv_util::{
+    box_err,
+    codec::number,
+    debug, error, info,
+    sys::inspector::{self_thread_inspector, ThreadInspector},
+    time::{Instant, Limiter},
+    warn,
+    worker::Scheduler,
+    Either,
+};
 use tokio::sync::Semaphore;
-use txn_types::{Key, Lock, LockType, OldValue, TimeStamp};
+use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
-use crate::channel::CdcEvent;
-use crate::delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState};
-use crate::endpoint::Deregister;
-use crate::metrics::*;
-use crate::old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors};
-use crate::service::ConnID;
-use crate::Task;
-use crate::{Error, Result};
+use crate::{
+    channel::CdcEvent,
+    delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState},
+    endpoint::Deregister,
+    metrics::*,
+    old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
+    service::ConnID,
+    Error, Result, Task,
+};
 
-#[derive(Clone, Copy, Debug)]
 struct ScanStat {
     // Fetched bytes to the scanner.
     emit: usize,
     // Bytes from the device, `None` if not possible to get it.
     disk_read: Option<usize>,
     // Perf delta for RocksDB.
-    perf_delta: PerfStatisticsDelta,
+    perf_delta: ReadPerfContext,
+}
+
+pub(crate) enum KvEntry {
+    TxnEntry(TxnEntry),
+    RawKvEntry(KvPair),
+}
+
+pub(crate) enum Scanner<S: Snapshot> {
+    TxnKvScanner(DeltaScanner<S>),
+    RawKvScanner(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
 pub(crate) struct Initializer<E> {
@@ -69,6 +94,8 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) build_resolver: bool,
     pub(crate) ts_filter_ratio: f64,
+
+    pub(crate) kv_api: ChangeDataRequestKvApi,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -176,6 +203,7 @@ impl<E: KvEngine> Initializer<E> {
         let downstream_id = self.downstream_id;
         let region_id = region.get_id();
         let observe_id = self.observe_id;
+        let kv_api = self.kv_api;
         debug!("cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
@@ -190,20 +218,36 @@ impl<E: KvEngine> Initializer<E> {
         };
 
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
-        if self.ts_filter_is_helpful(&snap) {
-            hint_min_ts = Some(self.checkpoint_ts);
-            let wc = new_old_value_cursor(&snap, CF_WRITE);
-            let dc = new_old_value_cursor(&snap, CF_DEFAULT);
-            old_value_cursors = Some(OldValueCursors::new(wc, dc));
-        }
+        let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
+            if self.ts_filter_is_helpful(&snap) {
+                hint_min_ts = Some(self.checkpoint_ts);
+                let wc = new_old_value_cursor(&snap, CF_WRITE);
+                let dc = new_old_value_cursor(&snap, CF_DEFAULT);
+                old_value_cursors = Some(OldValueCursors::new(wc, dc));
+            }
 
-        // Time range: (checkpoint_ts, max]
-        let mut scanner = ScannerBuilder::new(snap, TimeStamp::max())
-            .fill_cache(false)
-            .range(None, None)
-            .hint_min_ts(hint_min_ts)
-            .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
-            .unwrap();
+            // Time range: (checkpoint_ts, max]
+            let txnkv_scanner = ScannerBuilder::new(snap, TimeStamp::max())
+                .fill_cache(false)
+                .range(None, None)
+                .hint_min_ts(hint_min_ts)
+                .build_delta_scanner(self.checkpoint_ts, TxnExtraOp::ReadOldValue)
+                .unwrap();
+
+            Scanner::TxnKvScanner(txnkv_scanner)
+        } else {
+            let mut iter_opt = IterOptions::default();
+            iter_opt.set_fill_cache(false);
+            let (raw_key_prefix, raw_key_prefix_end) = ApiV2::get_rawkv_range();
+            iter_opt.set_lower_bound(&[raw_key_prefix], DATA_KEY_PREFIX_LEN);
+            iter_opt.set_upper_bound(&[raw_key_prefix_end], DATA_KEY_PREFIX_LEN);
+            let mut iter = RawMvccSnapshot::from_snapshot(snap)
+                .iter(CF_DEFAULT, iter_opt)
+                .unwrap();
+
+            iter.seek_to_first()?;
+            Scanner::RawKvScanner(iter)
+        };
 
         fail_point!("cdc_incremental_scan_start");
         let conn_id = self.conn_id;
@@ -215,6 +259,7 @@ impl<E: KvEngine> Initializer<E> {
             curr_state,
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
+
         let on_cancel = || -> Result<()> {
             info!("cdc async incremental scan canceled";
                 "region_id" => region_id,
@@ -261,13 +306,14 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    // It's extracted from `Initializer::scan_batch` to avoid becoming an asynchronous block,
-    // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
+    // It's extracted from `Initializer::scan_batch` to avoid becoming an
+    // asynchronous block, so that we can limit scan speed based on the thread
+    // disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
-        scanner: &mut DeltaScanner<S>,
+        scanner: &mut Scanner<S>,
         mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
-        entries: &mut Vec<Option<TxnEntry>>,
+        entries: &mut Vec<Option<KvEntry>>,
     ) -> Result<ScanStat> {
         let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
             let (wc, dc) = match old_value_cursors {
@@ -286,21 +332,38 @@ impl<E: KvEngine> Initializer<E> {
         // This code block shouldn't be switched to other threads.
         let mut total_bytes = 0;
         let mut total_size = 0;
-        let perf_instant = PerfStatisticsInstant::new();
+        let perf_instant = ReadPerfInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
         let mut stats = Statistics::default();
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
-            match scanner.next_entry()? {
-                Some(mut entry) => {
-                    read_old_value(entry.old_value(), &mut stats)?;
-                    total_bytes += entry.size();
-                    entries.push(Some(entry));
-                }
-                None => {
-                    entries.push(None);
-                    break;
+            match scanner {
+                Scanner::TxnKvScanner(scanner) => match scanner.next_entry()? {
+                    Some(mut entry) => {
+                        read_old_value(entry.old_value(), &mut stats)?;
+                        total_bytes += entry.size();
+                        entries.push(Some(KvEntry::TxnEntry(entry)));
+                    }
+                    None => {
+                        entries.push(None);
+                        break;
+                    }
+                },
+                Scanner::RawKvScanner(iter) => {
+                    if iter.valid()? {
+                        let key = iter.key();
+                        let ts = ApiV2::decode_ts_from(key)?;
+                        if ts > self.checkpoint_ts {
+                            let value = iter.value();
+                            total_bytes += key.len() + value.len();
+                            entries.push(Some(KvEntry::RawKvEntry((key.to_vec(), value.to_vec()))));
+                        }
+                        iter.next()?;
+                    } else {
+                        entries.push(None);
+                        break;
+                    }
                 }
             }
         }
@@ -321,10 +384,10 @@ impl<E: KvEngine> Initializer<E> {
 
     async fn scan_batch<S: Snapshot>(
         &self,
-        scanner: &mut DeltaScanner<S>,
+        scanner: &mut Scanner<S>,
         old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
-    ) -> Result<Vec<Option<TxnEntry>>> {
+    ) -> Result<Vec<Option<KvEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
         let ScanStat {
             emit,
@@ -339,14 +402,14 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
             bytes
         } else {
-            perf_delta.0.block_read_byte
+            perf_delta.block_read_byte as usize
         };
         self.speed_limiter.consume(require).await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
             for entry in entries.iter().flatten() {
-                if let TxnEntry::Prewrite { ref lock, .. } = entry {
+                if let KvEntry::TxnEntry(TxnEntry::Prewrite { ref lock, .. }) = entry {
                     let (encoded_key, value) = lock;
                     let key = Key::from_encoded_slice(encoded_key).into_raw().unwrap();
                     let lock = Lock::parse(value)?;
@@ -360,9 +423,10 @@ impl<E: KvEngine> Initializer<E> {
         Ok(entries)
     }
 
-    async fn sink_scan_events(&mut self, entries: Vec<Option<TxnEntry>>, done: bool) -> Result<()> {
+    async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
         let mut barrier = None;
-        let mut events = Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries);
+        let mut events =
+            Delegate::convert_to_grpc_events(self.region_id, self.request_id, entries)?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
             events.push(CdcEvent::Barrier(Some(cb)));
@@ -385,7 +449,7 @@ impl<E: KvEngine> Initializer<E> {
 
     fn finish_building_resolver(&self, mut resolver: Resolver, region: Region) {
         let observe_id = self.observe_id;
-        let rts = resolver.resolve(TimeStamp::zero());
+        let rts = resolver.resolve(TimeStamp::zero()).min();
         info!(
             "cdc resolver initialized and schedule resolver ready";
             "region_id" => region.get_id(),
@@ -410,10 +474,10 @@ impl<E: KvEngine> Initializer<E> {
     pub(crate) fn deregister_downstream(&self, err: Error) {
         let deregister = if self.build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
-            // * It fails to build a resolver. A delegate requires a resolver
-            //   to advance resolved ts.
-            // * A region error. It usually mean a peer is not leader or
-            //   a leader meets an error and can not serve.
+            // * It fails to build a resolver. A delegate requires a resolver to advance
+            //   resolved ts.
+            // * A region error. It usually mean a peer is not leader or a leader meets an
+            //   error and can not serve.
             Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_id,
@@ -462,7 +526,7 @@ impl<E: KvEngine> Initializer<E> {
         });
 
         let valid_count = total_count - filtered_count;
-        let use_ts_filter = valid_count as f64 / total_count as f64 <= self.ts_filter_ratio;
+        let use_ts_filter = valid_count as f64 <= total_count as f64 * self.ts_filter_ratio;
         info!("cdc incremental scan uses ts filter: {}", use_ts_filter;
             "region_id" => self.region_id,
             "hint_min_ts" => hint_min_ts,
@@ -483,27 +547,31 @@ impl<E: KvEngine> Initializer<E> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::fmt::Display;
-    use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender};
-    use std::time::Duration;
+    use std::{
+        collections::BTreeMap,
+        fmt::Display,
+        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        time::Duration,
+    };
 
     use collections::HashSet;
     use engine_rocks::RocksEngine;
     use engine_traits::{MiscExt, CF_WRITE};
-    use futures::executor::block_on;
-    use futures::StreamExt;
-    use kvproto::cdcpb::Event_oneof_event;
-    use kvproto::errorpb::Error as ErrorHeader;
-    use raftstore::coprocessor::ObserveHandle;
-    use raftstore::store::RegionSnapshot;
+    use futures::{executor::block_on, StreamExt};
+    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader};
+    use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
     use test_raftstore::MockRaftStoreRouter;
-    use tikv::storage::kv::Engine;
-    use tikv::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+    use tikv::storage::{
+        kv::Engine,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
+        },
+        TestEngineBuilder,
     };
-    use tikv::storage::TestEngineBuilder;
-    use tikv_util::worker::{LazyWorker, Runnable};
+    use tikv_util::{
+        sys::thread::ThreadBuildWrapper,
+        worker::{LazyWorker, Runnable},
+    };
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
@@ -532,6 +600,7 @@ mod tests {
         speed_limit: usize,
         buffer: usize,
         engine: Option<RocksEngine>,
+        kv_api: ChangeDataRequestKvApi,
     ) -> (
         LazyWorker<Task>,
         Runtime,
@@ -546,6 +615,8 @@ mod tests {
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
             .worker_threads(4)
+            .after_start_wrapper(|| {})
+            .before_stop_wrapper(|| {})
             .build()
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
@@ -572,6 +643,7 @@ mod tests {
             max_scan_batch_size: 1024,
             build_resolver: true,
             ts_filter_ratio: 1.0, // always enable it.
+            kv_api,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
@@ -608,8 +680,12 @@ mod tests {
         let snap = engine.snapshot(Default::default()).unwrap();
         // Buffer must be large enough to unblock async incremental scan.
         let buffer = 1000;
-        let (mut worker, pool, mut initializer, rx, mut drain) =
-            mock_initializer(total_bytes, buffer, Some(engine.kv_engine()));
+        let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
+            total_bytes,
+            buffer,
+            Some(engine.kv_engine()),
+            ChangeDataRequestKvApi::TiDb,
+        );
         let check_result = || loop {
             let task = rx.recv().unwrap();
             match task {
@@ -696,8 +772,12 @@ mod tests {
         let check_handling_old_value_seek_write = || {
             // Do incremental scan with different `hint_min_ts` values.
             for checkpoint_ts in [200, 100, 150] {
-                let (mut worker, pool, mut initializer, _rx, mut drain) =
-                    mock_initializer(usize::MAX, 1000, Some(engine.kv_engine()));
+                let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
+                    usize::MAX,
+                    1000,
+                    Some(engine.kv_engine()),
+                    ChangeDataRequestKvApi::TiDb,
+                );
                 initializer.checkpoint_ts = checkpoint_ts.into();
                 let mut drain = drain.drain();
 
@@ -748,7 +828,7 @@ mod tests {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, _pool, mut initializer, rx, _drain) =
-            mock_initializer(total_bytes, buffer, None);
+            mock_initializer(total_bytes, buffer, None, ChangeDataRequestKvApi::TiDb);
 
         // Errors reported by region should deregister region.
         initializer.build_resolver = false;
@@ -790,10 +870,15 @@ mod tests {
 
     #[test]
     fn test_initializer_initialize() {
+        test_initializer_initialize_impl(ChangeDataRequestKvApi::TiDb);
+        test_initializer_initialize_impl(ChangeDataRequestKvApi::RawKv);
+    }
+
+    fn test_initializer_initialize_impl(kv_api: ChangeDataRequestKvApi) {
         let total_bytes = 1;
         let buffer = 1;
         let (mut worker, pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, buffer, None);
+            mock_initializer(total_bytes, buffer, None, kv_api);
 
         let change_cmd = ChangeObserver::from_cdc(1, ObserveHandle::new());
         let raft_router = MockRaftStoreRouter::new();

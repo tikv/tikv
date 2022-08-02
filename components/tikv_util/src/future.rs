@@ -1,18 +1,24 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cell::UnsafeCell,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+};
+
+use futures::{
+    channel::{mpsc, oneshot as futures_oneshot},
+    future::{self, BoxFuture, Future, FutureExt, TryFutureExt},
+    stream::{Stream, StreamExt},
+    task::{self, ArcWake, Context, Poll},
+};
+
 use crate::callback::must_call;
-use futures::channel::mpsc;
-use futures::channel::oneshot as futures_oneshot;
-use futures::future::{self, BoxFuture, Future, FutureExt, TryFutureExt};
-use futures::stream::{Stream, StreamExt};
-use futures::task::{self, ArcWake, Context, Poll};
 
-use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Arc;
-
-/// Generates a paired future and callback so that when callback is being called, its result
-/// is automatically passed as a future result.
+/// Generates a paired future and callback so that when callback is being
+/// called, its result is automatically passed as a future result.
 pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where
     T: Send + 'static,
@@ -46,8 +52,9 @@ where
     (callback, future)
 }
 
-/// Create a stream proxy with buffer representing the remote stream. The returned task
-/// will receive messages from the remote stream as much as possible.
+/// Create a stream proxy with buffer representing the remote stream. The
+/// returned task will receive messages from the remote stream as much as
+/// possible.
 pub fn create_stream_with_buffer<T, S>(
     s: S,
     size: usize,
@@ -159,7 +166,8 @@ impl PollAtWake {
                 Ok(_) => return,
                 Err(s) => {
                     if s == NOTIFIED {
-                        // Only this thread can change the state from NOTIFIED, so it has to succeed.
+                        // Only this thread can change the state from NOTIFIED, so it has to
+                        // succeed.
                         match arc_self.state.compare_exchange(
                             NOTIFIED,
                             POLLING,
@@ -191,9 +199,11 @@ impl ArcWake for PollAtWake {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::task::Poll;
     use std::sync::atomic::AtomicUsize;
+
+    use futures::task::Poll;
+
+    use super::*;
 
     #[test]
     fn test_in_place_wake() {

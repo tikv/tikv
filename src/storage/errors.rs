@@ -1,13 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Types for storage related errors and associated helper methods.
-use std::error::Error as StdError;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
+use std::{
+    error::Error as StdError,
+    fmt::{self, Debug, Display, Formatter},
+    io::Error as IoError,
+};
 
-use kvproto::kvrpcpb::ApiVersion;
-use kvproto::{errorpb, kvrpcpb};
+use error_code::{self, ErrorCode, ErrorCodeExt};
+use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
+use tikv_util::deadline::DeadlineError;
+use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
     kv::{self, Error as KvError, ErrorInner as KvErrorInner},
@@ -15,13 +19,11 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     CommandKind, Result,
 };
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::deadline::DeadlineError;
-use txn_types::{KvPair, TimeStamp};
 
 #[derive(Debug, Error)]
-/// Detailed errors for storage operations. This enum also unifies code for basic error
-/// handling functionality in a single place instead of being spread out.
+/// Detailed errors for storage operations. This enum also unifies code for
+/// basic error handling functionality in a single place instead of being spread
+/// out.
 pub enum ErrorInner {
     #[error("{0}")]
     Kv(#[from] kv::Error),
@@ -57,13 +59,13 @@ pub enum ErrorInner {
     CfDeprecated(String),
 
     #[error("ttl is not enabled, but get put request with ttl")]
-    TTLNotEnabled,
+    TtlNotEnabled,
 
     #[error("Deadline is exceeded")]
     DeadlineExceeded,
 
     #[error("The length of ttls does not equal to the length of pairs")]
-    TTLsLenNotEqualsToPairs,
+    TtlLenNotEqualsToPairs,
 
     #[error("Api version in request does not match with TiKV storage, cmd: {:?}, storage: {:?}, request: {:?}", .cmd, .storage_api_version, .req_api_version)]
     ApiVersionNotMatched {
@@ -152,11 +154,9 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyTooLarge { .. } => error_code::storage::KEY_TOO_LARGE,
             ErrorInner::InvalidCf(_) => error_code::storage::INVALID_CF,
             ErrorInner::CfDeprecated(_) => error_code::storage::CF_DEPRECATED,
-            ErrorInner::TTLNotEnabled => error_code::storage::TTL_NOT_ENABLED,
+            ErrorInner::TtlNotEnabled => error_code::storage::TTL_NOT_ENABLED,
             ErrorInner::DeadlineExceeded => error_code::storage::DEADLINE_EXCEEDED,
-            ErrorInner::TTLsLenNotEqualsToPairs => {
-                error_code::storage::TTLS_LEN_NOT_EQUALS_TO_PAIRS
-            }
+            ErrorInner::TtlLenNotEqualsToPairs => error_code::storage::TTL_LEN_NOT_EQUALS_TO_PAIRS,
             ErrorInner::ApiVersionNotMatched { .. } => error_code::storage::API_VERSION_NOT_MATCHED,
             ErrorInner::InvalidKeyMode { .. } => error_code::storage::INVALID_KEY_MODE,
             ErrorInner::InvalidKeyRangeMode { .. } => error_code::storage::INVALID_KEY_MODE,
@@ -178,8 +178,9 @@ pub enum ErrorHeaderKind {
 }
 
 impl ErrorHeaderKind {
-    /// TODO: This function is only used for bridging existing & legacy metric tags.
-    /// It should be removed once Coprocessor starts using new static metrics.
+    /// TODO: This function is only used for bridging existing & legacy metric
+    /// tags. It should be removed once Coprocessor starts using new static
+    /// metrics.
     pub fn get_str(&self) -> &'static str {
         match *self {
             ErrorHeaderKind::NotLeader => "not_leader",
@@ -205,8 +206,8 @@ const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
-/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf message.
-/// Returns `ErrorHeaderKind::Other` if no match found.
+/// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
+/// message. Returns `ErrorHeaderKind::Other` if no match found.
 pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
     if header.has_not_leader() {
         ErrorHeaderKind::NotLeader
@@ -267,8 +268,8 @@ pub fn extract_region_error_from_ref(e: &Error) -> Option<errorpb::Error> {
             Some(err)
         }
         Error(box ErrorInner::Closed) => {
-            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
-            // temporarily, the client should retry the request in other TiKVs.
+            // TiKV is closing, return an RegionError to tell the client that this region is
+            // unavailable temporarily, the client should retry the request in other TiKVs.
             let mut err = errorpb::Error::default();
             err.set_message("TiKV is Closing".to_string());
             Some(err)

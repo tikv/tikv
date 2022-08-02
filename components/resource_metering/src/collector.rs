@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::RawRecords;
-
 use std::sync::Arc;
+
+use crate::RawRecords;
 
 /// `Collector` is used to connect [Recorder] and [Reporter].
 ///
@@ -15,7 +15,8 @@ use std::sync::Arc;
 /// to the `Scheduler` for processing.
 ///
 /// `Reporter` implements [Runnable] and [RunnableWithTimer], aggregates the
-/// data sent by the `Collector` internally, and reports it regularly through RPC.
+/// data sent by the `Collector` internally, and reports it regularly through
+/// RPC.
 ///
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter

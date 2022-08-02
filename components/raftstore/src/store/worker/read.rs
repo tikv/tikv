@@ -1,42 +1,46 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::Cell;
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    cell::Cell,
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
-use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::TrySendError;
+use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use fail::fail_point;
-use kvproto::errorpb;
-use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
-use kvproto::metapb;
-use kvproto::raft_cmdpb::{
-    CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response,
+use kvproto::{
+    errorpb,
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    metapb,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
+use tikv_util::{
+    codec::number::decode_u64,
+    debug, error,
+    lru::LruCache,
+    time::{monotonic_raw_now, Instant, ThreadReadId},
+};
 use time::Timespec;
 
-use crate::errors::RAFTSTORE_IS_BUSY;
-use crate::store::util::{self, LeaseState, RegionReadProgress, RemoteLease};
-use crate::store::{
-    cmd_resp, Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand,
-    ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
-};
-use crate::Error;
-use crate::Result;
-
-use engine_traits::{KvEngine, RaftEngine, Snapshot};
-use tikv_util::codec::number::decode_u64;
-use tikv_util::lru::LruCache;
-use tikv_util::time::monotonic_raw_now;
-use tikv_util::time::{Instant, ThreadReadId};
-use tikv_util::{debug, error};
-
 use super::metrics::*;
-use crate::store::fsm::store::StoreMeta;
+use crate::{
+    errors::RAFTSTORE_IS_BUSY,
+    store::{
+        cmd_resp,
+        fsm::store::StoreMeta,
+        util::{self, LeaseState, RegionReadProgress, RemoteLease},
+        Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadResponse,
+        RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
+    },
+    Error, Result,
+};
 
 pub trait ReadExecutor<E: KvEngine> {
     fn get_engine(&self) -> &E;
@@ -145,7 +149,7 @@ pub struct ReadDelegate {
     pub region: Arc<metapb::Region>,
     pub peer_id: u64,
     pub term: u64,
-    pub applied_index_term: u64,
+    pub applied_term: u64,
     pub leader_lease: Option<RemoteLease>,
     pub last_valid_ts: Timespec,
 
@@ -226,7 +230,7 @@ impl ReadDelegate {
             region: Arc::new(region),
             peer_id,
             term: peer.term(),
-            applied_index_term: peer.get_store().applied_index_term(),
+            applied_term: peer.get_store().applied_term(),
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, peer_id),
@@ -258,8 +262,8 @@ impl ReadDelegate {
             Progress::Term(term) => {
                 self.term = term;
             }
-            Progress::AppliedIndexTerm(applied_index_term) => {
-                self.applied_index_term = applied_index_term;
+            Progress::AppliedTerm(applied_term) => {
+                self.applied_term = applied_term;
             }
             Progress::LeaderLease(leader_lease) => {
                 self.leader_lease = Some(leader_lease);
@@ -354,7 +358,7 @@ impl ReadDelegate {
             region: Arc::new(region),
             peer_id: 1,
             term: 1,
-            applied_index_term: 1,
+            applied_term: 1,
             leader_lease: None,
             last_valid_ts: Timespec::new(0, 0),
             tag: format!("[region {}] {}", region_id, 1),
@@ -373,11 +377,11 @@ impl Display for ReadDelegate {
         write!(
             f,
             "ReadDelegate for region {}, \
-             leader {} at term {}, applied_index_term {}, has lease {}",
+             leader {} at term {}, applied_term {}, has lease {}",
             self.region.get_id(),
             self.peer_id,
             self.term,
-            self.applied_index_term,
+            self.applied_term,
             self.leader_lease.is_some(),
         )
     }
@@ -387,7 +391,7 @@ impl Display for ReadDelegate {
 pub enum Progress {
     Region(metapb::Region),
     Term(u64),
-    AppliedIndexTerm(u64),
+    AppliedTerm(u64),
     LeaderLease(RemoteLease),
     RegionBuckets(Arc<BucketMeta>),
 }
@@ -401,8 +405,8 @@ impl Progress {
         Progress::Term(term)
     }
 
-    pub fn applied_index_term(applied_index_term: u64) -> Progress {
-        Progress::AppliedIndexTerm(applied_index_term)
+    pub fn applied_term(applied_term: u64) -> Progress {
+        Progress::AppliedTerm(applied_term)
     }
 
     pub fn leader_lease(lease: RemoteLease) -> Progress {
@@ -510,10 +514,11 @@ where
         cmd.callback.invoke_read(read_resp);
     }
 
-    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the lifetime of
-    // the returned `&ReadDelegate` will bind to `self`, and make it impossible to use `&mut self`
-    // while the `&ReadDelegate` is alive, a better choice is use `Rc` but `LocalReader: Send` will be
-    // violated, which is required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
+    // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
+    // lifetime of the returned `&ReadDelegate` will bind to `self`, and make it
+    // impossible to use `&mut self` while the `&ReadDelegate` is alive, a better
+    // choice is use `Rc` but `LocalReader: Send` will be violated, which is
+    // required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
     fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
         let rd = match self.delegates.get(&region_id) {
@@ -665,7 +670,8 @@ where
                         // Getting the snapshot
                         let response = self.execute(&req, &delegate.region, None, read_id);
 
-                        // Double check in case `safe_ts` change after the first check and before getting snapshot
+                        // Double check in case `safe_ts` change after the first check and before
+                        // getting snapshot
                         if let Err(resp) =
                             delegate.check_stale_read_safe(read_ts, &mut self.metrics)
                         {
@@ -701,11 +707,12 @@ where
         }
     }
 
-    /// If read requests are received at the same RPC request, we can create one snapshot for all
-    /// of them and check whether the time when the snapshot was created is in lease. We use
-    /// ThreadReadId to figure out whether this RaftCommand comes from the same RPC request with
-    /// the last RaftCommand which left a snapshot cached in LocalReader. ThreadReadId is composed
-    /// by thread_id and a thread_local incremental sequence.
+    /// If read requests are received at the same RPC request, we can create one
+    /// snapshot for all of them and check whether the time when the snapshot
+    /// was created is in lease. We use ThreadReadId to figure out whether this
+    /// RaftCommand comes from the same RPC request with the last RaftCommand
+    /// which left a snapshot cached in LocalReader. ThreadReadId is composed by
+    /// thread_id and a thread_local incremental sequence.
     #[inline]
     pub fn read(
         &mut self,
@@ -748,13 +755,13 @@ struct Inspector<'r, 'm> {
 
 impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
     fn has_applied_to_current_term(&mut self) -> bool {
-        if self.delegate.applied_index_term == self.delegate.term {
+        if self.delegate.applied_term == self.delegate.term {
             true
         } else {
             debug!(
                 "rejected by term check";
                 "tag" => &self.delegate.tag,
-                "applied_index_term" => self.delegate.applied_index_term,
+                "applied_term" => self.delegate.applied_term,
                 "delegate_term" => ?self.delegate.term,
             );
 
@@ -912,23 +919,19 @@ impl ReadMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::*;
-    use std::thread;
+    use std::{sync::mpsc::*, thread};
 
     use crossbeam::channel::TrySendError;
-    use kvproto::raft_cmdpb::*;
-    use tempfile::{Builder, TempDir};
-    use time::Duration;
-
-    use crate::store::util::Lease;
-    use crate::store::Callback;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::ALL_CFS;
-    use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::time::monotonic_raw_now;
+    use kvproto::raft_cmdpb::*;
+    use tempfile::{Builder, TempDir};
+    use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use time::Duration;
     use txn_types::WriteBatchFlags;
 
     use super::*;
+    use crate::store::{util::Lease, Callback};
 
     struct MockRouter {
         p_router: SyncSender<RaftCommand<KvTestSnapshot>>,
@@ -981,8 +984,7 @@ mod tests {
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
-            .unwrap();
+        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
         let mut reader = LocalReader::new(db, store_meta, ch);
         reader.store_id = Cell::new(Some(store_id));
@@ -1078,7 +1080,7 @@ mod tests {
         // Register region 1
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
-        // But the applied_index_term is stale.
+        // But the applied_term is stale.
         {
             let mut meta = store_meta.lock().unwrap();
             let read_delegate = ReadDelegate {
@@ -1086,7 +1088,7 @@ mod tests {
                 region: Arc::new(region1.clone()),
                 peer_id: leader2.get_id(),
                 term: term6,
-                applied_index_term: term6 - 1,
+                applied_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
@@ -1099,13 +1101,13 @@ mod tests {
             meta.readers.insert(1, read_delegate);
         }
 
-        // The applied_index_term is stale
+        // The applied_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
         assert_eq!(reader.metrics.rejected_by_applied_term, 1);
 
-        // Make the applied_index_term matches current term.
-        let pg = Progress::applied_index_term(term6);
+        // Make the applied_term matches current term.
+        let pg = Progress::applied_term(term6);
         {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
@@ -1236,7 +1238,7 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .update(Progress::applied_index_term(term6 + 3));
+                .update(Progress::applied_term(term6 + 3));
         }
         reader.propose_raft_command(
             None,
@@ -1329,7 +1331,7 @@ mod tests {
                 region: Arc::new(region.clone()),
                 peer_id: 1,
                 term: 1,
-                applied_index_term: 1,
+                applied_term: 1,
                 leader_lease: None,
                 last_valid_ts: Timespec::new(0, 0),
                 txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
@@ -1345,7 +1347,7 @@ mod tests {
         let d = reader.get_delegate(1).unwrap();
         assert_eq!(&*d.region, &region);
         assert_eq!(d.term, 1);
-        assert_eq!(d.applied_index_term, 1);
+        assert_eq!(d.applied_term, 1);
         assert!(d.leader_lease.is_none());
         drop(d);
 
@@ -1370,9 +1372,9 @@ mod tests {
             meta.readers
                 .get_mut(&1)
                 .unwrap()
-                .update(Progress::applied_index_term(2));
+                .update(Progress::applied_term(2));
         }
-        assert_eq!(reader.get_delegate(1).unwrap().applied_index_term, 2);
+        assert_eq!(reader.get_delegate(1).unwrap().applied_term, 2);
 
         {
             let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.

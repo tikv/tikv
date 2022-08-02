@@ -1,52 +1,51 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::ptr::NonNull;
-use std::sync::Arc;
+use std::{cmp::Ordering, collections::BinaryHeap, ptr::NonNull, sync::Arc};
 
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
+    expr::{EvalConfig, EvalContext, EvalWarnings},
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use tipb::{Expr, FieldType, TopN};
 
-use crate::interface::*;
-use crate::util::*;
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::EvalWarnings;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::RpnStackNode;
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::{interface::*, util::*};
 
 pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// The heap, which contains N rows at most.
     ///
-    /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`, `order_is_desc`
-    /// and `src` because it relies on data in those fields and we want this field to be dropped
-    /// first.
+    /// This field is placed before `eval_columns_buffer_unsafe`, `order_exprs`,
+    /// `order_is_desc` and `src` because it relies on data in those fields
+    /// and we want this field to be dropped first.
     heap: BinaryHeap<HeapItemUnsafe>,
 
-    /// A collection of all evaluated columns. This is to avoid repeated allocations in
-    /// each `next_batch()`.
+    /// A collection of all evaluated columns. This is to avoid repeated
+    /// allocations in each `next_batch()`.
     ///
-    /// DO NOT EVER try to read the content of the elements directly, since it is highly unsafe.
-    /// The lifetime of elements is not really 'static. Certain elements are valid only if both
-    /// of the following conditions are satisfied:
+    /// DO NOT EVER try to read the content of the elements directly, since it
+    /// is highly unsafe. The lifetime of elements is not really 'static.
+    /// Certain elements are valid only if both of the following conditions
+    /// are satisfied:
     ///
     /// 1. `BatchTopNExecutor` is valid (i.e. not dropped).
     ///
-    /// 2. The referenced `LazyBatchColumnVec` of the element must be valid, which only happens
-    ///    when at least one of the row is in the `heap`. Note that rows may be swapped out from
-    ///    `heap` at any time.
+    /// 2. The referenced `LazyBatchColumnVec` of the element must be valid,
+    /// which only happens    when at least one of the row is in the `heap`.
+    /// Note that rows may be swapped out from    `heap` at any time.
     ///
-    /// This field is placed before `order_exprs` and `src` because it relies on data in
-    /// those fields and we want this field to be dropped first.
+    /// This field is placed before `order_exprs` and `src` because it relies on
+    /// data in those fields and we want this field to be dropped first.
     #[allow(clippy::box_collection)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
     order_exprs: Box<[RpnExpression]>,
 
-    /// This field stores the field type of the results evaluated by the exprs in `order_exprs`.
+    /// This field stores the field type of the results evaluated by the exprs
+    /// in `order_exprs`.
     order_exprs_field_type: Box<[FieldType]>,
 
     /// Whether or not it is descending order for each order by column.
@@ -59,13 +58,14 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     is_ended: bool,
 }
 
-/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the struct and
-/// `BatchTopNExecutor` doesn't leak the pointers to other threads. Therefore, with those `NonNull`
-/// pointers, BatchTopNExecutor still remains `Send`.
+/// All `NonNull` pointers in `BatchTopNExecutor` cannot be accessed out of the
+/// struct and `BatchTopNExecutor` doesn't leak the pointers to other threads.
+/// Therefore, with those `NonNull` pointers, BatchTopNExecutor still remains
+/// `Send`.
 unsafe impl<Src: BatchExecutor> Send for BatchTopNExecutor<Src> {}
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchTopNExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -104,6 +104,35 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             n,
 
             context: EvalContext::default(),
+            src,
+            is_ended: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test_with_config(
+        config: Arc<EvalConfig>,
+        src: Src,
+        order_exprs: Vec<RpnExpression>,
+        order_is_desc: Vec<bool>,
+        n: usize,
+    ) -> Self {
+        assert_eq!(order_exprs.len(), order_is_desc.len());
+
+        let order_exprs_field_type: Vec<FieldType> = order_exprs
+            .iter()
+            .map(|expr| expr.ret_field_type(src.schema()).clone())
+            .collect();
+
+        Self {
+            heap: BinaryHeap::new(),
+            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_exprs_field_type: order_exprs_field_type.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
+            n,
+
+            context: EvalContext::new(config),
             src,
             is_ended: false,
         }
@@ -182,8 +211,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             &logical_rows,
         )?;
 
-        // Pin data behind an Arc, so that they won't be dropped as long as this `pinned_data`
-        // is kept somewhere.
+        // Pin data behind an Arc, so that they won't be dropped as long as this
+        // `pinned_data` is kept somewhere.
         let pinned_source_data = Arc::new(HeapItemSourceData {
             physical_columns,
             logical_rows,
@@ -299,7 +328,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         if self.n == 0 {
@@ -310,6 +339,12 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
                 warnings: EvalWarnings::default(),
                 is_drained: Ok(true),
             };
+        }
+
+        if let Some(paging_size) = self.context.cfg.paging_size {
+            if self.n > paging_size as usize {
+                return self.src.next_batch(scan_rows);
+            }
         }
 
         let result = self.handle_next_batch();
@@ -372,8 +407,8 @@ struct HeapItemSourceData {
 
 /// The item in the heap of `BatchTopNExecutor`.
 ///
-/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
-/// not dropped). Thus it is called unsafe.
+/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is
+/// valid (i.e. not dropped). Thus it is called unsafe.
 struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
     order_is_desc_ptr: NonNull<[bool]>,
@@ -392,7 +427,8 @@ struct HeapItemUnsafe {
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
     eval_columns_offset: usize,
 
-    /// Which logical row in the evaluated columns this heap item is representing.
+    /// Which logical row in the evaluated columns this heap item is
+    /// representing.
     logical_row_index: usize,
 }
 
@@ -428,8 +464,9 @@ impl HeapItemUnsafe {
             let lhs = lhs_node.get_logical_scalar_ref(self.logical_row_index);
             let rhs = rhs_node.get_logical_scalar_ref(other.logical_row_index);
 
-            // There is panic inside, but will never panic, since the data type of corresponding
-            // column should be consistent for each `HeapItemUnsafe`.
+            // There is panic inside, but will never panic, since the data type of
+            // corresponding column should be consistent for each
+            // `HeapItemUnsafe`.
             let ord = lhs.cmp_sort_key(&rhs, &order_exprs_field_type[column_idx])?;
 
             if ord == Ordering::Equal {
@@ -446,8 +483,8 @@ impl HeapItemUnsafe {
     }
 }
 
-/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator fails to parse.
-/// So make sure that it is valid before putting it into a heap.
+/// WARN: HeapItemUnsafe implements partial ordering. It panics when Collator
+/// fails to parse. So make sure that it is valid before putting it into a heap.
 impl Ord for HeapItemUnsafe {
     fn cmp(&self, other: &Self) -> Ordering {
         self.cmp_sort_key(other).unwrap()
@@ -470,14 +507,13 @@ impl Eq for HeapItemUnsafe {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use tidb_query_datatype::builder::FieldTypeBuilder;
-    use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp};
-
-    use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::expr::EvalWarnings;
+    use tidb_query_datatype::{
+        builder::FieldTypeBuilder, expr::EvalWarnings, Collation, FieldTypeFlag, FieldTypeTp,
+    };
     use tidb_query_expr::RpnExpressionBuilder;
+
+    use super::*;
+    use crate::util::mock_executor::MockExecutor;
 
     #[test]
     fn test_top_0() {
@@ -772,8 +808,10 @@ mod tests {
 
     #[test]
     fn test_integration_3() {
-        use tidb_query_expr::impl_arithmetic::{arithmetic_fn_meta, IntIntPlus};
-        use tidb_query_expr::impl_op::is_null_fn_meta;
+        use tidb_query_expr::{
+            impl_arithmetic::{arithmetic_fn_meta, IntIntPlus},
+            impl_op::is_null_fn_meta,
+        };
 
         // Order by multiple expressions, data len > n.
         //
@@ -851,6 +889,7 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
     /// Col0 (Bytes[Utf8Mb4GeneralCi])      Col1(Bytes[Utf8Mb4Bin])     Col2(Bytes[Binary])
     /// == Call #1 ==
@@ -864,6 +903,7 @@ mod tests {
     /// "Aa"                                NULL                        "aaa"
     /// "aaa"                               "Aa"                        "áa"
     /// (drained)
+    /// ```
     fn make_bytes_src_executor() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -1106,6 +1146,7 @@ mod tests {
 
     /// Builds an executor that will return these data:
     ///
+    /// ```text
     /// == Schema ==
     /// Col0 (LongLong(Unsigned))      Col1(LongLong[Signed])       Col2(Long[Unsigned])
     /// == Call #1 ==
@@ -1119,6 +1160,7 @@ mod tests {
     /// 300                            300                          300
     /// 9,223,372,036,854,775,808      -9,223,372,036,854,775,808   2,147,483,648
     /// (drained)                      (drained)                    (drained)
+    /// ```
     fn make_src_executor_unsigned() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -1308,5 +1350,162 @@ mod tests {
                 Some(2000_u32 as i64),
             ],
         );
+    }
+
+    #[test]
+    fn test_top_paging() {
+        // Top N = 5 and PagingSize = 6, same with no-paging.
+        let test_top5_paging6 = |col_index: usize, is_desc: bool, expected: &[Option<i64>]| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(6);
+            let config = Arc::new(config);
+            let src_exec = make_src_executor_unsigned();
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(col_index)
+                        .build_for_test(),
+                ],
+                vec![is_desc],
+                5,
+            );
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert!(r.logical_rows.is_empty());
+            assert_eq!(r.physical_columns.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(&r.logical_rows, &[0, 1, 2, 3, 4]);
+            assert_eq!(r.physical_columns.rows_len(), 5);
+            assert_eq!(r.physical_columns.columns_len(), 3);
+            assert_eq!(
+                r.physical_columns[col_index].decoded().to_int_vec(),
+                expected
+            );
+            assert!(r.is_drained.unwrap());
+        };
+
+        test_top5_paging6(
+            0,
+            false,
+            &[
+                None,
+                Some(300_u64 as i64),
+                Some(2000_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            0,
+            true,
+            &[
+                Some(18_446_744_073_709_551_615_u64 as i64),
+                Some(18_446_744_073_709_551_613_u64 as i64),
+                Some(9_223_372_036_854_775_808_u64 as i64),
+                Some(9_223_372_036_854_775_807_u64 as i64),
+                Some(2000_u64 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            false,
+            &[
+                None,
+                Some(-9_223_372_036_854_775_808),
+                Some(-3),
+                Some(-1),
+                Some(300),
+            ],
+        );
+
+        test_top5_paging6(
+            1,
+            true,
+            &[
+                Some(9_223_372_036_854_775_807),
+                Some(2000),
+                Some(300),
+                Some(-1),
+                Some(-3),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            false,
+            &[
+                None,
+                Some(300_u32 as i64),
+                Some(2000_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+            ],
+        );
+
+        test_top5_paging6(
+            2,
+            true,
+            &[
+                Some(4_294_967_295_u32 as i64),
+                Some(4_294_967_295_u32 as i64),
+                Some(2_147_483_648_u32 as i64),
+                Some(2_147_483_647_u32 as i64),
+                Some(2000_u32 as i64),
+            ],
+        );
+
+        // Top N = 5 and PagingSize = 4, return all data and do nothing.
+        let test_top5_paging4 = |build_src_executor: fn() -> MockExecutor| {
+            let mut config = EvalConfig::default();
+            config.paging_size = Some(4);
+            let config = Arc::new(config);
+            let src_exec = build_src_executor();
+            let mut exec = BatchTopNExecutor::new_for_test_with_config(
+                config,
+                src_exec,
+                vec![
+                    RpnExpressionBuilder::new_for_test()
+                        .push_column_ref_for_test(0)
+                        .build_for_test(),
+                ],
+                vec![false],
+                5,
+            );
+            let mut exec2 = build_src_executor();
+
+            loop {
+                let r1 = exec.next_batch(1);
+                let r2 = exec2.next_batch(1);
+                assert_eq!(r1.logical_rows, r2.logical_rows);
+                assert_eq!(
+                    r1.physical_columns.rows_len(),
+                    r2.physical_columns.rows_len()
+                );
+                assert_eq!(
+                    r1.physical_columns.columns_len(),
+                    r2.physical_columns.columns_len()
+                );
+                let r1_is_drained = r1.is_drained.unwrap();
+                assert_eq!(r1_is_drained, r2.is_drained.unwrap());
+                if r1_is_drained {
+                    break;
+                }
+            }
+        };
+
+        test_top5_paging4(make_src_executor_unsigned);
+        test_top5_paging4(make_src_executor);
+        test_top5_paging4(make_bytes_src_executor);
     }
 }

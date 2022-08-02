@@ -1,13 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    sync::{mpsc::channel, Arc, Mutex},
+    time::Duration,
+};
+
 use file_system::calc_crc32;
-use futures::executor::block_on;
-use futures::{stream, SinkExt};
+use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::import_sstpb::*;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tempfile::Builder;
 use test_raftstore::Simulator;
 use test_sst_importer::*;
@@ -127,8 +128,8 @@ fn test_ingest_reentrant() {
 
     let checksum2 = calc_crc32(save_path).unwrap();
     // TODO: Remove this once write_global_seqno is deprecated.
-    // Checksums are the same since the global seqno in the SST file no longer gets updated with the
-    // default setting, which is write_global_seqno=false.
+    // Checksums are the same since the global seqno in the SST file no longer gets
+    // updated with the default setting, which is write_global_seqno=false.
     assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
     let resp = import.ingest(&ingest).unwrap();
@@ -154,12 +155,13 @@ fn test_ingest_key_manager_delete_file_failed() {
 
     let deregister_fp = "key_manager_fails_before_delete_file";
     // the first delete is in check before ingest, the second is in ingest cleanup
-    // set the ingest clean up failed to trigger remove file but not remove key condition
+    // set the ingest clean up failed to trigger remove file but not remove key
+    // condition
     fail::cfg(deregister_fp, "1*off->1*return->off").unwrap();
 
-    // Do an ingest and verify the result is correct. Though the ingest succeeded, the clone file is
-    // still in the key manager
-    //TODO: how to check the key manager contains the clone key
+    // Do an ingest and verify the result is correct. Though the ingest succeeded,
+    // the clone file is still in the key manager
+    // TODO: how to check the key manager contains the clone key
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx.clone());
     ingest.set_sst(meta.clone());
@@ -177,7 +179,8 @@ fn test_ingest_key_manager_delete_file_failed() {
         .get(&node_id)
         .unwrap()
         .get_path(&meta);
-    // wait up to 5 seconds to make sure raw uploaded file is deleted by the async clean up task.
+    // wait up to 5 seconds to make sure raw uploaded file is deleted by the async
+    // clean up task.
     for _ in 0..50 {
         if !save_path.as_path().exists() {
             break;
@@ -186,7 +189,8 @@ fn test_ingest_key_manager_delete_file_failed() {
     }
     assert!(!save_path.as_path().exists());
 
-    // Do upload and ingest again, though key manager contains this file, the ingest action should success.
+    // Do upload and ingest again, though key manager contains this file, the ingest
+    // action should success.
     upload_sst(&import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);

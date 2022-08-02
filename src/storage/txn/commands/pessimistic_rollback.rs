@@ -1,17 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, Result as MvccResult, SnapshotReader};
-use crate::storage::txn::commands::{
-    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
-    WriteResult,
-};
-use crate::storage::txn::Result;
-use crate::storage::{ProcessResult, Result as StorageResult, Snapshot};
 use std::mem;
+
 use txn_types::{Key, LockType, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
+    txn::{
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Result as StorageResult, Snapshot,
+};
 
 command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
@@ -19,7 +25,7 @@ command! {
     /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<StorageResult<()>>,
-        display => "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}", (keys.len, start_ts, for_update_ts, ctx),
+        display => "kv::command::pessimistic_rollback keys({:?}) @ {} {} | {:?}", (keys, start_ts, for_update_ts, ctx),
         content => {
             /// The keys to be rolled back.
             keys: Vec<Key>,
@@ -32,13 +38,15 @@ command! {
 impl CommandExt for PessimisticRollback {
     ctx!();
     tag!(pessimistic_rollback);
+    request_type!(KvPessimisticRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
-    /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
+    /// Delete any pessimistic lock with small for_update_ts belongs to this
+    /// transaction.
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -91,18 +99,23 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::Engine;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::{WriteCommand, WriteContext};
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::TestEngineBuilder;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
     use txn_types::Key;
+
+    use super::*;
+    use crate::storage::{
+        kv::Engine,
+        lock_manager::DummyLockManager,
+        mvcc::tests::*,
+        txn::{
+            commands::{WriteCommand, WriteContext},
+            scheduler::DEFAULT_EXECUTION_DURATION_LIMIT,
+            tests::*,
+        },
+        TestEngineBuilder,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &E,

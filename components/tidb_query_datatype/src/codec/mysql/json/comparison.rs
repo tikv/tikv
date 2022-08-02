@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::{Ord, Ordering};
-use std::f64;
+use std::{
+    cmp::{Ord, Ordering},
+    f64,
+};
 
-use super::super::Result;
-use super::constants::*;
-use super::{Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
+use super::{super::Result, constants::*, Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
 
 fn compare<T: Ord>(x: T, y: T) -> Ordering {
     x.cmp(&y)
@@ -145,8 +145,8 @@ impl<'a> PartialOrd for JsonRef<'a> {
 
         let left_data = self.as_f64();
         let right_data = right.as_f64();
-        // tidb treats boolean as integer, but boolean is different from integer in JSON.
-        // so we need convert them to same type and then compare.
+        // tidb treats boolean as integer, but boolean is different from integer in
+        // JSON. so we need convert them to same type and then compare.
         if let (Ok(left), Ok(right)) = (left_data, right_data) {
             return left.partial_cmp(&right);
         }

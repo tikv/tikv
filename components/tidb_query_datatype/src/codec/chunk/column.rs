@@ -2,32 +2,37 @@
 
 use std::convert::TryFrom;
 
-use crate::prelude::*;
-use crate::{EvalType, FieldTypeFlag, FieldTypeTp};
-use codec::buffer::{BufferReader, BufferWriter};
-use codec::number::{NumberDecoder, NumberEncoder};
+use codec::{
+    buffer::{BufferReader, BufferWriter},
+    number::{NumberDecoder, NumberEncoder},
+};
 use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
 use super::{Error, Result};
-use crate::codec::data_type::{ChunkRef, VectorValue};
-use crate::codec::datum;
-use crate::codec::datum_codec::DatumPayloadDecoder;
-use crate::codec::mysql::decimal::{
-    Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder, DECIMAL_STRUCT_SIZE,
+use crate::{
+    codec::{
+        data_type::{ChunkRef, VectorValue},
+        datum,
+        datum_codec::DatumPayloadDecoder,
+        mysql::{
+            decimal::{
+                Decimal, DecimalDatumPayloadChunkEncoder, DecimalDecoder, DecimalEncoder,
+                DECIMAL_STRUCT_SIZE,
+            },
+            duration::{
+                Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
+            },
+            enums::{Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef},
+            json::{Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef},
+            time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder},
+        },
+        Datum,
+    },
+    expr::EvalContext,
+    prelude::*,
+    EvalType, FieldTypeFlag, FieldTypeTp,
 };
-use crate::codec::mysql::duration::{
-    Duration, DurationDatumPayloadChunkEncoder, DurationDecoder, DurationEncoder,
-};
-use crate::codec::mysql::enums::{
-    Enum, EnumDatumPayloadChunkEncoder, EnumDecoder, EnumEncoder, EnumRef,
-};
-use crate::codec::mysql::json::{
-    Json, JsonDatumPayloadChunkEncoder, JsonDecoder, JsonEncoder, JsonRef,
-};
-use crate::codec::mysql::time::{Time, TimeDatumPayloadChunkEncoder, TimeDecoder, TimeEncoder};
-use crate::codec::Datum;
-use crate::expr::EvalContext;
 
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
@@ -397,7 +402,8 @@ impl Column {
         self.null_cnt = 0;
         self.null_bitmap.clear();
         if !self.var_offsets.is_empty() {
-            // The first offset is always 0, it makes slicing the data easier, we need to keep it.
+            // The first offset is always 0, it makes slicing the data easier, we need to
+            // keep it.
             self.var_offsets.truncate(1);
         }
         self.data.clear();
@@ -1001,7 +1007,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         }
         // offsets
         if !col.is_fixed() {
-            //let length = (col.length+1)*4;
+            // let length = (col.length+1)*4;
             for v in &col.var_offsets {
                 self.write_i64_le(*v as i64)?;
             }
@@ -1016,10 +1022,12 @@ impl<T: BufferWriter> ChunkColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {
+    use std::{f64, u64};
+
+    use tipb::FieldType;
+
     use super::*;
     use crate::codec::datum::Datum;
-    use std::{f64, u64};
-    use tipb::FieldType;
 
     #[test]
     fn test_column_i64() {

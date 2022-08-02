@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::ErrorCodeExt;
 use kvproto::errorpb;
+
+use super::ErrorCodeExt;
 
 define_error_codes!(
     "KV:Raftstore:",
@@ -28,6 +29,7 @@ define_error_codes!(
     DATA_IS_NOT_READY => ("DataIsNotReady", "", ""),
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
+    RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),
@@ -60,6 +62,8 @@ impl ErrorCodeExt for errorpb::Error {
             PROPOSAL_IN_MERGING_MODE
         } else if self.has_data_is_not_ready() {
             DATA_IS_NOT_READY
+        } else if self.has_recovery_in_progress() {
+            RECOVERY_IN_PROGRESS
         } else {
             UNKNOWN
         }

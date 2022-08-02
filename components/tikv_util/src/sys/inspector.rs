@@ -20,8 +20,8 @@ pub struct DiskStat {
 pub trait ThreadInspector {
     type DiskID;
 
-    /// Disk read and write bytes from the backend storage layer. `None` means it's not available
-    /// for the platform.
+    /// Disk read and write bytes from the backend storage layer. `None` means
+    /// it's not available for the platform.
     fn io_stat(&self) -> Result<Option<IoStat>, String> {
         Ok(None)
     }
@@ -39,9 +39,11 @@ pub trait ThreadInspector {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::fs::{read_to_string, File};
-    use std::os::unix::io::AsRawFd;
-    use std::path::Path;
+    use std::{
+        fs::{read_to_string, File},
+        os::unix::io::AsRawFd,
+        path::Path,
+    };
 
     use procfs::process::Process;
 
@@ -145,8 +147,9 @@ pub use self::notlinux::{self_thread_inspector, Impl as ThreadInspectorImpl};
 #[cfg(target_os = "linux")]
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     fn page_size() -> u64 {
         unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 }

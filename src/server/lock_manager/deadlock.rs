@@ -1,41 +1,53 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::client::{self, Client};
-use super::config::Config;
-use super::metrics::*;
-use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Result};
-use crate::server::resolve::StoreAddrResolver;
-use crate::storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken};
+use std::{
+    cell::RefCell,
+    fmt::{self, Display, Formatter},
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
+
 use collections::HashMap;
 use engine_traits::KvEngine;
-use futures::future::{self, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
+use futures::{
+    future::{self, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::TryStreamExt,
+};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
-use kvproto::deadlock::*;
-use kvproto::metapb::Region;
+use kvproto::{deadlock::*, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
-use raftstore::coprocessor::RoleChange;
-use raftstore::coprocessor::{
-    BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
-    RegionChangeEvent, RegionChangeObserver, RoleObserver,
+use raftstore::{
+    coprocessor::{
+        BoxRegionChangeObserver, BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext,
+        RegionChangeEvent, RegionChangeObserver, RoleChange, RoleObserver,
+    },
+    store::util::is_region_initialized,
 };
-use raftstore::store::util::is_region_initialized;
 use security::SecurityManager;
-use std::cell::RefCell;
-use std::fmt::{self, Display, Formatter};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use tikv_util::future::paired_future_callback;
-use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use tikv_util::{
+    future::paired_future_callback,
+    time::{Duration, Instant},
+    worker::{FutureRunnable, FutureScheduler, Stopped},
+};
 use tokio::task::spawn_local;
 use txn_types::TimeStamp;
+
+use super::{
+    client::{self, Client},
+    config::Config,
+    metrics::*,
+    waiter_manager::Scheduler as WaiterMgrScheduler,
+    Error, Result,
+};
+use crate::{
+    server::resolve::StoreAddrResolver,
+    storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken},
+};
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -100,9 +112,11 @@ impl Locks {
 
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 pub struct DetectTable {
-    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts` has a survival time -- `ttl`.
-    /// When checking the deadlock, if the ttl has elpased, the corresponding edge will be removed.
-    /// `last_detect_time` is the start time of the edge. `Detect` requests will refresh it.
+    /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts`
+    /// has a survival time -- `ttl`. When checking the deadlock, if the ttl
+    /// has elpased, the corresponding edge will be removed.
+    /// `last_detect_time` is the start time of the edge. `Detect` requests will
+    /// refresh it.
     // txn_ts => (lock_ts => Locks)
     wait_for_map: HashMap<TimeStamp, HashMap<TimeStamp, Locks>>,
 
@@ -126,11 +140,12 @@ impl DetectTable {
         }
     }
 
-    /// Returns the key hash which causes deadlock, and the current wait chain that forms the
-    /// deadlock with `txn_ts`'s waiting for txn at `lock_ts`.
-    /// Note that the current detecting edge is not included in the returned wait chain. This is
-    /// intended to reduce RPC message size since the information about current detecting txn is
-    /// included in a separated field.
+    /// Returns the key hash which causes deadlock, and the current wait chain
+    /// that forms the deadlock with `txn_ts`'s waiting for txn at
+    /// `lock_ts`. Note that the current detecting edge is not included in
+    /// the returned wait chain. This is intended to reduce RPC message size
+    /// since the information about current detecting txn is included in a
+    /// separated field.
     pub fn detect(
         &mut self,
         txn_ts: TimeStamp,
@@ -169,12 +184,12 @@ impl DetectTable {
         let ttl = self.ttl;
 
         let mut stack = vec![wait_for_ts];
-        // Memorize the pushed vertexes to avoid duplicate search, and maps to the predecessor of
-        // the vertex.
-        // Since the graph is a DAG instead of a tree, a vertex may have multiple predecessors. But
-        // it's ok if we only remember one: for each vertex, if it has a route to the goal (txn_ts),
-        // we must be able to find the goal and exit this function before visiting the vertex one
-        // more time.
+        // Memorize the pushed vertexes to avoid duplicate search, and maps to the
+        // predecessor of the vertex.
+        // Since the graph is a DAG instead of a tree, a vertex may have multiple
+        // predecessors. But it's ok if we only remember one: for each vertex,
+        // if it has a route to the goal (txn_ts), we must be able to find the
+        // goal and exit this function before visiting the vertex one more time.
         let mut pushed: HashMap<TimeStamp, TimeStamp> = HashMap::default();
         pushed.insert(wait_for_ts, TimeStamp::zero());
         while let Some(curr_ts) = stack.pop() {
@@ -208,18 +223,20 @@ impl DetectTable {
         None
     }
 
-    /// Generate the wait chain after deadlock is detected. This function is part of implementation
-    /// of `do_detect`. It assumes there's a path from `start` to `end` in the waiting graph, and
-    /// every single edge `V1 -> V2` has an entry in `vertex_predecessors_map` so that
-    /// `vertex_predecessors_map[V2] == V1`, and `vertex_predecessors_map[V1] == 0`.
+    /// Generate the wait chain after deadlock is detected. This function is
+    /// part of implementation of `do_detect`. It assumes there's a path
+    /// from `start` to `end` in the waiting graph, and every single edge
+    /// `V1 -> V2` has an entry in `vertex_predecessors_map` so that
+    /// `vertex_predecessors_map[V2] == V1`, and `vertex_predecessors_map[V1] ==
+    /// 0`.
     fn generate_wait_chain(
         &self,
         start: TimeStamp,
         end: TimeStamp,
         vertex_predecessors_map: HashMap<TimeStamp, TimeStamp>,
     ) -> Vec<WaitForEntry> {
-        // It's rare that a deadlock formed by too many transactions. Preallocating a few elements
-        // should be enough in most cases.
+        // It's rare that a deadlock formed by too many transactions. Preallocating a
+        // few elements should be enough in most cases.
         let mut wait_chain = Vec::with_capacity(3);
 
         let mut lock_ts = end;
@@ -247,9 +264,9 @@ impl DetectTable {
         wait_chain
     }
 
-    /// Returns true and adds to the detect table if `txn_ts` is waiting for `lock_ts`.
-    /// When the function returns true, `key` and `resource_group_tag` may be taken to store in the
-    /// waiting graph.
+    /// Returns true and adds to the detect table if `txn_ts` is waiting for
+    /// `lock_ts`. When the function returns true, `key` and
+    /// `resource_group_tag` may be taken to store in the waiting graph.
     fn register_if_existed(
         &mut self,
         txn_ts: TimeStamp,
@@ -268,7 +285,8 @@ impl DetectTable {
         false
     }
 
-    /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not exist.
+    /// Adds to the detect table. The edge from `txn_ts` to `lock_ts` must not
+    /// exist.
     fn register(
         &mut self,
         txn_ts: TimeStamp,
@@ -399,10 +417,11 @@ pub enum Task {
     /// If the node has the leader region and the role of the node changes,
     /// a `ChangeRole` task will be scheduled.
     ///
-    /// It's the only way to change the node from leader to follower, and vice versa.
+    /// It's the only way to change the node from leader to follower, and vice
+    /// versa.
     ChangeRole(Role),
     /// Change the ttl of DetectTable
-    ChangeTTL(Duration),
+    ChangeTtl(Duration),
     // Task only used for test
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(u64) + Send>),
@@ -425,7 +444,7 @@ impl Display for Task {
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
-            Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
+            Task::ChangeTtl(ttl) => write!(f, "ChangeTtl {{ ttl: {:?} }}", ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "Validate dead lock config"),
             #[cfg(test)]
@@ -434,8 +453,8 @@ impl Display for Task {
     }
 }
 
-/// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify scheduling tasks
-/// to the deadlock detector.
+/// `Scheduler` is the wrapper of the `FutureScheduler<Task>` to simplify
+/// scheduling tasks to the deadlock detector.
 #[derive(Clone)]
 pub struct Scheduler(FutureScheduler<Task>);
 
@@ -494,7 +513,7 @@ impl Scheduler {
     }
 
     pub fn change_ttl(&self, t: Duration) {
-        self.notify_scheduler(Task::ChangeTTL(t));
+        self.notify_scheduler(Task::ChangeTtl(t));
     }
 
     #[cfg(any(test, feature = "testexport"))]
@@ -508,14 +527,15 @@ impl Scheduler {
     }
 }
 
-/// The leader region is the region containing the LEADER_KEY and the leader of the
-/// leader region is also the leader of the deadlock detector.
+/// The leader region is the region containing the LEADER_KEY and the leader of
+/// the leader region is also the leader of the deadlock detector.
 const LEADER_KEY: &[u8] = b"";
 
-/// `RoleChangeNotifier` observes region or role change events of raftstore. If the
-/// region is the leader region and the role of this node is changed, a `ChangeRole`
-/// task will be scheduled to the deadlock detector. It's the only way to change the
-/// node from the leader of deadlock detector to follower, and vice versa.
+/// `RoleChangeNotifier` observes region or role change events of raftstore. If
+/// the region is the leader region and the role of this node is changed, a
+/// `ChangeRole` task will be scheduled to the deadlock detector. It's the only
+/// way to change the node from the leader of deadlock detector to follower, and
+/// vice versa.
 #[derive(Clone)]
 pub(crate) struct RoleChangeNotifier {
     /// The id of the valid leader region.
@@ -574,7 +594,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
         let region = ctx.region();
         if Self::is_leader_region(region) {
             match event {
-                RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                RegionChangeEvent::Create | RegionChangeEvent::Update(_) => {
                     *self.leader_region_id.lock().unwrap() = region.get_id();
                     self.scheduler.change_role(role.into());
                 }
@@ -765,8 +785,9 @@ where
                 }
             }
         }
-        // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
-        // is changed. It should reset itself even if the role of the node is not changed.
+        // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when
+        // the leader is changed. It should reset itself even if the role of the
+        // node is not changed.
         self.reset(role);
     }
 
@@ -812,8 +833,9 @@ where
 
     /// Returns true if sends successfully.
     ///
-    /// If the client is None, reconnects the leader first, then sends the request to the leader.
-    /// If sends failed, sets the client to None for retry.
+    /// If the client is None, reconnects the leader first, then sends the
+    /// request to the leader. If sends failed, sets the client to None for
+    /// retry.
     fn send_request_to_leader(
         &mut self,
         tp: DetectType,
@@ -936,11 +958,13 @@ where
                 if self.send_request_to_leader(tp, token, txn_ts, &wait_info, diag_ctx.clone()) {
                     return;
                 }
-                // Because the client is asynchronous, it won't be closed until failing to send a
-                // request. So retry to refresh the leader info and send it again.
+                // Because the client is asynchronous, it won't be closed until
+                // failing to send a request. So retry to
+                // refresh the leader info and send it again.
             }
-            // If a request which causes deadlock is dropped, it leads to the waiter timeout.
-            // TiDB will retry to acquire the lock and detect deadlock again.
+            // If a request which causes deadlock is dropped, it leads to the waiter
+            // timeout. TiDB will retry to acquire the lock and detect deadlock
+            // again.
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
             ERROR_COUNTER_METRICS.dropped.inc();
         }
@@ -1058,7 +1082,7 @@ where
                 self.handle_detect_rpc(stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
-            Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
+            Task::ChangeTtl(ttl) => self.handle_change_ttl(ttl),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
             #[cfg(test)]
@@ -1131,12 +1155,14 @@ impl Deadlock for Service {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::server::resolve::Callback;
     use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
+    use raftstore::coprocessor::RegionChangeReason;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
+
+    use super::*;
+    use crate::server::resolve::Callback;
 
     #[test]
     fn test_detect_table() {
@@ -1387,7 +1413,8 @@ pub mod tests {
             tag,
         };
 
-        // Detect specified edges sequentially, and expects the last one will cause the deadlock.
+        // Detect specified edges sequentially, and expects the last one will cause the
+        // deadlock.
         let test_once = |edges: &[Edge<'_>]| {
             let mut detect_table = DetectTable::new(Duration::from_millis(100));
             let mut edge_map = HashMap::default();
@@ -1545,7 +1572,7 @@ pub mod tests {
         ];
         let events = [
             RegionChangeEvent::Create,
-            RegionChangeEvent::Update,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
             RegionChangeEvent::Destroy,
         ];
         let check_role = |role| {
@@ -1581,7 +1608,11 @@ pub mod tests {
         check_role(Role::Follower);
         // Leader region id is changed.
         region.set_id(2);
-        host.on_region_changed(&region, RegionChangeEvent::Update, StateRole::Leader);
+        host.on_region_changed(
+            &region,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            StateRole::Leader,
+        );
         // Destroy the previous leader region.
         region.set_id(1);
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);

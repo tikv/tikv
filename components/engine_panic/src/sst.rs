@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::PanicEngine;
-use engine_traits::{
-    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
-    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
-};
 use std::path::PathBuf;
+
+use engine_traits::{
+    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SstCompressionType,
+    SstExt, SstReader, SstWriter, SstWriterBuilder,
+};
+
+use crate::engine::PanicEngine;
 
 impl SstExt for PanicEngine {
     type SstReader = PanicSstReader;
@@ -30,10 +32,7 @@ impl SstReader for PanicSstReader {
 impl Iterable for PanicSstReader {
     type Iterator = PanicSstReaderIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         panic!()
     }
 }
@@ -41,10 +40,18 @@ impl Iterable for PanicSstReader {
 pub struct PanicSstReaderIterator;
 
 impl Iterator for PanicSstReaderIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

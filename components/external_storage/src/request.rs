@@ -1,11 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io::{self, ErrorKind};
+
 use anyhow::Context;
 use futures::executor::block_on;
 use futures_io::{AsyncRead, AsyncWrite};
 use kvproto::brpb as proto;
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
-use std::io::{self, ErrorKind};
 use tikv_util::time::Limiter;
 use tokio::runtime::Runtime;
 use tokio_util::compat::Tokio02AsyncReadCompatExt;
@@ -23,7 +24,8 @@ pub fn write_sender(
         // currently it is copying into an intermediate buffer
         // Writing to a file here uses up disk space
         // But as a positive it gets the backup data out of the DB the fastest
-        // Currently this waits for the file to be completely written before sending to storage
+        // Currently this waits for the file to be completely written before sending to
+        // storage
         runtime.enter(|| {
             block_on(async {
                 let msg = |action: &str| format!("{} file {:?}", action, &file_path);

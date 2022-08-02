@@ -1,17 +1,21 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-use std::sync::*;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    path::Path,
+    sync::*,
+    thread,
+    time::{Duration, Instant},
+};
 
+use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::{
+    MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
+};
 use futures::{executor::block_on, future, SinkExt, StreamExt, TryStreamExt};
 use grpcio::*;
-use grpcio_health::proto::HealthCheckRequest;
-use grpcio_health::*;
-use tempfile::Builder;
-
+use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
@@ -20,26 +24,30 @@ use kvproto::{
     raft_serverpb::*,
     tikvpb::*,
 };
-use raft::eraftpb;
-
-use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use pd_client::PdClient;
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::store::{fsm::store::StoreMeta, AutoSplitController, SnapManager};
+use raft::eraftpb;
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+};
 use resource_metering::CollectorRegHandle;
+use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::QuotaConfig;
-use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::import::Config as ImportConfig;
-use tikv::import::SSTImporter;
-use tikv::server;
-use tikv::server::gc_worker::sync_gc;
-use tikv::server::service::{batch_commands_request, batch_commands_response};
-use tikv_util::config::ReadableSize;
-use tikv_util::worker::{dummy_scheduler, LazyWorker};
-use tikv_util::HandyRwLock;
+use tikv::{
+    config::QuotaConfig,
+    coprocessor::REQ_TYPE_DAG,
+    import::{Config as ImportConfig, SstImporter},
+    server,
+    server::{
+        gc_worker::sync_gc,
+        service::{batch_commands_request, batch_commands_response},
+    },
+};
+use tikv_util::{
+    config::ReadableSize,
+    worker::{dummy_scheduler, LazyWorker},
+    HandyRwLock,
+};
 use txn_types::{Key, Lock, LockType, TimeStamp};
 
 #[test]
@@ -601,21 +609,38 @@ fn test_coprocessor() {
 
 #[test]
 fn test_split_region() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    test_split_region_impl::<ApiV1>(false);
+    test_split_region_impl::<ApiV2>(false);
+    test_split_region_impl::<ApiV1>(true);
+    test_split_region_impl::<ApiV1Ttl>(true); // APIV1TTL for RawKV only.
+    test_split_region_impl::<ApiV2>(true);
+}
+
+fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
+    let encode_key = |k: &[u8]| -> Vec<u8> {
+        if !is_raw_kv || F::TAG == ApiVersion::V2 {
+            Key::from_raw(k).into_encoded()
+        } else {
+            k.to_vec()
+        }
+    };
+
+    let (mut cluster, leader, mut ctx) =
+        must_new_and_configure_cluster(|cluster| cluster.cfg.storage.set_api_version(F::TAG));
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+    ctx.set_api_version(F::CLIENT_TAG);
 
     // Split region commands
     let key = b"b";
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     req.set_split_key(key.to_vec());
     let resp = client.split_region(&req).unwrap();
-    assert_eq!(
-        Key::from_encoded(resp.get_left().get_end_key().to_vec())
-            .into_raw()
-            .unwrap()
-            .as_slice(),
-        key
-    );
+    assert_eq!(resp.get_left().get_end_key().to_vec(), encode_key(key));
     assert_eq!(
         resp.get_left().get_end_key(),
         resp.get_right().get_start_key()
@@ -630,21 +655,21 @@ fn test_split_region() {
     ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
+    req.set_is_raw_kv(is_raw_kv);
     let split_keys = vec![b"e".to_vec(), b"c".to_vec(), b"d".to_vec()];
     req.set_split_keys(split_keys.into());
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
         .get_regions()
         .iter()
-        .map(|x| {
-            Key::from_encoded(x.get_start_key().to_vec())
-                .into_raw()
-                .unwrap()
-        })
+        .map(|x| x.get_start_key().to_vec())
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+        vec![b"b", b"c", b"d", b"e",]
+            .into_iter()
+            .map(|k| encode_key(&k[..]))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -683,7 +708,7 @@ fn test_debug_get() {
     let engine = cluster.get_engine(store_id);
     let key = keys::data_key(k);
     engine.put(&key, v).unwrap();
-    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
+    assert_eq!(engine.get_value(&key).unwrap().unwrap(), v);
 
     // Debug get
     let mut req = debugpb::GetRequest::default();
@@ -709,15 +734,14 @@ fn test_debug_raft_log() {
     // Put some data.
     let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
-    let key = keys::raft_log_key(region_id, log_index);
     let mut entry = eraftpb::Entry::default();
     entry.set_term(1);
-    entry.set_index(1);
+    entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42].into());
-    engine.c().put_msg(&key, &entry).unwrap();
+    engine.append(region_id, vec![entry.clone()]).unwrap();
     assert_eq!(
-        engine.c().get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry
     );
 
@@ -747,19 +771,11 @@ fn test_debug_region_info() {
     let kv_engine = cluster.get_engine(store_id);
 
     let region_id = 100;
-    let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::default();
     raft_state.set_last_index(42);
-    raft_engine
-        .c()
-        .put_msg(&raft_state_key, &raft_state)
-        .unwrap();
+    raft_engine.put_raft_state(region_id, &raft_state).unwrap();
     assert_eq!(
-        raft_engine
-            .c()
-            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
-            .unwrap()
-            .unwrap(),
+        raft_engine.get_raft_state(region_id).unwrap().unwrap(),
         raft_state
     );
 
@@ -767,12 +783,10 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -783,12 +797,10 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -827,7 +839,6 @@ fn test_debug_region_size() {
     let mut state = RegionLocalState::default();
     state.set_region(region);
     engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
@@ -835,8 +846,7 @@ fn test_debug_region_size() {
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
-        let cf_handle = engine.cf_handle(cf).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
@@ -921,8 +931,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
         )
         .to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
     }
 
     let mut req = debugpb::ScanMvccRequest::default();
@@ -958,7 +967,7 @@ fn test_double_run_node() {
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
-        Arc::new(SSTImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
+        Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
 
@@ -1336,7 +1345,7 @@ fn test_prewrite_check_max_commit_ts() {
     }
 
     // There shouldn't be locks remaining in the lock table.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
 #[test]
@@ -1435,7 +1444,7 @@ macro_rules! test_func {
 
 macro_rules! test_func_init {
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
             req.set_keys(vec![b"key".to_vec()].into());
@@ -1655,7 +1664,8 @@ fn test_tikv_forwarding() {
     }
 }
 
-/// Test if forwarding works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and
+/// restarted.
 #[test]
 fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
@@ -1744,7 +1754,8 @@ fn test_get_lock_wait_info_api() {
 // Test API version verification for transaction requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
@@ -1822,7 +1833,7 @@ fn test_txn_api_version() {
                 let expect_prefix = format!("Error({}", errcode);
                 assert!(!errs.is_empty(), "case {}", i);
                 assert!(
-                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    errs[0].get_abort().starts_with(&expect_prefix), /* e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 }) */
                     "case {}: errs[0]: {:?}, expected: {}",
                     i,
                     errs[0],
@@ -1947,7 +1958,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will
+        // trigger the limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),
@@ -2007,4 +2019,132 @@ fn test_storage_with_quota_limiter_disable() {
     must_kv_prewrite(&client, ctx, vec![mutation], k, prewrite_start_version);
 
     assert!(begin.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn test_commands_write_detail() {
+    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.pessimistic_txn.pipelined = false;
+        cluster.cfg.pessimistic_txn.in_memory = false;
+    });
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+
+    let check_scan_detail = |sc: &ScanDetailV2| {
+        assert!(sc.get_get_snapshot_nanos() > 0);
+    };
+    let check_write_detail = |wd: &WriteDetail| {
+        assert!(wd.get_store_batch_wait_nanos() > 0);
+        assert!(wd.get_persist_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_leader_wait_nanos() > 0);
+        assert!(wd.get_raft_db_sync_log_nanos() > 0);
+        assert!(wd.get_raft_db_write_memtable_nanos() > 0);
+        assert!(wd.get_commit_log_nanos() > 0);
+        assert!(wd.get_apply_batch_wait_nanos() > 0);
+        assert!(wd.get_apply_log_nanos() > 0);
+        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        assert!(wd.get_apply_write_wal_nanos() > 0);
+        assert!(wd.get_apply_write_memtable_nanos() > 0);
+    };
+
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.set_key(k.clone());
+
+    let mut pessimistic_lock_req = PessimisticLockRequest::default();
+    pessimistic_lock_req.set_context(ctx.clone());
+    pessimistic_lock_req.set_mutations(vec![mutation.clone()].into());
+    pessimistic_lock_req.set_start_version(20);
+    pessimistic_lock_req.set_for_update_ts(20);
+    pessimistic_lock_req.set_primary_lock(k.clone());
+    pessimistic_lock_req.set_lock_ttl(3000);
+    let pessimistic_lock_resp = client.kv_pessimistic_lock(&pessimistic_lock_req).unwrap();
+    check_scan_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_scan_detail_v2(),
+    );
+    check_write_detail(
+        pessimistic_lock_resp
+            .get_exec_details_v2()
+            .get_write_detail(),
+    );
+
+    let mut prewrite_req = PrewriteRequest::default();
+    mutation.set_op(Op::Put);
+    mutation.set_value(v);
+    prewrite_req.set_mutations(vec![mutation].into());
+    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_context(ctx.clone());
+    prewrite_req.set_primary_lock(k.clone());
+    prewrite_req.set_start_version(20);
+    prewrite_req.set_for_update_ts(20);
+    prewrite_req.set_lock_ttl(3000);
+    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    check_scan_detail(prewrite_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(prewrite_resp.get_exec_details_v2().get_write_detail());
+
+    let mut commit_req = CommitRequest::default();
+    commit_req.set_context(ctx);
+    commit_req.set_keys(vec![k].into());
+    commit_req.set_start_version(20);
+    commit_req.set_commit_version(30);
+    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    check_scan_detail(commit_resp.get_exec_details_v2().get_scan_detail_v2());
+    check_write_detail(commit_resp.get_exec_details_v2().get_write_detail());
+}
+
+#[test]
+fn test_rpc_wall_time() {
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let k = b"key".to_vec();
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.key = k;
+    get_req.version = 10;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(
+        get_resp
+            .get_exec_details_v2()
+            .get_time_detail()
+            .get_total_rpc_wall_time_ns()
+            > 0
+    );
+
+    let (mut sender, receiver) = client.batch_commands().unwrap();
+    let mut batch_req = BatchCommandsRequest::default();
+    for i in 0..3 {
+        let mut req = batch_commands_request::Request::default();
+        req.cmd = Some(batch_commands_request::request::Cmd::Get(get_req.clone()));
+        batch_req.mut_requests().push(req);
+        batch_req.mut_request_ids().push(i);
+    }
+    block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+    block_on(sender.close()).unwrap();
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut responses = Vec::new();
+        for r in block_on(
+            receiver
+                .map(move |b| b.unwrap().take_responses())
+                .collect::<Vec<_>>(),
+        ) {
+            responses.extend(r.into_vec());
+        }
+        tx.send(responses).unwrap();
+    });
+    let responses = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(responses.len(), 3);
+    for resp in responses {
+        assert!(
+            resp.get_get()
+                .get_exec_details_v2()
+                .get_time_detail()
+                .get_total_rpc_wall_time_ns()
+                > 0
+        );
+    }
 }

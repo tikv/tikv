@@ -1,42 +1,45 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::mem;
-use std::sync::Arc;
+use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
 
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
-use rand::rngs::StdRng;
-use rand::Rng;
-use tidb_query_common::storage::scanner::{RangesScanner, RangesScannerOptions};
-use tidb_query_common::storage::Range;
-use tidb_query_datatype::codec::datum::{
-    encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG, UINT_FLAG,
+use rand::{rngs::StdRng, Rng};
+use tidb_query_common::storage::{
+    scanner::{RangesScanner, RangesScannerOptions},
+    Range,
 };
-use tidb_query_datatype::codec::table;
-use tidb_query_datatype::def::Collation;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::{
+    codec::{
+        datum::{
+            encode_value, split_datum, Datum, DatumDecoder, DURATION_FLAG, INT_FLAG, NIL_FLAG,
+            UINT_FLAG,
+        },
+        table,
+    },
+    def::Collation,
+    expr::{EvalConfig, EvalContext},
+    FieldTypeAccessor,
+};
 use tidb_query_executors::{
     interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
 };
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
-use tikv_util::metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC};
-use tikv_util::quota_limiter::QuotaLimiter;
-use tikv_util::time::Instant;
+use tikv_util::{
+    metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
+    quota_limiter::QuotaLimiter,
+    time::Instant,
+};
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use yatp::task::future::reschedule;
 
-use super::cmsketch::CmSketch;
-use super::fmsketch::FmSketch;
-use super::histogram::Histogram;
-use crate::coprocessor::dag::TiKVStorage;
-use crate::coprocessor::MEMTRACE_ANALYZE;
-use crate::coprocessor::*;
-use crate::storage::{Snapshot, SnapshotStore, Statistics};
+use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
+use crate::{
+    coprocessor::{dag::TiKvStorage, MEMTRACE_ANALYZE, *},
+    storage::{Snapshot, SnapshotStore, Statistics},
+};
 
 const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
@@ -44,10 +47,11 @@ const ANALYZE_VERSION_V2: i32 = 2;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKVStorage<SnapshotStore<S>>>,
+    storage: Option<TiKvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> AnalyzeContext<S> {
@@ -68,12 +72,15 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req_ctx.access_locks.clone(),
             false,
         );
+        let is_auto_analyze = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
+
         Ok(Self {
             req,
-            storage: Some(TiKVStorage::new(store, false)),
+            storage: Some(TiKvStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
             quota_limiter,
+            is_auto_analyze,
         })
     }
 
@@ -119,7 +126,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TiKVStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TiKvStorage<SnapshotStore<S>>>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -131,9 +138,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         let mut topn_heap = BinaryHeap::new();
-        // cur_val recording the current value's data and its counts when iterating index's rows.
-        // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
-        // top-n information.
+        // cur_val recording the current value's data and its counts when iterating
+        // index's rows. Once we met a new value, the old value will be pushed
+        // into the topn_heap to maintain the top-n information.
         let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
         let top_n_size = req.get_top_n_size() as usize;
         let stats_version = if req.has_version() {
@@ -269,8 +276,15 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let col_req = self.req.take_col_req();
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
-                let mut builder =
-                    RowSampleBuilder::new(col_req, storage, ranges, self.quota_limiter.clone())?;
+
+                let mut builder = RowSampleBuilder::new(
+                    col_req,
+                    storage,
+                    ranges,
+                    self.quota_limiter.clone(),
+                    self.is_auto_analyze,
+                )?;
+
                 let res = AnalyzeContext::handle_full_sampling(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
@@ -303,7 +317,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct RowSampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -311,14 +325,16 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
+        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -343,6 +359,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
+            is_auto_analyze,
         })
     }
 
@@ -374,7 +391,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
                 let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
@@ -427,8 +444,16 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 }
             }
 
-            // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
-            let quota_delay = self.quota_limiter.async_consume(sample).await;
+            // Don't let analyze bandwidth limit the quota limiter, this is already limited
+            // in rate limiter.
+            let quota_delay = {
+                if !self.is_auto_analyze {
+                    self.quota_limiter.consume_sample(sample, true).await
+                } else {
+                    self.quota_limiter.consume_sample(sample, false).await
+                }
+            };
+
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                     .get(ThrottleType::analyze_full_sampling)
@@ -724,6 +749,10 @@ impl RowSampleCollector for ReservoirRowSampleCollector {
     }
 
     fn sampling(&mut self, data: Vec<Vec<u8>>) {
+        // We should tolerate the abnormal case => `self.max_sample_size == 0`.
+        if self.max_sample_size == 0 {
+            return;
+        }
         let mut need_push = false;
         let cur_rng = self.base.rng.gen_range(0, i64::MAX);
         if self.samples.len() < self.max_sample_size {
@@ -768,7 +797,7 @@ impl Drop for BaseRowSampleCollector {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKVStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -789,7 +818,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,
-        storage: TiKVStorage<SnapshotStore<S>>,
+        storage: TiKvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
@@ -830,22 +859,21 @@ impl<S: Snapshot> SampleBuilder<S> {
         })
     }
 
-    // `collect_columns_stats` returns the sample collectors which contain total count,
-    // null count, distinct values count and count-min sketch. And it also returns the statistic
-    // builder for PK which contains the histogram. When PK is common handle, it returns index stats
-    // for PK.
+    // `collect_columns_stats` returns the sample collectors which contain total
+    // count, null count, distinct values count and count-min sketch. And it
+    // also returns the statistic builder for PK which contains the histogram.
+    // When PK is common handle, it returns index stats for PK.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(
         &mut self,
     ) -> Result<(AnalyzeColumnsResult, Option<AnalyzeIndexResult>)> {
-        use tidb_query_datatype::codec::collation::Collator;
-        use tidb_query_datatype::match_template_collator;
+        use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 
         // The number of columns need to be sampled is `columns_without_handle_len`.
-        // It equals to `columns_info.len()` if the first column doesn't contain a handle.
-        // Otherwise, it equals to `columns_info.len() - 1`.
+        // It equals to `columns_info.len()` if the first column doesn't contain a
+        // handle. Otherwise, it equals to `columns_info.len() - 1`.
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
@@ -888,9 +916,9 @@ impl<S: Snapshot> SampleBuilder<S> {
             }
 
             if self.analyze_common_handle {
-                // cur_val recording the current value's data and its counts when iterating index's rows.
-                // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
-                // top-n information.
+                // cur_val recording the current value's data and its counts when iterating
+                // index's rows. Once we met a new value, the old value will be pushed into the
+                // topn_heap to maintain the top-n information.
                 let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
                 let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
@@ -952,16 +980,21 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut val,
                     )?;
 
-                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
-                    // We need this because we must ensure we are using the same encoding method when we are querying values from
-                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
-                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
-                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                    // This is a workaround for different encoding methods used by TiDB and TiKV for
+                    // CM Sketch. We need this because we must ensure we are using the same encoding
+                    // method when we are querying values from CM Sketch (in TiDB) and inserting
+                    // values into CM Sketch (here).
+                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and
+                    // query CM Sketch using bytes encoded by tablecodec.EncodeValue() in TiDB.
+                    // Their results are different after row format becomes ver 2.
                     //
-                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
-                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
-                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
-                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    // Here we:
+                    // - convert INT bytes to VAR_INT bytes
+                    // - convert UINT bytes to VAR_UINT bytes
+                    // - "flatten" the duration value from DURATION bytes into i64 value, then
+                    //   convert it to VAR_INT bytes.
+                    // These are the only 3 cases we need to care about according to TiDB's
+                    // tablecodec.EncodeValue() and TiKV's V1CompatibleEncoder::write_v2_as_datum().
                     val = match val[0] {
                         INT_FLAG | UINT_FLAG | DURATION_FLAG => {
                             let mut mut_val = &val[..];
@@ -1010,7 +1043,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     }
 }
 
-/// `SampleCollector` will collect Samples and calculate the count, ndv and total size of an attribute.
+/// `SampleCollector` will collect Samples and calculate the count, ndv and
+/// total size of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,
@@ -1183,11 +1217,10 @@ impl AnalyzeMixedResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use ::std::collections::HashMap;
-    use tidb_query_datatype::codec::datum;
-    use tidb_query_datatype::codec::datum::Datum;
+    use tidb_query_datatype::codec::{datum, datum::Datum};
+
+    use super::*;
 
     #[test]
     fn test_sample_collector() {
@@ -1306,6 +1339,35 @@ mod tests {
                 "v: {}",
                 v
             );
+        }
+    }
+
+    #[test]
+    fn test_abnormal_sampling() {
+        let sample_num = 0; // abnormal.
+        let row_num = 100;
+        let mut nums: Vec<Vec<u8>> = Vec::with_capacity(row_num);
+        for i in 0..row_num {
+            nums.push(
+                datum::encode_value(&mut EvalContext::default(), &[Datum::I64(i as i64)]).unwrap(),
+            );
+        }
+        {
+            // Test for ReservoirRowSampleCollector
+            let mut collector = ReservoirRowSampleCollector::new(sample_num, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            assert_eq!(collector.samples.len(), 0);
+        }
+        {
+            // Test for BernoulliRowSampleCollector
+            let mut collector =
+                BernoulliRowSampleCollector::new(sample_num as f64 / row_num as f64, 1000, 1);
+            for row in &nums {
+                collector.sampling([row.clone()].to_vec());
+            }
+            assert_eq!(collector.samples.len(), 0);
         }
     }
 }

@@ -2,13 +2,19 @@
 
 //! A sample Handler for test and micro-benchmark purpose.
 
-use crate::*;
+use std::{
+    borrow::Cow,
+    ops::DerefMut,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+
 use derive_more::{Add, AddAssign};
-use std::borrow::Cow;
-use std::ops::DerefMut;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use tikv_util::mpsc;
+
+use crate::*;
 
 /// Message `Runner` can accepts.
 pub enum Message {

@@ -3,27 +3,28 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
-use std::future::Future;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
-use prometheus::{Histogram, IntCounter, IntGauge};
+use prometheus::{IntCounter, IntGauge};
+use tracker::TrackedFuture;
 use yatp::task::future;
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
 
 use super::metrics;
-use crate::time::Instant;
 
 #[derive(Clone)]
 struct Env {
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
-    metrics_pool_schedule_duration: Histogram,
 }
 
 #[derive(Clone)]
@@ -46,8 +47,6 @@ impl FuturePool {
             metrics_running_task_count: metrics::FUTUREPOOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
             metrics_handled_task_count: metrics::FUTUREPOOL_HANDLED_TASK_VEC
-                .with_label_values(&[name]),
-            metrics_pool_schedule_duration: metrics::FUTUREPOOL_SCHEDULE_DURATION_VEC
                 .with_label_values(&[name]),
         };
         FuturePool {
@@ -73,8 +72,8 @@ impl FuturePool {
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
         self.inner.get_running_task_count()
     }
 
@@ -83,10 +82,11 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(future)
+        self.inner.spawn(TrackedFuture::new(future))
     }
 
-    /// Spawns a future in the pool and returns a handle to the result of the future.
+    /// Spawns a future in the pool and returns a handle to the result of the
+    /// future.
     ///
     /// The future will not be executed if the handle is not polled.
     pub fn spawn_handle<F>(
@@ -97,7 +97,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(future)
+        self.inner.spawn_handle(TrackedFuture::new(future))
     }
 }
 
@@ -117,8 +117,8 @@ impl PoolInner {
     }
 
     fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
+        // As long as different future pool has different name prefix, we can safely use
+        // the value in metrics.
         self.env.metrics_running_task_count.get() as usize
     }
 
@@ -147,8 +147,6 @@ impl PoolInner {
     where
         F: Future + Send + 'static,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -157,7 +155,6 @@ impl PoolInner {
         metrics_running_task_count.inc();
 
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let _ = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -173,8 +170,6 @@ impl PoolInner {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        let timer = Instant::now_coarse();
-        let h_schedule = self.env.metrics_pool_schedule_duration.clone();
         let metrics_handled_task_count = self.env.metrics_handled_task_count.clone();
         let metrics_running_task_count = self.env.metrics_running_task_count.clone();
 
@@ -183,7 +178,6 @@ impl PoolInner {
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
         self.pool.spawn(async move {
-            h_schedule.observe(timer.saturating_elapsed_secs());
             let res = future.await;
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
@@ -213,18 +207,21 @@ impl std::error::Error for Full {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::sync::mpsc;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Mutex,
+        },
+        thread,
+        time::Duration,
     };
-    use std::thread;
-    use std::time::Duration;
 
-    use super::super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL};
     use futures::executor::block_on;
+
+    use super::{
+        super::{DefaultTicker, PoolTicker, YatpPoolBuilder as Builder, TICK_INTERVAL},
+        *,
+    };
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
         block_on(
@@ -302,7 +299,8 @@ mod tests {
         // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
         assert!(try_recv_tick().is_err());
 
-        // Even if long enough time has elapsed, tick is not emitted until next task arrives
+        // Even if long enough time has elapsed, tick is not emitted until next task
+        // arrives
         thread::sleep(TICK_INTERVAL * 2);
         assert!(try_recv_tick().is_err());
 
@@ -476,10 +474,10 @@ mod tests {
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
 
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
-        assert!(rx.recv().is_ok());
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
+        rx.recv().unwrap().unwrap();
 
         // no more results
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());

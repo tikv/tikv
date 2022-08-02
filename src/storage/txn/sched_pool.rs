@@ -1,27 +1,28 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
-use std::mem;
-use std::sync::{Arc, Mutex};
-use tikv_util::sys::SysQuota;
-use tikv_util::time::Duration;
+use std::{
+    cell::RefCell,
+    mem,
+    sync::{Arc, Mutex},
+};
 
 use collections::HashMap;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use kvproto::pdpb::QueryKind;
 use prometheus::local::*;
 use raftstore::store::WriteStats;
-use tikv_util::yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder};
-
-use crate::storage::kv::{
-    destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics,
+use tikv_util::{
+    sys::SysQuota,
+    yatp_pool::{FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use crate::storage::metrics::*;
+
+use crate::storage::{
+    kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter, Statistics},
+    metrics::*,
+};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
     command_keyread_histogram_vec: LocalHistogramVec,
     local_write_stats: WriteStats,
 }
@@ -30,8 +31,6 @@ thread_local! {
      static TLS_SCHED_METRICS: RefCell<SchedLocalMetrics> = RefCell::new(
         SchedLocalMetrics {
             local_scan_details: HashMap::default(),
-            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
-            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
             command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_write_stats:WriteStats::default(),
         }
@@ -62,7 +61,8 @@ impl SchedPool {
         name_prefix: &str,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases that we need more thread than cpu num.
+        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
+        // that we need more thread than cpu num.
         let max_pool_size = std::cmp::max(
             pool_size,
             std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
@@ -74,7 +74,7 @@ impl SchedPool {
             // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
             })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
@@ -108,8 +108,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
                 }
             }
         }
-        m.processing_read_duration.flush();
-        m.processing_write_duration.flush();
         m.command_keyread_histogram_vec.flush();
 
         // Report PD metrics
@@ -125,15 +123,6 @@ pub fn tls_collect_query(region_id: u64, kind: QueryKind) {
     TLS_SCHED_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         m.local_write_stats.add_query_num(region_id, kind);
-    });
-}
-
-pub fn tls_collect_read_duration(cmd: &str, duration: Duration) {
-    TLS_SCHED_METRICS.with(|m| {
-        m.borrow_mut()
-            .processing_read_duration
-            .with_label_values(&[cmd])
-            .observe(tikv_util::time::duration_to_sec(duration))
     });
 }
 

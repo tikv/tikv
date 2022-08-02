@@ -1,13 +1,24 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::*;
-use kvproto::raft_serverpb::RaftLocalState;
+use kvproto::{
+    metapb::Region,
+    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+};
 use raft::eraftpb::Entry;
+
+use crate::*;
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
+    fn is_empty(&self) -> Result<bool>;
+
+    fn get_store_ident(&self) -> Result<Option<StoreIdent>>;
+    fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
+
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
+    fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
+    fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
@@ -25,13 +36,36 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_all_entries_to(&self, region_id: u64, buf: &mut Vec<Entry>) -> Result<()>;
 }
 
-pub struct RaftLogGCTask {
+pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
+    /// Scan all log entries of given raft group in order.
+    fn scan_entries<F>(&self, raft_group_id: u64, f: F) -> Result<()>
+    where
+        F: FnMut(&Entry) -> Result<bool>;
+
+    /// Put all data of given raft group into a log batch.
+    fn dump_all_data(&self, region_id: u64) -> <Self as RaftEngine>::LogBatch {
+        let mut batch = self.log_batch(0);
+        let mut entries = Vec::new();
+        self.scan_entries(region_id, |e| {
+            entries.push(e.clone());
+            Ok(true)
+        })
+        .unwrap();
+        batch.append(region_id, entries).unwrap();
+        if let Some(state) = self.get_raft_state(region_id).unwrap() {
+            batch.put_raft_state(region_id, &state).unwrap();
+        }
+        batch
+    }
+}
+
+pub struct RaftLogGcTask {
     pub raft_group_id: u64,
     pub from: u64,
     pub to: u64,
 }
 
-pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
+pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send + 'static {
     type LogBatch: RaftLogBatch;
 
     fn log_batch(&self, capacity: usize) -> Self::LogBatch;
@@ -65,13 +99,15 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Note: `RaftLocalState` won't be updated in this call.
     fn append(&self, raft_group_id: u64, entries: Vec<Entry>) -> Result<usize>;
 
+    fn put_store_ident(&self, ident: &StoreIdent) -> Result<()>;
+
     fn put_raft_state(&self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
 
-    /// Like `cut_logs` but the range could be very large. Return the deleted count.
-    /// Generally, `from` can be passed in `0`.
+    /// Like `cut_logs` but the range could be very large. Return the deleted
+    /// count. Generally, `from` can be passed in `0`.
     fn gc(&self, raft_group_id: u64, from: u64, to: u64) -> Result<usize>;
 
-    fn batch_gc(&self, tasks: Vec<RaftLogGCTask>) -> Result<usize> {
+    fn batch_gc(&self, tasks: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut total = 0;
         for task in tasks {
             total += self.gc(task.raft_group_id, task.from, task.to)?;
@@ -82,14 +118,6 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.
     fn purge_expired_files(&self) -> Result<Vec<u64>>;
-
-    /// The `RaftEngine` has a builtin entry cache or not.
-    fn has_builtin_entry_cache(&self) -> bool {
-        false
-    }
-
-    /// GC the builtin entry cache.
-    fn gc_entry_cache(&self, _raft_group_id: u64, _to: u64) {}
 
     fn flush_metrics(&self, _instance: &str) {}
     fn flush_stats(&self) -> Option<CacheStats> {
@@ -102,6 +130,14 @@ pub trait RaftEngine: RaftEngineReadOnly + Clone + Sync + Send + 'static {
     fn dump_stats(&self) -> Result<String>;
 
     fn get_engine_size(&self) -> Result<u64>;
+
+    /// Visit all available raft groups.
+    ///
+    /// If any error is returned, the iteration will stop.
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>;
 }
 
 pub trait RaftLogBatch: Send {
@@ -111,7 +147,14 @@ pub trait RaftLogBatch: Send {
     /// Remove Raft logs in [`from`, `to`) which will be overwritten later.
     fn cut_logs(&mut self, raft_group_id: u64, from: u64, to: u64);
 
+    fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()>;
+
+    fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()>;
+    fn remove_prepare_bootstrap_region(&mut self) -> Result<()>;
+
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
+    fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
+    fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
 
     /// The data size of this RaftLogBatch.
     fn persist_size(&self) -> usize;
@@ -120,7 +163,7 @@ pub trait RaftLogBatch: Send {
     fn is_empty(&self) -> bool;
 
     /// Merge another RaftLogBatch to itself.
-    fn merge(&mut self, _: Self);
+    fn merge(&mut self, _: Self) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Default)]

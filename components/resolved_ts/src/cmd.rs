@@ -2,8 +2,10 @@
 
 use collections::HashMap;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::errorpb;
-use kvproto::raft_cmdpb::{AdminCmdType, CmdType, Request};
+use kvproto::{
+    errorpb,
+    raft_cmdpb::{AdminCmdType, CmdType, Request},
+};
 use raftstore::coprocessor::{Cmd, CmdBatch, ObserveLevel};
 use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
@@ -47,6 +49,7 @@ impl ChangeLog {
             .map(|cmd| {
                 let Cmd {
                     index,
+                    term: _,
                     mut request,
                     mut response,
                 } = cmd;
@@ -132,7 +135,8 @@ impl ChangeLog {
 
 pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<Write> {
     let write = WriteRef::parse(value).ok()?.to_owned();
-    // Drop the record it self but keep only the overlapped rollback information if gc_fence exists.
+    // Drop the record it self but keep only the overlapped rollback information if
+    // gc_fence exists.
     if is_apply && write.gc_fence.is_some() {
         // `gc_fence` is set means the write record has been rewritten.
         // Currently the only case is writing overlapped_rollback. And in this case
@@ -188,7 +192,8 @@ struct RowChange {
 
 fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
     let mut changes: HashMap<Key, RowChange> = HashMap::default();
-    // The changes about default cf was recorded here and need to be matched with a `write` or a `lock`.
+    // The changes about default cf was recorded here and need to be matched with a
+    // `write` or a `lock`.
     let mut unmatched_default = HashMap::default();
     for mut req in requests {
         match req.get_cmd_type() {
@@ -251,8 +256,8 @@ fn group_row_changes(requests: Vec<Request>) -> HashMap<Key, RowChange> {
     changes
 }
 
-/// Filter non-lock related data (i.e `default_cf` data), the implement is subject to
-/// how `group_row_changes` and `encode_rows` encode `ChangeRow`
+/// Filter non-lock related data (i.e `default_cf` data), the implement is
+/// subject to how `group_row_changes` and `encode_rows` encode `ChangeRow`
 pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
     if cmd_batch.is_empty() {
         return None;
@@ -282,12 +287,15 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::AssertionLevel;
-    use tikv::storage::kv::{MockEngineBuilder, TestEngineBuilder};
-    use tikv::storage::mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader};
-    use tikv::storage::txn::commands::one_pc_commit;
-    use tikv::storage::txn::tests::*;
-    use tikv::storage::txn::{prewrite, CommitKind, TransactionKind, TransactionProperties};
-    use tikv::storage::Engine;
+    use tikv::storage::{
+        kv::{MockEngineBuilder, TestEngineBuilder},
+        mvcc::{tests::write, Mutation, MvccTxn, SnapshotReader},
+        txn::{
+            commands::one_pc_commit, prewrite, tests::*, CommitKind, TransactionKind,
+            TransactionProperties,
+        },
+        Engine,
+    };
     use tikv_kv::Modify;
     use txn_types::{Key, LockType, WriteType};
 

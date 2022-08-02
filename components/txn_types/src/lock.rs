@@ -1,13 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::timestamp::{TimeStamp, TsSet};
-use crate::types::{Key, Mutation, Value, SHORT_VALUE_PREFIX};
-use crate::{Error, ErrorInner, Result};
+use std::{borrow::Cow, mem::size_of};
+
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op};
-use std::{borrow::Cow, mem::size_of};
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN};
+use tikv_util::codec::{
+    bytes::{self, BytesEncoder},
+    number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+};
+
+use crate::{
+    timestamp::{TimeStamp, TsSet},
+    types::{Key, Mutation, Value, SHORT_VALUE_PREFIX},
+    Error, ErrorInner, Result,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -325,7 +331,8 @@ impl Lock {
         info
     }
 
-    /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
+    /// Checks whether the lock conflicts with the given `ts`. If `ts ==
+    /// TimeStamp::max()`, the primary lock will be ignored.
     fn check_ts_conflict_si(
         lock: Cow<'_, Self>,
         key: &Key,
@@ -352,8 +359,9 @@ impl Lock {
         let raw_key = key.to_raw()?;
 
         if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
-            // When `ts == TimeStamp::max()` (which means to get latest committed version for
-            // primary key), and current key is the primary key, we ignore this lock.
+            // When `ts == TimeStamp::max()` (which means to get latest committed version
+            // for primary key), and current key is the primary key, we ignore
+            // this lock.
             return Ok(());
         }
 
@@ -415,8 +423,8 @@ impl Lock {
     }
 }
 
-/// A specialized lock only for pessimistic lock. This saves memory for cases that only
-/// pessimistic locks exist.
+/// A specialized lock only for pessimistic lock. This saves memory for cases
+/// that only pessimistic locks exist.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PessimisticLock {
     /// The primary key in raw format.
@@ -797,7 +805,8 @@ mod tests {
         )
         .unwrap();
 
-        // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
+        // Ignore the primary lock when reading the latest committed version by setting
+        // u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
         Lock::check_ts_conflict(
@@ -809,7 +818,8 @@ mod tests {
         )
         .unwrap();
 
-        // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
+        // Should not ignore the primary lock of an async commit transaction even if
+        // setting u64::MAX as ts
         let async_commit_lock = lock.clone().use_async_commit(vec![]);
         Lock::check_ts_conflict(
             Cow::Borrowed(&async_commit_lock),

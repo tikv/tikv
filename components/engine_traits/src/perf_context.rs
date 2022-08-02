@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use tikv_util::numeric_enum_serializing_mod;
+use tracker::TrackerToken;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PerfLevel {
@@ -39,14 +40,19 @@ pub trait PerfContextExt {
     fn get_perf_context(&self, level: PerfLevel, kind: PerfContextKind) -> Self::PerfContext;
 }
 
-/// The raftstore subsystem the PerfContext is being created for.
+/// The subsystem the PerfContext is being created for.
 ///
 /// This is a leaky abstraction that supports the encapsulation of metrics
-/// reporting by the two raftstore subsystems that use `report_metrics`.
-#[derive(Eq, PartialEq, Copy, Clone)]
+/// reporting by the subsystems that use PerfContext.
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,
+    /// Commands in tikv::storage, the inner str is the command tag.
+    Storage(&'static str),
+    /// Coprocessor requests in tikv::coprocessor, the inner str is the request
+    /// type.
+    Coprocessor(&'static str),
 }
 
 /// Reports metrics to prometheus
@@ -57,6 +63,6 @@ pub trait PerfContext: Send {
     /// Reinitializes statistics and the perf level
     fn start_observe(&mut self);
 
-    /// Reports the current collected metrics to prometheus
-    fn report_metrics(&mut self);
+    /// Reports the current collected metrics to prometheus and trackers
+    fn report_metrics(&mut self, trackers: &[TrackerToken]);
 }

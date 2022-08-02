@@ -1,20 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::error::Result;
-use crate::metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM};
-use crate::reporter::data_sink::DataSink;
-use crate::reporter::data_sink_reg::{DataSinkGuard, DataSinkRegHandle};
-
-use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    fmt::{self, Display, Formatter},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::SinkExt;
 use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
 use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
-use tikv_util::warn;
-use tikv_util::worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler};
+use tikv_util::{
+    warn,
+    worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler},
+};
+
+use crate::{
+    error::Result,
+    metrics::{IGNORED_DATA_COUNTER, REPORT_DATA_COUNTER, REPORT_DURATION_HISTOGRAM},
+    reporter::{
+        data_sink::DataSink,
+        data_sink_reg::{DataSinkGuard, DataSinkRegHandle},
+    },
+};
 
 impl Runnable for SingleTargetDataSink {
     type Task = Task;
@@ -31,8 +41,8 @@ impl Runnable for SingleTargetDataSink {
     }
 }
 
-/// `SingleTargetDataSink` is the default implementation of [DataSink], which uses gRPC
-/// to report data to the remote end.
+/// `SingleTargetDataSink` is the default implementation of [DataSink], which
+/// uses gRPC to report data to the remote end.
 pub struct SingleTargetDataSink {
     scheduler: Scheduler<Task>,
     data_sink_reg: DataSinkRegHandle,
@@ -236,8 +246,8 @@ impl Drop for Guard {
     }
 }
 
-/// Constructs a default [SingleTargetDataSink], start it and return the corresponding [AddressChangeNotifier]
-/// and [LazyWorker].
+/// Constructs a default [SingleTargetDataSink], start it and return the
+/// corresponding [AddressChangeNotifier] and [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_single_target(

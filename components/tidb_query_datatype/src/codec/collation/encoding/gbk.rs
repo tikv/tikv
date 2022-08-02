@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use encoding_rs::GBK;
+
 use super::*;
 use crate::codec::data_type::{BytesGuard, BytesWriter};
-use encoding_rs::GBK;
 
 #[derive(Debug)]
 pub struct EncodingGBK;
@@ -12,7 +13,10 @@ impl Encoding for EncodingGBK {
     fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         match GBK.decode_without_bom_handling_and_without_replacement(data) {
             Some(v) => Ok(Bytes::from(v.as_bytes())),
-            None => Err(Error::cannot_convert_string("gbk")),
+            None => Err(Error::cannot_convert_string(
+                format_invalid_char(data).as_str(),
+                "gbk",
+            )),
         }
     }
 

@@ -1,11 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
-use crate::{Callback, ExtCallback, Modify, SnapContext, WriteData};
-use crate::{Engine, RocksEngine};
+use std::{
+    collections::LinkedList,
+    sync::{Arc, Mutex},
+};
+
 use kvproto::kvrpcpb::Context;
-use std::collections::LinkedList;
-use std::sync::{Arc, Mutex};
+
+use super::Result;
+use crate::{Callback, Engine, ExtCallback, Modify, RocksEngine, SnapContext, WriteData};
 
 /// A mock engine is a simple wrapper around RocksEngine
 /// but with the ability to assert the modifies,
@@ -78,7 +81,8 @@ impl ExpectedWrite {
     }
 }
 
-/// `ExpectedWriteList` represents a list of writes expected to write to the engine
+/// `ExpectedWriteList` represents a list of writes expected to write to the
+/// engine
 struct ExpectedWriteList(Mutex<LinkedList<ExpectedWrite>>);
 
 // We implement drop here instead of on MockEngine

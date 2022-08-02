@@ -1,11 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use server::setup::initial_logger;
-use std::borrow::ToOwned;
-use std::error::Error;
-use std::str::FromStr;
-use std::{str, u64};
+use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 
+use server::setup::initial_logger;
 use tikv::config::TiKvConfig;
 
 const LOG_DIR: &str = "./ctl-engine-info-log";
@@ -13,7 +10,7 @@ const LOG_DIR: &str = "./ctl-engine-info-log";
 #[allow(clippy::field_reassign_with_default)]
 pub fn init_ctl_logger(level: &str) {
     let mut cfg = TiKvConfig::default();
-    cfg.log.level = slog::Level::from_str(level).unwrap();
+    cfg.log.level = slog::Level::from_str(level).unwrap().into();
     cfg.rocksdb.info_log_dir = LOG_DIR.to_owned();
     cfg.raftdb.info_log_dir = LOG_DIR.to_owned();
     initial_logger(&cfg);

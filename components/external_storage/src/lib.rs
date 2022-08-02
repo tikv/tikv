@@ -8,25 +8,29 @@ extern crate slog_global;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-use std::io::{self, Write};
-use std::marker::Unpin;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    io::{self, Write},
+    marker::Unpin,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
-use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
+use encryption::{from_engine_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
-use tikv_util::stream::{block_on_external_io, READ_BUF_SIZE};
-use tikv_util::time::{Instant, Limiter};
+use openssl::hash::{Hasher, MessageDigest};
+use tikv_util::{
+    stream::{block_on_external_io, READ_BUF_SIZE},
+    time::{Instant, Limiter},
+};
 use tokio::time::timeout;
 
 mod hdfs;
-pub use hdfs::HdfsConfig;
-pub use hdfs::HdfsStorage;
-mod local;
+pub use hdfs::{HdfsConfig, HdfsStorage};
+pub mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
@@ -46,9 +50,9 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 }
 
 /// UnpinReader is a simple wrapper for AsyncRead + Unpin + Send.
-/// This wrapper would remove the lifetime at the argument of the generted async function
-/// in order to make rustc happy. (And reduce the length of signture of write.)
-/// see https://github.com/rust-lang/rust/issues/63033
+/// This wrapper would remove the lifetime at the argument of the generated
+/// async function in order to make rustc happy. (And reduce the length of
+/// signature of write.) see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
 
 #[derive(Debug, Default)]
@@ -77,6 +81,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
         storage_name: &str,
         restore_name: std::path::PathBuf,
         expected_length: u64,
+        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
@@ -94,6 +99,7 @@ pub trait ExternalStorage: 'static + Send + Sync {
             output,
             speed_limiter,
             expected_length,
+            expected_sha256,
             min_read_speed,
         ))
     }
@@ -137,8 +143,8 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
     }
 }
 
-// Wrap the reader with file_crypter
-// Return the reader directly if file_crypter is None
+/// Wrap the reader with file_crypter.
+/// Return the reader directly if file_crypter is None.
 pub fn encrypt_wrap_reader<'a>(
     file_crypter: Option<FileEncryptionInfo>,
     reader: Box<dyn AsyncRead + Unpin + 'a>,
@@ -146,7 +152,7 @@ pub fn encrypt_wrap_reader<'a>(
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
-            encryption_method_from_db_encryption_method(x.method),
+            from_engine_encryption_method(x.method),
             &x.key,
             Iv::from_slice(&x.iv)?,
         )?),
@@ -161,6 +167,7 @@ pub async fn read_external_storage_into_file(
     output: &mut dyn Write,
     speed_limiter: &Limiter,
     expected_length: u64,
+    expected_sha256: Option<Vec<u8>>,
     min_read_speed: usize,
 ) -> io::Result<()> {
     let dur = Duration::from_secs((READ_BUF_SIZE / min_read_speed) as u64);
@@ -168,6 +175,12 @@ pub async fn read_external_storage_into_file(
     // do the I/O copy from external_storage to the local file.
     let mut buffer = vec![0u8; READ_BUF_SIZE];
     let mut file_length = 0;
+    let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("openssl hasher failed to init: {}", err),
+        )
+    })?;
 
     loop {
         // separate the speed limiting from actual reading so it won't
@@ -180,6 +193,14 @@ pub async fn read_external_storage_into_file(
         }
         speed_limiter.consume(bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
+        if expected_sha256.is_some() {
+            hasher.update(&buffer[..bytes_read]).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher udpate failed: {}", err),
+                )
+            })?;
+        }
         file_length += bytes_read as u64;
     }
 
@@ -191,6 +212,27 @@ pub async fn read_external_storage_into_file(
                 file_length, expected_length
             ),
         ));
+    }
+
+    if let Some(expected_s) = expected_sha256 {
+        let cal_sha256 = hasher.finish().map_or_else(
+            |err| {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("openssl hasher finish failed: {}", err),
+                ))
+            },
+            |bytes| Ok(bytes.to_vec()),
+        )?;
+        if !expected_s.eq(&cal_sha256) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "sha256 not match, expect: {:?}, calculate: {:?}",
+                    expected_s, cal_sha256,
+                ),
+            ));
+        }
     }
 
     Ok(())

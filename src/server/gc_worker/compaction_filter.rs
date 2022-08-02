@@ -1,50 +1,63 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::Cell;
-use std::ffi::CString;
-use std::mem;
-use std::result::Result;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use engine_rocks::raw::{
-    new_compaction_filter_raw, CompactionFilter, CompactionFilterContext, CompactionFilterDecision,
-    CompactionFilterFactory, CompactionFilterValueType, DBCompactionFilter,
+use std::{
+    cell::Cell,
+    ffi::CString,
+    mem,
+    result::Result,
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
-use engine_rocks::{RocksEngine, RocksMvccProperties, RocksWriteBatch};
+
+use engine_rocks::{
+    raw::{
+        new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
+        CompactionFilterDecision, CompactionFilterFactory, CompactionFilterValueType,
+        DBCompactionFilter,
+    },
+    RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
+};
 use engine_traits::{
     KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::time::Instant;
-use tikv_util::worker::{ScheduleError, Scheduler};
+use tikv_util::{
+    time::Instant,
+    worker::{ScheduleError, Scheduler},
+};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
-use crate::server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager};
-use crate::storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
+use crate::{
+    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager},
+    storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
+};
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
-const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
+pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 
-// The default version that can enable compaction filter for GC. This is necessary because after
-// compaction filter is enabled, it's impossible to fallback to ealier version which modifications
-// of GC are distributed to other replicas by Raft.
+// The default version that can enable compaction filter for GC. This is
+// necessary because after compaction filter is enabled, it's impossible to
+// fallback to earlier version which modifications of GC are distributed to
+// other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
-// Global context to create a compaction filter for write CF. It's necessary as these fields are
-// not available when constructing `WriteCompactionFilterFactory`.
-struct GcContext {
-    db: RocksEngine,
-    store_id: u64,
-    safe_point: Arc<AtomicU64>,
+// Global context to create a compaction filter for write CF. It's necessary as
+// these fields are not available when constructing
+// `WriteCompactionFilterFactory`.
+pub struct GcContext {
+    pub(crate) db: RocksEngine,
+    pub(crate) store_id: u64,
+    pub(crate) safe_point: Arc<AtomicU64>,
     cfg_tracker: GcWorkerConfigManager,
     feature_gate: FeatureGate,
-    gc_scheduler: Scheduler<GcTask<RocksEngine>>,
-    region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
+    pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
+    pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
@@ -53,16 +66,16 @@ struct GcContext {
 static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 
 lazy_static! {
-    static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
+    pub static ref GC_CONTEXT: Mutex<Option<GcContext>> = Mutex::new(None);
 
     // Filtered keys in `WriteCompactionFilter::filter_v2`.
-    static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_FILTERED: IntCounter = register_int_counter!(
         "tikv_gc_compaction_filtered",
         "Filtered versions by compaction"
     )
     .unwrap();
     // A counter for errors met by `WriteCompactionFilter`.
-    static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
+    pub static ref GC_COMPACTION_FAILURE: IntCounterVec = register_int_counter_vec!(
         "tikv_gc_compaction_failure",
         "Compaction filter meets failure",
         &["type"]
@@ -82,7 +95,7 @@ lazy_static! {
 
 
     // `WriteType::Rollback` and `WriteType::Lock` are handled in different ways.
-    static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
+    pub static ref GC_COMPACTION_MVCC_ROLLBACK: IntCounter = register_int_counter!(
         "tikv_gc_compaction_mvcc_rollback",
         "Compaction of mvcc rollbacks"
     )
@@ -256,7 +269,7 @@ struct WriteCompactionFilter {
     is_bottommost_level: bool,
     encountered_errors: bool,
 
-    write_batch: RocksWriteBatch,
+    write_batch: RocksWriteBatchVec,
     gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     // A key batch which is going to be sent to the GC worker.
     mvcc_deletions: Vec<Key>,
@@ -327,8 +340,8 @@ impl WriteCompactionFilter {
         }
     }
 
-    // `log_on_error` indicates whether to print an error log on scheduling failures.
-    // It's only enabled for `GcTask::OrphanVersions`.
+    // `log_on_error` indicates whether to print an error log on scheduling
+    // failures. It's only enabled for `GcTask::OrphanVersions`.
     fn schedule_gc_task(&self, task: GcTask<RocksEngine>, log_on_error: bool) {
         match self.gc_scheduler.schedule(task) {
             Ok(_) => {}
@@ -421,7 +434,7 @@ impl WriteCompactionFilter {
         }
         self.filtered += 1;
         self.handle_filtered_write(write)?;
-        self.flush_pending_writes_if_need(false /*force*/)?;
+        self.flush_pending_writes_if_need(false /* force */)?;
         let decision = if self.remove_older {
             // Use `Decision::RemoveAndSkipUntil` instead of `Decision::Remove` to avoid
             // leaving tombstones, which can only be freed at the bottommost level.
@@ -450,13 +463,16 @@ impl WriteCompactionFilter {
         }
 
         fn do_flush(
-            wb: &RocksWriteBatch,
+            wb: &RocksWriteBatchVec,
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
-            let _io_type_guard = WithIOType::new(IOType::Gc);
+            let _io_type_guard = WithIoType::new(IoType::Gc);
             fail_point!("write_compaction_filter_flush_write_batch", true, |_| {
                 Err(engine_traits::Error::Engine(
-                    "Ingested fail point".to_string(),
+                    engine_traits::Status::with_error(
+                        engine_traits::Code::IoError,
+                        "Ingested fail point",
+                    ),
                 ))
             });
             wb.write_opt(wopts)
@@ -519,18 +535,18 @@ impl WriteCompactionFilter {
     }
 }
 
-struct CompactionFilterStats {
-    versions: Cell<usize>, // Total stale versions meet by compaction filters.
-    filtered: Cell<usize>, // Filtered versions by compaction filters.
-    last_report: Cell<Instant>,
+pub struct CompactionFilterStats {
+    pub versions: Cell<usize>, // Total stale versions meet by compaction filters.
+    pub filtered: Cell<usize>, // Filtered versions by compaction filters.
+    pub last_report: Cell<Instant>,
 }
 impl CompactionFilterStats {
-    fn need_report(&self) -> bool {
+    pub fn need_report(&self) -> bool {
         self.versions.get() >= 1024 * 1024 // 1M versions.
             || self.last_report.get().saturating_elapsed() >= Duration::from_secs(60)
     }
 
-    fn prepare_report(&self) -> (usize, usize) {
+    pub fn prepare_report(&self) -> (usize, usize) {
         let versions = self.versions.replace(0);
         let filtered = self.filtered.replace(0);
         self.last_report.set(Instant::now());
@@ -552,8 +568,8 @@ thread_local! {
 }
 
 impl Drop for WriteCompactionFilter {
-    // NOTE: it's required that `CompactionFilter` is dropped before the compaction result
-    // becomes installed into the DB instance.
+    // NOTE: it's required that `CompactionFilter` is dropped before the compaction
+    // result becomes installed into the DB instance.
     fn drop(&mut self) {
         if self.mvcc_deletion_overlaps.take() == Some(0) {
             self.handle_bottommost_delete();
@@ -638,7 +654,7 @@ fn check_need_gc(
     ratio_threshold: f64,
     context: &CompactionFilterContext,
 ) -> bool {
-    let check_props = |props: &MvccProperties| -> (bool, bool /*skip_more_checks*/) {
+    let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         if props.min_ts > safe_point {
             return (false, false);
         }
@@ -654,8 +670,9 @@ fn check_need_gc(
             return (true, false);
         }
 
-        // When comparing `num_versions` with `num_puts`, trait internal levels specially
-        // because MVCC-deletion marks can't be handled at those levels.
+        // When comparing `num_versions` with `num_puts`, trait internal levels
+        // specially because MVCC-deletion marks can't be handled at those
+        // levels.
         let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
         if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
             return (true, false);
@@ -687,15 +704,20 @@ fn check_need_gc(
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
 #[cfg(any(test, feature = "failpoints"))]
 pub mod test_utils {
+    use engine_rocks::{
+        raw::{CompactOptions, CompactionOptions},
+        util::get_cf_handle,
+        RocksEngine,
+    };
+    use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
+    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use tikv_util::{
+        config::VersionTrack,
+        worker::{dummy_scheduler, ReceiverWrapper},
+    };
+
     use super::*;
     use crate::storage::kv::RocksEngine as StorageRocksEngine;
-    use engine_rocks::raw::{CompactOptions, CompactionOptions};
-    use engine_rocks::util::get_cf_handle;
-    use engine_rocks::RocksEngine;
-    use engine_traits::{SyncMutable, CF_WRITE};
-    use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
-    use tikv_util::config::VersionTrack;
-    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
 
     /// Do a global GC with the given safe point.
     pub fn gc_by_compact(engine: &StorageRocksEngine, _: &[u8], safe_point: u64) {
@@ -703,7 +725,7 @@ pub mod test_utils {
         // Put a new key-value pair to ensure compaction can be triggered correctly.
         engine.delete_cf("write", b"znot-exists-key").unwrap();
 
-        TestGCRunner::new(safe_point).gc(&engine);
+        TestGcRunner::new(safe_point).gc(&engine);
     }
 
     lazy_static! {
@@ -718,7 +740,7 @@ pub mod test_utils {
         compact_opts
     }
 
-    pub struct TestGCRunner<'a> {
+    pub struct TestGcRunner<'a> {
         pub safe_point: u64,
         pub ratio_threshold: Option<f64>,
         pub start: Option<&'a [u8]>,
@@ -729,11 +751,11 @@ pub mod test_utils {
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
     }
 
-    impl<'a> TestGCRunner<'a> {
+    impl<'a> TestGcRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
 
-            TestGCRunner {
+            TestGcRunner {
                 safe_point,
                 ratio_threshold: None,
                 start: None,
@@ -746,7 +768,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'a> TestGCRunner<'a> {
+    impl<'a> TestGcRunner<'a> {
         pub fn safe_point(&mut self, sp: u64) -> &mut Self {
             self.safe_point = sp;
             self
@@ -803,6 +825,21 @@ pub mod test_utils {
             self.post_gc();
         }
 
+        pub fn gc_raw(&mut self, engine: &RocksEngine) {
+            let _guard = LOCK.lock().unwrap();
+            self.prepare_gc(engine);
+
+            let db = engine.as_inner();
+            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+            let mut compact_opts = default_compact_options();
+            if let Some(target_level) = self.target_level {
+                compact_opts.set_change_level(true);
+                compact_opts.set_target_level(target_level as i32);
+            }
+            db.compact_range_cf_opt(handle, &compact_opts, None, None);
+            self.post_gc();
+        }
+
         pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String]) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
@@ -842,14 +879,17 @@ pub mod test_utils {
 
 #[cfg(test)]
 pub mod tests {
-    use super::test_utils::*;
-    use super::*;
-
-    use crate::config::DbConfig;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::mvcc::tests::{must_get, must_get_none};
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
     use engine_traits::{DeleteStrategy, MiscExt, Peekable, Range, SyncMutable, CF_WRITE};
+
+    use super::{test_utils::*, *};
+    use crate::{
+        config::DbConfig,
+        storage::{
+            kv::TestEngineBuilder,
+            mvcc::tests::{must_get, must_get_none},
+            txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put},
+        },
+    };
 
     #[test]
     fn test_is_compaction_filter_allowed() {
@@ -875,7 +915,7 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         // GC can't delete keys after the given safe point.
         must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -908,7 +948,7 @@ pub mod tests {
         let value = vec![b'v'; 512];
         let engine = TestEngineBuilder::new().build().unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc(&raw_engine);
@@ -936,7 +976,8 @@ pub mod tests {
         must_prewrite_delete(&engine, b"zkey", b"zkey", 120);
         must_commit(&engine, b"zkey", 120, 130);
 
-        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        // No GC task should be emit because the mvcc-deletion mark covers some older
+        // versions.
         gc_and_check(false, b"zkey");
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey");
@@ -958,14 +999,15 @@ pub mod tests {
         must_prewrite_put(&engine, b"zkey2", &value, b"zkey2", 220);
         must_commit(&engine, b"zkey2", 220, 230);
 
-        // No GC task should be emit because the mvcc-deletion mark covers some older versions.
+        // No GC task should be emit because the mvcc-deletion mark covers some older
+        // versions.
         gc_and_check(false, b"zkey1");
         // A GC task should be emit after older versions are cleaned.
         gc_and_check(true, b"zkey1");
     }
 
-    // Test if there are not enought garbage in SST files involved by a compaction, no compaction
-    // filter will be created.
+    // Test if there are not enought garbage in SST files involved by a compaction,
+    // no compaction filter will be created.
     #[test]
     fn test_mvcc_properties() {
         let mut cfg = DbConfig::default();
@@ -976,7 +1018,7 @@ pub mod tests {
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
         let value = vec![b'v'; 512];
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         for start_ts in &[100, 110, 120, 130] {
             must_prewrite_put(&engine, b"zkey", &value, b"zkey", *start_ts);
@@ -994,7 +1036,8 @@ pub mod tests {
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(100).gc(&raw_engine);
 
-        // Can perform GC at the bottommost level even if the threshold can't be reached.
+        // Can perform GC at the bottommost level even if the threshold can't be
+        // reached.
         gc_runner.ratio_threshold = Some(10.0);
         gc_runner.target_level = Some(6);
         gc_runner.safe_point(140).gc(&raw_engine);
@@ -1025,12 +1068,12 @@ pub mod tests {
         }
     }
 
-    // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction filters,
-    // deletion marks can only be handled in the bottommost level. Otherwise dirty
-    // versions could be exposed incorrectly.
+    // If we use `CompactionFilterDecision::RemoveAndSkipUntil` in compaction
+    // filters, deletion marks can only be handled in the bottommost level.
+    // Otherwise dirty versions could be exposed incorrectly.
     //
-    // This case tests that deletion marks won't be handled at internal levels, and at
-    // the bottommost levels, dirty versions still can't be exposed.
+    // This case tests that deletion marks won't be handled at internal levels, and
+    // at the bottommost levels, dirty versions still can't be exposed.
     #[test]
     fn test_remove_and_skip_until() {
         let mut cfg = DbConfig::default();
@@ -1041,7 +1084,7 @@ pub mod tests {
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         // So the construction of SST files will be:
         // L6: |key_110|

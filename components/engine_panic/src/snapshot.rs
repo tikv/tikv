@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db_vector::PanicDBVector;
-use crate::engine::PanicEngine;
-use engine_traits::{
-    IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, SeekKey, Snapshot,
-};
 use std::ops::Deref;
+
+use engine_traits::{IterOptions, Iterable, Iterator, Peekable, ReadOptions, Result, Snapshot};
+
+use crate::{db_vector::PanicDbVector, engine::PanicEngine};
 
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
@@ -17,9 +16,9 @@ impl Snapshot for PanicSnapshot {
 }
 
 impl Peekable for PanicSnapshot {
-    type DBVector = PanicDBVector;
+    type DbVector = PanicDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         panic!()
     }
     fn get_value_cf_opt(
@@ -27,7 +26,7 @@ impl Peekable for PanicSnapshot {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<Self::DBVector>> {
+    ) -> Result<Option<Self::DbVector>> {
         panic!()
     }
 }
@@ -35,10 +34,7 @@ impl Peekable for PanicSnapshot {
 impl Iterable for PanicSnapshot {
     type Iterator = PanicSnapshotIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         panic!()
     }
 }
@@ -46,10 +42,18 @@ impl Iterable for PanicSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

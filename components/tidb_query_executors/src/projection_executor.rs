@@ -2,17 +2,15 @@
 
 use std::sync::Arc;
 
-use tidb_query_common::storage::IntervalRange;
-use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-use tipb::Expr;
-use tipb::FieldType;
-use tipb::Projection;
+use tidb_query_common::{storage::IntervalRange, Result};
+use tidb_query_datatype::{
+    codec::{batch::LazyBatchColumnVec, data_type::*},
+    expr::{EvalConfig, EvalContext},
+};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tipb::{Expr, FieldType, Projection};
 
 use crate::interface::*;
-use tidb_query_common::Result;
-use tidb_query_datatype::codec::data_type::*;
-use tidb_query_datatype::expr::{EvalConfig, EvalContext};
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
 
 pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
@@ -22,8 +20,8 @@ pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     exprs: Vec<RpnExpression>,
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchProjectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -161,14 +159,11 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tidb_query_codegen::rpn_fn;
-    use tidb_query_datatype::FieldTypeTp;
+    use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalWarnings, FieldTypeTp};
 
+    use super::*;
     use crate::util::mock_executor::MockExecutor;
-    use tidb_query_datatype::codec::batch::LazyBatchColumnVec;
-    use tidb_query_datatype::expr::EvalWarnings;
 
     #[test]
     fn test_empty_rows() {
@@ -214,8 +209,9 @@ mod tests {
             ],
         );
 
-        // When source executor returns empty rows, projection executor should process correctly.
-        // No errors should be generated and the expression functions should not be called.
+        // When source executor returns empty rows, projection executor should process
+        // correctly. No errors should be generated and the expression functions
+        // should not be called.
 
         let r = exec.next_batch(1);
         // The scan rows parameter has no effect for mock executor. We don't care.
@@ -512,8 +508,8 @@ mod tests {
             ],
         );
 
-        // When evaluating expr[0], there will be no error. However we will meet errors for
-        // expr[1].
+        // When evaluating expr[0], there will be no error. However we will meet errors
+        // for expr[1].
 
         let exprs = (0..=1)
             .map(|offset| {

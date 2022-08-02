@@ -12,18 +12,17 @@ use std::{
     time::Duration,
 };
 
-use raft::eraftpb::{self, MessageType};
-use raft::StateRole;
-use thiserror::Error;
-
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
-    kvrpcpb::Context,
-    kvrpcpb::IsolationLevel,
+    kvrpcpb::{Context, IsolationLevel},
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
+};
+use raft::{
+    eraftpb::{self, MessageType},
+    StateRole,
 };
 use raftstore::{
     coprocessor::{
@@ -36,16 +35,18 @@ use raftstore::{
         RegionSnapshot, WriteResponse,
     },
 };
-use tikv_util::codec::number::NumberEncoder;
-use tikv_util::time::Instant;
+use thiserror::Error;
+use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
-use crate::storage::kv::{
-    write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback,
-    Modify, SnapContext, WriteData,
+use crate::storage::{
+    self, kv,
+    kv::{
+        write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
+        ExtCallback, Modify, SnapContext, WriteData,
+    },
 };
-use crate::storage::{self, kv};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -513,7 +514,8 @@ impl Coprocessor for ReplicaReadLockChecker {}
 impl ReadIndexObserver for ReplicaReadLockChecker {
     fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
         // Only check and return result if the current peer is a leader.
-        // If it's not a leader, the read index request will be redirected to the leader later.
+        // If it's not a leader, the read index request will be redirected to the leader
+        // later.
         if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
             return;
         }
@@ -568,11 +570,13 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use kvproto::raft_cmdpb;
     use uuid::Uuid;
 
-    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
+    use super::*;
+
+    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read
+    // index.
     #[test]
     fn test_replica_read_lock_checker_for_single_uuid() {
         let cm = ConcurrencyManager::new(1.into());

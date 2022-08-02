@@ -1,13 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::Write;
-use engine_traits::{IterOptions, DATA_KEY_PREFIX_LEN};
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use kvproto::import_sstpb::{DuplicateDetectResponse, KvPair};
 use sst_importer::{Error, Result};
 use tikv_kv::{Iterator as kvIterator, Snapshot};
 use tikv_util::keybuilder::KeyBuilder;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+
+use crate::storage::mvcc::Write;
 
 #[cfg(test)]
 const MAX_SCAN_BATCH_COUNT: usize = 256;
@@ -40,9 +40,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         });
         let mut iter_opt = IterOptions::new(Some(l_bound), u_bound, false);
         iter_opt.set_key_only(key_only);
-        let mut iter = snapshot
-            .iter_cf(CF_WRITE, iter_opt)
-            .map_err(from_kv_error)?;
+        let mut iter = snapshot.iter(CF_WRITE, iter_opt).map_err(from_kv_error)?;
         iter.seek(&start_key).map_err(from_kv_error)?;
         Ok(DuplicateDetector {
             snapshot,
@@ -232,17 +230,22 @@ fn from_txn_types_error(e: txn_types::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::lock_manager::{DummyLockManager, LockManager};
-    use crate::storage::txn::commands;
-    use crate::storage::{Storage, TestStorageBuilder};
-    use kvproto::kvrpcpb::{ApiVersion, Context};
     use std::sync::mpsc::channel;
+
+    use api_version::KvFormat;
+    use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
     use txn_types::Mutation;
 
-    fn prewrite_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    use super::*;
+    use crate::storage::{
+        lock_manager::{DummyLockManager, LockManager},
+        txn::commands,
+        Storage, TestStorageBuilderApiV1,
+    };
+
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -273,8 +276,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -296,8 +299,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager>(
-        storage: &Storage<E, L>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
+        storage: &Storage<E, L, F>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {
@@ -347,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let mut data = vec![];
@@ -394,16 +397,18 @@ mod tests {
     }
 
     // There are 40 key-value pairs in db, there are
-    //  [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] with commit timestamp 10
-    //  [104, 105, 106, 107, 108, 109, 110, 111, 112, 113] with commit timestamp 14, these 20 keys
-    //   have existed in db before importing. So we do not think (105,10) is repeated with (105,14).
-    //  [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
-    //  [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp 22, these 20 keys
-    // are imported by lightning. So (108,18) is repeated with (108,14), but (108,18) is not repeated
-    // with (108,10).
+    // - [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] with commit timestamp 10
+    // - [104, 105, 106, 107, 108, 109, 110, 111, 112, 113] with commit timestamp
+    //   14, these 20 keys have existed in db before importing. So we do not think
+    //   (105,10) is repeated with (105,14).
+    // - [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
+    // - [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp
+    //   22, these 20 keys
+    // are imported by lightning. So (108,18) is repeated with (108,14), but
+    // (108,18) is not repeated with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         for &start in &[100, 104, 108, 112] {
@@ -464,7 +469,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detect_rollback_and_delete() {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .build()
             .unwrap();
         let data = vec![

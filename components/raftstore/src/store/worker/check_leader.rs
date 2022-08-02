@@ -1,15 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::store::fsm::store::StoreMeta;
-use crate::store::util::RegionReadProgressRegistry;
+use std::{
+    collections::Bound::{Excluded, Unbounded},
+    fmt,
+    sync::{Arc, Mutex},
+};
+
 use fail::fail_point;
 use keys::{data_end_key, data_key, enc_start_key};
 use kvproto::kvrpcpb::{KeyRange, LeaderInfo};
-use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt;
-use std::sync::Arc;
-use std::sync::Mutex;
 use tikv_util::worker::Runnable;
+
+use crate::store::{fsm::store::StoreMeta, util::RegionReadProgressRegistry};
 
 pub struct Runner {
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -54,7 +56,8 @@ impl Runner {
         }
     }
 
-    // Get the minimal `safe_ts` from regions overlap with the key range [`start_key`, `end_key`)
+    // Get the minimal `safe_ts` from regions overlap with the key range
+    // [`start_key`, `end_key`)
     fn get_range_safe_ts(&self, key_range: KeyRange) -> u64 {
         if key_range.get_start_key().is_empty() && key_range.get_end_key().is_empty() {
             // Fast path to get the min `safe_ts` of all regions in this store
@@ -71,16 +74,16 @@ impl Runner {
                 data_key(key_range.get_start_key()),
                 data_end_key(key_range.get_end_key()),
             );
-            // `store_safe_ts` won't be accessed frequently (like per-request or per-transaction),
-            // also this branch won't entry because the request key range is empty currently (in v5.1)
-            // keep this branch for robustness and future use, so it is okay getting `store_safe_ts`
-            // from `store_meta` (behide a mutex)
+            // `store_safe_ts` won't be accessed frequently (like per-request or
+            // per-transaction), also this branch won't entry because the request key range
+            // is empty currently (in v5.1) keep this branch for robustness and future use,
+            // so it is okay getting `store_safe_ts` from `store_meta` (behide a mutex)
             let meta = self.store_meta.lock().unwrap();
             meta.region_read_progress.with(|registry| {
                 meta.region_ranges
                 // get overlapped regions
                 .range((Excluded(start_key), Unbounded))
-                .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[id]))
+                .take_while(|(_, id)| end_key > enc_start_key(&meta.regions[*id]))
                 // get the min `safe_ts`
                 .map(|(_, id)| {
                     registry.get(id).unwrap().safe_ts()
@@ -121,10 +124,11 @@ impl Runnable for Runner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::store::util::RegionReadProgress;
     use keys::enc_end_key;
     use kvproto::metapb::Region;
+
+    use super::*;
+    use crate::store::util::RegionReadProgress;
 
     #[test]
     fn test_get_range_min_safe_ts() {

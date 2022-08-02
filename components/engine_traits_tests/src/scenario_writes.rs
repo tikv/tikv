@@ -1,11 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::engine_cfs;
 use engine_test::kv::KvTestEngine;
-use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
-use engine_traits::{Peekable, Result, SyncMutable};
-use engine_traits::{ALL_CFS, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    Mutable, Peekable, Result, SyncMutable, WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT,
+    CF_WRITE,
+};
 use panic_hook::recover_safe;
+
+use super::engine_cfs;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Eq, PartialEq)]
@@ -103,7 +105,7 @@ impl WriteScenarioEngine {
         }
     }
 
-    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DBVector>> {
+    fn get_value(&self, key: &[u8]) -> Result<Option<<KvTestEngine as Peekable>::DbVector>> {
         use WriteScenario::*;
         match self.scenario {
             NoCf | DefaultCf | WriteBatchNoCf | WriteBatchDefaultCf => {
@@ -211,8 +213,7 @@ scenario_test! { put_get {
 
 scenario_test! { delete_none {
     let db = write_scenario_engine();
-    let res = db.delete(b"foo");
-    assert!(res.is_ok());
+    db.delete(b"foo").unwrap();
 }}
 
 scenario_test! { delete {

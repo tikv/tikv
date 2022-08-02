@@ -6,9 +6,7 @@ use raft::StateRole;
 use raftstore::coprocessor::*;
 use tikv_util::worker::Scheduler;
 
-use crate::cmd::lock_only_filter;
-use crate::endpoint::Task;
-use crate::metrics::RTS_CHANNEL_PENDING_CMD_BYTES;
+use crate::{cmd::lock_only_filter, endpoint::Task, metrics::RTS_CHANNEL_PENDING_CMD_BYTES};
 
 pub struct Observer<E: KvEngine> {
     scheduler: Scheduler<Task<E::Snapshot>>,
@@ -20,8 +18,9 @@ impl<E: KvEngine> Observer<E> {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a low priority
-        // to let it be the last observer and avoid affecting other observers
+        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a
+        // low priority to let it be the last observer and avoid affecting other
+        // observers
         coprocessor_host
             .registry
             .register_cmd_observer(1000, BoxCmdObserver::new(self.clone()));
@@ -86,7 +85,8 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
 impl<E: KvEngine> RoleObserver for Observer<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // Stop to advance resolved ts after peer steps down to follower or candidate.
-        // Do not need to check observe id because we expect all role change events are scheduled in order.
+        // Do not need to check observe id because we expect all role change events are
+        // scheduled in order.
         if role_change.state != StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::DeRegisterRegion {
                 region_id: ctx.region().id,
@@ -104,15 +104,15 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         event: RegionChangeEvent,
         role: StateRole,
     ) {
-        // If the peer is not leader, it must has not registered the observe region or it is deregistering
-        // the observe region, so don't need to send `RegionUpdated`/`RegionDestroyed` to update the observe
-        // region
+        // If the peer is not leader, it must has not registered the observe region or
+        // it is deregistering the observe region, so don't need to send
+        // `RegionUpdated`/`RegionDestroyed` to update the observe region
         if role != StateRole::Leader {
             return;
         }
         match event {
             RegionChangeEvent::Create => {}
-            RegionChangeEvent::Update => {
+            RegionChangeEvent::Update(_) => {
                 if let Err(e) = self
                     .scheduler
                     .schedule(Task::RegionUpdated(ctx.region().clone()))
@@ -137,13 +137,15 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use std::time::Duration;
+
     use engine_rocks::RocksSnapshot;
     use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::raft_cmdpb::*;
-    use std::time::Duration;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+
+    use super::*;
 
     fn put_cf(cf: &str, key: &[u8], value: &[u8]) -> Request {
         let mut cmd = Request::default();
@@ -185,14 +187,18 @@ mod test {
             put_cf(CF_WRITE, b"k7", b"v"),
             put_cf(CF_WRITE, b"k8", b"v"),
         ];
-        let mut cmd = Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        let mut cmd = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
         cmd.request.mut_requests().clear();
         for put in &data {
             cmd.request.mut_requests().push(put.clone());
         }
 
         // Both cdc and resolved-ts worker are observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
         observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
@@ -200,7 +206,11 @@ mod test {
         expect_recv(&mut rx, data.clone());
 
         // Only cdc is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -208,8 +218,24 @@ mod test {
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
+        // Pitr and rts is observing
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::default(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
+        let mut cb = CmdBatch::new(&observe_info, 0);
+        cb.push(&observe_info, 0, cmd.clone());
+        observer.on_flush_applied_cmd_batch(cb.level, &mut vec![cb], &engine);
+        // Still observe all data
+        expect_recv(&mut rx, data.clone());
+
         // Only resolved-ts worker is observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, cmd.clone());
@@ -219,7 +245,11 @@ mod test {
         expect_recv(&mut rx, data);
 
         // Both cdc and resolved-ts worker are not observing
-        let observe_info = CmdObserveInfo::from_handle(ObserveHandle::new(), ObserveHandle::new());
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::default(),
+        );
         observe_info.rts_id.stop_observing();
         observe_info.cdc_id.stop_observing();
         let mut cb = CmdBatch::new(&observe_info, 0);

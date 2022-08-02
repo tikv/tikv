@@ -1,24 +1,30 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
-};
-use crate::storage::txn::actions::check_data_constraint::check_data_constraint;
-use crate::storage::types::PessimisticLockKeyResult;
-use crate::storage::Snapshot;
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
-/// Acquires pessimistic lock on a single key. Optionally reads the previous value by the way.
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
+    },
+    txn::actions::check_data_constraint::check_data_constraint,
+    types::PessimisticLockKeyResult,
+    Snapshot,
+};
+
+/// Acquires pessimistic lock on a single key. Optionally reads the previous
+/// value by the way.
 ///
-/// When `need_value` is set, the first return value will be the previous value of the key (possibly
-/// `None`). When `need_value` is not set but `need_check_existence` is set, the first return value
-/// will be an empty value (`Some(vec![])`) if the key exists before or `None` if not. If neither
-/// `need_value` nor `need_check_existence` is set, the first return value is always `None`.
+/// When `need_value` is set, the first return value will be the previous value
+/// of the key (possibly `None`). When `need_value` is not set but
+/// `need_check_existence` is set, the first return value will be an empty value
+/// (`Some(vec![])`) if the key exists before or `None` if not. If neither
+/// `need_value` nor `need_check_existence` is set, the first return value is
+/// always `None`.
 ///
-/// The second return value will also contains the previous value of the key if `need_old_value` is
-/// set, or `OldValue::Unspecified` otherwise.
+/// The second return value will also contains the previous value of the key if
+/// `need_old_value` is set, or `OldValue::Unspecified` otherwise.
 pub fn acquire_pessimistic_lock<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -37,14 +43,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
-    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    // Update max_ts for Insert operation to guarante linearizability and snapshot
+    // isolation
     if should_not_exist || need_value || need_check_existence {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
 
-    // When `need_value` is set, the value need to be loaded of course. If `need_check_existence`
-    // and `need_old_value` are both set, we also load the value even if `need_value` is false,
-    // so that it avoids `load_old_value` doing repeated work.
+    // When `need_value` is set, the value need to be loaded of course. If
+    // `need_check_existence` and `need_old_value` are both set, we also load
+    // the value even if `need_value` is false, so that it avoids
+    // `load_old_value` doing repeated work.
     let mut need_load_value = need_value || (need_check_existence && need_old_value);
 
     fn load_old_value<S: Snapshot>(
@@ -174,8 +182,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         }
 
         // Handle rollback.
-        // The rollback information may come from either a Rollback record or a record with
-        // `has_overlapped_rollback` flag.
+        // The rollback information may come from either a Rollback record or a record
+        // with `has_overlapped_rollback` flag.
         if commit_ts == reader.start_ts
             && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
         {
@@ -186,7 +194,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
-        // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
+        // If `commit_ts` we seek is already before `start_ts`, the rollback must not
+        // exist.
         if commit_ts > reader.start_ts {
             if let Some((older_commit_ts, older_write)) =
                 reader.seek_write(&key, reader.start_ts)?
@@ -204,8 +213,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
         }
 
-        // Check data constraint when acquiring pessimistic lock. But in case we are going to lock
-        // it with write conflict, we do not check it since the statement will then retry.
+        // Check data constraint when acquiring pessimistic lock. But in case we are
+        // going to lock it with write conflict, we do not check it since the
+        // statement will then retry.
         if locked_with_conflict_ts.is_none() {
             check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
         }
@@ -268,14 +278,16 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::WriteData;
-    use crate::storage::mvcc::{Error as MvccError, MvccReader};
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
 
+    use super::*;
+    use crate::storage::{
+        kv::WriteData,
+        mvcc::{Error as MvccError, MvccReader},
+        Engine,
+    };
     #[cfg(test)]
     use crate::storage::{
         mvcc::tests::*,
@@ -578,8 +590,8 @@ pub mod tests {
         let k = b"k1";
         let v = b"v1";
 
-        // TODO: Some corner cases don't give proper results. Although they are not important, we
-        // should consider whether they are better to be fixed.
+        // TODO: Some corner cases don't give proper results. Although they are not
+        // important, we should consider whether they are better to be fixed.
 
         // Normal
         must_succeed(&engine, k, k, 1, 1);
@@ -728,8 +740,9 @@ pub mod tests {
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
         must_locked(&engine, k, 35);
 
-        // Commit pessimistic transaction's key but with smaller commit_ts than for_update_ts.
-        // Currently not checked, so in this case it will actually be successfully committed.
+        // Commit pessimistic transaction's key but with smaller commit_ts than
+        // for_update_ts. Currently not checked, so in this case it will
+        // actually be successfully committed.
         must_commit(&engine, k, 35, 36);
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, 35, 36);
@@ -759,17 +772,18 @@ pub mod tests {
         must_commit(&engine, k, 46, 50);
         must_unlocked(&engine, k);
 
-        // Prewrite on non-pessimistic key meets write with larger commit_ts than current
-        // for_update_ts (non-pessimistic data conflict).
-        // Normally non-pessimistic keys in pessimistic transactions are used when we are sure that
-        // there won't be conflicts. So this case is also not checked, and prewrite will succeeed.
+        // Prewrite on non-pessimistic key meets write with larger commit_ts than
+        // current for_update_ts (non-pessimistic data conflict).
+        // Normally non-pessimistic keys in pessimistic transactions are used when we
+        // are sure that there won't be conflicts. So this case is also not checked, and
+        // prewrite will succeeed.
         must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
         must_locked(&engine, k, 47);
         must_cleanup(&engine, k, 47, 0);
         must_unlocked(&engine, k);
 
-        // The rollback of the primary key in a pessimistic transaction should be protected from
-        // being collapsed.
+        // The rollback of the primary key in a pessimistic transaction should be
+        // protected from being collapsed.
         must_succeed(&engine, k, k, 49, 60);
         must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
         must_locked(&engine, k, 49);
@@ -779,8 +793,9 @@ pub mod tests {
         must_rollback(&engine, k, 51, false);
         must_err(&engine, k, k, 49, 60);
 
-        // Overlapped rollback record will be written when the current start_ts equals to another write
-        // records' commit ts. Now there is a commit record with commit_ts = 50.
+        // Overlapped rollback record will be written when the current start_ts equals
+        // to another write records' commit ts. Now there is a commit record with
+        // commit_ts = 50.
         must_succeed(&engine, k, k, 50, 61);
         must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
         must_locked(&engine, k, 50);
@@ -944,9 +959,9 @@ pub mod tests {
 
         // PUT,  LOCK,    READ
         //  `----------^
-        // Note that this case is special because usually the `LOCK` is the first write already got
-        // during prewrite/acquire_pessimistic_lock and will continue searching an older version
-        // from the `LOCK` record.
+        // Note that this case is special because usually the `LOCK` is the first write
+        // already got during prewrite/acquire_pessimistic_lock and will continue
+        // searching an older version from the `LOCK` record.
         must_prewrite_put(&engine, b"k7", b"v7", b"k7", 16);
         must_commit(&engine, b"k7", 16, 30);
         must_prewrite_lock(&engine, b"k7", b"k7", 37);
@@ -1174,7 +1189,8 @@ pub mod tests {
         must_pessimistic_prewrite_put(&engine, key, value, key, 3, 3, true);
         must_commit(&engine, key, 3, 5);
 
-        // T2: start_ts = 15, acquire pessimistic lock on k, with should_not_exist flag set.
+        // T2: start_ts = 15, acquire pessimistic lock on k, with should_not_exist flag
+        // set.
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = TimeStamp::zero();
         let cm = ConcurrencyManager::new(min_commit_ts);
@@ -1203,12 +1219,14 @@ pub mod tests {
 
         assert_eq!(cm.max_ts().into_inner(), 15);
 
-        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on
+        // k
         must_succeed(&engine, key, key, 8, 8);
         must_pessimistic_prewrite_delete(&engine, key, key, 8, 8, true);
         must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
-        // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with should_not_exist flag set
+        // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with
+        // should_not_exist flag set
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = TimeStamp::new(10);
         let for_update_ts = TimeStamp::new(10);
@@ -1261,9 +1279,10 @@ pub mod tests {
         // k5: GC fence invalid
         must_prewrite_put(&engine, b"k5", b"v5", b"k5", 5);
         must_commit(&engine, b"k5", 5, 6);
-        // A invalid gc fence is assumed never pointing to a ts greater than GC safepoint, and
-        // a read operation's ts is assumed never less than the GC safepoint. Therefore since we
-        // will read at ts=10 later, we can't put a version greater than 10 in this case.
+        // A invalid gc fence is assumed never pointing to a ts greater than GC
+        // safepoint, and a read operation's ts is assumed never less than the
+        // GC safepoint. Therefore since we will read at ts=10 later, we can't
+        // put a version greater than 10 in this case.
         must_cleanup_with_gc_fence(&engine, b"k5", 6, 0, 8, true);
 
         for &need_value in &[false, true] {

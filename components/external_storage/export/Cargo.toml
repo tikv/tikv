@@ -40,13 +40,12 @@ cloud-storage-grpc = [
   "futures",
   "futures-executor",
   "libc",
-  "signal",
+  "signal-hook",
   "slog",
   "slog-global",
   "slog-term",
   "tokio",
   "tokio-util",
-  "nix",
 ]
 
 [dependencies]
@@ -72,7 +71,7 @@ protobuf = { optional = true, version = "2" }
 slog-global = { optional = true, version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { path = "../../tikv_util" }
 tokio = { version = "1.5", features = ["time", "rt", "net"], optional = true }
-tokio-util = { version = "0.6", features = ["compat"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
 url = "2.0"
 async-trait = "0.1"
 
@@ -89,8 +88,8 @@ name = "scli"
 path = "examples/scli.rs"
 
 [target.'cfg(unix)'.dependencies]
-nix = { optional = true, version = "0.23" }
-signal = { optional = true, version = "0.6" }
+nix = { optional = true, version = "0.24" }
+signal-hook = { optional = true, version = "0.3" }
 libc = { optional = true, version = "0.2" }
 slog = { optional = true, version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-term = { optional = true, version = "2.4" }

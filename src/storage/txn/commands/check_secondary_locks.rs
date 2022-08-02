@@ -1,20 +1,23 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord};
-use crate::storage::txn::commands::ReaderWithStats;
-use crate::storage::txn::{
-    actions::check_txn_status::{collapse_prev_rollback, make_rollback},
-    commands::{
-        CommandExt, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext, WriteResult,
-    },
-    Result,
-};
-use crate::storage::types::SecondaryLocksStatus;
-use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, Lock, WriteType};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{LockType, MvccTxn, SnapshotReader, TimeStamp, TxnCommitRecord},
+    txn::{
+        actions::check_txn_status::{collapse_prev_rollback, make_rollback},
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    types::SecondaryLocksStatus,
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Check secondary locks of an async commit transaction.
@@ -26,7 +29,7 @@ command! {
     /// status being changed, a rollback may be written.
     CheckSecondaryLocks:
         cmd_ty => SecondaryLocksStatus,
-        display => "kv::command::CheckSecondaryLocks {} keys@{} | {:?}", (keys.len, start_ts, ctx),
+        display => "kv::command::CheckSecondaryLocks {:?} keys@{} | {:?}", (keys, start_ts, ctx),
         content => {
             /// The keys of secondary locks.
             keys: Vec<Key>,
@@ -38,6 +41,7 @@ command! {
 impl CommandExt for CheckSecondaryLocks {
     ctx!();
     tag!(check_secondary_locks);
+    request_type!(KvCheckSecondaryLocks);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
@@ -52,8 +56,8 @@ enum SecondaryLockStatus {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
+        // It is not allowed for commit to overwrite a protected rollback. So we update
+        // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
@@ -79,8 +83,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                         (SecondaryLockStatus::Locked(lock), false, None)
                     }
                 }
-                // Searches the write CF for the commit record of the lock and returns the commit timestamp
-                // (0 if the lock is not committed).
+                // Searches the write CF for the commit record of the lock and returns the commit
+                // timestamp (0 if the lock is not committed).
                 l => {
                     mismatch_lock = l;
                     match reader.get_txn_commit_record(&key)? {
@@ -92,9 +96,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                             };
                             // We needn't write a rollback once there is a write record for it:
                             // If it's a committed record, it cannot be changed.
-                            // If it's a rollback record, it either comes from another check_secondary_lock
-                            // (thus protected) or the client stops commit actively. So we don't need
-                            // to make it protected again.
+                            // If it's a rollback record, it either comes from another
+                            // check_secondary_lock (thus protected) or the client stops commit
+                            // actively. So we don't need to make it protected again.
                             (status, false, None)
                         }
                         TxnCommitRecord::OverlappedRollback { .. } => {
@@ -158,17 +162,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
 #[cfg(test)]
 pub mod tests {
-    use super::*;
-    use crate::storage::kv::TestEngineBuilder;
-    use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::txn::commands::WriteCommand;
-    use crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT;
-    use crate::storage::txn::tests::*;
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
+
+    use super::*;
+    use crate::storage::{
+        kv::TestEngineBuilder,
+        lock_manager::DummyLockManager,
+        mvcc::tests::*,
+        txn::{commands::WriteCommand, scheduler::DEFAULT_EXECUTION_DURATION_LIMIT, tests::*},
+        Engine,
+    };
 
     pub fn must_success<E: Engine>(
         engine: &E,

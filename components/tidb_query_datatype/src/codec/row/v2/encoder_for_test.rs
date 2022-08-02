@@ -1,36 +1,40 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This `encoder` module is only used for test, so the implementation is very straightforward.
+//! This `encoder` module is only used for test, so the implementation is very
+//! straightforward.
 //!
 //! According to <https://github.com/pingcap/tidb/blob/master/docs/design/2018-07-19-row-format.md>
 //!
 //! The row format is:
-//!
+//! ```
 //! | version | flag | number_of_non_null_columns | number_of_null_columns | non_null_column_ids | null_column_ids | value_offsets | values |
 //! |---------| ---- | -------------------------- | ---------------------- | ------------------- | --------------- | ------------- | ------ |
-//!
+//! ```
 //! length about each field:
 //!
 //! * version: 1 byte
-//! * flag: 1 byte, when there's id greater than 255 or the total size of the values is greater than 65535 , value is 1, otherwise 0
+//! * flag: 1 byte, when there's id greater than 255 or the total size of the
+//!   values is greater than 65535 , value is 1, otherwise 0
 //! * number of non-null values: 2 bytes
 //! * number of null values: 2 bytes
 //! * non-null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
 //! * null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
 //! * non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
-use crate::codec::{
-    data_type::ScalarValue,
-    mysql::{decimal::DecimalEncoder, json::JsonEncoder},
-    Error, Result,
-};
+use std::{i16, i32, i8, u16, u32, u8};
 
-use crate::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use codec::prelude::*;
 use tipb::FieldType;
 
-use crate::expr::EvalContext;
-use codec::prelude::*;
-use std::{i16, i32, i8, u16, u32, u8};
+use crate::{
+    codec::{
+        data_type::ScalarValue,
+        mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+        Error, Result,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
+};
 
 const MAX_I8: i64 = i8::MAX as i64;
 const MIN_I8: i64 = i8::MIN as i64;
@@ -220,13 +224,16 @@ impl<T: BufferWriter> ScalarValueEncoder for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Column, RowEncoder};
-    use crate::codec::{
-        data_type::ScalarValue,
-        mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
-    };
-    use crate::expr::EvalContext;
     use std::str::FromStr;
+
+    use super::{Column, RowEncoder};
+    use crate::{
+        codec::{
+            data_type::ScalarValue,
+            mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
+        },
+        expr::EvalContext,
+    };
 
     #[test]
     fn test_encode_unsigned() {

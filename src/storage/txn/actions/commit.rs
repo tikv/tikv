@@ -1,12 +1,15 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::mvcc::{
-    metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-    ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
-};
-use crate::storage::Snapshot;
 use txn_types::{Key, TimeStamp, Write, WriteType};
+
+use crate::storage::{
+    mvcc::{
+        metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
+        ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+    },
+    Snapshot,
+};
 
 pub fn commit<S: Snapshot>(
     txn: &mut MvccTxn,
@@ -38,11 +41,11 @@ pub fn commit<S: Snapshot>(
                 .into());
             }
 
-            // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-            // transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire
-            // this lock again(due to WriteConflict). If the transaction is committed, we
-            // should commit this pessimistic lock too.
+            // It's an abnormal routine since pessimistic locks shouldn't be committed in
+            // our transaction model. But a pessimistic lock will be left if the pessimistic
+            // rollback request fails to send and the transaction need not to acquire this
+            // lock again(due to WriteConflict). If the transaction is committed, we should
+            // commit this pessimistic lock too.
             if lock.lock_type == LockType::Pessimistic {
                 warn!(
                     "commit a pessimistic lock with Lock type";
@@ -102,23 +105,23 @@ pub fn commit<S: Snapshot>(
 }
 
 pub mod tests {
-    use super::*;
-    use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::Engine;
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
 
+    use super::*;
     #[cfg(test)]
     use crate::storage::txn::tests::{
         must_acquire_pessimistic_lock_for_large_txn, must_prewrite_delete, must_prewrite_lock,
         must_prewrite_put, must_prewrite_put_for_large_txn, must_prewrite_put_impl, must_rollback,
     };
-
     #[cfg(test)]
     use crate::storage::{
         mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
+    };
+    use crate::storage::{
+        mvcc::{tests::*, MvccTxn},
+        Engine,
     };
 
     pub fn must_succeed<E: Engine>(
@@ -251,7 +254,8 @@ pub mod tests {
         );
         must_succeed(&engine, k, ts(30, 0), ts(50, 0));
 
-        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
+        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
+        // it.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
         check_txn_status::tests::must_success(
             &engine,

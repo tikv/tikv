@@ -1,14 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::server::lock_manager::waiter_manager;
-use crate::server::lock_manager::waiter_manager::Callback;
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::Error as TxnError;
-use crate::storage::Error as StorageError;
-use kvproto::kvrpcpb::LockInfo;
-use kvproto::metapb::RegionEpoch;
 use std::time::Duration;
+
+use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
 use txn_types::{Key, TimeStamp};
+
+use crate::{
+    server::lock_manager::{waiter_manager, waiter_manager::Callback},
+    storage::{
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::Error as TxnError,
+        Error as StorageError,
+    },
+};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct LockDigest {
@@ -30,8 +34,9 @@ impl LockDigest {
 pub struct DiagnosticContext {
     /// The key we care about
     pub key: Vec<u8>,
-    /// This tag is used for aggregate related kv requests (eg. generated from same statement)
-    /// Currently it is the encoded SQL digest if the client is TiDB
+    /// This tag is used for aggregate related kv requests (eg. generated from
+    /// same statement) Currently it is the encoded SQL digest if the client
+    /// is TiDB
     pub resource_group_tag: Vec<u8>,
 }
 
@@ -51,8 +56,8 @@ impl WaitTimeout {
         }
     }
 
-    /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
-    /// Negative means no wait.
+    /// Timeouts are encoded as i64s in protobufs where 0 means using default
+    /// timeout. Negative means no wait.
     pub fn from_encoded(i: i64) -> Option<WaitTimeout> {
         use std::cmp::Ordering::*;
 
@@ -94,18 +99,21 @@ pub struct KeyWakeUpEvent {
     pub awakened_allow_resuming: bool,
 }
 
-/// `LockManager` manages transactions waiting for locks held by other transactions.
-/// It has responsibility to handle deadlocks between transactions.
+/// `LockManager` manages transactions waiting for locks held by other
+/// transactions. It has responsibility to handle deadlocks between
+/// transactions.
 pub trait LockManager: Clone + Send + 'static {
     fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&Key) + Send>);
 
     fn allocate_token(&self) -> LockWaitToken;
     /// Transaction with `start_ts` waits for `lock` released.
     ///
-    /// If the lock is released or waiting times out or deadlock occurs, the transaction
-    /// should be waken up and call `cb` with `pr` to notify the caller.
+    /// If the lock is released or waiting times out or deadlock occurs, the
+    /// transaction should be waken up and call `cb` with `pr` to notify the
+    /// caller.
     ///
-    /// If the lock is the first lock the transaction waits for, it won't result in deadlock.
+    /// If the lock is the first lock the transaction waits for, it won't result
+    /// in deadlock.
     fn wait_for(
         &self,
         token: LockWaitToken,
@@ -126,7 +134,8 @@ pub trait LockManager: Clone + Send + 'static {
 
     fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>);
 
-    /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
+    /// The locks with `lock_ts` and `hashes` are released, tries to wake up
+    /// transactions.
     fn remove_lock_wait(&self, token: LockWaitToken);
 
     /// Returns true if there are waiters in the `LockManager`.

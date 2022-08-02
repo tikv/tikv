@@ -1,16 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor};
-
-use super::scalar::ScalarValueRef;
-use super::*;
-use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
-use crate::codec::Result;
+use super::{scalar::ScalarValueRef, *};
+use crate::{
+    codec::{mysql::decimal::DECIMAL_STRUCT_SIZE, Result},
+    match_template_collator, match_template_evaltype, EvalType, FieldTypeAccessor,
+};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
-/// The inner concrete value is immutable. However it is allowed to push and remove values from
-/// this vector container.
+/// The inner concrete value is immutable. However it is allowed to push and
+/// remove values from this vector container.
 #[derive(Debug, PartialEq, Clone)]
 pub enum VectorValue {
     Int(ChunkedVecSized<Int>),
@@ -26,8 +25,8 @@ pub enum VectorValue {
 }
 
 impl VectorValue {
-    /// Creates an empty `VectorValue` according to `eval_tp` and reserves capacity according
-    /// to `capacity`.
+    /// Creates an empty `VectorValue` according to `eval_tp` and reserves
+    /// capacity according to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
         match_template_evaltype! {
@@ -117,9 +116,11 @@ impl VectorValue {
         self.len() == 0
     }
 
-    /// Shortens the column, keeping the first `len` datums and dropping the rest.
+    /// Shortens the column, keeping the first `len` datums and dropping the
+    /// rest.
     ///
-    /// If `len` is greater than the column's current length, this has no effect.
+    /// If `len` is greater than the column's current length, this has no
+    /// effect.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         match_template_evaltype! {
@@ -135,7 +136,8 @@ impl VectorValue {
         self.truncate(0);
     }
 
-    /// Returns the number of elements this column can hold without reallocating.
+    /// Returns the number of elements this column can hold without
+    /// reallocating.
     #[inline]
     pub fn capacity(&self) -> usize {
         match_template_evaltype! {
@@ -166,7 +168,8 @@ impl VectorValue {
 
     /// Evaluates values into MySQL logic values.
     ///
-    /// The caller must provide an output buffer which is large enough for holding values.
+    /// The caller must provide an output buffer which is large enough for
+    /// holding values.
     pub fn eval_as_mysql_bools(
         &self,
         ctx: &mut EvalContext,
@@ -435,9 +438,10 @@ impl VectorValue {
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        use crate::codec::collation::Collator;
-        use crate::codec::datum_codec::EvaluableDatumEncoder;
-        use crate::Collation;
+        use crate::{
+            codec::{collation::Collator, datum_codec::EvaluableDatumEncoder},
+            Collation,
+        };
 
         match self {
             VectorValue::Bytes(ref vec) => {
@@ -464,7 +468,8 @@ impl VectorValue {
 macro_rules! impl_as_slice {
     ($ty:tt, $name:ident) => {
         impl VectorValue {
-            /// Extracts a slice of values in specified concrete type from current column.
+            /// Extracts a slice of values in specified concrete type from current
+            /// column.
             ///
             /// # Panics
             ///
@@ -494,8 +499,9 @@ impl_as_slice! { Json, to_json_vec }
 impl_as_slice! { Enum, to_enum_vec }
 impl_as_slice! { Set, to_set_vec }
 
-/// Additional `VectorValue` methods available via generics. These methods support different
-/// concrete types but have same names and should be specified via the generic parameter type.
+/// Additional `VectorValue` methods available via generics. These methods
+/// support different concrete types but have same names and should be specified
+/// via the generic parameter type.
 pub trait VectorValueExt<T: EvaluableRet> {
     /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);

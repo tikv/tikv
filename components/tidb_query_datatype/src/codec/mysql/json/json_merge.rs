@@ -1,8 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
+
 use super::{Json, JsonRef, JsonType};
 use crate::codec::{Error, Result};
-use std::collections::BTreeMap;
 
 impl Json {
     /// `merge` is the implementation for JSON_MERGE in mysql
@@ -12,7 +13,8 @@ impl Json {
     /// 1. adjacent arrays are merged to a single array;
     /// 2. adjacent object are merged to a single object;
     /// 3. a scalar value is autowrapped as an array before merge;
-    /// 4. an adjacent array and object are merged by autowrapping the object as an array.
+    /// 4. an adjacent array and object are merged by autowrapping the object as
+    /// an array.
     ///
     /// See `MergeBinary()` in TiDB `json/binary_function.go`
     #[allow(clippy::comparison_chain)]

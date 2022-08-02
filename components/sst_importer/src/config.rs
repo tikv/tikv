@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::result::Result;
+use std::{error::Error, result::Result};
+
 use tikv_util::config::ReadableDuration;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -27,12 +27,21 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        let default_cfg = Config::default();
         if self.num_threads == 0 {
-            return Err("import.num_threads can not be 0".into());
+            warn!(
+                "import.num_threads can not be 0, change it to {}",
+                default_cfg.num_threads
+            );
+            self.num_threads = default_cfg.num_threads;
         }
         if self.stream_channel_window == 0 {
-            return Err("import.stream_channel_window can not be 0".into());
+            warn!(
+                "import.stream_channel_window can not be 0, change it to {}",
+                default_cfg.stream_channel_window
+            );
+            self.stream_channel_window = default_cfg.stream_channel_window;
         }
         Ok(())
     }

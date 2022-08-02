@@ -3,14 +3,14 @@
 //! This crate provides a macro that can be used to generate code to
 //! implement `OnlineConfig` trait
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use syn::punctuated::Punctuated;
-use syn::token::Comma;
-use syn::*;
+use syn::{punctuated::Punctuated, token::Comma, *};
 
 #[proc_macro_derive(OnlineConfig, attributes(online_config))]
 pub fn config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -172,7 +172,7 @@ fn update(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<Token
         let f = if submodule {
             quote! {
                 if let Some(#crate_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
-                    #crate_name::OnlineConfig::update(&mut self.#name, v);
+                    #crate_name::OnlineConfig::update(&mut self.#name, v)?;
                 }
             }
         } else if is_option_type(&field.ty) {
@@ -181,22 +181,23 @@ fn update(fields: &Punctuated<Field, Comma>, crate_name: &Ident) -> Result<Token
                     if #crate_name::ConfigValue::None == v {
                         self.#name = None;
                     } else {
-                        self.#name = Some(v.into());
+                        self.#name = Some(std::convert::TryInto::try_into(v)?);
                     }
                 }
             }
         } else {
             quote! {
                 if let Some(v) = #incoming.remove(#name_lit) {
-                    self.#name = v.into();
+                    self.#name = std::convert::TryInto::try_into(v)?;
                 }
             }
         };
         update_fields.push(f);
     }
     Ok(quote! {
-        fn update(&mut self, mut #incoming: #crate_name::ConfigChange) {
+        fn update(&mut self, mut #incoming: #crate_name::ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
             #(#update_fields)*
+            Ok(())
         }
     })
 }

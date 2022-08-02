@@ -1,27 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
-use engine_rocks::RocksEngine;
-use engine_rocks::RocksSstReader;
-pub use engine_rocks::RocksSstWriter;
-use engine_rocks::RocksSstWriterBuilder;
-use engine_traits::KvEngine;
-use engine_traits::SstWriter;
-use engine_traits::SstWriterBuilder;
+use engine_rocks::{
+    raw::{DBEntryType, Env, TablePropertiesCollector, TablePropertiesCollectorFactory},
+    util::new_engine_opt,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
+};
+pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
+use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
-
-use engine_rocks::raw::{
-    ColumnFamilyOptions, DBEntryType, DBOptions, Env, TablePropertiesCollector,
-    TablePropertiesCollectorFactory,
-};
-use engine_rocks::raw_util::{new_engine, CFOptions};
-use std::sync::Arc;
-
-pub use engine_rocks::RocksEngine as TestEngine;
 
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
@@ -40,12 +29,12 @@ pub fn new_test_engine_with_options_and_env<F>(
     env: Option<Arc<Env>>,
 ) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     let cf_opts = cfs
         .iter()
         .map(|cf| {
-            let mut opt = ColumnFamilyOptions::new();
+            let mut opt = RocksCfOptions::default();
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
@@ -54,22 +43,21 @@ where
                 "tikv.test_properties",
                 TestPropertiesCollectorFactory::new(*cf),
             );
-            CFOptions::new(*cf, opt)
+            (*cf, opt)
         })
         .collect();
 
-    let db_opts = env.map(|e| {
-        let mut opts = DBOptions::default();
+    let db_opts = env.map_or_else(RocksDbOptions::default, |e| {
+        let mut opts = RocksDbOptions::default();
         opts.set_env(e);
         opts
     });
-    let db = new_engine(path, db_opts, cfs, Some(cf_opts)).expect("rocks test engine");
-    RocksEngine::from_db(Arc::new(db))
+    new_engine_opt(path, db_opts, cf_opts).expect("rocks test engine")
 }
 
 pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], apply: F) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     new_test_engine_with_options_and_env(path, cfs, apply, None)
 }

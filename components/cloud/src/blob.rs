@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{io, marker::Unpin, pin::Pin, task::Poll};
+
 use async_trait::async_trait;
 use futures_io::AsyncRead;
 pub use kvproto::brpb::CloudDynamic;
-use std::io;
-use std::marker::Unpin;
-use std::pin::Pin;
-use std::task::Poll;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -17,7 +15,8 @@ pub trait BlobConfig: 'static + Send + Sync {
 /// It is identity to [external_storage::UnpinReader],
 /// only for decoupling external_storage and cloud package.
 ///
-/// See the documentation of [external_storage::UnpinReader] for why those wrappers exists.
+/// See the documentation of [external_storage::UnpinReader] for why those
+/// wrappers exists.
 pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
 
 impl AsyncRead for PutResource {

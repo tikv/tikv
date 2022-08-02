@@ -1,13 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::ReleasedLock;
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::commands::{CommandExt, ReleasedLocks, SyncCommand, SyncCommandContext};
-use crate::storage::txn::Error as TxnError;
-use crate::storage::Error as StorageError;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
+
 use txn_types::Key;
+
+use crate::storage::{
+    mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
+    txn::{
+        commands::{CommandExt, ReleasedLocks, SyncCommand, SyncCommandContext},
+        Error as TxnError,
+    },
+    Error as StorageError,
+};
 
 command! {
     /// Wake up as many legacy pessimistic lock that's waiting on the specified key as possible.

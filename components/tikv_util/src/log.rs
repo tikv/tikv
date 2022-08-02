@@ -6,10 +6,13 @@ macro_rules! crit( ($($args:tt)+) => {
     ::slog_global::crit!($($args)+)
 };);
 
-/// Logs a error level message using the slog global logger. /// Use '?' to output error in debug format or '%' to ouput error in display format.
-/// As the third and forth rules shown, the last log field should follow a ',' to seperate the 'err' field. eg. `error!(?e, "msg"; "foo" => foo,);`
-/// If you don't want to output error code, just use the common form like other macros.
-/// Require `slog_global` dependency and `#![feature(min_speacilization)]` in all crates.
+/// Logs a error level message using the slog global logger. /// Use '?' to
+/// output error in debug format or '%' to output error in display format. As
+/// the third and forth rules shown, the last log field should follow a ',' to
+/// separate the 'err' field. eg. `error!(?e, "msg"; "foo" => foo,);`
+/// If you don't want to output error code, just use the common form like other
+/// macros. Require `slog_global` dependency and
+/// `#![feature(min_speacilization)]` in all crates.
 #[macro_export]
 macro_rules! error {
     (?$e:expr; $l:literal) => {

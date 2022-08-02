@@ -1,15 +1,27 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::time::{monotonic_raw_now, Instant};
+use std::{
+    cmp::{Ord, Ordering, Reverse},
+    collections::BinaryHeap,
+    sync::{mpsc, Arc},
+    thread::Builder,
+    time::Duration,
+};
+
 use lazy_static::lazy_static;
-use std::cmp::{Ord, Ordering, Reverse};
-use std::collections::BinaryHeap;
-use std::sync::{mpsc, Arc};
-use std::thread::Builder;
-use std::time::Duration;
 use time::Timespec;
 use tokio_executor::park::ParkThread;
-use tokio_timer::{self, clock::Clock, clock::Now, timer::Handle, Delay};
+use tokio_timer::{
+    self,
+    clock::{Clock, Now},
+    timer::Handle,
+    Delay,
+};
+
+use crate::{
+    sys::thread::StdThreadBuildWrapper,
+    time::{monotonic_raw_now, Instant},
+};
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -36,11 +48,11 @@ impl<T> Timer<T> {
         self.pending.peek().map(|task| task.0.next_tick)
     }
 
-    /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before `instant`.
-    /// Returns `None` if no tasks should be ticked any more.
+    /// Pops a `TimeoutTask` from the `Timer`, which should be ticked before
+    /// `instant`. Returns `None` if no tasks should be ticked any more.
     ///
-    /// The normal use case is keeping `pop_task_before` until get `None` in order
-    /// to retrieve all available events.
+    /// The normal use case is keeping `pop_task_before` until get `None` in
+    /// order to retrieve all available events.
     pub fn pop_task_before(&mut self, instant: Instant) -> Option<T> {
         if self
             .pending
@@ -89,7 +101,7 @@ fn start_global_timer() -> Handle {
     let props = crate::thread_group::current_properties();
     Builder::new()
         .name(thd_name!("timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             crate::thread_group::set_properties(props);
             tikv_alloc::add_thread_memory_accessor();
             let mut timer = tokio_timer::Timer::default();
@@ -109,8 +121,8 @@ fn start_global_timer() -> Handle {
 struct TimeZero {
     /// An arbitrary time used as the zero time.
     ///
-    /// Note that `zero` doesn't have to be related to `steady_time_point`, as what's
-    /// observed here is elapsed time instead of time point.
+    /// Note that `zero` doesn't have to be related to `steady_time_point`, as
+    /// what's observed here is elapsed time instead of time point.
     zero: std::time::Instant,
     /// A base time point.
     ///
@@ -123,8 +135,8 @@ struct TimeZero {
 /// Time produced by the clock is not affected by clock jump or time adjustment.
 /// Internally it uses CLOCK_MONOTONIC_RAW to get a steady time source.
 ///
-/// `Instant`s produced by this clock can't be compared or used to calculate elapse
-/// unless they are produced using the same zero time.
+/// `Instant`s produced by this clock can't be compared or used to calculate
+/// elapse unless they are produced using the same zero time.
 #[derive(Clone)]
 pub struct SteadyClock {
     zero: Arc<TimeZero>,
@@ -188,7 +200,7 @@ fn start_global_steady_timer() -> SteadyTimer {
     let clock_ = clock.clone();
     Builder::new()
         .name(thd_name!("steady-timer"))
-        .spawn(move || {
+        .spawn_wrapper(move || {
             let c = Clock::new_with_now(clock_);
             let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
             tx.send(timer.handle()).unwrap();
@@ -205,9 +217,9 @@ fn start_global_steady_timer() -> SteadyTimer {
 
 #[cfg(test)]
 mod tests {
+    use futures::{compat::Future01CompatExt, executor::block_on};
+
     use super::*;
-    use futures::compat::Future01CompatExt;
-    use futures::executor::block_on;
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {

@@ -1,25 +1,28 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::{
+    future::Future,
+    sync::{mpsc::SyncSender, Arc, Mutex},
+};
 
-use futures::channel::oneshot;
-use futures::future::TryFutureExt;
+use file_system::{set_io_type, IoType};
+use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::IntGauge;
 use thiserror::Error;
-use yatp::pool::Remote;
-use yatp::queue::Extras;
-use yatp::task::future::TaskCell;
-
-use file_system::{set_io_type, IOType};
-use tikv_util::sys::SysQuota;
-use tikv_util::yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder};
+use tikv_util::{
+    sys::SysQuota,
+    yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
+};
+use tracker::TrackedFuture;
+use yatp::{pool::Remote, queue::Extras, task::future::TaskCell};
 
 use self::metrics::*;
-use crate::config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY};
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter};
+use crate::{
+    config::{UnifiedReadPoolConfig, UNIFIED_READPOOL_MIN_CONCURRENCY},
+    storage::kv::{destroy_tls_engine, set_tls_engine, Engine, FlowStatsReporter},
+};
 
 pub enum ReadPool {
     FuturePools {
@@ -119,10 +122,10 @@ impl ReadPoolHandle {
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
                 let task_cell = TaskCell::new(
-                    async move {
+                    TrackedFuture::new(async move {
                         f.await;
                         running_tasks.dec();
-                    },
+                    }),
                     extras,
                 );
                 remote.spawn(task_cell);
@@ -258,7 +261,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
-            set_io_type(IOType::ForegroundRead);
+            set_io_type(IoType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
@@ -289,13 +292,14 @@ impl From<Vec<FuturePool>> for ReadPool {
     }
 }
 
-pub struct ReadPoolConfigManager(pub ReadPoolHandle);
+pub struct ReadPoolConfigManager(pub ReadPoolHandle, pub SyncSender<usize>);
 
 impl ConfigManager for ReadPoolConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> CfgResult<()> {
         if let Some(ConfigValue::Module(unified)) = change.get("unified") {
             if let Some(ConfigValue::Usize(max_thread_count)) = unified.get("max_thread_count") {
                 self.0.scale_pool_size(*max_thread_count);
+                self.1.send(*max_thread_count)?;
             }
         }
         info!(
@@ -333,12 +337,13 @@ mod metrics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::storage::TestEngineBuilder;
+    use std::{thread, time::Duration};
+
     use futures::channel::oneshot;
     use raftstore::store::{ReadStats, WriteStats};
-    use std::thread;
-    use std::time::Duration;
+
+    use super::*;
+    use crate::storage::TestEngineBuilder;
 
     #[derive(Clone)]
     struct DummyReporter;
@@ -375,8 +380,8 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -386,7 +391,7 @@ mod tests {
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
     }
 
     #[test]
@@ -417,8 +422,8 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -429,7 +434,7 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5) {
@@ -466,8 +471,8 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -482,7 +487,7 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5) {

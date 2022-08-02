@@ -3,15 +3,19 @@
 // #[PerformanceCriticalPath]
 use txn_types::Key;
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::commands::{
-    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
-    WriteResult,
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        commit, Error, ErrorInner, Result,
+    },
+    ProcessResult, Snapshot, TxnStatus,
 };
-use crate::storage::txn::{commit, Error, ErrorInner, Result};
-use crate::storage::{ProcessResult, Snapshot, TxnStatus};
 
 command! {
     /// Commit the transaction that started at `lock_ts`.
@@ -19,7 +23,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        display => "kv::command::commit {} {} -> {} | {:?}", (keys.len, lock_ts, commit_ts, ctx),
+        display => "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx),
         content => {
             /// The keys affected.
             keys: Vec<Key>,
@@ -33,6 +37,7 @@ command! {
 impl CommandExt for Commit {
     ctx!();
     tag!(commit);
+    request_type!(KvCommit);
     ts!(commit_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

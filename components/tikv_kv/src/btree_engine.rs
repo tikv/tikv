@@ -1,29 +1,33 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
-use std::collections::Bound::{self, Excluded, Included, Unbounded};
-use std::default::Default;
-use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::RangeBounds;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::{
+        BTreeMap,
+        Bound::{self, Excluded, Included, Unbounded},
+    },
+    default::Default,
+    fmt::{self, Debug, Display, Formatter},
+    ops::RangeBounds,
+    sync::{Arc, RwLock},
+};
 
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
 
+use super::SnapContext;
 use crate::{
     Callback as EngineCallback, DummySnapshotExt, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, Snapshot, WriteData,
 };
 
-use super::SnapContext;
-
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
-/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and benchmarks.
-/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not isolated,
-/// they will be affected by the later modifies.
+/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and
+/// benchmarks. Note: The `snapshot()` and `async_snapshot()` methods are fake,
+/// the returned snapshot is not isolated, they will be affected by the later
+/// modifies.
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
@@ -99,7 +103,8 @@ impl Engine for BTreeEngine {
         Ok(())
     }
 
-    /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
+    /// warning: It returns a fake snapshot whose content will be affected by
+    /// the later modifies!
     fn async_snapshot(
         &self,
         _ctx: SnapContext<'_>,
@@ -152,9 +157,10 @@ impl BTreeEngineIterator {
         }
     }
 
-    /// In general, there are 2 endpoints in a range, the left one and the right one.
-    /// This method will seek to the left one if left is `true`, else seek to the right one.
-    /// Returns true when the endpoint is valid, which means the endpoint exist and in `self.bounds`.
+    /// In general, there are 2 endpoints in a range, the left one and the right
+    /// one. This method will seek to the left one if left is `true`, else seek
+    /// to the right one. Returns true when the endpoint is valid, which means
+    /// the endpoint exist and in `self.bounds`.
     fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
@@ -243,11 +249,8 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
-    fn iter(&self, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
-        self.iter_cf(CF_DEFAULT, iter_opt)
-    }
     #[inline]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
@@ -293,11 +296,13 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::tests::*;
-    use super::super::{CfStatistics, TEST_ENGINE_CFS};
-    use super::*;
-    use crate::{Cursor, ScanMode};
     use engine_traits::IterOptions;
+
+    use super::{
+        super::{tests::*, CfStatistics, TEST_ENGINE_CFS},
+        *,
+    };
+    use crate::{Cursor, ScanMode};
 
     #[test]
     fn test_btree_engine() {
@@ -336,13 +341,21 @@ pub mod tests {
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
         assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());

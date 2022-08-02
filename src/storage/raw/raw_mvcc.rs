@@ -1,10 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
-
-use engine_traits::{CfName, DATA_KEY_PREFIX_LEN};
-use engine_traits::{IterOptions, ReadOptions};
+use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
 use txn_types::{Key, TimeStamp, Value};
+
+use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
 
 const VEC_SHRINK_THRESHOLD: usize = 512; // shrink vec when it's over 512.
 
@@ -20,7 +19,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
     pub fn seek_first_key_value_cf(
         &self,
-        cf: Option<CfName>,
+        cf: CfName,
         opts: Option<ReadOptions>,
         key: &Key,
     ) -> Result<Option<Value>> {
@@ -28,12 +27,9 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
         iter_opt.set_fill_cache(opts.map_or(true, |v| v.fill_cache()));
         iter_opt.use_prefix_seek();
         iter_opt.set_prefix_same_as_start(true);
-        let end_key = key.clone().append_ts(TimeStamp::zero());
-        iter_opt.set_upper_bound(end_key.as_encoded(), DATA_KEY_PREFIX_LEN);
-        let mut iter = match cf {
-            Some(cf_name) => self.iter_cf(cf_name, iter_opt)?,
-            None => self.iter(iter_opt)?,
-        };
+        let upper_bound = key.clone().append_ts(TimeStamp::zero()).into_encoded();
+        iter_opt.set_vec_upper_bound(upper_bound, DATA_KEY_PREFIX_LEN);
+        let mut iter = self.iter(cf, iter_opt)?;
         if iter.seek(key)? {
             Ok(Some(iter.value().to_owned()))
         } else {
@@ -44,29 +40,22 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     type Iter = RawMvccIterator<S::Iter>;
-    type Ext<'a>
-    where
-        S: 'a,
-    = S::Ext<'a>;
+    type Ext<'a> = S::Ext<'a> where S: 'a;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(None, None, key)
+        self.seek_first_key_value_cf(CF_DEFAULT, None, key)
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(Some(cf), None, key)
+        self.seek_first_key_value_cf(cf, None, key)
     }
 
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        self.seek_first_key_value_cf(Some(cf), Some(opts), key)
+        self.seek_first_key_value_cf(cf, Some(opts), key)
     }
 
-    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(RawMvccIterator::new(self.snap.iter(iter_opt)?))
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
-        Ok(RawMvccIterator::new(self.snap.iter_cf(cf, iter_opt)?))
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
+        Ok(RawMvccIterator::new(self.snap.iter(cf, iter_opt)?))
     }
 
     #[inline]
@@ -162,8 +151,9 @@ impl<I: Iterator> RawMvccIterator<I> {
 }
 
 // RawMvccIterator always return the latest ts of user key.
-// ts is desc encoded after user key, so it's placed the first one for the same user key.
-// Only one-way direction scan is supported. Like `seek` then `next` or `seek_for_prev` then `prev`
+// ts is desc encoded after user key, so it's placed the first one for the same
+// user key. Only one-way direction scan is supported. Like `seek` then `next`
+// or `seek_for_prev` then `prev`
 impl<I: Iterator> Iterator for RawMvccIterator<I> {
     fn next(&mut self) -> Result<bool> {
         if !self.is_forward {
@@ -228,7 +218,8 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 
     fn key(&self) -> &[u8] {
-        // need map_or_else to lazy evaluate the default func, as it will abort when invalid.
+        // need map_or_else to lazy evaluate the default func, as it will abort when
+        // invalid.
         self.cur_key.as_deref().unwrap_or_else(|| self.inner.key())
     }
 
@@ -236,5 +227,128 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
         self.cur_value
             .as_deref()
             .unwrap_or_else(|| self.inner.value())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fmt::Debug,
+        iter::Iterator as StdIterator,
+        sync::mpsc::{channel, Sender},
+    };
+
+    use api_version::{ApiV2, KvFormat, RawValue};
+    use engine_traits::{raw_ttl::ttl_to_expire_ts, CF_DEFAULT};
+    use kvproto::kvrpcpb::Context;
+    use tikv_kv::{Engine, Iterator as EngineIterator, Modify, WriteData};
+
+    use super::*;
+    use crate::storage::{raw::encoded::RawEncodeSnapshot, TestEngineBuilder};
+
+    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> tikv_kv::Callback<T> {
+        Box::new(move |x: tikv_kv::Result<T>| {
+            x.unwrap();
+            done.send(id).unwrap();
+        })
+    }
+
+    #[test]
+    fn test_raw_mvcc_snapshot() {
+        // Use `Engine` to be independent to `Storage`.
+        // Do not set "api version" to use `Engine` as a raw RocksDB.
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        let ctx = Context::default();
+
+        // TODO: Consider another way other than hard coding, to generate keys' prefix
+        // of test data.
+        let test_data = vec![
+            (b"r\0a".to_vec(), b"aa".to_vec(), 10),
+            (b"r\0aa".to_vec(), b"aaa".to_vec(), 20),
+            (b"r\0b".to_vec(), b"bb".to_vec(), 30),
+            (b"r\0bb".to_vec(), b"bbb".to_vec(), 40),
+            (b"r\0c".to_vec(), b"cc".to_vec(), 50),
+            (b"r\0cc".to_vec(), b"ccc".to_vec(), 60),
+            (b"r\0a".to_vec(), b"n_aa".to_vec(), 70),
+            (b"r\0aa".to_vec(), b"n_aaa".to_vec(), 80),
+            (b"r\0b".to_vec(), b"n_bb".to_vec(), 90),
+            (b"r\0bb".to_vec(), b"n_bbb".to_vec(), 100),
+            (b"r\0c".to_vec(), b"n_cc".to_vec(), 110),
+            (b"r\0cc".to_vec(), b"n_ccc".to_vec(), 120),
+        ];
+        let ttl = 300;
+
+        for (key, value, ts) in test_data.clone() {
+            let raw_value = RawValue {
+                user_value: value,
+                expire_ts: ttl_to_expire_ts(ttl),
+                is_delete: false,
+            };
+            let m = Modify::Put(
+                CF_DEFAULT,
+                ApiV2::encode_raw_key_owned(key, Some(ts.into())),
+                ApiV2::encode_raw_value_owned(raw_value),
+            );
+            let batch = WriteData::from_modifies(vec![m]);
+            engine
+                .async_write(&ctx, batch, expect_ok_callback(tx.clone(), 0))
+                .unwrap();
+            rx.recv().unwrap();
+        }
+
+        // snapshot
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+        let raw_mvcc_snapshot = RawMvccSnapshot::from_snapshot(snapshot);
+        let encode_snapshot: RawEncodeSnapshot<_, ApiV2> =
+            RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
+
+        // get_cf
+        for &(ref key, ref value, _) in &test_data[6..12] {
+            let res = encode_snapshot.get_cf(CF_DEFAULT, &ApiV2::encode_raw_key(key, None));
+            assert_eq!(res.unwrap(), Some(value.to_owned()));
+        }
+
+        // seek
+        let iter_opt = IterOptions::default();
+        let mut iter = encode_snapshot.iter(CF_DEFAULT, iter_opt).unwrap();
+        let mut pairs = vec![];
+        let raw_key = ApiV2::encode_raw_key_owned(b"r\0a".to_vec(), None);
+        iter.seek(&raw_key).unwrap();
+        while iter.valid().unwrap() {
+            let (user_key, _) =
+                ApiV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
+            pairs.push((user_key, iter.value().to_owned()));
+            iter.next().unwrap();
+        }
+
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .clone()
+            .into_iter()
+            .skip(6)
+            .map(|(key, val, _)| (key, val))
+            .collect();
+        assert_eq!(pairs, ret_data);
+
+        // seek_for_prev
+        let raw_key = ApiV2::encode_raw_key_owned(b"r\0z".to_vec(), None);
+        iter.seek_for_prev(&raw_key).unwrap();
+        pairs.clear();
+        while iter.valid().unwrap() {
+            let (user_key, _) =
+                ApiV2::decode_raw_key_owned(Key::from_encoded_slice(iter.key()), true).unwrap();
+            pairs.push((user_key, iter.value().to_owned()));
+            iter.prev().unwrap();
+        }
+        let ret_data: Vec<(Vec<u8>, Vec<u8>)> = test_data
+            .into_iter()
+            .skip(6)
+            .rev()
+            .map(|(key, val, _)| (key, val))
+            .collect();
+        assert_eq!(pairs, ret_data);
+
+        // two way direction scan is not supported.
+        assert_eq!(iter.next().is_err(), true);
     }
 }

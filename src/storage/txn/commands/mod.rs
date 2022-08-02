@@ -23,6 +23,15 @@ pub(crate) mod rollback;
 pub(crate) mod txn_heart_beat;
 pub(crate) mod wake_up_legacy_pessimistic_lock_waits;
 
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    iter,
+    marker::PhantomData,
+    num::NonZeroU64,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
+
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
 pub use atomic_store::RawAtomicStore;
 pub use check_secondary_locks::CheckSecondaryLocks;
@@ -30,52 +39,45 @@ pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
 pub use pessimistic_rollback::PessimisticRollback;
 pub use prewrite::{one_pc_commit, Prewrite, PrewritePessimistic};
-pub use resolve_lock::ResolveLock;
+pub use resolve_lock::{ResolveLock, RESOLVE_LOCK_BATCH_SIZE};
 pub use resolve_lock_lite::ResolveLockLite;
 pub use resolve_lock_readphase::ResolveLockReadPhase;
 pub use rollback::Rollback;
 use tikv_util::deadline::Deadline;
+use tracker::RequestType;
 pub use txn_heart_beat::TxnHeartBeat;
-
-pub use resolve_lock::RESOLVE_LOCK_BATCH_SIZE;
-
-use std::fmt::{self, Debug, Display, Formatter};
-use std::iter;
-use std::marker::PhantomData;
-use std::num::NonZeroU64;
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-
-use kvproto::kvrpcpb::*;
 use txn_types::{Key, TimeStamp, Value, Write};
 
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::{LockManager, WaitTimeout};
-use crate::storage::mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader};
-use crate::storage::txn::commands::wake_up_legacy_pessimistic_lock_waits::WakeUpLegacyPessimisticLockWaits;
-use crate::storage::txn::latch;
-use crate::storage::txn::scheduler::PartialPessimisticLockRequestSharedState;
-use crate::storage::txn::{ProcessResult, Result};
-use crate::storage::types::{
-    MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
-    SecondaryLocksStatus, StorageCallbackType, TxnStatus,
-};
 use crate::storage::{
-    metrics, Error as StorageError, Result as StorageResult, Snapshot, Statistics,
+    kv::WriteData,
+    lock_manager::{LockManager, WaitTimeout},
+    metrics,
+    mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
+    txn::{
+        commands::wake_up_legacy_pessimistic_lock_waits::WakeUpLegacyPessimisticLockWaits, latch,
+        scheduler::PartialPessimisticLockRequestSharedState, ProcessResult, Result,
+    },
+    types::{
+        MvccInfo, PessimisticLockKeyResult, PessimisticLockResults, PrewriteResult,
+        SecondaryLocksStatus, StorageCallbackType, TxnStatus,
+    },
+    Error as StorageError, Result as StorageResult, Snapshot, Statistics,
 };
-use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 
 /// Store Transaction scheduler commands.
 ///
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](crate::storage::Storage) with functions like
+/// These are typically scheduled and used through the
+/// [`Storage`](crate::storage::Storage) with functions like
 /// [`prewrite`](prewrite::Prewrite) trait and are executed asynchronously.
 pub enum Command {
     Prewrite(Prewrite),
@@ -101,22 +103,23 @@ pub enum Command {
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
 ///
-/// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are converted to
-/// this type via a series of transformations. That process is described below using
-/// `CommitRequest` as an example:
-/// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs, where it
-/// needs to be transformed to a `TypedCommand` before being passed to the
-/// `storage.sched_txn_command` method.
-/// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its generic
-/// parameter indicates that the result type for this instance of `TypedCommand` is
-/// going to be `TxnStatus` - one of the variants of the `StorageCallback` enum.
-/// 3. In the above `from` method, the details of the commit request are captured by
-/// creating an instance of the struct `storage::txn::commands::commit::Command`
-/// via its `new` method.
-/// 4. This struct is wrapped in a variant of the enum `storage::txn::commands::Command`.
-/// This enum exists to facilitate generic operations over different commands.
-/// 5. Finally, the `Command` enum variant for `Commit` is converted to the `TypedCommand`
-/// using the `From<Command>` impl for `TypedCommand`.
+/// Incoming grpc requests (like `CommitRequest`, `PrewriteRequest`) are
+/// converted to this type via a series of transformations. That process is
+/// described below using `CommitRequest` as an example:
+/// 1. A `CommitRequest` is handled by the `future_commit` method in kv.rs,
+/// where it needs to be transformed to a `TypedCommand` before being passed to
+/// the `storage.sched_txn_command` method.
+/// 2. The `From<CommitRequest>` impl for `TypedCommand` gets chosen, and its
+/// generic parameter indicates that the result type for this instance of
+/// `TypedCommand` is going to be `TxnStatus` - one of the variants of the
+/// `StorageCallback` enum. 3. In the above `from` method, the details of the
+/// commit request are captured by creating an instance of the struct
+/// `storage::txn::commands::commit::Command` via its `new` method.
+/// 4. This struct is wrapped in a variant of the enum
+/// `storage::txn::commands::Command`. This enum exists to facilitate generic
+/// operations over different commands. 5. Finally, the `Command` enum variant
+/// for `Commit` is converted to the `TypedCommand` using the `From<Command>`
+/// impl for `TypedCommand`.
 ///
 /// For other requests, see the corresponding `future_` method, the `From` trait
 /// implementation and so on.
@@ -353,16 +356,18 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
-/// Represents for a scheduler command, when should the response sent to the client.
-/// For most cases, the response should be sent after the result being successfully applied to
-/// the storage (if needed). But in some special cases, some optimizations allows the response to be
-/// returned at an earlier phase.
+/// Represents for a scheduler command, when should the response sent to the
+/// client. For most cases, the response should be sent after the result being
+/// successfully applied to the storage (if needed). But in some special cases,
+/// some optimizations allows the response to be returned at an earlier phase.
 ///
-/// Note that this doesn't affect latch releasing. The latch and the memory lock (if any) are always
-/// released after applying, regardless of when the response is sent.
+/// Note that this doesn't affect latch releasing. The latch and the memory lock
+/// (if any) are always released after applying, regardless of when the response
+/// is sent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResponsePolicy {
-    /// Return the response to the client when the command has finished applying.
+    /// Return the response to the client when the command has finished
+    /// applying.
     OnApplied,
     /// Return the response after finishing Raft committing.
     OnCommitted,
@@ -407,7 +412,8 @@ pub struct WriteResultLockInfo {
     pub lock_hash: u64,
     pub hash_for_latch: u64,
     pub key_cb: Option<PessimisticLockKeyCallback>,
-    // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest, Option<Callback<PessimisticLockKeyResult>>)>,
+    // pub locks: Vec<(usize, LockInfo, lock_manager::LockDigest,
+    // Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
@@ -506,6 +512,10 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 
 pub trait CommandExt: Display {
     fn tag(&self) -> metrics::CommandKind;
+
+    fn request_type(&self) -> RequestType {
+        RequestType::Unknown
+    }
 
     fn get_ctx(&self) -> &Context;
 
@@ -706,6 +716,10 @@ impl Command {
         self.command_ext().tag()
     }
 
+    pub fn request_type(&self) -> RequestType {
+        self.command_ext().request_type()
+    }
+
     pub fn ts(&self) -> TimeStamp {
         self.command_ext().ts()
     }
@@ -747,12 +761,14 @@ impl Debug for Command {
     }
 }
 
-/// Commands that do not need to modify the database during execution will implement this trait.
+/// Commands that do not need to modify the database during execution will
+/// implement this trait.
 pub trait ReadCommand<S: Snapshot>: CommandExt {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult>;
 }
 
-/// Commands that need to modify the database during execution will implement this trait.
+/// Commands that need to modify the database during execution will implement
+/// this trait.
 pub trait WriteCommand<S: Snapshot, L: LockManager>: CommandExt {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult>;
 }
@@ -770,13 +786,14 @@ pub trait SyncCommand: CommandExt {
 
 #[cfg(test)]
 pub mod test_util {
-    use super::*;
-
-    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::txn::{Error, ErrorInner, Result};
-    use crate::storage::DummyLockManager;
-    use crate::storage::Engine;
     use txn_types::Mutation;
+
+    use super::*;
+    use crate::storage::{
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{Error, ErrorInner, Result},
+        DummyLockManager, Engine,
+    };
 
     // Some utils for tests that may be used in multiple source code files.
 

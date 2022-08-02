@@ -10,30 +10,25 @@ mod util;
 
 mod config;
 pub mod errors;
-pub use self::client::{DummyPdClient, RpcClient};
-pub use self::config::Config;
-pub use self::errors::{Error, Result};
-pub use self::feature_gate::{Feature, FeatureGate};
-pub use self::util::PdConnector;
-pub use self::util::REQUEST_RECONNECT_INTERVAL;
-pub use self::util::{merge_bucket_stats, new_bucket_stats};
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{cmp::Ordering, collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use grpcio::ClientSStreamReceiver;
-use kvproto::metapb;
-use kvproto::pdpb;
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb, pdpb,
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
+
+pub use self::{
+    client::{DummyPdClient, RpcClient},
+    config::Config,
+    errors::{Error, Result},
+    feature_gate::{Feature, FeatureGate},
+    util::{merge_bucket_stats, new_bucket_stats, PdConnector, REQUEST_RECONNECT_INTERVAL},
+};
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
@@ -131,13 +126,13 @@ impl BucketMeta {
 pub struct BucketStat {
     pub meta: Arc<BucketMeta>,
     pub stats: metapb::BucketStats,
-    pub last_report_time: Instant,
+    pub create_time: Instant,
 }
 
 impl Default for BucketStat {
     fn default() -> Self {
         Self {
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
             meta: Arc::default(),
             stats: metapb::BucketStats::default(),
         }
@@ -149,7 +144,7 @@ impl BucketStat {
         Self {
             meta,
             stats,
-            last_report_time: Instant::now(),
+            create_time: Instant::now(),
         }
     }
 
@@ -229,10 +224,10 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Creates the cluster with cluster ID, node, stores and first Region.
-    /// If the cluster is already bootstrapped, return ClusterBootstrapped error.
-    /// When a node starts, if it finds nothing in the node and
-    /// cluster is not bootstrapped, it begins to create node, stores, first Region
-    /// and then call bootstrap_cluster to let PD know it.
+    /// If the cluster is already bootstrapped, return ClusterBootstrapped
+    /// error. When a node starts, if it finds nothing in the node and
+    /// cluster is not bootstrapped, it begins to create node, stores, first
+    /// Region and then call bootstrap_cluster to let PD know it.
     /// It may happen that multi nodes start at same time to try to
     /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
@@ -268,11 +263,12 @@ pub trait PdClient: Send + Sync {
     /// - For bootstrapping, PD knows first Region with `bootstrap_cluster`.
     /// - For changing Peer, PD determines where to add a new Peer in some store
     ///   for this Region.
-    /// - For Region splitting, PD determines the new Region id and Peer id for the
-    ///   split Region.
-    /// - For Region merging, PD knows which two Regions will be merged and which Region
-    ///   and Peers will be removed.
-    /// - For auto-balance, PD determines how to move the Region from one store to another.
+    /// - For Region splitting, PD determines the new Region id and Peer id for
+    ///   the split Region.
+    /// - For Region merging, PD knows which two Regions will be merged and
+    ///   which Region and Peers will be removed.
+    /// - For auto-balance, PD determines how to move the Region from one store
+    ///   to another.
 
     /// Gets store information if it is not a tombstone store.
     fn get_store(&self, _store_id: u64) -> Result<metapb::Store> {
@@ -385,7 +381,8 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
-    /// Registers a handler to the client, which will be invoked after reconnecting to PD.
+    /// Registers a handler to the client, which will be invoked after
+    /// reconnecting to PD.
     ///
     /// Please note that this method should only be called once.
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F)
@@ -414,9 +411,20 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Gets a batch of timestamps from PD.
-    /// Return a timestamp with (physical, logical), indicating that timestamps allocated are:
-    /// [Timestamp(physical, logical - count + 1), Timestamp(physical, logical)]
+    /// Return a timestamp with (physical, logical), indicating that timestamps
+    /// allocated are: [Timestamp(physical, logical - count + 1),
+    /// Timestamp(physical, logical)]
     fn batch_get_tso(&self, _count: u32) -> PdFuture<TimeStamp> {
+        unimplemented!()
+    }
+
+    /// Set a service safe point.
+    fn update_service_safe_point(
+        &self,
+        _name: String,
+        _safepoint: TimeStamp,
+        _ttl: Duration,
+    ) -> PdFuture<()> {
         unimplemented!()
     }
 

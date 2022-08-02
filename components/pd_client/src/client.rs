@@ -1,38 +1,46 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
-use futures::channel::mpsc;
-use futures::compat::{Compat, Future01CompatExt};
-use futures::executor::block_on;
-use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
+use futures::{
+    channel::mpsc,
+    compat::{Compat, Future01CompatExt},
+    executor::block_on,
+    future::{self, BoxFuture, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::StreamExt,
+};
 use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
-
-use kvproto::metapb;
-use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{
-    RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus,
+use kvproto::{
+    metapb,
+    pdpb::{self, Member},
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
-use tikv_util::time::{duration_to_sec, Instant};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::{box_err, debug, error, info, thd_name, warn};
-use tikv_util::{Either, HandyRwLock};
+use tikv_util::{
+    box_err, debug, error, info, thd_name,
+    time::{duration_to_sec, Instant},
+    timer::GLOBAL_TIMER_HANDLE,
+    warn, Either, HandyRwLock,
+};
 use txn_types::TimeStamp;
-use yatp::task::future::TaskCell;
-use yatp::ThreadPool;
+use yatp::{task::future::TaskCell, ThreadPool};
 
-use super::metrics::*;
-use super::util::{check_resp_header, sync_request, Client, PdConnector};
-use super::{BucketStat, Config, FeatureGate, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{
+    metrics::*,
+    util::{check_resp_header, sync_request, Client, PdConnector},
+    BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
+    UnixSecs, REQUEST_TIMEOUT,
+};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -540,7 +548,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_region_by_id"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                if resp.has_region() {
+                if resp.has_region() && resp.has_leader() {
                     Ok(Some((resp.take_region(), resp.take_leader())))
                 } else {
                     Ok(None)
@@ -611,6 +619,9 @@ impl PdClient for RpcClient {
                             if last > last_report {
                                 last_report = last - 1;
                             }
+                            fail::fail_point!("region_heartbeat_send_failed", |_| {
+                                Err(Error::Grpc(grpcio::Error::RemoteStopped))
+                            });
                             Ok((r, WriteFlags::default()))
                         }))
                         .await;
@@ -635,7 +646,8 @@ impl PdClient for RpcClient {
                 .expect("expect region heartbeat sender");
             let ret = sender
                 .unbounded_send(req)
-                .map_err(|e| Error::Other(Box::new(e)));
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
+
             Box::pin(future::ready(ret)) as PdFuture<_>
         };
 
@@ -719,7 +731,7 @@ impl PdClient for RpcClient {
     fn store_heartbeat(
         &self,
         mut stats: pdpb::StoreStats,
-        report_opt: Option<pdpb::StoreReport>,
+        store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         let timer = Instant::now();
@@ -730,7 +742,7 @@ impl PdClient for RpcClient {
             .mut_interval()
             .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
-        if let Some(report) = report_opt {
+        if let Some(report) = store_report {
             req.set_store_report(report);
         }
         if let Some(status) = dr_autosync_status {
@@ -900,6 +912,44 @@ impl PdClient for RpcClient {
             .execute()
     }
 
+    fn update_service_safe_point(
+        &self,
+        name: String,
+        safe_point: TimeStamp,
+        ttl: Duration,
+    ) -> PdFuture<()> {
+        let begin = Instant::now();
+        let mut req = pdpb::UpdateServiceGcSafePointRequest::default();
+        req.set_header(self.header());
+        req.set_service_id(name.into());
+        req.set_ttl(ttl.as_secs() as _);
+        req.set_safe_point(safe_point.into_inner());
+        let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
+            let handler = client
+                .inner
+                .rl()
+                .client_stub
+                .update_service_gc_safe_point_async_opt(&r, Self::call_option(client))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fail to request PD {} err {:?}",
+                        "update_service_safe_point", e
+                    )
+                });
+            Box::pin(async move {
+                let resp = handler.await?;
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["update_service_safe_point"])
+                    .observe(duration_to_sec(begin.saturating_elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(())
+            }) as PdFuture<_>
+        };
+        self.pd_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn feature_gate(&self) -> &FeatureGate {
         &self.pd_client.feature_gate
     }
@@ -1002,7 +1052,7 @@ impl PdClient for RpcClient {
                 .expect("expect region buckets sender");
             let ret = sender
                 .unbounded_send(req)
-                .map_err(|e| Error::Other(Box::new(e)));
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
             Box::pin(future::ready(ret)) as PdFuture<_>
         };
 

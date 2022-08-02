@@ -1,19 +1,16 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::thread;
-use std::time;
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    thread, time,
+};
 
+use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use futures::executor::block_on;
 use kvproto::kvrpcpb::{Context, KeyRange};
 use raft::eraftpb::MessageType;
-
-use engine_traits::{CfName, IterOptions, CF_DEFAULT};
 use test_raftstore::*;
-use tikv::storage::kv::*;
-use tikv::storage::CfStatistics;
-use tikv_util::codec::bytes;
-use tikv_util::HandyRwLock;
+use tikv::storage::{kv::*, CfStatistics};
+use tikv_util::{codec::bytes, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
 #[test]
@@ -388,20 +385,7 @@ fn assert_none_cf<E: Engine>(ctx: SnapContext<'_>, engine: &E, cf: CfName, key: 
     assert_eq!(snapshot.get_cf(cf, &Key::from_raw(key)).unwrap(), None);
 }
 
-fn assert_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
-    let snapshot = engine.snapshot(ctx).unwrap();
-    let mut cursor = Cursor::new(
-        snapshot.iter(IterOptions::default()).unwrap(),
-        ScanMode::Mixed,
-        false,
-    );
-    let mut statistics = CfStatistics::default();
-    cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
-    assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
-    assert_eq!(cursor.value(&mut statistics), pair.1);
-}
-
-fn assert_seek_cf<E: Engine>(
+fn assert_seek<E: Engine>(
     ctx: SnapContext<'_>,
     engine: &E,
     cf: CfName,
@@ -410,7 +394,7 @@ fn assert_seek_cf<E: Engine>(
 ) {
     let snapshot = engine.snapshot(ctx).unwrap();
     let mut cursor = Cursor::new(
-        snapshot.iter_cf(cf, IterOptions::default()).unwrap(),
+        snapshot.iter(cf, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
     );
@@ -482,14 +466,14 @@ fn batch<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
 
 fn seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     must_put(ctx.pb_ctx, engine, b"x", b"1");
-    assert_seek(ctx.clone(), engine, b"x", (b"x", b"1"));
-    assert_seek(ctx.clone(), engine, b"a", (b"x", b"1"));
+    assert_seek(ctx.clone(), engine, CF_DEFAULT, b"x", (b"x", b"1"));
+    assert_seek(ctx.clone(), engine, CF_DEFAULT, b"a", (b"x", b"1"));
     must_put(ctx.pb_ctx, engine, b"z", b"2");
-    assert_seek(ctx.clone(), engine, b"y", (b"z", b"2"));
-    assert_seek(ctx.clone(), engine, b"x\x00", (b"z", b"2"));
+    assert_seek(ctx.clone(), engine, CF_DEFAULT, b"y", (b"z", b"2"));
+    assert_seek(ctx.clone(), engine, CF_DEFAULT, b"x\x00", (b"z", b"2"));
     let snapshot = engine.snapshot(ctx.clone()).unwrap();
     let mut iter = Cursor::new(
-        snapshot.iter(IterOptions::default()).unwrap(),
+        snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
     );
@@ -508,7 +492,7 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     must_put(ctx.pb_ctx, engine, b"z", b"2");
     let snapshot = engine.snapshot(ctx.clone()).unwrap();
     let mut cursor = Cursor::new(
-        snapshot.iter(IterOptions::default()).unwrap(),
+        snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
         ScanMode::Mixed,
         false,
     );
@@ -528,11 +512,12 @@ fn near_seek<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     must_delete(ctx.pb_ctx, engine, b"z");
 }
 
+// TODO: remove following as the code path of cf is the same.
 fn cf<E: Engine>(ctx: SnapContext<'_>, engine: &E) {
     assert_none_cf(ctx.clone(), engine, "default", b"key");
     must_put_cf(ctx.pb_ctx, engine, "default", b"key", b"value");
     assert_has_cf(ctx.clone(), engine, "default", b"key", b"value");
-    assert_seek_cf(ctx.clone(), engine, "default", b"k", (b"key", b"value"));
+    assert_seek(ctx.clone(), engine, "default", b"k", (b"key", b"value"));
     must_delete_cf(ctx.pb_ctx, engine, "default", b"key");
     assert_none_cf(ctx, engine, "default", b"key");
 }

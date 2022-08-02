@@ -32,9 +32,6 @@ pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub type BytesRef<'a> = &'a [u8];
 
-pub use crate::codec::mysql::{
-    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
-};
 pub use bit_vec::{BitAndIterator, BitVec};
 pub use chunked_vec_bytes::{BytesGuard, BytesWriter, ChunkedVecBytes, PartialBytesWriter};
 pub use chunked_vec_enum::ChunkedVecEnum;
@@ -43,60 +40,61 @@ pub use chunked_vec_set::ChunkedVecSet;
 pub use chunked_vec_sized::ChunkedVecSized;
 
 // Dynamic eval types.
-pub use self::scalar::{ScalarValue, ScalarValueRef};
-pub use self::vector::{VectorValue, VectorValueExt};
-
-use crate::EvalType;
-
+pub use self::{
+    scalar::{ScalarValue, ScalarValueRef},
+    vector::{VectorValue, VectorValueExt},
+};
 use super::Result;
-use crate::codec::convert::ConvertTo;
-use crate::expr::EvalContext;
+pub use crate::codec::mysql::{
+    json::JsonRef, Decimal, Duration, Enum, EnumRef, Json, JsonType, Set, SetRef, Time as DateTime,
+};
+use crate::{codec::convert::ConvertTo, expr::EvalContext, EvalType};
 
-/// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
-/// Rust's `bool` type.
-pub trait AsMySQLBool {
+/// A trait of evaluating current concrete eval type into a MySQL logic value,
+/// represented by Rust's `bool` type.
+pub trait AsMySqlBool {
     /// Evaluates into a MySQL logic value.
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool>;
 }
 
-impl AsMySQLBool for Int {
+impl AsMySqlBool for Int {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(*self != 0)
     }
 }
 
-impl AsMySQLBool for Real {
+impl AsMySqlBool for Real {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(self.into_inner() != 0f64)
     }
 }
 
-impl<'a, T: AsMySQLBool> AsMySQLBool for &'a T {
+impl<'a, T: AsMySqlBool> AsMySqlBool for &'a T {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         (**self).as_mysql_bool(context)
     }
 }
 
-impl AsMySQLBool for Bytes {
+impl AsMySqlBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         self.as_slice().as_mysql_bool(context)
     }
 }
 
-impl<'a> AsMySQLBool for BytesRef<'a> {
+impl<'a> AsMySqlBool for BytesRef<'a> {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty() && ConvertTo::<f64>::convert(self, context)? != 0f64)
     }
 }
 
-impl<'a, T> AsMySQLBool for Option<&'a T>
+impl<'a, T> AsMySqlBool for Option<&'a T>
 where
-    T: AsMySQLBool,
+    T: AsMySqlBool,
 {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
@@ -106,25 +104,25 @@ where
     }
 }
 
-impl<'a> AsMySQLBool for JsonRef<'a> {
+impl<'a> AsMySqlBool for JsonRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_zero())
     }
 }
 
-impl<'a> AsMySQLBool for EnumRef<'a> {
+impl<'a> AsMySqlBool for EnumRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySQLBool for SetRef<'a> {
+impl<'a> AsMySqlBool for SetRef<'a> {
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty())
     }
 }
 
-impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
+impl<'a> AsMySqlBool for Option<BytesRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -133,7 +131,7 @@ impl<'a> AsMySQLBool for Option<BytesRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
+impl<'a> AsMySqlBool for Option<JsonRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -142,7 +140,7 @@ impl<'a> AsMySQLBool for Option<JsonRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
+impl<'a> AsMySqlBool for Option<EnumRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -151,7 +149,7 @@ impl<'a> AsMySQLBool for Option<EnumRef<'a>> {
     }
 }
 
-impl<'a> AsMySQLBool for Option<SetRef<'a>> {
+impl<'a> AsMySqlBool for Option<SetRef<'a>> {
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             None => Ok(false),
@@ -189,27 +187,28 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// panics if the varient mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self>;
 
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Borrows a slice of this concrete type from a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn borrow_vector_value(v: &VectorValue) -> &ChunkedVecSized<Self>;
 }
 
 pub trait EvaluableRet: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
     type ChunkedType: ChunkedVec<Self>;
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Converts a vector of this concrete type into a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn cast_chunk_into_vector_value(vec: Self::ChunkedType) -> VectorValue;
 }
 
 /// # Notes
 ///
-/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0 and the
-/// corresponding value is None.
+/// Make sure operating `bitmap` and `value` together, so while `bitmap` is 0
+/// and the corresponding value is None.
 ///
 /// With this guaranty, we can avoid the following issue:
 ///
-/// For Data [Some(1), Some(2), None], we could have different stored representation:
+/// For Data [Some(1), Some(2), None], we could have different stored
+/// representation:
 ///
 /// Bitmap: 110, Value: 1, 2, 0
 /// Bitmap: 110, Value: 1, 2, 1
@@ -370,8 +369,8 @@ pub trait EvaluableRef<'a>: Clone + std::fmt::Debug + Send + Sync {
     /// panics if the varient mismatches.
     fn borrow_scalar_value_ref(v: ScalarValueRef<'a>) -> Option<Self>;
 
-    /// Borrows a slice of this concrete type from a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    /// Borrows a slice of this concrete type from a `VectorValue` in the same
+    /// type; panics if the varient mismatches.
     fn borrow_vector_value(v: &'a VectorValue) -> Self::ChunkedType;
 
     /// Convert this reference to owned type
@@ -651,8 +650,9 @@ impl<'a> EvaluableRef<'a> for SetRef<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::f64;
+
+    use super::*;
 
     #[test]
     fn test_bytes_as_bool() {

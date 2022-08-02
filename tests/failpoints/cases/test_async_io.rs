@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{atomic::AtomicBool, mpsc, Arc, Mutex},
+    time::Duration,
+};
 
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;

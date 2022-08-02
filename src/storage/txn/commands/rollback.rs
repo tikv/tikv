@@ -1,16 +1,22 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::storage::kv::WriteData;
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{MvccTxn, SnapshotReader};
-use crate::storage::txn::commands::{
-    CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
-    WriteResult,
-};
-use crate::storage::txn::{cleanup, Result};
-use crate::storage::{ProcessResult, Snapshot};
 use txn_types::{Key, TimeStamp};
+
+use crate::storage::{
+    kv::WriteData,
+    lock_manager::LockManager,
+    mvcc::{MvccTxn, SnapshotReader},
+    txn::{
+        cleanup,
+        commands::{
+            CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, WriteCommand, WriteContext,
+            WriteResult,
+        },
+        Result,
+    },
+    ProcessResult, Snapshot,
+};
 
 command! {
     /// Rollback from the transaction that was started at `start_ts`.
@@ -18,7 +24,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        display => "kv::command::rollback keys({}) @ {} | {:?}", (keys.len, start_ts, ctx),
+        display => "kv::command::rollback keys({:?}) @ {} | {:?}", (keys, start_ts, ctx),
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
@@ -29,6 +35,7 @@ command! {
 impl CommandExt for Rollback {
     ctx!();
     tag!(rollback);
+    request_type!(KvRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);
@@ -45,8 +52,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new();
         for k in self.keys {
-            // Rollback is called only if the transaction is known to fail. Under the circumstances,
-            // the rollback record needn't be protected.
+            // Rollback is called only if the transaction is known to fail. Under the
+            // circumstances, the rollback record needn't be protected.
             let released_lock = cleanup(&mut txn, &mut reader, k, TimeStamp::zero(), false)?;
             released_locks.push(released_lock);
         }
@@ -67,8 +74,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::txn::tests::*;
-    use crate::storage::TestEngineBuilder;
+    use crate::storage::{txn::tests::*, TestEngineBuilder};
 
     #[test]
     fn rollback_lock_with_existing_rollback() {

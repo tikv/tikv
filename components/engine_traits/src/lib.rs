@@ -60,14 +60,15 @@
 //! - [`SyncMutable`] and [`Mutable`] - types to which single key/value pairs
 //!   can be written. This includes engines and write batches.
 //!
-//! - [`WriteBatch`] - types that can commit multiple key/value pairs in batches.
-//!   A `WriteBatchExt::WriteBtach` commits all pairs in one atomic transaction.
-//!   A `WriteBatchExt::WriteBatchVec` does not (FIXME: is this correct?).
+//! - [`WriteBatch`] - types that can commit multiple key/value pairs in
+//!   batches. A `WriteBatchExt::WriteBatch` commits all pairs in one atomic
+//!   transaction. A `WriteBatchExt::WriteBatchVec` does not (FIXME: is this
+//!   correct?).
 //!
 //! The `KvEngine` instance generally acts as a factory for types that implement
 //! other traits in the crate. These factory methods, associated types, and
-//! other associated methods are defined in "extension" traits. For example, methods
-//! on engines related to batch writes are in the `WriteBatchExt` trait.
+//! other associated methods are defined in "extension" traits. For example,
+//! methods on engines related to batch writes are in the `WriteBatchExt` trait.
 //!
 //!
 //! # Design notes
@@ -75,19 +76,19 @@
 //! - `KvEngine` is the main engine trait. It requires many other traits, which
 //!   have many other associated types that implement yet more traits.
 //!
-//! - Features should be grouped into their own modules with their own
-//!   traits. A common pattern is to have an associated type that implements
-//!   a trait, and an "extension" trait that associates that type with `KvEngine`,
-//!   which is part of `KvEngine's trait requirements.
+//! - Features should be grouped into their own modules with their own traits. A
+//!   common pattern is to have an associated type that implements a trait, and
+//!   an "extension" trait that associates that type with `KvEngine`, which is
+//!   part of `KvEngine's trait requirements.
 //!
 //! - For now, for simplicity, all extension traits are required by `KvEngine`.
 //!   In the future it may be feasible to separate them for engines with
 //!   different feature sets.
 //!
-//! - Associated types generally have the same name as the trait they
-//!   are required to implement. Engine extensions generally have the same
-//!   name suffixed with `Ext`. Concrete implementations usually have the
-//!   same name prefixed with the database name, i.e. `Rocks`.
+//! - Associated types generally have the same name as the trait they are
+//!   required to implement. Engine extensions generally have the same name
+//!   suffixed with `Ext`. Concrete implementations usually have the same name
+//!   prefixed with the database name, i.e. `Rocks`.
 //!
 //!   Example:
 //!
@@ -121,9 +122,9 @@
 //!   use a standard new method). If future engines require factory methods, the
 //!   traits can be converted then.
 //!
-//! - Types that require a handle to the engine (or some other "parent" type)
-//!   do so with either Rc or Arc. An example is EngineIterator. The reason
-//!   for this is that associated types cannot contain lifetimes. That requires
+//! - Types that require a handle to the engine (or some other "parent" type) do
+//!   so with either Rc or Arc. An example is EngineIterator. The reason for
+//!   this is that associated types cannot contain lifetimes. That requires
 //!   "generic associated types". See
 //!
 //!   - <https://github.com/rust-lang/rfcs/pull/1598>
@@ -221,15 +222,15 @@
 //!   `RocksDB::from_ref` and `RocksDB::as_inner` methods.
 //!
 //! - Down follow the type system too far "down the rabbit hole". When you see
-//!   that another subsystem is blocking you from refactoring the system you
-//!   are trying to refactor, stop, stash your changes, and focus on the other
+//!   that another subsystem is blocking you from refactoring the system you are
+//!   trying to refactor, stop, stash your changes, and focus on the other
 //!   system instead.
 //!
 //! - You will through away branches that lead to dead ends. Learn from the
 //!   experience and try again from a different angle.
 //!
-//! - For now, use the same APIs as the RocksDB bindings, as methods
-//!   on the various engine traits, and with this crate's error type.
+//! - For now, use the same APIs as the RocksDB bindings, as methods on the
+//!   various engine traits, and with this crate's error type.
 //!
 //! - When new types are needed from the RocksDB API, add a new module, define a
 //!   new trait (possibly with the same name as the RocksDB type), then define a
@@ -238,10 +239,6 @@
 //! - Port methods directly from the existing `engine` crate by re-implementing
 //!   it in engine_traits and engine_rocks, replacing all the callers with calls
 //!   into the traits, then delete the versions in the `engine` crate.
-//!
-//! - Use the .c() method from engine_rocks::compat::Compat to get a
-//!   KvEngine reference from Arc<DB> in the fewest characters. It also
-//!   works on Snapshot, and can be adapted to other types.
 //!
 //! - Use `IntoOther` to adapt between error types of dependencies that are not
 //!   themselves interdependent. E.g. raft::Error can be created from
@@ -293,8 +290,7 @@ mod mvcc_properties;
 mod sst_partitioner;
 pub use crate::sst_partitioner::*;
 mod range_properties;
-pub use crate::mvcc_properties::*;
-pub use crate::range_properties::*;
+pub use crate::{mvcc_properties::*, range_properties::*};
 mod ttl_properties;
 pub use crate::ttl_properties::*;
 mod perf_context;
@@ -327,9 +323,13 @@ mod options;
 pub use crate::options::*;
 pub mod range;
 pub use crate::range::*;
+
+// FIXME: Move raft engine traits to a separate crate.
+
 mod raft_engine;
 pub use raft_engine::{
-    CacheStats, RaftEngine, RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, RAFT_LOG_MULTI_GET_CNT,
+    CacheStats, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask,
+    RAFT_LOG_MULTI_GET_CNT,
 };
 
 // These modules need further scrutiny

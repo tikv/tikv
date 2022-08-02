@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use test::{black_box, Bencher};
+use std::sync::Arc;
 
 use engine_rocks::RocksSnapshot;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use std::sync::Arc;
+use test::{black_box, Bencher};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query_datatype::codec::table;
 use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
@@ -47,8 +47,8 @@ fn table_lookup_gen_data() -> (SnapshotStore<Arc<RocksSnapshot>>, Vec<Key>) {
         false,
     );
 
-    // Keys are given in order, and are far away from each other to simulate a normal table lookup
-    // scenario.
+    // Keys are given in order, and are far away from each other to simulate a
+    // normal table lookup scenario.
     let mut get_keys = Vec::new();
     for i in (0..30000).step_by(30) {
         get_keys.push(Key::from_raw(&table::encode_row_key(5, i)));

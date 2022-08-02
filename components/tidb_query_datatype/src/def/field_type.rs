@@ -2,8 +2,7 @@
 
 use std::fmt;
 
-use tipb::ColumnInfo;
-use tipb::FieldType;
+use tipb::{ColumnInfo, FieldType};
 
 use crate::error::DataTypeError;
 
@@ -11,9 +10,10 @@ use crate::error::DataTypeError;
 ///
 /// `FieldType` is the field type of a column defined by schema.
 ///
-/// `ColumnInfo` describes a column. It contains `FieldType` and some other column specific
-/// information. However for historical reasons, fields in `FieldType` (for example, `tp`)
-/// are flattened into `ColumnInfo`. Semantically these fields are identical.
+/// `ColumnInfo` describes a column. It contains `FieldType` and some other
+/// column specific information. However for historical reasons, fields in
+/// `FieldType` (for example, `tp`) are flattened into `ColumnInfo`.
+/// Semantically these fields are identical.
 ///
 /// Please refer to [mysql/type.go](https://github.com/pingcap/parser/blob/master/mysql/type.go).
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -118,9 +118,9 @@ pub enum Collation {
 impl Collation {
     /// Parse from collation id.
     ///
-    /// These are magic numbers defined in tidb, where positive numbers are for legacy
-    /// compatibility, and all new clusters with padding configuration enabled will
-    /// use negative numbers to indicate the padding behavior.
+    /// These are magic numbers defined in tidb, where positive numbers are for
+    /// legacy compatibility, and all new clusters with padding configuration
+    /// enabled will use negative numbers to indicate the padding behavior.
     pub fn from_i32(n: i32) -> Result<Self, DataTypeError> {
         match n {
             -33 | -45 => Ok(Collation::Utf8Mb4GeneralCi),
@@ -216,8 +216,9 @@ pub trait FieldTypeAccessor {
 
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor;
 
-    /// Convert reference to `FieldTypeAccessor` interface. Useful when an implementer
-    /// provides inherent methods with the same name as the accessor trait methods.
+    /// Convert reference to `FieldTypeAccessor` interface. Useful when an
+    /// implementer provides inherent methods with the same name as the accessor
+    /// trait methods.
     fn as_accessor(&self) -> &dyn FieldTypeAccessor
     where
         Self: Sized,
@@ -233,8 +234,8 @@ pub trait FieldTypeAccessor {
         self as &mut dyn FieldTypeAccessor
     }
 
-    /// Whether this type is a hybrid type, which can represent different types of value in
-    /// specific context.
+    /// Whether this type is a hybrid type, which can represent different types
+    /// of value in specific context.
     ///
     /// Please refer to `Hybrid` in TiDB.
     #[inline]
@@ -255,7 +256,8 @@ pub trait FieldTypeAccessor {
             || tp == FieldTypeTp::LongBlob
     }
 
-    /// Whether this type is a char-like type like a string type or a varchar type.
+    /// Whether this type is a char-like type like a string type or a varchar
+    /// type.
     ///
     /// Please refer to `IsTypeChar` in TiDB.
     #[inline]
@@ -264,7 +266,8 @@ pub trait FieldTypeAccessor {
         tp == FieldTypeTp::String || tp == FieldTypeTp::VarChar
     }
 
-    /// Whether this type is a varchar-like type like a varstring type or a varchar type.
+    /// Whether this type is a varchar-like type like a varstring type or a
+    /// varchar type.
     ///
     /// Please refer to `IsTypeVarchar` in TiDB.
     #[inline]
@@ -445,8 +448,9 @@ impl FieldTypeAccessor for ColumnInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::i32;
+
+    use super::*;
 
     fn field_types() -> Vec<FieldTypeTp> {
         vec![

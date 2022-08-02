@@ -1,16 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath
-use kvproto::kvrpcpb::IsolationLevel;
+use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use std::borrow::Cow;
+use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
-use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::ErrorInner::WriteConflict;
-use crate::storage::mvcc::{default_not_found_error, NewerTsCheckState, Result};
-use crate::storage::need_check_locks;
+use crate::storage::{
+    kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
+    mvcc::{default_not_found_error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    need_check_locks,
+};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -49,8 +50,8 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
-    /// Set whether values of the user key should be omitted. When `omit_value` is `true`, the
-    /// length of returned value will be 0.
+    /// Set whether values of the user key should be omitted. When `omit_value`
+    /// is `true`, the length of returned value will be 0.
     ///
     /// Previously this option is called `key_only`.
     ///
@@ -92,8 +93,8 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
-    /// Check whether there is data with newer ts. The result of `met_newer_ts_data` is Unknown
-    /// if this option is not set.
+    /// Check whether there is data with newer ts. The result of
+    /// `met_newer_ts_data` is Unknown if this option is not set.
     ///
     /// Default is false.
     #[inline]
@@ -131,8 +132,9 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     }
 }
 
-/// This struct can be used to get the value of user keys. Internally, rollbacks are ignored and
-/// smaller version will be tried. If the isolation level is Si, locks will be checked first.
+/// This struct can be used to get the value of user keys. Internally, rollbacks
+/// are ignored and smaller version will be tried. If the isolation level is Si,
+/// locks will be checked first.
 ///
 /// Use `PointGetterBuilder` to build `PointGetter`.
 pub struct PointGetter<S: Snapshot> {
@@ -168,7 +170,8 @@ impl<S: Snapshot> PointGetter<S> {
         fail_point!("point_getter_get");
 
         if need_check_locks(self.isolation_level) {
-            // Check locks that signal concurrent writes for `Si` or more recent writes for `RcCheckTs`.
+            // Check locks that signal concurrent writes for `Si` or more recent writes for
+            // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key)? {
                 return self.load_data_from_lock(user_key, lock);
             }
@@ -177,13 +180,14 @@ impl<S: Snapshot> PointGetter<S> {
         self.load_data(user_key)
     }
 
-    /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
-    /// see whether it conflicts with the given `ts` and return an error if so. If the
-    /// lock is in access_locks, it will be returned and caller can read through it.
+    /// Get a lock of a user key in the lock CF. If lock exists, it will be
+    /// checked to see whether it conflicts with the given `ts` and return
+    /// an error if so. If the lock is in access_locks, it will be returned
+    /// and caller can read through it.
     ///
-    /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
-    /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
-    /// until find a user key.
+    /// In common cases we expect to get nothing in lock cf. Using a `get_cf`
+    /// instead of `seek` is fast in such cases due to no need for RocksDB
+    /// to continue move and skip deleted entries until find a user key.
     fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
@@ -215,8 +219,8 @@ impl<S: Snapshot> PointGetter<S> {
 
     /// Load the value.
     ///
-    /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
-    /// from Default CF if necessary.
+    /// First, a correct version info in the Write CF will be sought. Then,
+    /// value will be loaded from Default CF if necessary.
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
@@ -322,9 +326,10 @@ impl<S: Snapshot> PointGetter<S> {
 
     /// Load the value from default CF.
     ///
-    /// We assume that mostly the keys given to batch get keys are not very close to each other.
-    /// `near_seek` will likely fall back to `seek` in such scenario, which takes 2x time
-    /// compared to `get_cf`. Thus we use `get_cf` directly here.
+    /// We assume that mostly the keys given to batch get keys are not very
+    /// close to each other. `near_seek` will likely fall back to `seek` in
+    /// such scenario, which takes 2x time compared to `get_cf`. Thus we use
+    /// `get_cf` directly here.
     fn load_data_from_default_cf(
         &mut self,
         write_start_ts: TimeStamp,
@@ -349,7 +354,8 @@ impl<S: Snapshot> PointGetter<S> {
 
     /// Load the value from the lock.
     ///
-    /// The lock belongs to a committed transaction and its commit_ts <= read's start_ts.
+    /// The lock belongs to a committed transaction and its commit_ts <= read's
+    /// start_ts.
     fn load_data_from_lock(&mut self, user_key: &Key, lock: Lock) -> Result<Option<Value>> {
         debug_assert!(lock.ts < self.ts && lock.min_commit_ts <= self.ts);
         match lock.lock_type {
@@ -372,8 +378,8 @@ impl<S: Snapshot> PointGetter<S> {
             }
             LockType::Delete => Ok(None),
             LockType::Lock | LockType::Pessimistic => {
-                // Only when fails to call `Lock::check_ts_conflict()`, the function is called, so it's
-                // unreachable here.
+                // Only when fails to call `Lock::check_ts_conflict()`, the function is called,
+                // so it's unreachable here.
                 unreachable!()
             }
         }
@@ -382,19 +388,19 @@ impl<S: Snapshot> PointGetter<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use engine_rocks::ReadPerfInstant;
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
     use txn_types::SHORT_VALUE_MAX_LEN;
 
-    use crate::storage::kv::{
-        CfStatistics, Engine, PerfStatisticsInstant, RocksEngine, TestEngineBuilder,
+    use super::*;
+    use crate::storage::{
+        kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder},
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
+            must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
+            must_prewrite_put, must_prewrite_put_impl, must_rollback,
+        },
     };
-    use crate::storage::txn::tests::{
-        must_acquire_pessimistic_lock, must_cleanup_with_gc_fence, must_commit, must_gc,
-        must_pessimistic_prewrite_delete, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put, must_prewrite_put_impl, must_rollback,
-    };
-    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
 
     fn new_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         new_point_getter_with_iso(engine, ts, IsolationLevel::Si)
@@ -551,8 +557,8 @@ mod tests {
         engine
     }
 
-    /// Builds a sample engine that contains transactions on the way and some short
-    /// values embedded in the write CF. The data is as follows:
+    /// Builds a sample engine that contains transactions on the way and some
+    /// short values embedded in the write CF. The data is as follows:
     /// DELETE  bar                     (start at 4)
     /// PUT     bar     -> barval       (commit at 3)
     /// PUT     foo1    -> foo1vv...    (commit at 3)
@@ -690,21 +696,21 @@ mod tests {
         must_gc(&engine, b"foo3", 50);
 
         let mut getter = new_point_getter(&engine, TimeStamp::max());
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_value(&mut getter, b"foo", b"bar");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_none(&mut getter, b"foo1");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_none(&mut getter, b"foo2");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        let perf_statistics = PerfStatisticsInstant::new();
+        let perf_statistics = ReadPerfInstant::new();
         must_get_value(&mut getter, b"foo3", b"bar3");
-        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
     }
 
     #[test]
@@ -918,8 +924,8 @@ mod tests {
         must_get_err(&mut getter, key);
         must_rollback(&engine, key, 40, false);
 
-        // Should get the latest committed value if there is a primary lock with a ts less than
-        // the latest Write's commit_ts.
+        // Should get the latest committed value if there is a primary lock with a ts
+        // less than the latest Write's commit_ts.
         //
         // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
         must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
@@ -1015,7 +1021,7 @@ mod tests {
             100,
             80.into(),
             1,
-            100.into(), /* min_commit_ts */
+            100.into(), // min_commit_ts
             TimeStamp::default(),
             false,
             Assertion::None,
@@ -1228,7 +1234,8 @@ mod tests {
         must_get_value(&mut batch_getter, key2, val22);
         must_get_err(&mut batch_getter, key3);
 
-        // Test batch point get. Error should not be reported if the lock type is rollback or lock.
+        // Test batch point get. Error should not be reported if the lock type is
+        // rollback or lock.
         let mut batch_getter_ok =
             new_point_getter_with_iso(&engine, 70.into(), IsolationLevel::RcCheckTs);
         must_get_value(&mut batch_getter_ok, key4, val4);

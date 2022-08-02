@@ -8,11 +8,12 @@ use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::ErrorInner::WriteConflict;
-use crate::storage::mvcc::{NewerTsCheckState, Result};
-use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Snapshot, Statistics};
+use crate::storage::{
+    kv::SEEK_BOUND,
+    mvcc::{ErrorInner::WriteConflict, NewerTsCheckState, Result},
+    txn::{Result as TxnResult, TxnEntry, TxnEntryScanner},
+    Cursor, Snapshot, Statistics,
+};
 
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
@@ -93,8 +94,8 @@ impl<S: Snapshot> Cursors<S> {
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
-        // `current_user_key` must have reserved space here, so its clone has reserved space too.
-        // So no reallocation happens in `append_ts`.
+        // `current_user_key` must have reserved space here, so its clone has reserved
+        // space too. So no reallocation happens in `append_ts`.
         self.write.internal_seek(
             &current_user_key.clone().append_ts(TimeStamp::zero()),
             &mut statistics.write,
@@ -193,17 +194,17 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
         loop {
             // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
-            // the encoded user key we are currently dealing with. It may not have a write, or
-            // may not have a lock. It is not a slice to avoid data being invalidated after
-            // cursor moving.
+            // the encoded user key we are currently dealing with. It may not have a write,
+            // or may not have a lock. It is not a slice to avoid data being invalidated
+            // after cursor moving.
             //
-            // `has_write` indicates whether `current_user_key` has at least one corresponding
-            // `write`. If there is one, it is what current write cursor pointing to. The pointed
-            // `write` must be the most recent (i.e. largest `commit_ts`) write of
-            // `current_user_key`.
+            // `has_write` indicates whether `current_user_key` has at least one
+            // corresponding `write`. If there is one, it is what current write cursor
+            // pointing to. The pointed `write` must be the most recent (i.e. largest
+            // `commit_ts`) write of `current_user_key`.
             //
-            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
-            // there is one, it is what current lock cursor pointing to.
+            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`.
+            // If there is one, it is what current lock cursor pointing to.
             let (mut current_user_key, has_write, has_lock) = {
                 let w_key = if self.cursors.write.valid()? {
                     Some(self.cursors.write.key(&mut self.statistics.write))
@@ -260,8 +261,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     }
                 };
 
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts
+                // to the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
@@ -302,10 +303,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         }
     }
 
-    /// Try to move the write cursor to the `self.cfg.ts` version of the given key.
-    /// Because it is possible that the cursor is moved to the next user key or
-    /// the end of key space, the method returns whether the write cursor still
-    /// points to the given user key.
+    /// Try to move the write cursor to the `self.cfg.ts` version of the given
+    /// key. Because it is possible that the cursor is moved to the next user
+    /// key or the end of key space, the method returns whether the write cursor
+    /// still points to the given user key.
     fn move_write_cursor_to_ts(&mut self, user_key: &Key) -> Result<bool> {
         assert!(self.cursors.write.valid()?);
 
@@ -338,7 +339,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
 
-                // Report error if there's a more recent version if the isolation level is RcCheckTs.
+                // Report error if there's a more recent version if the isolation level is
+                // RcCheckTs.
                 if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
                     // TODO: the more write recent version with `LOCK` or `ROLLBACK` write type
                     //       could be skipped.
@@ -353,10 +355,11 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
         }
-        // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
+        // If we have not found `${user_key}_${ts}` in a few `next()`, directly
+        // `seek()`.
         if needs_seek {
-            // `user_key` must have reserved space here, so its clone has reserved space too. So no
-            // reallocation happens in `append_ts`.
+            // `user_key` must have reserved space here, so its clone has reserved space
+            // too. So no reallocation happens in `append_ts`.
             self.cursors.write.seek(
                 &user_key.clone().append_ts(self.cfg.ts),
                 &mut self.statistics.write,
@@ -535,8 +538,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
-        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we
+        // may meet `Lock` or `Rollback`. In this case, more versions needs to be looked
+        // up.
         let mut write_key = cursors.write.key(&mut statistics.write);
         let entry: Option<TxnEntry> = loop {
             if Key::decode_ts_from(write_key)? <= self.after_ts {
@@ -647,7 +651,8 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
     .map(|_| HandleRes::Skip(current_user_key))
 }
 
-/// The ScanPolicy for outputting `TxnEntry` for every locks or commits in specified ts range.
+/// The ScanPolicy for outputting `TxnEntry` for every locks or commits in
+/// specified ts range.
 ///
 /// The `ForwardScanner` with this policy scans all entries whose `commit_ts`s
 /// (or locks' `start_ts`s) in range (`from_ts`, `cfg.ts`].
@@ -744,8 +749,8 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             let write_value = cursors.write.value(&mut statistics.write);
             let commit_ts = Key::decode_ts_from(cursors.write.key(&mut statistics.write))?;
 
-            // commit_ts > cfg.ts never happens since the ForwardScanner will skip those greater
-            // versions.
+            // commit_ts > cfg.ts never happens since the ForwardScanner will skip those
+            // greater versions.
 
             if commit_ts <= self.from_ts {
                 cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
@@ -754,8 +759,9 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
 
             let (write_type, start_ts, short_value) = {
                 // DeltaEntryScanner only returns commit records between `from_ts` and `cfg.ts`.
-                // We can assume that it must ensure GC safepoint doesn't exceed `from_ts`, so GC
-                // fence checking can be skipped. But it's still needed when loading the old value.
+                // We can assume that it must ensure GC safepoint doesn't exceed `from_ts`, so
+                // GC fence checking can be skipped. But it's still needed when loading the old
+                // value.
                 let write_ref = WriteRef::parse(write_value)?;
                 (
                     write_ref.write_type,
@@ -831,10 +837,11 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     }
 }
 
-/// This type can be used to scan keys starting from the given user key (greater than or equal).
+/// This type can be used to scan keys starting from the given user key (greater
+/// than or equal).
 ///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
+/// Internally, for each key, rollbacks are ignored and smaller version will be
+/// tried. If the isolation level is SI, locks will be checked first.
 ///
 /// Use `ScannerBuilder` to build `ForwardKvScanner`.
 pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
@@ -842,8 +849,8 @@ pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 /// This scanner is like `ForwardKvScanner` but outputs `TxnEntry`.
 pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
 
-/// This scanner scans all entries whose commit_ts (or locks' start_ts) is in range
-/// (from_ts, cfg.ts].
+/// This scanner scans all entries whose commit_ts (or locks' start_ts) is in
+/// range (from_ts, cfg.ts].
 pub type DeltaScanner<S> = ForwardScanner<S, DeltaEntryPolicy>;
 
 impl<S, P> TxnEntryScanner for ForwardScanner<S, P>
@@ -861,12 +868,14 @@ where
 
 pub mod test_util {
     use super::*;
-    use crate::storage::mvcc::Write;
-    use crate::storage::txn::tests::{
-        must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
-        must_prewrite_put,
+    use crate::storage::{
+        mvcc::Write,
+        txn::tests::{
+            must_cleanup_with_gc_fence, must_commit, must_prewrite_delete, must_prewrite_lock,
+            must_prewrite_put,
+        },
+        Engine,
     };
-    use crate::storage::Engine;
 
     pub struct EntryBuilder {
         pub key: Vec<u8>,
@@ -1095,17 +1104,19 @@ pub mod test_util {
 
 #[cfg(test)]
 mod latest_kv_tests {
-    use super::super::ScannerBuilder;
-    use super::test_util::prepare_test_data_for_check_gc_fence;
-    use super::*;
-    use crate::storage::kv::{Engine, Modify, TestEngineBuilder};
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::tests::*;
-    use crate::storage::Scanner;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
 
-    /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
+    use super::{super::ScannerBuilder, test_util::prepare_test_data_for_check_gc_fence, *};
+    use crate::storage::{
+        kv::{Engine, Modify, TestEngineBuilder},
+        mvcc::tests::write,
+        txn::tests::*,
+        Scanner,
+    };
+
+    /// Check whether everything works as usual when `ForwardKvScanner::get()`
+    /// goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1171,7 +1182,8 @@ mod latest_kv_tests {
     }
 
     /// Check whether everything works as usual when
-    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of
+    /// bound.
     ///
     /// Case 1. next() out of bound
     #[test]
@@ -1228,7 +1240,7 @@ mod latest_kv_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
         //   a_8 b_2 b_1 b_0
         //                   ^cursor
         assert_eq!(
@@ -1252,7 +1264,8 @@ mod latest_kv_tests {
     }
 
     /// Check whether everything works as usual when
-    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of
+    /// bound.
     ///
     /// Case 2. seek() out of bound
     #[test]
@@ -1576,18 +1589,21 @@ mod latest_kv_tests {
 
 #[cfg(test)]
 mod latest_entry_tests {
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::txn::tests::{must_commit, must_prewrite_delete, must_prewrite_put};
-    use crate::storage::{Engine, Modify, TestEngineBuilder};
-
-    use super::test_util::*;
-    use crate::storage::mvcc::tests::write;
-    use crate::storage::txn::EntryBatch;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
 
-    /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
+    use super::{super::ScannerBuilder, test_util::*, *};
+    use crate::storage::{
+        mvcc::tests::write,
+        txn::{
+            tests::{must_commit, must_prewrite_delete, must_prewrite_put},
+            EntryBatch,
+        },
+        Engine, Modify, TestEngineBuilder,
+    };
+
+    /// Check whether everything works as usual when `EntryScanner::get()` goes
+    /// out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -1715,7 +1731,7 @@ mod latest_entry_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
         //   a_8 b_2 b_1 b_0
         //                   ^cursor
         let entry = EntryBuilder::default()
@@ -2012,18 +2028,14 @@ mod latest_entry_tests {
 
 #[cfg(test)]
 mod delta_entry_tests {
-    use super::super::ScannerBuilder;
-    use super::*;
-    use crate::storage::txn::tests::*;
-    use crate::storage::{Engine, Modify, TestEngineBuilder};
-
-    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
-
-    use super::test_util::*;
-    use crate::storage::mvcc::tests::write;
     use engine_traits::{CF_LOCK, CF_WRITE};
     use kvproto::kvrpcpb::Context;
-    /// Check whether everything works as usual when `Delta::get()` goes out of bound.
+    use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
+
+    use super::{super::ScannerBuilder, test_util::*, *};
+    use crate::storage::{mvcc::tests::write, txn::tests::*, Engine, Modify, TestEngineBuilder};
+    /// Check whether everything works as usual when `Delta::get()` goes out of
+    /// bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -2150,7 +2162,7 @@ mod delta_entry_tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         // We should be able to get wanted value without any operation.
-        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        // After get the value, use SEEK_BOUND/2+1 next to reach next user key and stop:
         //   a_8 b_2 b_1 b_0
         //           ^cursor
         let entry = EntryBuilder::default()
@@ -2188,8 +2200,8 @@ mod delta_entry_tests {
         must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
 
         // Generate SEEK_BOUND rollback and 1 put for [b] .
-        // It differs from EntryScanner that this will try to fetch multiple versions of each key.
-        // So in this test it needs one more next than EntryScanner.
+        // It differs from EntryScanner that this will try to fetch multiple versions of
+        // each key. So in this test it needs one more next than EntryScanner.
         for ts in 1..=SEEK_BOUND {
             let modifies = vec![
                 // ts is rather small, so it is ok to `as u8`
@@ -2340,8 +2352,8 @@ mod delta_entry_tests {
     fn test_mess() {
         // TODO: non-pessimistic lock should be returned enven if its ts < from_ts.
         // (key, lock, [commit1, commit2, ...])
-        // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it will be saved
-        // in default cf.
+        // Values ends with 'L' will be made larger than `SHORT_VALUE_MAX_LEN` so it
+        // will be saved in default cf.
         let test_data = vec![
             (
                 b"a" as &[u8],
@@ -2554,7 +2566,8 @@ mod delta_entry_tests {
             while let Some(entry) = scanner.next_entry().unwrap() {
                 actual.push(entry);
             }
-            // Do assertions one by one so that if it fails it won't print too long panic message.
+            // Do assertions one by one so that if it fails it won't print too long panic
+            // message.
             for i in 0..std::cmp::max(actual.len(), expected.len()) {
                 assert_eq!(
                     actual[i], expected[i],
@@ -2694,7 +2707,8 @@ mod delta_entry_tests {
 
         // Scanning entries in (10, max] should get all prewrites
         check(10, vec![&entry_a_5, &entry_b_15, &entry_c_5]);
-        // Scanning entries include delete in (7, max] should get a_5, b_10, b_15 and c_5
+        // Scanning entries include delete in (7, max] should get a_5, b_10, b_15 and
+        // c_5
         check(7, vec![&entry_a_5, &entry_b_15, &entry_b_10, &entry_c_5]);
         // Scanning entries in (0, max] should get a_1, a_3, a_5, b_2, b_10, and b_15
         check(

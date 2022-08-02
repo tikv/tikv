@@ -1,18 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
-use std::fmt::{self, Display, Formatter};
+use std::{
+    cmp::Ordering,
+    fmt::{self, Display, Formatter},
+};
 
-use crate::FieldTypeAccessor;
 use codec::prelude::*;
 use tipb::FieldType;
 
 use super::{check_fsp, Decimal, DEFAULT_FSP};
-use crate::codec::convert::ConvertTo;
-use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE};
-use crate::codec::mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP};
-use crate::codec::{Error, Result, TEN_POW};
-use crate::expr::EvalContext;
+use crate::{
+    codec::{
+        convert::ConvertTo,
+        error::{ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE},
+        mysql::{Time as DateTime, TimeType, MAX_FSP, MIN_FSP},
+        Error, Result, TEN_POW,
+    },
+    expr::EvalContext,
+    FieldTypeAccessor,
+};
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANOS_PER_MILLI: i64 = 1_000_000;
@@ -83,10 +89,13 @@ fn check_nanos(nanos: i64) -> Result<i64> {
 }
 
 mod parser {
+    use nom::{
+        character::complete::{anychar, char, digit0, digit1, space0, space1},
+        combinator::opt,
+        IResult,
+    };
+
     use super::*;
-    use nom::character::complete::{anychar, char, digit0, digit1, space0, space1};
-    use nom::combinator::opt;
-    use nom::IResult;
 
     fn number(input: &str) -> IResult<&str, u32, ()> {
         let (rest, num) = digit1(input)?;
@@ -141,28 +150,35 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
+    /// A string can match datetime format only if it starts with a series of
+    /// digits whose length matches the full format of DateTime literal (12,
+    /// 14) or the string starts with a date literal.
+    fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
+        let (rest, digits) = digit1(input)?;
+
+        if digits.len() == 12 || digits.len() == 14 {
+            return Ok(((), ()));
+        }
+
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+        let (rest, _) = anysep(rest)?;
+        let (rest, _) = digit1(rest)?;
+
+        if matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ') {
+            Ok(((), ()))
+        } else {
+            Err(nom::Err::Error(()))
+        }
+    }
+
+    /// Caller should make sure the input string can match datetime format
+    /// according to `format_can_match_datetime`.
     fn hhmmss_datetime<'a>(
         ctx: &mut EvalContext,
         input: &'a str,
         fsp: u8,
     ) -> IResult<&'a str, Duration, ()> {
-        let (rest, digits) = digit1(input)?;
-        if digits.len() == 12 || digits.len() == 14 {
-            let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
-                .map_err(|_| nom::Err::Error(()))?;
-            return Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?));
-        }
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-        let (rest, _) = anysep(rest)?;
-        let (rest, _) = digit1(rest)?;
-
-        let has_datetime_sep = matches!(rest.chars().next(), Some(c) if c == 'T' || c == ' ');
-
-        if !has_datetime_sep {
-            return Err(nom::Err::Error(()));
-        }
-
         let datetime = DateTime::parse_datetime(ctx, input, fsp as i8, true)
             .map_err(|_| nom::Err::Error(()))?;
         Ok(("", datetime.convert(ctx).map_err(|_| nom::Err::Error(()))?))
@@ -199,16 +215,21 @@ mod parser {
         ctx: &mut EvalContext,
         input: &str,
         fsp: u8,
-        fallback_to_daytime: bool,
+        fallback_to_datetime: bool,
         overflow_as_null: bool,
     ) -> Option<Duration> {
         let input = input.trim();
         if input.is_empty() {
-            return Some(Duration::zero());
+            return None;
         }
 
         let (rest, neg) = negative(input).ok()?;
         let (rest, _) = space0::<_, ()>(rest).ok()?;
+
+        let chars_len = rest.len();
+        let mut truncated_parse = false;
+        let fallback_to_datetime = fallback_to_datetime && format_can_match_datetime(rest).is_ok();
+
         let duration = day_hhmmss(rest)
             .ok()
             .and_then(|(rest, (day, [hh, mm, ss]))| {
@@ -221,7 +242,10 @@ mod parser {
                 let (rest, frac) = fraction(rest, fsp).ok()?;
 
                 if !rest.is_empty() {
-                    return None;
+                    if chars_len >= 12 {
+                        return None;
+                    }
+                    truncated_parse = true;
                 }
 
                 Some(Duration::new_from_parts(
@@ -229,8 +253,18 @@ mod parser {
                 ))
             });
 
+        // In order to keep compatible with TiDB, when input string can only be
+        // partially parsed by `hhmmss_compact` and it can match the datetime
+        // format, we fallback to parse it using datetime format.
+        if truncated_parse && fallback_to_datetime {
+            return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
+        }
+
         match duration {
-            Some(Ok(duration)) => Some(duration),
+            Some(Ok(duration)) => {
+                let _ = ctx.handle_truncate(truncated_parse);
+                Some(duration)
+            }
             Some(Err(err)) if err.is_overflow() => {
                 if overflow_as_null {
                     return None;
@@ -240,7 +274,7 @@ mod parser {
                     Some(Duration { nanos, fsp })
                 })
             }
-            None if fallback_to_daytime => {
+            None if fallback_to_datetime => {
                 hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration))
             }
             _ => None,
@@ -330,7 +364,8 @@ impl Duration {
     }
 
     /// Returns the number of seconds contained by this Duration as f64.
-    /// The returned value does include the fractional (nanosecond) part of the duration.
+    /// The returned value does include the fractional (nanosecond) part of the
+    /// duration.
     #[inline]
     pub fn to_secs_f64(self) -> f64 {
         self.nanos as f64 / NANOS_PER_SEC as f64
@@ -474,7 +509,8 @@ impl Duration {
         Ok(Duration { nanos, fsp })
     }
 
-    /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
+    /// Checked duration addition. Computes self + rhs, returning None if
+    /// overflow occurred.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
         let nanos = self.nanos.checked_add(rhs.nanos)?;
         check_nanos(nanos).ok()?;
@@ -484,7 +520,8 @@ impl Duration {
         })
     }
 
-    /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
+    /// Checked duration subtraction. Computes self - rhs, returning None if
+    /// overflow occurred.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
         let nanos = self.nanos.checked_sub(rhs.nanos)?;
         check_nanos(nanos).ok()?;
@@ -666,7 +703,7 @@ pub trait DurationDecoder: NumberDecoder {
 
 impl<T: BufferReader> DurationDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Duration {
+impl crate::codec::data_type::AsMySqlBool for Duration {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
@@ -675,11 +712,13 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::data_type::DateTime;
-    use crate::codec::mysql::UNSPECIFIED_FSP;
-    use crate::expr::{EvalConfig, EvalContext, Flag};
     use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        codec::{data_type::DateTime, mysql::UNSPECIFIED_FSP},
+        expr::{EvalConfig, EvalContext, Flag},
+    };
 
     #[test]
     fn test_hours() {
@@ -798,7 +837,8 @@ mod tests {
             ("2011-11-11 00:00:01", 0, Some("00:00:01")),
             ("20111111000001", 0, Some("00:00:01")),
             ("201112110102", 0, Some("11:01:02")),
-            ("2011-11-11", 0, None),
+            ("2011-11-11", 0, Some("00:20:11")),
+            ("2012-08-x", 0, Some("00:20:12")),
             ("--23", 0, None),
             ("232 10", 0, None),
             ("-232 10", 0, None),
@@ -807,7 +847,24 @@ mod tests {
             ("00:00:00.777777", 2, Some("00:00:00.78")),
             ("00:00:00.777777", 6, Some("00:00:00.777777")),
             ("00:00:00.001", 3, Some("00:00:00.001")),
+            ("0x", 6, Some("00:00:00.000000")),
+            ("1x", 6, Some("00:00:01.000000")),
+            ("0000-00-00", 6, Some("00:00:00.000000")),
             // NOTE: The following case is easy to fail.
+            ("0000-00-00", 0, Some("00:00:00")),
+            ("1234abc", 0, Some("00:12:34")),
+            ("1234x", 0, Some("00:12:34")),
+            ("1234xxxxxxx", 0, Some("00:12:34")),
+            ("1234xxxxxxxx", 0, None),
+            ("-1234xxxxxxx", 0, Some("-00:12:34")),
+            ("-1234xxxxxxxx", 0, None),
+            ("1-----", 0, Some("00:00:01")),
+            ("20100000-02-12", 0, None),
+            ("20100-02-12", 0, Some("02:01:00")),
+            ("99999-99-99", 0, None),
+            ("99990000", 0, None),
+            ("0000-00-00", 0, Some("00:00:00")),
+            ("00-00-00", 0, Some("00:00:00")),
             ("- 1 ", 0, Some("-00:00:01")),
             ("1:2:3", 0, Some("01:02:03")),
             ("1 1:2:3", 0, Some("25:02:03")),
@@ -824,8 +881,9 @@ mod tests {
             (" - 1 : 2 :  3 .123 ", 3, Some("-01:02:03.123")),
             (" - 1 .123 ", 3, Some("-00:00:01.123")),
             ("-", 0, None),
+            ("a", 0, None),
             ("- .1", 0, None),
-            ("", 0, Some("00:00:00")),
+            ("", 0, None),
             ("", 7, None),
             ("1.1", 1, Some("00:00:01.1")),
             ("-1.1", 1, Some("-00:00:01.1")),
@@ -835,13 +893,13 @@ mod tests {
             ("4294967295 0:59:59", 0, None),
             ("4294967295 232:59:59", 0, None),
             ("-4294967295 232:59:59", 0, None),
-            ("1::2:3", 0, None),
-            ("1.23 3", 0, None),
+            ("1::2:3", 0, Some("00:00:01")),
+            ("1.23 3", 0, Some("00:00:01")),
             ("1:62:3", 0, None),
             ("1:02:63", 0, None),
             ("-231342080", 0, None),
+            ("2010-02-12", 0, Some("00:20:10")),
             // test fallback to datetime
-            ("2010-02-12", 0, None),
             ("2010-02-12t12:23:34", 0, None),
             ("2010-02-12T12:23:34", 0, Some("12:23:34")),
             ("2010-02-12 12:23:34", 0, Some("12:23:34")),
@@ -860,6 +918,7 @@ mod tests {
         let cases: Vec<(&str, i8, Option<&'static str>, bool)> = vec![
             ("-790822912", 0, None, true),
             ("-790822912", 0, Some("-838:59:59"), false),
+            ("99990000", 0, Some("838:59:59"), false),
         ];
 
         for (input, fsp, expect, return_null) in cases {

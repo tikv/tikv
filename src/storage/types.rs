@@ -2,16 +2,16 @@
 
 //! Core data types.
 
-use crate::storage::txn::commands::WriteResultLockInfo;
+use std::{fmt::Debug, sync::Arc};
+
+use kvproto::kvrpcpb;
+use txn_types::{Key, Value};
+
 use crate::storage::{
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
-    txn::ProcessResult,
+    txn::{commands::WriteResultLockInfo, ProcessResult},
     Callback, Error, Result,
 };
-use kvproto::kvrpcpb;
-use std::fmt::Debug;
-use std::sync::Arc;
-use txn_types::{Key, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.

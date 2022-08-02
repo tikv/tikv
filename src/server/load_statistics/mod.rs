@@ -1,10 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{
+    cell::RefCell,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
+
 use collections::HashMap;
 use parking_lot::Mutex;
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tikv_util::sys::thread::{self, Pid};
 
 thread_local! {
@@ -39,7 +44,8 @@ impl ThreadLoadPool {
         })
     }
 
-    /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
+    /// Gets the current load. For example, 200 means the threads consuming 200%
+    /// of the CPU resources.
     pub fn total_load(&self) -> usize {
         self.total_load.load(Ordering::Relaxed)
     }
@@ -52,9 +58,9 @@ pub use self::linux::ThreadLoadStatistics;
 
 #[cfg(not(target_os = "linux"))]
 mod other_os {
+    use std::{sync::Arc, time::Instant};
+
     use super::ThreadLoadPool;
-    use std::sync::Arc;
-    use std::time::Instant;
 
     /// A dummy `ThreadLoadStatistics` implementation for non-Linux platforms
     pub struct ThreadLoadStatistics;

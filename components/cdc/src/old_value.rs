@@ -4,8 +4,10 @@ use std::ops::Deref;
 
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use getset::CopyGetters;
-use tikv::storage::mvcc::near_load_data_by_write;
-use tikv::storage::{Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot, Statistics};
+use tikv::storage::{
+    mvcc::near_load_data_by_write, Cursor, CursorBuilder, ScanMode, Snapshot as EngineSnapshot,
+    Statistics,
+};
 use tikv_kv::Iterator;
 use tikv_util::{
     config::ReadableSize,
@@ -15,8 +17,7 @@ use tikv_util::{
 };
 use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
-use crate::metrics::*;
-use crate::Result;
+use crate::{metrics::*, Result};
 
 pub(crate) type OldValueCallback = Box<
     dyn Fn(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Result<Option<Vec<u8>>> + Send,
@@ -103,8 +104,8 @@ impl OldValueCache {
     }
 }
 
-/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek and retrieve it with
-/// `query_ts` from `snapshot`.
+/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek
+/// and retrieve it with `query_ts` from `snapshot`.
 pub fn get_old_value<S: EngineSnapshot>(
     snapshot: &S,
     key: Key,
@@ -170,9 +171,10 @@ pub fn new_old_value_cursor<S: EngineSnapshot>(snapshot: &S, cf: &'static str) -
 
 /// Gets the latest value to the key with an older or equal version.
 ///
-/// The key passed in should be a key with a timestamp. This function will returns
-/// the latest value of the entry if the user key is the same to the given key and
-/// the timestamp is older than or equal to the timestamp in the given key.
+/// The key passed in should be a key with a timestamp. This function will
+/// returns the latest value of the entry if the user key is the same to the
+/// given key and the timestamp is older than or equal to the timestamp in the
+/// given key.
 ///
 /// `load_from_cf_data` indicates how to get value from `CF_DEFAULT`.
 pub fn near_seek_old_value<S: EngineSnapshot>(
@@ -287,14 +289,16 @@ fn get_value_default<S: EngineSnapshot>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use engine_rocks::RocksEngine;
-    use engine_traits::{KvEngine, MiscExt};
     use std::sync::Arc;
-    use tikv::config::DbConfig;
-    use tikv::storage::kv::TestEngineBuilder;
-    use tikv::storage::txn::tests::*;
-    use tikv_kv::PerfStatisticsInstant;
+
+    use engine_rocks::{ReadPerfInstant, RocksEngine};
+    use engine_traits::{KvEngine, MiscExt};
+    use tikv::{
+        config::DbConfig,
+        storage::{kv::TestEngineBuilder, txn::tests::*},
+    };
+
+    use super::*;
 
     fn must_get_eq(
         kv_engine: &RocksEngine,
@@ -594,7 +598,7 @@ mod tests {
 
         let key = format!("zkey-{:0>3}", 0).into_bytes();
         let snapshot = Arc::new(kv_engine.snapshot());
-        let perf_instant = PerfStatisticsInstant::new();
+        let perf_instant = ReadPerfInstant::new();
         let value = get_old_value(
             &snapshot,
             Key::from_raw(&key).append_ts(100.into()),
@@ -608,6 +612,6 @@ mod tests {
         // block read count should be 1 instead of 4 because some of them
         // are filtered by `prefix_seek`.
         let perf_delta = perf_instant.delta();
-        assert_eq!(perf_delta.0.block_read_count, 1);
+        assert_eq!(perf_delta.block_read_count, 1);
     }
 }

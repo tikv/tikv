@@ -1,26 +1,35 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, MiscExt, RaftEngine};
-use futures::channel::oneshot;
-use futures::future::Future;
-use futures::future::{FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, TryStreamExt};
-use grpcio::{Error as GrpcError, WriteFlags};
-use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
-use kvproto::debugpb::{self, *};
-use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
-    StatusCmdType, StatusRequest,
+use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine};
+use futures::{
+    channel::oneshot,
+    future::{Future, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::{self, TryStreamExt},
 };
+use grpcio::{
+    Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
+    WriteFlags,
+};
+use kvproto::{
+    debugpb::{self, *},
+    raft_cmdpb::{
+        AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
+        StatusCmdType, StatusRequest,
+    },
+};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::msg::{Callback, RaftCmdExtraOpts},
+};
+use tikv_util::metrics;
 use tokio::runtime::Handle;
 
-use crate::config::ConfigController;
-use crate::server::debug::{Debugger, Error, Result};
-use raftstore::router::RaftStoreRouter;
-use raftstore::store::msg::{Callback, RaftCmdExtraOpts};
-use tikv_util::metrics;
+use crate::{
+    config::ConfigController,
+    server::debug::{Debugger, Error, Result},
+};
 
 fn error_to_status(e: Error) -> RpcStatus {
     let (code, msg) = match e {
@@ -44,25 +53,28 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> {
+pub struct Service<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> {
     pool: Handle,
     debugger: Debugger<ER>,
     raft_router: T,
+    _phantom: std::marker::PhantomData<EK>,
 }
 
-impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
-    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> Service<ER, EK, T> {
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a
+    /// `GcWorker`.
     pub fn new(
         engines: Engines<RocksEngine, ER>,
         pool: Handle,
         raft_router: T,
         cfg_controller: ConfigController,
-    ) -> Service<ER, T> {
+    ) -> Service<ER, EK, T> {
         let debugger = Debugger::new(engines, cfg_controller);
         Service {
             pool,
             debugger,
             raft_router,
+            _phantom: Default::default(),
         }
     }
 
@@ -87,7 +99,9 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine>> Service<ER, T> {
     }
 }
 
-impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug for Service<ER, T> {
+impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK> + 'static> debugpb::Debug
+    for Service<ER, EK, T>
+{
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -351,7 +365,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
-                resp.set_prometheus(metrics::dump());
+                resp.set_prometheus(metrics::dump(false));
                 if req.get_all() {
                     let engines = debugger.get_engine();
                     resp.set_rocksdb_kv(box_try!(MiscExt::dump_stats(&engines.kv)));
@@ -523,7 +537,7 @@ impl<ER: RaftEngine, T: RaftStoreRouter<RocksEngine> + 'static> debugpb::Debug f
     }
 }
 
-fn region_detail<T: RaftStoreRouter<RocksEngine>>(
+fn region_detail<EK: KvEngine, T: RaftStoreRouter<EK>>(
     raft_router: T,
     region_id: u64,
     store_id: u64,
@@ -564,7 +578,7 @@ fn region_detail<T: RaftStoreRouter<RocksEngine>>(
     }
 }
 
-fn consistency_check<T: RaftStoreRouter<RocksEngine>>(
+fn consistency_check<EK: KvEngine, T: RaftStoreRouter<EK>>(
     raft_router: T,
     mut detail: RegionDetailResponse,
 ) -> impl Future<Output = Result<()>> {

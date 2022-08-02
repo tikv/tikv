@@ -1,37 +1,48 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::channel, mpsc::RecvTimeoutError, Arc};
-use std::thread;
-use std::time::Duration;
-
-use grpcio::*;
-use kvproto::kvrpcpb::{
-    self, ApiVersion, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context,
-    GetRequest, Op, PrewriteRequest, RawPutRequest,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{channel, RecvTimeoutError},
+        Arc,
+    },
+    thread,
+    time::Duration,
 };
-use kvproto::tikvpb::TikvClient;
 
+use api_version::KvFormat;
 use collections::HashMap;
+use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
+use grpcio::*;
+use kvproto::{
+    kvrpcpb::{
+        self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
+        Op, PrewriteRequest, RawPutRequest,
+    },
+    tikvpb::TikvClient,
+};
 use test_raftstore::*;
-use tikv::config::{ConfigController, Module};
-use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{
-    commands, flow_controller::FlowController, Error as TxnError, ErrorInner as TxnErrorInner,
+use tikv::{
+    config::{ConfigController, Module},
+    storage::{
+        self,
+        config_manager::StorageConfigManger,
+        kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
+        lock_manager::DummyLockManager,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        test_util::*,
+        txn::{
+            commands,
+            flow_controller::{EngineFlowController, FlowController},
+            Error as TxnError, ErrorInner as TxnErrorInner,
+        },
+        Error as StorageError, ErrorInner as StorageErrorInner, *,
+    },
 };
-use tikv::storage::{self, config_manager::StorageConfigManger, test_util::*, *};
-use tikv::storage::{
-    kv::{Error as KvError, ErrorInner as KvErrorInner, SnapContext, SnapshotExt},
-    Error as StorageError, ErrorInner as StorageErrorInner,
-};
-use tikv_util::future::paired_future_callback;
-use tikv_util::worker::dummy_scheduler;
-use tikv_util::HandyRwLock;
-use txn_types::Key;
-use txn_types::{Mutation, OldValues, TimeStamp};
+use tikv_util::{future::paired_future_callback, worker::dummy_scheduler, HandyRwLock};
+use txn_types::{Key, Mutation, OldValues, TimeStamp};
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -42,13 +53,9 @@ fn test_scheduler_leader_change_twice() {
     let peers = region0.get_peers();
     cluster.must_transfer_leader(region0.get_id(), peers[0].clone());
     let engine0 = cluster.sim.rl().storages[&peers[0].get_id()].clone();
-    let storage0 = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine0,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage0 = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine0, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx0 = Context::default();
     ctx0.set_region_id(region0.get_id());
@@ -240,30 +247,26 @@ fn test_scale_scheduler_pool() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .config(cluster.cfg.tikv.storage.clone())
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .config(cluster.cfg.tikv.storage.clone())
+        .build()
+        .unwrap();
 
     let cfg = new_tikv_config(1);
     let kv_engine = storage.get_engine().kv_engine();
     let (_tx, rx) = std::sync::mpsc::channel();
-    let flow_controller = Arc::new(FlowController::new(
+    let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,
         kv_engine.clone(),
         rx,
-    ));
+    )));
 
     let cfg_controller = ConfigController::new(cfg.clone());
     let (scheduler, _receiver) = dummy_scheduler();
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            kv_engine,
+            Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
             cfg.storage.block_cache.shared,
             scheduler,
             flow_controller,
@@ -341,7 +344,7 @@ fn test_pipelined_pessimistic_lock() {
     let before_pipelined_write_finish_fp = "before_pipelined_write_finish";
 
     {
-        let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
             .pipelined_pessimistic_lock(false)
             .build()
             .unwrap();
@@ -368,7 +371,7 @@ fn test_pipelined_pessimistic_lock() {
         fail::remove(rockskv_write_modifies_fp);
     }
 
-    let storage = TestStorageBuilder::new(DummyLockManager {}, ApiVersion::V1)
+    let storage = TestStorageBuilderApiV1::new(DummyLockManager)
         .pipelined_pessimistic_lock(true)
         .build()
         .unwrap();
@@ -478,8 +481,9 @@ fn test_pipelined_pessimistic_lock() {
     fail::remove(scheduler_async_write_finish_fp);
     delete_pessimistic_lock(&storage, key.clone(), 50, 50);
 
-    // The proposed callback, which is responsible for returning response, is not guaranteed to be
-    // invoked. In this case it should still be continued properly.
+    // The proposed callback, which is responsible for returning response, is not
+    // guaranteed to be invoked. In this case it should still be continued
+    // properly.
     fail::cfg(before_pipelined_write_finish_fp, "return()").unwrap();
     storage
         .sched_txn_command(
@@ -517,13 +521,10 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine.clone(),
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage =
+        TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
+            .build()
+            .unwrap();
 
     // Fail to get timestamp from PD at first
     fail::cfg("test_raftstore_get_tso", "pause").unwrap();
@@ -635,8 +636,8 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
     assert_eq!(lock_info.get_lock_version(), lock_ts.into_inner());
 }
 
-fn test_async_apply_prewrite_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
+    storage: &Storage<E, DummyLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -815,14 +816,10 @@ fn test_async_apply_prewrite() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -917,14 +914,10 @@ fn test_async_apply_prewrite_fallback() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -982,8 +975,8 @@ fn test_async_apply_prewrite_fallback() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
 }
 
-fn test_async_apply_prewrite_1pc_impl<E: Engine>(
-    storage: &Storage<E, DummyLockManager>,
+fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
+    storage: &Storage<E, DummyLockManager, F>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -1106,14 +1099,10 @@ fn test_async_apply_prewrite_1pc() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .async_apply_prewrite(true)
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .async_apply_prewrite(true)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1137,13 +1126,9 @@ fn test_atomic_cas_lock_by_latch() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1227,13 +1212,9 @@ fn test_before_async_write_deadline() {
         .get(&1)
         .unwrap()
         .clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1263,13 +1244,9 @@ fn test_before_propose_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1300,13 +1277,9 @@ fn test_resolve_lock_deadline() {
     cluster.run();
 
     let engine = cluster.sim.read().unwrap().storages[&1].clone();
-    let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
-        engine,
-        DummyLockManager {},
-        ApiVersion::V1,
-    )
-    .build()
-    .unwrap();
+    let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
+        .build()
+        .unwrap();
 
     let mut ctx = Context::default();
     ctx.set_region_id(1);
@@ -1343,7 +1316,7 @@ fn test_resolve_lock_deadline() {
             }),
         )
         .unwrap();
-    assert!(rx.recv().unwrap().is_ok());
+    rx.recv().unwrap().unwrap();
 
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.
@@ -1369,10 +1342,11 @@ fn test_resolve_lock_deadline() {
 
 /// Checks if concurrent transaction works correctly during shutdown.
 ///
-/// During shutdown, all pending writes will fail with error so its latch will be released.
-/// Then other writes in the latch queue will be continued to be processed, which can break
-/// the correctness of latch: underlying command result is always determined, it should be
-/// either always success written or never be written.
+/// During shutdown, all pending writes will fail with error so its latch will
+/// be released. Then other writes in the latch queue will be continued to be
+/// processed, which can break the correctness of latch: underlying command
+/// result is always determined, it should be either always success written or
+/// never be written.
 #[test]
 fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     let (mut cluster, mut client, mut ctx) = must_new_cluster_and_kv_client_mul(3);
@@ -1440,7 +1414,8 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     client = TikvClient::new(channel);
 
-    // The first request is commit, the second is rollback, the first one should succeed.
+    // The first request is commit, the second is rollback, the first one should
+    // succeed.
     ts += 1;
     let get_version = ts;
     let mut get_req = GetRequest::default();

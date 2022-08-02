@@ -5,9 +5,7 @@ mod util;
 
 use criterion::measurement::Measurement;
 
-use crate::util::scan_bencher::ScanBencher;
-use crate::util::store::*;
-use crate::util::BenchCase;
+use crate::util::{scan_bencher::ScanBencher, store::*, BenchCase};
 
 const ROWS: usize = 5000;
 
@@ -28,7 +26,8 @@ where
     );
 }
 
-/// 1 interested column, at the front of each row. Each row contains 100 columns.
+/// 1 interested column, at the front of each row. Each row contains 100
+/// columns.
 ///
 /// This kind of scanner is used in SQLs like `SELECT COUNT(column)`.
 fn bench_table_scan_datum_front<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
@@ -45,7 +44,8 @@ where
     );
 }
 
-/// 2 interested columns, at the front of each row. Each row contains 100 columns.
+/// 2 interested columns, at the front of each row. Each row contains 100
+/// columns.
 fn bench_table_scan_datum_multi_front<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -78,8 +78,8 @@ where
     );
 }
 
-/// 100 interested columns, all columns in the row are interested (i.e. there are totally 100
-/// columns in the row).
+/// 100 interested columns, all columns in the row are interested (i.e. there
+/// are totally 100 columns in the row).
 fn bench_table_scan_datum_all<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -94,7 +94,8 @@ where
     );
 }
 
-/// 3 columns in the row and the last column is very long but only PK is interested.
+/// 3 columns in the row and the last column is very long but only PK is
+/// interested.
 fn bench_table_scan_long_datum_primary_key<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -109,7 +110,8 @@ where
     );
 }
 
-/// 3 columns in the row and the last column is very long but a short column is interested.
+/// 3 columns in the row and the last column is very long but a short column is
+/// interested.
 fn bench_table_scan_long_datum_normal<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -124,7 +126,8 @@ where
     );
 }
 
-/// 3 columns in the row and the last column is very long and the long column is interested.
+/// 3 columns in the row and the last column is very long and the long column is
+/// interested.
 fn bench_table_scan_long_datum_long<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -139,7 +142,8 @@ where
     );
 }
 
-/// 3 columns in the row and the last column is very long and the all columns are interested.
+/// 3 columns in the row and the last column is very long and the all columns
+/// are interested.
 fn bench_table_scan_long_datum_all<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -158,8 +162,8 @@ where
     );
 }
 
-/// 1 interested column, but the column is missing from each row (i.e. it's default value is
-/// used instead). Each row contains totally 10 columns.
+/// 1 interested column, but the column is missing from each row (i.e. it's
+/// default value is used instead). Each row contains totally 10 columns.
 fn bench_table_scan_datum_absent<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,
@@ -174,8 +178,8 @@ where
     );
 }
 
-/// 1 interested column, but the column is missing from each row (i.e. it's default value is
-/// used instead). Each row contains totally 100 columns.
+/// 1 interested column, but the column is missing from each row (i.e. it's
+/// default value is used instead). Each row contains totally 100 columns.
 fn bench_table_scan_datum_absent_large_row<M>(b: &mut criterion::Bencher<'_, M>, input: &Input<M>)
 where
     M: Measurement,

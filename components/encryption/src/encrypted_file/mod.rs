@@ -1,18 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{Read, Write};
-use std::path::Path;
+use std::{
+    io::{Read, Write},
+    path::Path,
+};
 
 use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
+use slog_global::error;
 use tikv_util::time::Instant;
 
-use crate::master_key::*;
-use crate::metrics::*;
-use crate::Result;
-use slog_global::error;
+use crate::{master_key::*, metrics::*, Result};
 
 mod header;
 pub use header::*;
@@ -34,8 +34,8 @@ impl<'a> EncryptedFile<'a> {
         EncryptedFile { base, name }
     }
 
-    /// Read and decrypt the file. Caller need to handle the NotFound io error in case file not
-    /// exists.
+    /// Read and decrypt the file. Caller need to handle the NotFound io error
+    /// in case file not exists.
     pub fn read(&self, master_key: &dyn Backend) -> Result<Vec<u8>> {
         let start = Instant::now();
         let res = OpenOptions::new()
@@ -106,11 +106,12 @@ impl<'a> EncryptedFile<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Error;
+    use std::io::ErrorKind;
 
     use matches::assert_matches;
-    use std::io::ErrorKind;
+
+    use super::*;
+    use crate::Error;
 
     #[test]
     fn test_open_write() {
@@ -126,7 +127,6 @@ mod tests {
 
         let content = b"test content";
         file.write(content, &PlaintextBackend::default()).unwrap();
-        drop(file);
 
         let file = EncryptedFile::new(tmp.path(), "encrypted");
         assert_eq!(file.read(&PlaintextBackend::default()).unwrap(), content);

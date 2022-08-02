@@ -1,7 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
-use std::io::Result;
+use std::{
+    fmt::{self, Debug, Formatter},
+    io::Result,
+};
 
 pub trait EncryptionKeyManager: Sync + Send {
     fn get_file(&self, fname: &str) -> Result<FileEncryptionInfo>;
@@ -51,4 +53,5 @@ pub enum EncryptionMethod {
     Aes128Ctr = 2,
     Aes192Ctr = 3,
     Aes256Ctr = 4,
+    Sm4Ctr = 5,
 }

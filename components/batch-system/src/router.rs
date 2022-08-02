@@ -1,18 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use crate::fsm::{Fsm, FsmScheduler, FsmState};
-use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
+use std::{
+    cell::Cell,
+    mem,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
+
 use collections::HashMap;
 use crossbeam::channel::{SendError, TrySendError};
-use std::cell::Cell;
-use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use tikv_util::lru::LruCache;
-use tikv_util::Either;
-use tikv_util::{debug, info};
+use tikv_util::{debug, info, lru::LruCache, Either};
+
+use crate::{
+    fsm::{Fsm, FsmScheduler, FsmState},
+    mailbox::{BasicMailbox, Mailbox},
+    metrics::CHANNEL_FULL_COUNTER_VEC,
+};
 
 /// A struct that traces the approximate memory usage of router.
 #[derive(Default)]
@@ -340,8 +346,8 @@ where
         let state_unit = mem::size_of::<FsmState<N>>();
         // Every message in crossbeam sender needs 8 bytes to store state.
         let message_unit = mem::size_of::<N::Message>() + 8;
-        // crossbeam unbounded channel sender has a list of blocks. Every block has 31 unit
-        // and every sender has at least one sender.
+        // crossbeam unbounded channel sender has a list of blocks. Every block has 31
+        // unit and every sender has at least one sender.
         let sender_block_unit = 31;
         RouterTrace {
             alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.
