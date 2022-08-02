@@ -7,7 +7,8 @@ pub enum ProfError {
     MemProfilingNotEnabled,
     IOError(std::io::Error),
     JemallocError(String),
-    PathEncodingError(std::ffi::OsString), // When temp files are in a non-unicode directory, OsString.into_string() will cause this error,
+    PathEncodingError(std::ffi::OsString), /* When temp files are in a non-unicode directory,
+                                            * OsString.into_string() will cause this error, */
     PathWithNulError(std::ffi::NulError),
 }
 

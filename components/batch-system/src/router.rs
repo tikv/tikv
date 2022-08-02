@@ -346,8 +346,8 @@ where
         let state_unit = mem::size_of::<FsmState<N>>();
         // Every message in crossbeam sender needs 8 bytes to store state.
         let message_unit = mem::size_of::<N::Message>() + 8;
-        // crossbeam unbounded channel sender has a list of blocks. Every block has 31 unit
-        // and every sender has at least one sender.
+        // crossbeam unbounded channel sender has a list of blocks. Every block has 31
+        // unit and every sender has at least one sender.
         let sender_block_unit = 31;
         RouterTrace {
             alive: (mailbox_unit * 8 / 7 // hashmap uses 7/8 of allocated memory.

@@ -84,8 +84,9 @@ impl ExternalStorage for LocalStorage {
             ));
         }
         // create the parent dir if there isn't one.
-        // note: we may write to arbitrary directory here if the path contains things like '../'
-        // but internally the file name should be fully controlled by TiKV, so maybe it is OK?
+        // note: we may write to arbitrary directory here if the path contains things
+        // like '../' but internally the file name should be fully controlled by
+        // TiKV, so maybe it is OK?
         if let Some(parent) = Path::new(name).parent() {
             fs::create_dir_all(self.base.join(parent))
                 .await
@@ -102,7 +103,8 @@ impl ExternalStorage for LocalStorage {
         }
 
         // Because s3 could support writing(put_object) a existed object.
-        // For the interface consistent with s3, local storage need also support write a existed file.
+        // For the interface consistent with s3, local storage need also support write a
+        // existed file.
         if fs::metadata(self.base.join(name)).await.is_ok() {
             info!("[{}] is already exists in {}", name, self.base.display());
         }
@@ -120,7 +122,8 @@ impl ExternalStorage for LocalStorage {
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin> {
         debug!("read file from local storage";
             "name" => %name, "base" => %self.base.display());
-        // We used std i/o here for removing the requirement of tokio reactor when restoring.
+        // We used std i/o here for removing the requirement of tokio reactor when
+        // restoring.
         // FIXME: when restore side get ready, use tokio::fs::File for returning.
         match StdFile::open(self.base.join(name)) {
             Ok(file) => Box::new(AllowStdIo::new(file)) as _,
@@ -224,18 +227,15 @@ mod tests {
         let filename = "existed.file";
         let buf1: &[u8] = b"pingcap";
         let buf2: &[u8] = b"tikv";
-        let r = ls
-            .write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
-            .await;
-        assert!(r.is_ok());
-        let r = ls
-            .write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
-            .await;
-        assert!(r.is_ok());
+        ls.write(filename, UnpinReader(Box::new(buf1)), buf1.len() as _)
+            .await
+            .unwrap();
+        ls.write(filename, UnpinReader(Box::new(buf2)), buf2.len() as _)
+            .await
+            .unwrap();
 
         let mut read_buff: Vec<u8> = Vec::new();
-        let r = ls.read(filename).read_to_end(&mut read_buff).await;
-        assert!(r.is_ok());
+        ls.read(filename).read_to_end(&mut read_buff).await.unwrap();
         assert_eq!(read_buff.len(), 4);
         assert_eq!(&read_buff, buf2);
     }

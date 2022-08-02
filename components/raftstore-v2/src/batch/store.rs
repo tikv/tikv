@@ -39,7 +39,8 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub trans: T,
     /// The latest configuration.
     pub cfg: Config,
-    /// The tick batch for delay ticking. It will be flushed at the end of every round.
+    /// The tick batch for delay ticking. It will be flushed at the end of every
+    /// round.
     pub tick_batch: Vec<PeerTickBatch>,
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
@@ -252,7 +253,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
     }
 
     fn clean_up_tablets(&self, peers: &HashMap<u64, SenderFsmPair<EK, ER>>) -> Result<()> {
-        // TODO: list all available tablets and destroy those which are not in the peers.
+        // TODO: list all available tablets and destroy those which are not in the
+        // peers.
         Ok(())
     }
 }
