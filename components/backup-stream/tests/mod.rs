@@ -250,7 +250,6 @@ impl Suite {
         let regions = sim.region_info_accessors.get(&id).unwrap().clone();
         let mut cfg = BackupStreamConfig::default();
         cfg.enable = true;
-        cfg.use_checkpoint_v3 = true;
         cfg.temp_path = format!("/{}/{}", self.temp_files.path().display(), id);
         let ob = self.obs.get(&id).unwrap().clone();
         let endpoint = Endpoint::new(
