@@ -771,8 +771,7 @@ where
         let mut callback_time = 0f64;
         if notify {
             for (region_id, (peer_id, ready_number)) in &self.batch.readies {
-                self.notifier
-                    .notify(*region_id, *peer_id, *ready_number);
+                self.notifier.notify(*region_id, *peer_id, *ready_number);
             }
             now = Instant::now();
             callback_time = duration_to_sec(now.saturating_duration_since(now2));
