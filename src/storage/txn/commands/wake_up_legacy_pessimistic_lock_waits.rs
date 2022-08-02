@@ -5,8 +5,8 @@ use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::commands::{CommandExt, ReleasedLocks, SyncCommand, SyncCommandContext};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::Error as StorageError;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use txn_types::Key;
 
 command! {

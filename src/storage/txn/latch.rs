@@ -314,13 +314,15 @@ impl Latches {
                 Self::push_lock_waiting(&mut queues, next_lock);
             }
 
-            let mut has_awakened_lock = false;
+            let mut has_awakened_lock_needs_derive_latch = false;
             while let Some(next_lock) = released_locks.next_if(|v| v.hash_for_latch <= key_hash) {
                 assert_eq!(next_lock.hash_for_latch, key_hash);
                 // TODO: Pass term here
                 if let Some(lock_wait) = Self::pop_lock_waiting(&mut queues, &next_lock.key, None) {
+                    if lock_wait.allow_lock_with_conflict {
+                        has_awakened_lock_needs_derive_latch = true;
+                    }
                     txn_lock_wakeup_list.push(lock_wait);
-                    has_awakened_lock = true;
                 }
             }
 
@@ -332,7 +334,7 @@ impl Latches {
             assert_eq!(v, key_hash);
 
             // If we are waking up some blocked pessimistic lock requests, do not wake up next queueing command.
-            if !has_awakened_lock {
+            if !has_awakened_lock_needs_derive_latch {
                 // Put back the queue to latch
                 if let Some(queues) = queues {
                     if !queues.is_empty() {

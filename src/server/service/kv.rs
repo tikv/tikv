@@ -16,7 +16,7 @@ use crate::server::Result as ServerResult;
 use crate::storage::{
     errors::{
         extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
-        extract_region_error, map_kv_pairs,
+        extract_region_error, extract_region_error_from_ref, map_kv_pairs,
     },
     kv::Engine,
     lock_manager::LockManager,
@@ -1913,7 +1913,11 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                         let (res, error) = res.into_pb();
                         resp.set_results(res.into());
                         if let Some(e) = error {
-                            resp.set_errors(vec![extract_key_error(&e)].into())
+                            if let Some(region_error) = extract_region_error_from_ref(&*e) {
+                                resp.set_region_error(region_error);
+                            } else {
+                                resp.set_errors(vec![extract_key_error(&e)].into());
+                            }
                         }
                     }
                     PessimisticWaitLockMode::RetryFirst => {

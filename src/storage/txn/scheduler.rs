@@ -54,7 +54,7 @@ use crate::storage::lock_manager::{
     self, DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
 };
 use crate::storage::metrics::{self, *};
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock};
 use crate::storage::txn::commands::{
     self, CallbackWithArcError, PessimisticLockKeyCallback, ReleasedLocks, ResponsePolicy,
     SyncCommandContext, WriteContext, WriteResult, WriteResultLockInfo,
@@ -469,7 +469,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             None
         };
-        let (cmd_wakeup_list, latch_keep_list, txn_lock_wakeup_list, queues) =
+        let (cmd_wakeup_list, latch_keep_list, mut txn_lock_wakeup_list, queues) =
             self.inner.latches.release(
                 lock,
                 cid,
@@ -479,6 +479,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             );
         for wcid in cmd_wakeup_list {
             self.try_to_wake_up(wcid);
+        }
+
+        let mut awakened_legacy_locks = vec![];
+
+        {
+            let mut i = 0;
+            while i < txn_lock_wakeup_list.len() {
+                if txn_lock_wakeup_list[i].allow_lock_with_conflict {
+                    i += 1;
+                } else {
+                    awakened_legacy_locks.push(txn_lock_wakeup_list.swap_remove(i));
+                }
+            }
         }
 
         assert_eq!(latch_keep_list.is_empty(), txn_lock_wakeup_list.is_empty());
@@ -491,6 +504,24 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 queues,
             );
         }
+
+        if !awakened_legacy_locks.is_empty() {
+            let mut wake_up_events = Vec::with_capacity(awakened_legacy_locks.len());
+            for lock in &awakened_legacy_locks {
+                wake_up_events.push(lock_manager::KeyWakeUpEvent {
+                    key: lock.key.clone(),
+                    released_start_ts: 0.into(),
+                    awakened_start_ts: lock.parameters.start_ts,
+                    awakened_allow_resuming: lock.allow_lock_with_conflict,
+                })
+            }
+            self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
+            self.wake_up_legacy_pessimistic_locks(awakened_legacy_locks.into_iter().map(|item| {
+                let key = item.key.clone();
+                (item, ReleasedLock::new(0.into(), None, key, false))
+            }))
+        }
+
         STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC
             .get(tag)
             .observe(start_time.saturating_elapsed_secs())
@@ -1497,7 +1528,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
+        self.wake_up_legacy_pessimistic_locks(legacy_wakeup_list);
+    }
 
+    fn wake_up_legacy_pessimistic_locks(
+        &self,
+        legacy_wakeup_list: impl IntoIterator<Item = (WriteResultLockInfo, ReleasedLock)>
+        + Send
+        + 'static,
+    ) {
         self.get_sched_pool(CommandPri::High)
             .pool
             .spawn(async move {
