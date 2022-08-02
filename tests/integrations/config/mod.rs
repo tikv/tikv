@@ -243,6 +243,8 @@ fn test_serde_custom_tikv_config() {
         reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
         reactive_memory_lock_timeout_tick: 8,
         report_region_buckets_tick_interval: ReadableDuration::secs(1234),
+        check_long_uncommitted_interval: ReadableDuration::secs(1),
+        long_uncommitted_base_threshold: ReadableDuration::secs(1),
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
     };

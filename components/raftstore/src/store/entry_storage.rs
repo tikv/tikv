@@ -20,7 +20,7 @@ use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState};
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
-use tikv_util::{debug, info, worker::Scheduler};
+use tikv_util::{debug, info, time::Instant, warn, worker::Scheduler};
 
 use super::{metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE};
 use crate::{bytes_capacity, store::worker::RaftlogFetchTask};
@@ -364,9 +364,10 @@ impl Drop for EntryCache {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum RaftlogFetchState {
-    Fetching,
+    // The Instant records the start time of the fetching.
+    Fetching(Instant),
     Fetched(Box<RaftlogFetchResult>),
 }
 
@@ -481,26 +482,40 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     // None indicates cleanning the fetched result.
     pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
-        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
-            && res.is_none()
-        {
-            return;
+        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low) {
+            if res.is_none() {
+                return;
+            }
         }
 
         match res {
             Some(res) => {
-                if let Some(RaftlogFetchState::Fetched(prev)) = self
+                match self
                     .async_fetch_results
                     .borrow_mut()
                     .insert(low, RaftlogFetchState::Fetched(res))
                 {
-                    info!(
-                        "unconsumed async fetch res";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer_id,
-                        "res" => ?prev,
-                        "low" => low,
-                    );
+                    Some(RaftlogFetchState::Fetching(start)) => {
+                        RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM
+                            .observe(start.saturating_elapsed_secs());
+                    }
+                    Some(RaftlogFetchState::Fetched(prev)) => {
+                        info!(
+                            "unconsumed async fetch res";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer_id,
+                            "res" => ?prev,
+                            "low" => low,
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            "unknown async fetch res";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer_id,
+                            "low" => low,
+                        );
+                    }
                 }
             }
             None => {
@@ -521,7 +536,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         context: GetEntriesContext,
         buf: &mut Vec<Entry>,
     ) -> raft::Result<usize> {
-        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
+        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low) {
             // already an async fetch in flight
             return Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
@@ -630,7 +645,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
         self.async_fetch_results
             .borrow_mut()
-            .insert(low, RaftlogFetchState::Fetching);
+            .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
         self.raftlog_fetch_scheduler
             .schedule(RaftlogFetchTask::PeerStorage {
                 region_id,
@@ -849,6 +864,11 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     #[inline]
     pub fn is_entry_cache_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+
+    #[inline]
+    pub fn entry_cache_first_index(&self) -> Option<u64> {
+        self.cache.first_index()
     }
 
     /// Evict entries from the cache.
