@@ -1261,7 +1261,8 @@ where
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
-                self.engines.clone(),
+                self.engines.raft.clone(),
+                Some(self.engines.kv.clone()),
                 rx,
                 self.router.clone(),
                 self.trans.clone(),
@@ -1526,8 +1527,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
-        self.store_writers
-            .spawn(meta.get_id(), &engines, &self.router, &trans, &cfg)?;
+        self.store_writers.spawn(
+            meta.get_id(),
+            engines.raft.clone(),
+            Some(engines.kv.clone()),
+            &self.router,
+            &trans,
+            &cfg,
+        )?;
 
         let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let mut builder = RaftPollerBuilder {
@@ -1717,7 +1724,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::new(),
+        store_writers: StoreWriters::default(),
     };
     (raft_router, system)
 }
