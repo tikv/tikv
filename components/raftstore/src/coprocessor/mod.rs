@@ -203,6 +203,7 @@ pub trait SplitCheckObserver<E>: Coprocessor {
     );
 }
 
+/// Describes size information about all stores.
 #[derive(Debug, Default)]
 pub struct StoreSizeInfo {
     pub capacity: u64,

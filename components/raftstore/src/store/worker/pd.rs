@@ -2290,41 +2290,40 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     snap_mgr_size: u64,
 ) -> Option<(u64, u64, u64)> {
     if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
-        Some((engine_size.capacity, engine_size.used, engine_size.avail))
-    } else {
-        let store_info = store_info.unwrap();
-        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.kv_engine.path(),
-                    "err" => ?e
-                );
-                return None;
-            }
-            Ok(stats) => stats,
-        };
-        let disk_cap = disk_stats.total_space();
-        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-            disk_cap
-        } else {
-            store_info.capacity
-        };
-        let used_size = snap_mgr_size
-            + store_info
-                .kv_engine
-                .get_engine_used_size()
-                .expect("kv engine used size")
-            + store_info
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
-        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available
-        // here.
-        available = cmp::min(available, disk_stats.available_space());
-        Some((capacity, used_size, available))
+        return Some((engine_size.capacity, engine_size.used, engine_size.avail));
     }
+    let store_info = store_info.unwrap();
+    let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+        Err(e) => {
+            error!(
+                "get disk stat for rocksdb failed";
+                "engine_path" => store_info.kv_engine.path(),
+                "err" => ?e
+            );
+            return None;
+        }
+        Ok(stats) => stats,
+    };
+    let disk_cap = disk_stats.total_space();
+    let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+        disk_cap
+    } else {
+        store_info.capacity
+    };
+    let used_size = snap_mgr_size
+        + store_info
+            .kv_engine
+            .get_engine_used_size()
+            .expect("kv engine used size")
+        + store_info
+            .raft_engine
+            .get_engine_size()
+            .expect("raft engine used size");
+    let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+    // We only care about rocksdb SST file size, so we should check disk available
+    // here.
+    available = cmp::min(available, disk_stats.available_space());
+    Some((capacity, used_size, available))
 }
 
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
