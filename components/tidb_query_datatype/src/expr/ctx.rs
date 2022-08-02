@@ -344,19 +344,19 @@ mod tests {
     fn test_handle_truncate() {
         // ignore_truncate = false, truncate_as_warning = false
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
-        assert!(ctx.handle_truncate(false).is_ok());
+        ctx.handle_truncate(false).unwrap();
         assert!(ctx.handle_truncate(true).is_err());
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(false).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
-        assert!(ctx.handle_truncate(false).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(false).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert!(!ctx.take_warnings().warnings.is_empty());
     }
 
@@ -364,11 +364,11 @@ mod tests {
     fn test_max_warning_cnt() {
         let eval_cfg = Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING));
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
-        assert!(ctx.handle_truncate(true).is_ok());
-        assert!(ctx.handle_truncate(true).is_ok());
+        ctx.handle_truncate(true).unwrap();
+        ctx.handle_truncate(true).unwrap();
         assert_eq!(ctx.take_warnings().warnings.len(), 2);
         for _ in 0..2 * DEFAULT_MAX_WARNING_CNT {
-            assert!(ctx.handle_truncate(true).is_ok());
+            ctx.handle_truncate(true).unwrap();
         }
         let warnings = ctx.take_warnings();
         assert_eq!(warnings.warning_cnt, 2 * DEFAULT_MAX_WARNING_CNT);

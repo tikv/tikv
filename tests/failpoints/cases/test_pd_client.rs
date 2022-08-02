@@ -118,7 +118,6 @@ fn test_load_global_config() {
             )
             .await
     });
-    assert!(res.is_ok());
     for (k, v) in res.unwrap() {
         assert_eq!(k, format!("/global/config/{}", v))
     }
