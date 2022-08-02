@@ -194,6 +194,16 @@ impl FileSystem for ManagedFileSystem {
         self.base_file_system.delete(path)
     }
 
+    fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        self.base_file_system
+            .rename(src_path.as_ref(), dst_path.as_ref())?;
+        if let Some(ref manager) = self.key_manager {
+            manager.delete_file(src_path.as_ref().to_str().unwrap())?;
+            manager.new_file(dst_path.as_ref().to_str().unwrap())?;
+        }
+        Ok(())
+    }
+
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
         if let Some(ref manager) = self.key_manager {
             if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {

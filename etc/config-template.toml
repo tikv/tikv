@@ -1086,6 +1086,16 @@
 ## When it's not set, 15% of available system memory will be used.
 # memory-limit = "1GB"
 
+## Version of raft logs in Raft Engine.
+## Default: 1. Maximum: 2.
+# format-version = 1
+
+## Determines whether to recycle stale raft logs for future writing. `purge`
+## operations on Raft Engine will firstly put stale files into a list for
+## recycle. It's only available when `format-version` >= `2`.
+## Default: false.
+# enable-log-recycle = false
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
