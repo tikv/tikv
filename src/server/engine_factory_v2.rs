@@ -7,7 +7,9 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT};
+use engine_traits::{
+    CfOptions, CfOptionsExt, OpenOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+};
 
 use crate::server::engine_factory::KvEngineFactory;
 
@@ -30,16 +32,6 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
     (tablet_id, tablet_suffix)
 }
 
-impl KvEngineFactoryV2 {
-    fn create_tablet_helper(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let tablet_path = self.tablet_path(id, suffix);
-        let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
-        debug!("inserting tablet"; "key" => ?(id, suffix));
-        self.inner.on_tablet_created(id, suffix);
-        Ok(kv_engine)
-    }
-}
-
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
@@ -51,7 +43,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             ));
         }
 
-        let kv_engine = self.create_tablet_helper(id, suffix)?;
+        let tablet_path = self.tablet_path(id, suffix);
+        let kv_engine = self.open_tablet_raw(&tablet_path, OpenOptions::default().create(true))?;
         reg.insert((id, suffix), kv_engine.clone());
 
         Ok(kv_engine)
@@ -64,10 +57,27 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         }
 
         let db_path = self.tablet_path(id, suffix);
-        let db = self.open_tablet_raw(db_path.as_path(), false)?;
+        let db = self.open_tablet_raw(db_path.as_path(), OpenOptions::default())?;
         debug!("open tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), db.clone());
         Ok(db)
+    }
+
+    fn open_tablet_raw(&self, path: &Path, option: OpenOptions) -> Result<RocksEngine> {
+        if !option.create && !RocksEngine::exists(path.to_str().unwrap_or_default()) {
+            return Err(box_err!(
+                "path {} does not have db",
+                path.to_str().unwrap_or_default()
+            ));
+        }
+
+        let (id, suffix) = get_id_and_suffix_from_path(&path);
+
+        let kv_engine = self.inner.create_tablet(path, id, suffix)?;
+        debug!("inserting tablet"; "key" => ?(id, suffix));
+        self.inner.on_tablet_created(id, suffix);
+
+        Ok(kv_engine)
     }
 
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<RocksEngine> {
@@ -85,17 +95,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             return Some(reg.get(k).unwrap().clone());
         }
         None
-    }
-
-    fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<RocksEngine> {
-        if !RocksEngine::exists(path.to_str().unwrap_or_default()) {
-            return Err(box_err!(
-                "path {} does not have db",
-                path.to_str().unwrap_or_default()
-            ));
-        }
-        let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
-        self.create_tablet_helper(tablet_id, tablet_suffix)
     }
 
     #[inline]
@@ -157,7 +156,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
         let db_path = self.tablet_path(id, suffix);
         std::fs::rename(path, &db_path)?;
-        let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+        let new_engine = self.open_tablet_raw(db_path.as_path(), OpenOptions::default());
         if new_engine.is_ok() {
             let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
             reg.remove(&(old_id, old_suffix));

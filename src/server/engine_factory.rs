@@ -11,8 +11,8 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
-    CF_WRITE,
+    CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
+    CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -226,7 +226,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         self.create_shared_db()
     }
 
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
+    fn open_tablet_raw(&self, _path: &Path, _option: OpenOptions) -> Result<RocksEngine> {
         TabletFactory::create_tablet(self, 0, 0)
     }
 

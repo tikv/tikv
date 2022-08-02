@@ -153,6 +153,27 @@ impl Drop for TabletErrorCollector {
     }
 }
 
+#[derive(Default)]
+pub struct OpenOptions {
+    pub read_only: bool,
+    // create tablet if non-exist
+    pub create: bool,
+}
+
+impl OpenOptions {
+    /// Sets the option to create a new file, or open it if it already exists.
+    pub fn create(mut self, create: bool) -> Self {
+        self.create = create;
+        self
+    }
+
+    /// Sets the option for read access.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+}
+
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
@@ -167,13 +188,15 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Open a tablet by id and suffix. If the tablet exists, it will open it.
     /// If the tablet does not exist, it will create it.
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, suffix), false)
+        self.open_tablet_raw(&self.tablet_path(id, suffix), OpenOptions::default())
     }
 
     /// Open a tablet by id and suffix from cache---that means it should already
     /// be opened.
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
+        if let Ok(engine) =
+            self.open_tablet_raw(&self.tablet_path(id, suffix), OpenOptions::default())
+        {
             return Some(engine);
         }
         None
@@ -185,7 +208,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     }
 
     /// Open tablet by path and readonly flag
-    fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
+    fn open_tablet_raw(&self, path: &Path, option: OpenOptions) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -242,7 +265,7 @@ where
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
+    fn open_tablet_raw(&self, _path: &Path, _option: OpenOptions) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
     fn create_shared_db(&self) -> Result<EK> {

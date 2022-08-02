@@ -91,7 +91,7 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-        CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+        CfOptions, CfOptionsExt, OpenOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
     };
     use tikv_util::box_err;
 
@@ -173,7 +173,7 @@ pub mod kv {
             }
 
             let db_path = self.tablet_path(id, suffix);
-            let db = self.open_tablet_raw(db_path.as_path(), false)?;
+            let db = self.open_tablet_raw(db_path.as_path(), OpenOptions::default())?;
             reg.insert((id, suffix), db.clone());
             Ok(db)
         }
@@ -194,7 +194,7 @@ pub mod kv {
             None
         }
 
-        fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<KvTestEngine> {
+        fn open_tablet_raw(&self, path: &Path, _readonly: OpenOptions) -> Result<KvTestEngine> {
             if !KvTestEngine::exists(path.to_str().unwrap_or_default()) {
                 return Err(box_err!(
                     "path {} does not have db",
@@ -249,20 +249,18 @@ pub mod kv {
 
         #[inline]
         fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            {
-                let reg = self.registry.lock().unwrap();
-                if let Some(db) = reg.get(&(id, suffix)) {
-                    return Err(box_err!(
-                        "region {} {} already exists",
-                        id,
-                        db.as_inner().path()
-                    ));
-                }
+            let reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Err(box_err!(
+                    "region {} {} already exists",
+                    id,
+                    db.as_inner().path()
+                ));
             }
 
             let db_path = self.tablet_path(id, suffix);
             std::fs::rename(path, &db_path)?;
-            let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+            let new_engine = self.open_tablet_raw(db_path.as_path(), OpenOptions::default());
             if new_engine.is_ok() {
                 let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
                 self.registry.lock().unwrap().remove(&(old_id, old_suffix));
