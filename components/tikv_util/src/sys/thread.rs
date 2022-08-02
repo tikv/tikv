@@ -9,7 +9,7 @@ use std::{io, io::Result, sync::Mutex, thread};
 use collections::HashMap;
 
 /// A cross-platform CPU statistics data structure.
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub struct ThreadStat {
     // libc::clock_t is not used here because the definition of
     // clock_t is different on linux and bsd.

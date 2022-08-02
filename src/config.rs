@@ -213,7 +213,7 @@ impl TitanCfConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BackgroundJobLimits {
     max_background_jobs: u32,
     max_background_flushes: u32,
@@ -966,7 +966,7 @@ impl RaftCfConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 // Note that Titan is still an experimental feature. Once enabled, it can't fall
@@ -1813,7 +1813,7 @@ fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(Str
         .collect()
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MetricConfig {
@@ -1838,7 +1838,7 @@ impl Default for MetricConfig {
         }
     }
 }
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnifiedReadPoolConfig {
@@ -1969,7 +1969,7 @@ mod unified_read_pool_tests {
 
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
-        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug)]
+        #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $struct_name {
@@ -2213,7 +2213,7 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
@@ -2393,7 +2393,7 @@ mod readpool_tests {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct HadoopConfig {
@@ -2401,7 +2401,7 @@ pub struct HadoopConfig {
     pub linux_user: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupConfig {
@@ -2469,7 +2469,7 @@ impl Default for BackupConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct BackupStreamConfig {
@@ -2641,7 +2641,7 @@ impl CdcConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolvedTsConfig {
@@ -2674,7 +2674,7 @@ impl Default for ResolvedTsConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct File {
@@ -2697,7 +2697,7 @@ impl Default for File {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct LogConfig {
@@ -2711,7 +2711,7 @@ pub struct LogConfig {
 }
 
 /// LogLevel is a wrapper type of `slog::Level`
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LogLevel(slog::Level);
 
 impl From<LogLevel> for slog::Level {
@@ -2806,7 +2806,7 @@ impl ConfigManager for LogConfigManager {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct QuotaConfig {

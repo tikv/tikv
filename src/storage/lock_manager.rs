@@ -9,7 +9,7 @@ use crate::{
     storage::{txn::ProcessResult, types::StorageCallback},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
     pub hash: u64,
@@ -27,7 +27,7 @@ pub struct DiagnosticContext {
 }
 
 /// Time to wait for lock released when encountering locks.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum WaitTimeout {
     Default,
     Millis(u64),

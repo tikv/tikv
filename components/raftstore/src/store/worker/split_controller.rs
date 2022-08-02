@@ -552,7 +552,7 @@ impl SplitInfo {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum SplitConfigChange {
     Noop,
     UpdateRegionCPUCollector(bool),

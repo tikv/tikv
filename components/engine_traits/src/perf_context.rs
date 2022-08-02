@@ -2,7 +2,7 @@
 use tikv_util::numeric_enum_serializing_mod;
 use tracker::TrackerToken;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PerfLevel {
     Uninitialized,
     Disable,
@@ -44,7 +44,7 @@ pub trait PerfContextExt {
 ///
 /// This is a leaky abstraction that supports the encapsulation of metrics
 /// reporting by the subsystems that use PerfContext.
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,

@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     use crate as online_config;
 
-    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct TestConfig {
         field1: usize,
         field2: String,
@@ -152,7 +152,7 @@ mod tests {
         submodule_field: SubConfig,
     }
 
-    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct SubConfig {
         field1: u64,
         field2: bool,
@@ -296,7 +296,7 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
     pub enum TestEnum {
         First,
         Second,
@@ -332,7 +332,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, OnlineConfig, Debug, PartialEq, Eq)]
+    #[derive(Clone, OnlineConfig, Debug, PartialEq)]
     pub struct TestEnumConfig {
         f1: u64,
         e: TestEnum,

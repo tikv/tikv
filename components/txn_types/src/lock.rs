@@ -15,7 +15,7 @@ use crate::{
     Error, ErrorInner, Result,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
     Put,
     Delete,
@@ -64,7 +64,7 @@ impl LockType {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Clone)]
 pub struct Lock {
     pub lock_type: LockType,
     pub primary: Vec<u8>,
@@ -425,7 +425,7 @@ impl Lock {
 
 /// A specialized lock only for pessimistic lock. This saves memory for cases
 /// that only pessimistic locks exist.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct PessimisticLock {
     /// The primary key in raw format.
     pub primary: Box<[u8]>,

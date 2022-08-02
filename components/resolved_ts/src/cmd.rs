@@ -11,7 +11,7 @@ use txn_types::{
     Key, Lock, LockType, TimeStamp, Value, Write, WriteBatchFlags, WriteRef, WriteType,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum ChangeRow {
     Prewrite {
         key: Key,

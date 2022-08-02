@@ -15,9 +15,10 @@ if [[ -n "$SHELL_DEBUG" ]] ; then
   set -x
 fi
 
-# TODOs:
+# Notes:
 # - Enables `significant_drop_in_scrutinee` after
 #   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
+# - `derive_partial_eq_without_eq` has compilation overhead.
 CLIPPY_LINTS=(
 	-A clippy::module_inception  \
 	-A clippy::should_implement_trait \
@@ -36,10 +37,11 @@ CLIPPY_LINTS=(
 	-A clippy::enum_variant_names \
 	-A clippy::type_complexity \
 	-A clippy::significant_drop_in_scrutinee \
+	-A clippy::derive_partial_eq_without_eq \
 	-W clippy::dbg_macro \
 	-W clippy::todo \
 	-D clippy::upper_case_acronyms \
-	-D clippy::disallowed-methods \
+	-D clippy::disallowed_methods \
 	-D rust-2018-idioms \
 	-D clippy::assertions_on_result_states \
 )

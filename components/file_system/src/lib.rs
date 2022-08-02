@@ -48,14 +48,14 @@ pub use rate_limiter::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IoOp {
     Read,
     Write,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumCount, EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, EnumCount, EnumIter)]
 pub enum IoType {
     Other = 0,
     // Including coprocessor and storage read.
@@ -129,7 +129,7 @@ impl std::ops::Sub for IoBytes {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, PartialEq, Eq, Copy, EnumCount)]
+#[derive(Debug, Clone, PartialEq, Copy, EnumCount)]
 pub enum IoPriority {
     Low = 0,
     Medium = 1,

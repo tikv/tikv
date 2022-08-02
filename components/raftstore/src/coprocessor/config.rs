@@ -58,7 +58,7 @@ pub struct Config {
     pub region_bucket_merge_size_ratio: f64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsistencyCheckMethod {
     /// Does consistency check for regions based on raw data. Only used when

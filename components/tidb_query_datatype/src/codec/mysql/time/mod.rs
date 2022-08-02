@@ -192,7 +192,7 @@ bitfield! {
     u8, get_fsp_tt, set_fsp_tt: 3, 0;
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum TimeType {
     Date,
     DateTime,

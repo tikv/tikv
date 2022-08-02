@@ -90,7 +90,7 @@ impl RequestInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum RequestType {
     #[default]
     Unknown,

@@ -12,7 +12,7 @@ use crate::store::metrics::*;
 const NEGOTIATION_HIBERNATE: Feature = Feature::require(5, 0, 0);
 
 /// Represents state of the group.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub enum GroupState {
     /// The group is working generally, leader keeps
     /// replicating data to followers.
@@ -26,14 +26,14 @@ pub enum GroupState {
     Idle,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LeaderState {
     Awaken,
     Poll(Vec<u64>),
     Hibernated,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HibernateState {
     group: GroupState,
     leader: LeaderState,

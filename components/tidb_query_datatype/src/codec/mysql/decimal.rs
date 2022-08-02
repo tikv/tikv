@@ -24,7 +24,7 @@ use crate::{
     expr::EvalContext,
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Res<T> {
     Ok(T),
     Truncated(T),

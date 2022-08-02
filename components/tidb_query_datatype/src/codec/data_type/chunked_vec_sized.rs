@@ -14,7 +14,7 @@ use crate::impl_chunked_vec_common;
 /// (or `None`), the corresponding `bitmap` bit is false, and `data` stores zero
 /// value for that element. Otherwise, `data` stores actual data, and `bitmap`
 /// bit is true.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecSized<T: Sized> {
     data: Vec<T>,
     bitmap: BitVec,

@@ -187,7 +187,7 @@ impl PoolInner {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Full {
     pub current_tasks: usize,
     pub max_tasks: usize,

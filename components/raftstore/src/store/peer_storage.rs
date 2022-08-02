@@ -64,7 +64,7 @@ pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
 
 /// Possible status returned by `check_applying_snap`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CheckApplyingSnapStatus {
     /// A snapshot is just applied.
     Success,

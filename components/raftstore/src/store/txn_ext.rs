@@ -63,7 +63,7 @@ const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
 const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq)]
 pub struct PeerPessimisticLocks {
     /// The table that stores pessimistic locks.
     ///
@@ -119,7 +119,7 @@ pub struct PeerPessimisticLocks {
     pub memory_size: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocksStatus {
     Normal,
     TransferringLeader,

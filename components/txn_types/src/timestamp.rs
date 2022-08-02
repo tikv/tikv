@@ -118,7 +118,7 @@ impl slog::Value for TimeStamp {
 const TS_SET_USE_VEC_LIMIT: usize = 8;
 
 /// A hybrid immutable set for timestamps.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TsSet {
     /// When the set is empty, avoid the useless cloning of Arc.
     Empty,

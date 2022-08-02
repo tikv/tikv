@@ -75,7 +75,7 @@ impl Runner {
     }
 }
 
-#[derive(Add, PartialEq, Eq, Debug, Default, AddAssign, Clone, Copy)]
+#[derive(Add, PartialEq, Debug, Default, AddAssign, Clone, Copy)]
 pub struct HandleMetrics {
     pub begin: usize,
     pub control: usize,

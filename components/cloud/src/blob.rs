@@ -74,7 +74,7 @@ impl BlobStorage for Box<dyn BlobStorage> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct StringNonEmpty(String);
 impl StringNonEmpty {
     pub fn opt(s: String) -> Option<Self> {

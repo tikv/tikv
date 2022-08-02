@@ -59,14 +59,14 @@ const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
 const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum LogFormat {
     Text,
     Json,
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd, Default)]
+#[derive(Clone, Debug, Copy, PartialEq, PartialOrd, Default)]
 pub struct ReadableSize(pub u64);
 
 impl From<ReadableSize> for ConfigValue {

@@ -361,7 +361,7 @@ impl DetectTable {
 }
 
 /// The role of the detector.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Role {
     /// The node is the leader of the detector.
     Leader,

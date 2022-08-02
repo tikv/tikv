@@ -3,7 +3,7 @@
 /// A boolean vector, which consolidates 64 booleans into 1 u64 to save space.
 ///
 /// `BitVec` is mainly used to implement bitmap in ChunkedVec.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct BitVec {
     data: Vec<u64>,
     length: usize,

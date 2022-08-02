@@ -17,7 +17,7 @@ const MAX_MAX_RESOURCE_GROUPS: usize = 5_000;
 const MIN_REPORT_RECEIVER_INTERVAL: ReadableDuration = ReadableDuration::millis(500);
 
 /// Public configuration of resource metering module.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, OnlineConfig)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

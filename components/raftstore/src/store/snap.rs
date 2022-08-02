@@ -445,7 +445,7 @@ pub struct Snapshot {
     mgr: SnapManagerCore,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 enum CheckPolicy {
     ErrAllowed,
     ErrNotAllowed,
@@ -1329,7 +1329,7 @@ impl Drop for Snapshot {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum SnapEntry {
     Generating = 1,
     Sending = 2,

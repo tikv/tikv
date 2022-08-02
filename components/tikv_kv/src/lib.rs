@@ -67,7 +67,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
@@ -428,7 +428,7 @@ pub trait Iterator: Send {
     fn value(&self) -> &[u8];
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ScanMode {
     Forward,
     Backward,
@@ -941,7 +941,7 @@ pub mod tests {
         }};
     }
 
-    #[derive(PartialEq, Eq, Clone, Copy)]
+    #[derive(PartialEq, Clone, Copy)]
     enum SeekMode {
         Normal,
         Reverse,

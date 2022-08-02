@@ -3,7 +3,7 @@
 use super::{bit_vec::BitVec, Bytes, BytesRef, ChunkRef, ChunkedVec, UnsafeRefInto};
 use crate::impl_chunked_vec_common;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecBytes {
     data: Vec<u8>,
     bitmap: BitVec,

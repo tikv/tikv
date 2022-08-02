@@ -10,7 +10,7 @@ use panic_hook::recover_safe;
 use super::engine_cfs;
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Eq, PartialEq)]
+#[derive(PartialEq)]
 enum WriteScenario {
     NoCf,
     DefaultCf,

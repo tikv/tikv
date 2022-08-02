@@ -26,7 +26,7 @@ use crate::{
 ///
 /// TODO: Once we removed the `Option<..>` wrapper, it will be much like
 /// `Datum`. At that time, we only need to preserve one of them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ScalarValue {
     Int(Option<super::Int>),
     Real(Option<super::Real>),

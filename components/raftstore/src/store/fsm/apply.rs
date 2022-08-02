@@ -3290,7 +3290,7 @@ where
     }
 }
 
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub struct ApplyMetrics {
     /// an inaccurate difference in region size since last reset.
     pub size_diff_hint: i64,

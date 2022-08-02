@@ -176,7 +176,7 @@ macro_rules! dispatch_api_version {
 }
 
 /// The key mode inferred from the key prefix.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyMode {
     /// Raw key.
     Raw,
@@ -235,7 +235,7 @@ pub enum KeyMode {
 /// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff | 0x01 (0b00000001) |
 /// --------------------------------------------------------------------------------
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawValue<T: AsRef<[u8]>> {
     /// The user value.
     pub user_value: T,

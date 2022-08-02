@@ -31,7 +31,7 @@ impl GcInfo {
 /// `ReleasedLock` contains the information of the lock released by `commit`,
 /// `rollback` and so on. It's used by `LockManager` to wake up transactions
 /// waiting for locks.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct ReleasedLock {
     /// The hash value of the lock.
     pub hash: u64,

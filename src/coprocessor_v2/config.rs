@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

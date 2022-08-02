@@ -21,7 +21,7 @@ use grpcio::{
 #[cfg(feature = "tonic")]
 use tonic::transport::{channel::ClientTlsConfig, Certificate, Identity};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct SecurityConfig {
