@@ -44,7 +44,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletAccessor, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -97,8 +97,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
+        KvEngineFactory, KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
+        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
@@ -1675,13 +1675,15 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
                 self.config.storage.block_cache.shared,
             )),
         );
-        self.tablet_factory = Some(factory);
+        self.tablet_factory = Some(factory.clone());
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, // max_samples_to_preserve
+            factory,
+            engines.raft.as_rocks_engine().cloned(),
+            180, // max_samples_to_preserve
         ));
 
         (engines, engines_info)
@@ -1831,7 +1833,7 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 }
 
 pub struct EnginesResourceInfo {
-    kv_engine: RocksEngine,
+    tablet_factory: Arc<KvEngineFactory>,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -1840,13 +1842,13 @@ pub struct EnginesResourceInfo {
 impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
-    fn new<CER: ConfiguredRaftEngine>(
-        engines: &Engines<RocksEngine, CER>,
+    fn new(
+        tablet_factory: Arc<KvEngineFactory>,
+        raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
-        let raft_engine = engines.raft.as_rocks_engine().cloned();
         EnginesResourceInfo {
-            kv_engine: engines.kv.clone(),
+            tablet_factory,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
@@ -1875,7 +1877,10 @@ impl EnginesResourceInfo {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
         for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
+            self.tablet_factory
+                .for_each_opened_tablet(&mut |_id, _suffix, db: &RocksEngine| {
+                    fetch_engine_cf(db, cf, &mut normalized_pending_bytes);
+                });
         }
         let (_, avg) = self
             .normalized_pending_bytes_collector
