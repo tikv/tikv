@@ -634,6 +634,8 @@ extern "C" fn ffi_try_flush_data(
     _arg1: *mut ffi_interfaces::EngineStoreServerWrap,
     _region_id: u64,
     _try_until_succeed: u8,
+    _index: u64,
+    _term: u64,
 ) -> u8 {
     fail::fail_point!("try_flush_data", |e| e.unwrap().parse::<u8>().unwrap());
     true as u8
