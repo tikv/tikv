@@ -18,8 +18,9 @@ pub struct GcConfig {
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
     pub enable_compaction_filter: bool,
-    /// By default compaction_filter can only works if `cluster_version` is greater than 5.0.0.
-    /// Change `compaction_filter_skip_version_check` can enable it by force.
+    /// By default compaction_filter can only works if `cluster_version` is
+    /// greater than 5.0.0. Change `compaction_filter_skip_version_check`
+    /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
 }
 
@@ -54,7 +55,8 @@ impl ConfigManager for GcWorkerConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0.update(move |cfg: &mut GcConfig| cfg.update(change));
+            self.0
+                .update(move |cfg: &mut GcConfig| cfg.update(change))?;
         }
         info!(
             "GC worker config changed";

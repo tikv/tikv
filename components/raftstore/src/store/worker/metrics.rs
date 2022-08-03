@@ -72,7 +72,7 @@ lazy_static! {
         "tikv_raftstore_snapshot_duration_seconds",
         "Bucketed histogram of raftstore snapshot process duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SNAP_HISTOGRAM: SnapHistogram =
@@ -80,7 +80,7 @@ lazy_static! {
     pub static ref CHECK_SPILT_HISTOGRAM: Histogram = register_histogram!(
         "tikv_raftstore_check_split_duration_seconds",
         "Bucketed histogram of raftstore split check duration",
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref COMPACT_RANGE_CF: HistogramVec = register_histogram_vec!(

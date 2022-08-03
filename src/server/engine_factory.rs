@@ -7,17 +7,18 @@ use std::{
 
 use engine_rocks::{
     raw::{Cache, Env},
-    CompactionListener, FlowListener, RocksCompactedEvent, RocksCompactionJobInfo, RocksEngine,
+    CompactedEventSender, CompactionListener, FlowListener, RocksCompactionJobInfo, RocksEngine,
     RocksEventListener,
 };
-use engine_traits::{CompactionJobInfo, RaftEngine, Result, TabletFactory, CF_DEFAULT, CF_WRITE};
-use kvproto::kvrpcpb::ApiVersion;
-use raftstore::{
-    store::{RaftRouter, StoreMsg},
-    RegionInfoAccessor,
+use engine_traits::{
+    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    CF_WRITE,
 };
+use kvproto::kvrpcpb::ApiVersion;
+use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
+use super::engine_factory_v2::KvEngineFactoryV2;
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
@@ -32,12 +33,12 @@ struct FactoryInner {
     root_db: Mutex<Option<RocksEngine>>,
 }
 
-pub struct KvEngineFactoryBuilder<ER: RaftEngine> {
+pub struct KvEngineFactoryBuilder {
     inner: FactoryInner,
-    router: Option<RaftRouter<RocksEngine, ER>>,
+    compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
 }
 
-impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
+impl KvEngineFactoryBuilder {
     pub fn new(env: Arc<Env>, config: &TiKvConfig, store_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: FactoryInner {
@@ -51,7 +52,7 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
                 sst_recovery_sender: None,
                 root_db: Mutex::default(),
             },
-            router: None,
+            compact_event_sender: None,
         }
     }
 
@@ -75,31 +76,42 @@ impl<ER: RaftEngine> KvEngineFactoryBuilder<ER> {
         self
     }
 
-    pub fn compaction_filter_router(mut self, router: RaftRouter<RocksEngine, ER>) -> Self {
-        self.router = Some(router);
+    pub fn compaction_event_sender(
+        mut self,
+        sender: Arc<dyn CompactedEventSender + Send + Sync>,
+    ) -> Self {
+        self.compact_event_sender = Some(sender);
         self
     }
 
-    pub fn build(self) -> KvEngineFactory<ER> {
+    pub fn build(self) -> KvEngineFactory {
         KvEngineFactory {
             inner: Arc::new(self.inner),
-            router: self.router,
+            compact_event_sender: self.compact_event_sender.clone(),
+        }
+    }
+
+    pub fn build_v2(self) -> KvEngineFactoryV2 {
+        let factory = KvEngineFactory {
+            inner: Arc::new(self.inner),
+            compact_event_sender: self.compact_event_sender.clone(),
+        };
+        KvEngineFactoryV2 {
+            inner: factory,
+            registry: Arc::default(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct KvEngineFactory<ER: RaftEngine> {
+pub struct KvEngineFactory {
     inner: Arc<FactoryInner>,
-    router: Option<RaftRouter<RocksEngine, ER>>,
+    compact_event_sender: Option<Arc<dyn CompactedEventSender + Send + Sync>>,
 }
 
-impl<ER: RaftEngine> KvEngineFactory<ER> {
+impl KvEngineFactory {
     pub fn create_raftstore_compaction_listener(&self) -> Option<CompactionListener> {
-        let ch = match &self.router {
-            Some(r) => Mutex::new(r.clone()),
-            None => return None,
-        };
+        self.compact_event_sender.as_ref()?;
         fn size_change_filter(info: &RocksCompactionJobInfo<'_>) -> bool {
             // When calculating region size, we only consider write and default
             // column families.
@@ -114,16 +126,8 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
 
             true
         }
-
-        let compacted_handler = Box::new(move |compacted_event: RocksCompactedEvent| {
-            let ch = ch.lock().unwrap();
-            let event = StoreMsg::CompactedEvent(compacted_event);
-            if let Err(e) = ch.send_control(event) {
-                error_unknown!(?e; "send compaction finished event to raftstore failed");
-            }
-        });
         Some(CompactionListener::new(
-            compacted_handler,
+            self.compact_event_sender.as_ref().unwrap().clone(),
             Some(size_change_filter),
         ))
     }
@@ -152,19 +156,18 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+        let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
             kv_cfs_opts,
         );
-        let kv_engine = match kv_engine {
+        let mut kv_engine = match kv_engine {
             Ok(e) => e,
             Err(e) => {
                 error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
                 return Err(e);
             }
         };
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         Ok(kv_engine)
@@ -191,12 +194,11 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
             self.inner.api_version,
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
-        /*
-        engine_rocks::raw_util::destroy_engine(
-            tablet_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )?;*/
+        // engine_rocks::util::destroy_engine(
+        //   tablet_path.to_str().unwrap(),
+        //   kv_db_opts,
+        //   kv_cfs_opts,
+        // )?;
         let _ = std::fs::remove_dir_all(tablet_path);
         Ok(())
     }
@@ -218,7 +220,7 @@ impl<ER: RaftEngine> KvEngineFactory<ER> {
     }
 }
 
-impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
+impl TabletFactory<RocksEngine> for KvEngineFactory {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
@@ -229,11 +231,20 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     }
 
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let cp = db.as_ref().unwrap().clone();
-            return Ok(cp);
+        let db = self.inner.root_db.lock().unwrap();
+        if let Some(cp) = db.as_ref() {
+            return Ok(cp.clone());
         }
+
         self.create_shared_db()
+    }
+
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
+        self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
     }
 
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
@@ -243,9 +254,11 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
+
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
@@ -254,14 +267,23 @@ impl<ER: RaftEngine> TabletFactory<RocksEngine> for KvEngineFactory<ER> {
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
         Ok(())
     }
-    fn clone(&self) -> Box<dyn TabletFactory<RocksEngine> + Send> {
-        Box::new(std::clone::Clone::clone(self))
+
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        let db = self.inner.root_db.lock().unwrap();
+        let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+        opt.set_block_cache_capacity(capacity)?;
+        Ok(())
+    }
+}
+
+impl TabletAccessor<RocksEngine> for KvEngineFactory {
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
+        let db = self.inner.root_db.lock().unwrap();
+        let db = db.as_ref().unwrap();
+        f(0, 0, db);
     }
 
-    fn loop_tablet_cache(&self, mut f: Box<dyn FnMut(u64, u64, &RocksEngine) + '_>) {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let db = db.as_ref().unwrap();
-            f(0, 0, db);
-        }
+    fn is_single_engine(&self) -> bool {
+        true
     }
 }

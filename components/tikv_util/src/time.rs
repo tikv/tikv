@@ -348,10 +348,11 @@ impl Instant {
         }
     }
 
-    /// It is similar to `duration_since`, but it won't panic when `self` is less than `other`,
-    /// and `None` will be returned in this case.
+    /// It is similar to `duration_since`, but it won't panic when `self` is
+    /// less than `other`, and `None` will be returned in this case.
     ///
-    /// Callers need to ensure that `self` and `other` are same type of Instants.
+    /// Callers need to ensure that `self` and `other` are same type of
+    /// Instants.
     pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
         if *self >= other {
             Some(self.duration_since(other))

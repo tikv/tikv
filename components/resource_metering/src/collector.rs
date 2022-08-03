@@ -15,7 +15,8 @@ use crate::RawRecords;
 /// to the `Scheduler` for processing.
 ///
 /// `Reporter` implements [Runnable] and [RunnableWithTimer], aggregates the
-/// data sent by the `Collector` internally, and reports it regularly through RPC.
+/// data sent by the `Collector` internally, and reports it regularly through
+/// RPC.
 ///
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter

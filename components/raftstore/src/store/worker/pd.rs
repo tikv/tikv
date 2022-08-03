@@ -49,19 +49,22 @@ use tikv_util::{
 };
 use yatp::Remote;
 
-use crate::store::{
-    cmd_resp::new_error,
-    metrics::*,
-    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
-    transport::SignificantRouter,
-    util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
-    worker::{
-        query_stats::QueryStats,
-        split_controller::{SplitInfo, TOP_N},
-        AutoSplitController, ReadStats, WriteStats,
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        cmd_resp::new_error,
+        metrics::*,
+        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
+        transport::SignificantRouter,
+        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        worker::{
+            query_stats::QueryStats,
+            split_controller::{SplitInfo, TOP_N},
+            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+        },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
-    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -183,6 +186,7 @@ where
         id: u64,
         duration: RaftstoreDuration,
     },
+    UpdateRegionCPUCollector(bool),
     RegionCPURecords(Arc<RawRecords>),
     ReportMinResolvedTS {
         store_id: u64,
@@ -349,7 +353,7 @@ where
                 log_wrappers::Value::key(split_key),
             ),
             Task::AutoSplit { ref split_infos } => {
-                write!(f, "auto split split regions, num is {}", split_infos.len(),)
+                write!(f, "auto split split regions, num is {}", split_infos.len())
             }
             Task::AskBatchSplit {
                 ref region,
@@ -404,6 +408,12 @@ where
             }
             Task::UpdateSlowScore { id, ref duration } => {
                 write!(f, "compute slow score: id {}, duration {:?}", id, duration)
+            }
+            Task::UpdateRegionCPUCollector(is_register) => {
+                if is_register {
+                    return write!(f, "register region cpu collector");
+                }
+                write!(f, "deregister region cpu collector")
             }
             Task::RegionCPURecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
@@ -465,6 +475,7 @@ where
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
     read_stats_sender: Option<Sender<ReadStats>>,
+    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -486,6 +497,7 @@ where
             handle: None,
             timer: None,
             read_stats_sender: None,
+            cpu_stats_sender: None,
             collect_store_infos_interval: interval,
             load_base_split_check_interval: cmp::min(
                 DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL,
@@ -530,6 +542,9 @@ where
         let (read_stats_sender, read_stats_receiver) = mpsc::channel();
         self.read_stats_sender = Some(read_stats_sender);
 
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        self.cpu_stats_sender = Some(cpu_stats_sender);
+
         let scheduler = self.scheduler.clone();
         let props = tikv_util::thread_group::current_properties();
 
@@ -541,17 +556,25 @@ where
             .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
-                let mut thread_stats = ThreadInfoStatistics::new();
+                // Create different `ThreadInfoStatistics` for different purposes to
+                // make sure the record won't be disturbed.
+                let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
+                let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
-                        StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
+                        StatsMonitor::collect_store_infos(
+                            &mut collect_store_infos_thread_stats,
+                            &scheduler,
+                        );
                     }
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
                             &read_stats_receiver,
+                            &cpu_stats_receiver,
+                            &mut load_base_split_thread_stats,
                             &scheduler,
                         );
                     }
@@ -595,15 +618,35 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
-        receiver: &Receiver<ReadStats>,
+        read_stats_receiver: &Receiver<ReadStats>,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+        thread_stats: &mut ThreadInfoStatistics,
         scheduler: &Scheduler<Task<EK, ER>>,
     ) {
-        auto_split_controller.refresh_cfg();
-        let mut others = vec![];
-        while let Ok(other) = receiver.try_recv() {
-            others.push(other);
+        let start_time = TiInstant::now();
+        match auto_split_controller.refresh_and_check_cfg() {
+            SplitConfigChange::UpdateRegionCPUCollector(is_register) => {
+                if let Err(e) = scheduler.schedule(Task::UpdateRegionCPUCollector(is_register)) {
+                    error!(
+                        "failed to register or deregister the region cpu collector";
+                        "is_register" => is_register,
+                        "err" => ?e,
+                    );
+                }
+            }
+            SplitConfigChange::Noop => {}
         }
-        let (top, split_infos) = auto_split_controller.flush(others);
+        let mut read_stats_vec = vec![];
+        while let Ok(read_stats) = read_stats_receiver.try_recv() {
+            read_stats_vec.push(read_stats);
+        }
+        let mut cpu_stats_vec = vec![];
+        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
+            cpu_stats_vec.push(cpu_stats);
+        }
+        thread_stats.record();
+        let (top_qps, split_infos) =
+            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
         auto_split_controller.clear();
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
@@ -613,14 +656,15 @@ where
             );
         }
         for i in 0..TOP_N {
-            if i < top.len() {
+            if i < top_qps.len() {
                 READ_QPS_TOPN
                     .with_label_values(&[&i.to_string()])
-                    .set(top[i] as f64);
+                    .set(top_qps[i] as f64);
             } else {
                 READ_QPS_TOPN.with_label_values(&[&i.to_string()]).set(0.0);
             }
         }
+        LOAD_BASE_SPLIT_DURATION_HISTOGRAM.observe(start_time.saturating_elapsed_secs());
     }
 
     pub fn report_min_resolved_ts(
@@ -652,14 +696,21 @@ where
         if let Some(h) = self.handle.take() {
             drop(self.timer.take());
             drop(self.read_stats_sender.take());
+            drop(self.cpu_stats_sender.take());
             if let Err(e) = h.join() {
                 error!("join stats collector failed"; "err" => ?e);
             }
         }
     }
 
-    pub fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
+    #[inline(always)]
+    fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
+    }
+
+    #[inline(always)]
+    fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
+        &self.cpu_stats_sender
     }
 }
 
@@ -690,11 +741,12 @@ fn hotspot_query_num_report_threshold() -> u64 {
     HOTSPOT_QUERY_RATE_THRESHOLD * 10
 }
 
-// Slow score is a value that represents the speed of a store and ranges in [1, 100].
-// It is maintained in the AIMD way.
-// If there are some inspecting requests timeout during a round, by default the score
-// will be increased at most 1x when above 10% inspecting requests timeout.
-// If there is not any timeout inspecting requests, the score will go back to 1 in at least 5min.
+// Slow score is a value that represents the speed of a store and ranges in [1,
+// 100]. It is maintained in the AIMD way.
+// If there are some inspecting requests timeout during a round, by default the
+// score will be increased at most 1x when above 10% inspecting requests
+// timeout. If there is not any timeout inspecting requests, the score will go
+// back to 1 in at least 5min.
 struct SlowScore {
     value: OrderedFloat<f64>,
     last_record_time: Instant,
@@ -840,7 +892,8 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     stats_monitor: StatsMonitor<EK, ER>,
 
-    _region_cpu_records_collector: CollectorGuard,
+    collector_reg_handle: CollectorRegHandle,
+    region_cpu_records_collector: Option<CollectorGuard>,
     // region_id -> total_cpu_time_ms (since last region heartbeat)
     region_cpu_records: HashMap<u64, u32>,
 
@@ -852,6 +905,7 @@ where
     // The health status of the store is updated by the slow score mechanism.
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
+    coprocessor_host: CoprocessorHost<EK>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -876,7 +930,20 @@ where
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        coprocessor_host: CoprocessorHost<EK>,
     ) -> Runner<EK, ER, T> {
+        // Register the region CPU records collector.
+        let mut region_cpu_records_collector = None;
+        if auto_split_controller
+            .cfg
+            .region_cpu_overload_threshold_ratio
+            > 0.0
+        {
+            region_cpu_records_collector = Some(collector_reg_handle.register(
+                Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
+                false,
+            ));
+        }
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
             interval,
@@ -886,11 +953,6 @@ where
         if let Err(e) = stats_monitor.start(auto_split_controller, region_read_progress, store_id) {
             error!("failed to start stats collector, error = {:?}", e);
         }
-
-        let _region_cpu_records_collector = collector_reg_handle.register(
-            Box::new(RegionCPUMeteringCollector::new(scheduler.clone())),
-            true,
-        );
 
         Runner {
             store_id,
@@ -903,7 +965,8 @@ where
             start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
-            _region_cpu_records_collector,
+            collector_reg_handle,
+            region_cpu_records_collector,
             region_cpu_records: HashMap::default(),
             concurrency_manager,
             snap_mgr,
@@ -911,6 +974,7 @@ where
             slow_score: SlowScore::new(cfg.inspect_interval.0),
             health_service,
             curr_health_status: ServingStatus::Serving,
+            coprocessor_host,
         }
     }
 
@@ -966,6 +1030,21 @@ where
         self.remote.spawn(f);
     }
 
+    fn handle_update_region_cpu_collector(&mut self, is_register: bool) {
+        // If it's a deregister task, just take and drop the original collector.
+        if !is_register {
+            self.region_cpu_records_collector.take();
+            return;
+        }
+        if self.region_cpu_records_collector.is_some() {
+            return;
+        }
+        self.region_cpu_records_collector = Some(self.collector_reg_handle.register(
+            Box::new(RegionCPUMeteringCollector::new(self.scheduler.clone())),
+            false,
+        ));
+    }
+
     // Note: The parameter doesn't contain `self` because this function may
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
@@ -1014,9 +1093,10 @@ where
                         Default::default(),
                     );
                 }
-                // When rolling update, there might be some old version tikvs that don't support batch split in cluster.
-                // In this situation, PD version check would refuse `ask_batch_split`.
-                // But if update time is long, it may cause large Regions, so call `ask_split` instead.
+                // When rolling update, there might be some old version tikvs that don't support
+                // batch split in cluster. In this situation, PD version check would refuse
+                // `ask_batch_split`. But if update time is long, it may cause large Regions, so
+                // call `ask_split` instead.
                 Err(Error::Incompatible) => {
                     let (region_id, peer_id) = (region.id, peer.id);
                     info!(
@@ -1105,18 +1185,6 @@ where
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
-        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.kv_engine.path(),
-                    "err" => ?e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
-
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -1144,34 +1212,21 @@ where
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-
-        let disk_cap = disk_stats.total_space();
-        let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-            disk_cap
-        } else {
-            store_info.capacity
+        let (capacity, used_size, available) = match collect_engine_size(
+            &self.coprocessor_host,
+            Some(&store_info),
+            self.snap_mgr.get_total_snap_size().unwrap(),
+        ) {
+            Some((capacity, used_size, available)) => (capacity, used_size, available),
+            None => return,
         };
+
         stats.set_capacity(capacity);
-
-        let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-            + store_info
-                .kv_engine
-                .get_engine_used_size()
-                .expect("kv engine used size")
-            + store_info
-                .raft_engine
-                .get_engine_size()
-                .expect("raft engine used size");
         stats.set_used_size(used_size);
-
-        let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // We only care about rocksdb SST file size, so we should check disk available here.
-        available = cmp::min(available, disk_stats.available_space());
 
         if available == 0 {
             warn!("no available space");
         }
-
         stats.set_available(available);
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
@@ -1449,6 +1504,8 @@ where
                     } else {
                         CasualMessage::HalfSplitRegion {
                             region_epoch: epoch,
+                            start_key: None,
+                            end_key: None,
                             policy: split_region.get_policy(),
                             source: "pd",
                             cb: Callback::None,
@@ -1638,6 +1695,12 @@ where
     // which is the read load portion of the write path.
     // TODO: more accurate CPU consumption of a specified region.
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
+        // Send Region CPU info to AutoSplitController inside the stats_monitor.
+        if let Some(cpu_stats_sender) = self.stats_monitor.get_cpu_stats_sender() {
+            if cpu_stats_sender.send(records.clone()).is_err() {
+                warn!("send region cpu info failed, are we shutting down?")
+            }
+        }
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
@@ -1785,18 +1848,46 @@ where
                         if let Ok(Some(region)) =
                             pd_client.get_region_by_id(split_info.region_id).await
                         {
-                            Self::handle_ask_batch_split(
-                                router.clone(),
-                                scheduler.clone(),
-                                pd_client.clone(),
-                                region,
-                                vec![split_info.split_key],
-                                split_info.peer,
-                                true,
-                                Callback::None,
-                                String::from("auto_split"),
-                                remote.clone(),
-                            );
+                            // Try to split the region with the given split key.
+                            if let Some(split_key) = split_info.split_key {
+                                Self::handle_ask_batch_split(
+                                    router.clone(),
+                                    scheduler.clone(),
+                                    pd_client.clone(),
+                                    region,
+                                    vec![split_key],
+                                    split_info.peer,
+                                    true,
+                                    Callback::None,
+                                    String::from("auto_split"),
+                                    remote.clone(),
+                                );
+                                return;
+                            }
+                            // Try to split the region on half within the given key range
+                            // if there is no `split_key` been given.
+                            if split_info.start_key.is_some() && split_info.end_key.is_some() {
+                                let start_key = split_info.start_key.unwrap();
+                                let end_key = split_info.end_key.unwrap();
+                                let region_id = region.get_id();
+                                let msg = CasualMessage::HalfSplitRegion {
+                                    region_epoch: region.get_region_epoch().clone(),
+                                    start_key: Some(start_key.clone()),
+                                    end_key: Some(end_key.clone()),
+                                    policy: pdpb::CheckPolicy::Scan,
+                                    source: "auto_split",
+                                    cb: Callback::None,
+                                };
+                                if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg))
+                                {
+                                    error!("send auto half split request failed";
+                                        "region_id" => region_id,
+                                        "start_key" => log_wrappers::Value::key(&start_key),
+                                        "end_key" => log_wrappers::Value::key(&end_key),
+                                        "err" => ?e,
+                                    );
+                                }
+                            }
                         }
                     }
                 };
@@ -1924,6 +2015,9 @@ where
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
             Task::UpdateSlowScore { id, duration } => self.slow_score.record(id, duration.sum()),
+            Task::UpdateRegionCPUCollector(is_register) => {
+                self.handle_update_region_cpu_collector(is_register)
+            }
             Task::RegionCPURecords(records) => self.handle_region_cpu_records(records),
             Task::ReportMinResolvedTS {
                 store_id,
@@ -1963,8 +2057,8 @@ where
         self.slow_score.last_tick_finished = false;
 
         if self.slow_score.last_tick_id % self.slow_score.round_ticks == 0 {
-            // `last_update_time` is refreshed every round. If no update happens in a whole round,
-            // we set the status to unknown.
+            // `last_update_time` is refreshed every round. If no update happens in a whole
+            // round, we set the status to unknown.
             if self.curr_health_status == ServingStatus::Serving
                 && self.slow_score.last_record_time < self.slow_score.last_update_time
             {
@@ -2190,6 +2284,48 @@ fn collect_report_read_peer_stats(
     stats
 }
 
+fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
+    coprocessor_host: &CoprocessorHost<EK>,
+    store_info: Option<&StoreInfo<EK, ER>>,
+    snap_mgr_size: u64,
+) -> Option<(u64, u64, u64)> {
+    if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
+        return Some((engine_size.capacity, engine_size.used, engine_size.avail));
+    }
+    let store_info = store_info.unwrap();
+    let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+        Err(e) => {
+            error!(
+                "get disk stat for rocksdb failed";
+                "engine_path" => store_info.kv_engine.path(),
+                "err" => ?e
+            );
+            return None;
+        }
+        Ok(stats) => stats,
+    };
+    let disk_cap = disk_stats.total_space();
+    let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+        disk_cap
+    } else {
+        store_info.capacity
+    };
+    let used_size = snap_mgr_size
+        + store_info
+            .kv_engine
+            .get_engine_used_size()
+            .expect("kv engine used size")
+        + store_info
+            .raft_engine
+            .get_engine_size()
+            .expect("raft engine used size");
+    let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+    // We only care about rocksdb SST file size, so we should check disk available
+    // here.
+    available = cmp::min(available, disk_stats.available_space());
+    Some((capacity, used_size, available))
+}
+
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
@@ -2380,8 +2516,11 @@ mod tests {
         );
     }
 
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use metapb::Peer;
     use resource_metering::{RawRecord, TagInfos};
+
+    use crate::coprocessor::{BoxPdTaskObserver, Coprocessor, PdTaskObserver, StoreSizeInfo};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2485,5 +2624,37 @@ mod tests {
             let report = bucket.new_report(UnixSecs::now());
             assert_eq!(report.stats.get_read_qps(), expected);
         }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct PdObserver {}
+
+    impl Coprocessor for PdObserver {}
+
+    impl PdTaskObserver for PdObserver {
+        fn on_compute_engine_size(&self, s: &mut Option<StoreSizeInfo>) {
+            let _ = s.insert(StoreSizeInfo {
+                capacity: 444,
+                used: 111,
+                avail: 333,
+            });
+        }
+    }
+
+    #[test]
+    fn test_pd_task_observer() {
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = PdObserver::default();
+        host.registry
+            .register_pd_task_observer(1, BoxPdTaskObserver::new(obs));
+        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0);
+        let (cap, used, avail) = if let Some((cap, used, avail)) = store_size {
+            (cap, used, avail)
+        } else {
+            panic!("store_size should not be none");
+        };
+        assert_eq!(cap, 444);
+        assert_eq!(used, 111);
+        assert_eq!(avail, 333);
     }
 }

@@ -514,7 +514,8 @@ impl Coprocessor for ReplicaReadLockChecker {}
 impl ReadIndexObserver for ReplicaReadLockChecker {
     fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
         // Only check and return result if the current peer is a leader.
-        // If it's not a leader, the read index request will be redirected to the leader later.
+        // If it's not a leader, the read index request will be redirected to the leader
+        // later.
         if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
             return;
         }
@@ -574,7 +575,8 @@ mod tests {
 
     use super::*;
 
-    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
+    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read
+    // index.
     #[test]
     fn test_replica_read_lock_checker_for_single_uuid() {
         let cm = ConcurrencyManager::new(1.into());
