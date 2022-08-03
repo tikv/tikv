@@ -13,8 +13,8 @@ use txn_types::TimeStamp;
 use super::{
     keys::{self, KeyValue, MetaKey},
     store::{
-        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore,
-        Snapshot, Subscription, Transaction, WithRevision,
+        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot,
+        Subscription, Transaction, WithRevision,
     },
 };
 use crate::{
