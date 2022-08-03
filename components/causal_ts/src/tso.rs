@@ -207,10 +207,10 @@ impl TsoBatchList {
     /// `after_ts` is included.
     pub fn pop(&self, after_ts: Option<TimeStamp>) -> Option<TimeStamp> {
         let inner = self.inner.read();
-        let range = after_ts.map_or_else(
-            || inner.range(..),
-            |after_ts| inner.range(&after_ts.into_inner()..),
-        );
+        let range = match after_ts {
+            Some(after_ts) => inner.range(&after_ts.into_inner()..),
+            None => inner.range(..),
+        };
         for (key, batch) in range {
             if let Some((ts, is_used_up)) = batch.pop() {
                 let key = *key;
@@ -363,7 +363,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         need_flush: bool,
         reason: TsoBatchRenewReason,
     ) -> Result<()> {
-        let start = Instant::now();
+        let start = Instant::now_coarse();
         let (request, response) = oneshot::channel();
         renew_request_tx
             .send(RenewRequest {
