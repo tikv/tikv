@@ -644,6 +644,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+            fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -4728,7 +4729,7 @@ mod tests {
         });
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
-        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         // Make sure Apply and Snapshot are in the same batch.
         let (snap_tx, _) = mpsc::sync_channel(0);

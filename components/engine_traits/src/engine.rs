@@ -193,19 +193,10 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
 
     /// Open a tablet by id and suffix from cache---that means it should already
     /// be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        if let Ok(engine) =
-            self.open_tablet_raw(&self.tablet_path(id, suffix), OpenOptions::default())
-        {
-            return Some(engine);
-        }
-        None
-    }
+    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK>;
 
     /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
-        self.open_tablet_cache(id, 0)
-    }
+    fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
 
     /// Open tablet by path and readonly flag
     fn open_tablet_raw(&self, path: &Path, option: OpenOptions) -> Result<EK>;
@@ -265,21 +256,35 @@ where
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn open_tablet_raw(&self, _path: &Path, _option: OpenOptions) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
+    }
+
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         true
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
+
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
@@ -294,6 +299,7 @@ where
         opt.set_block_cache_capacity(capacity)
     }
 }
+
 impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
     EK: CfOptionsExt + Clone + Send + 'static,
@@ -332,7 +338,7 @@ mod tests {
     fn test_tablet_error_collector_ok() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        assert!(err.take_result().is_ok());
+        err.take_result().unwrap();
         assert_eq!(err.get_error_count(), 0);
     }
 
