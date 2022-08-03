@@ -235,11 +235,9 @@ mod tests {
         let shared_db = factory.create_shared_db().unwrap();
 
         // V1 can only create tablet once
-        assert!(
-            factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
-                .is_err()
-        );
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap_err();
 
         let tablet = factory
             .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
@@ -319,16 +317,12 @@ mod tests {
         factory.load_tablet(&tablet_path, 1, 20).unwrap();
         // After we load it as with the new id or suffix, we should be unable to get it
         // with the old id and suffix in the cache.
-        assert!(
-            factory
-                .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
-                .is_err()
-        );
-        assert!(
-            factory
-                .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
-                .is_ok()
-        );
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap_err();
+        factory
+            .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
+            .unwrap();
 
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
