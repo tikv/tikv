@@ -281,8 +281,17 @@ pub struct Config {
     // Interval of scheduling a tick to report region buckets.
     pub report_region_buckets_tick_interval: ReadableDuration,
 
+    /// Interval to check long uncommitted proposals.
+    #[doc(hidden)]
+    pub check_long_uncommitted_interval: ReadableDuration,
+    /// Base threshold of long uncommitted proposal.
+    #[doc(hidden)]
+    pub long_uncommitted_base_threshold: ReadableDuration,
+
     #[doc(hidden)]
     pub max_snapshot_file_raw_size: ReadableSize,
+
+    pub unreachable_backoff: ReadableDuration,
 }
 
 impl Default for Config {
@@ -361,6 +370,14 @@ impl Default for Config {
             raft_msg_flush_interval: ReadableDuration::micros(250),
             reactive_memory_lock_tick_interval: ReadableDuration::secs(2),
             reactive_memory_lock_timeout_tick: 5,
+            check_long_uncommitted_interval: ReadableDuration::secs(10),
+            /// In some cases, such as rolling upgrade, some regions' commit log
+            /// duration can be 12 seconds. Before #13078 is merged,
+            /// the commit log duration can be 2.8 minutes. So maybe
+            /// 20s is a relatively reasonable base threshold. Generally,
+            /// the log commit duration is less than 1s. Feel free to adjust
+            /// this config :)
+            long_uncommitted_base_threshold: ReadableDuration::secs(20),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
@@ -372,6 +389,7 @@ impl Default for Config {
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
+            unreachable_backoff: ReadableDuration::secs(10),
         }
     }
 }
