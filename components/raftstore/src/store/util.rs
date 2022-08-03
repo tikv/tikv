@@ -449,7 +449,7 @@ pub struct Lease {
     remote: Option<RemoteLease>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LeaseState {
     /// The lease is suspicious, may be invalid.
     Suspect,
@@ -794,7 +794,7 @@ impl<
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
     Simple,

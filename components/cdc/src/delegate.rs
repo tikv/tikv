@@ -45,7 +45,7 @@ use crate::{
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct DownstreamID(usize);
 
 impl DownstreamID {
@@ -1229,7 +1229,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.

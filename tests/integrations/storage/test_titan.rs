@@ -83,7 +83,7 @@ fn test_turnoff_titan() {
 
     // try reopen db when titan isn't properly turned off.
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start_check().is_err());
+    cluster.pre_start_check().unwrap_err();
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     cluster.pre_start_check().unwrap();

@@ -465,7 +465,7 @@ mod tests {
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).is_err());
+        point_getter.get(&Key::from_raw(key)).unwrap_err();
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
@@ -1152,15 +1152,15 @@ mod tests {
             (b"k9", None),
         ];
 
-        for (k, v) in &expected_results {
+        for (k, v) in expected_results.iter().copied() {
             let mut single_getter = new_point_getter(&engine, 40.into());
-            let value = single_getter.get(&Key::from_raw(*k)).unwrap();
+            let value = single_getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
 
         let mut getter = new_point_getter(&engine, 40.into());
-        for (k, v) in &expected_results {
-            let value = getter.get(&Key::from_raw(*k)).unwrap();
+        for (k, v) in expected_results {
+            let value = getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
     }

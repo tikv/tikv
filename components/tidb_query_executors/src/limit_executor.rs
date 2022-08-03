@@ -124,7 +124,7 @@ mod tests {
         let r = exec.next_batch(1);
         assert_eq!(&r.logical_rows, &[1, 2]);
         assert_eq!(r.physical_columns.rows_len(), 3);
-        assert!(r.is_drained.is_err());
+        r.is_drained.unwrap_err();
     }
 
     #[test]

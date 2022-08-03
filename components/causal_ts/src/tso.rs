@@ -876,7 +876,7 @@ pub mod tests {
         }
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 100);
 
@@ -896,7 +896,7 @@ pub mod tests {
         for ts in 1261..=2300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
         assert_eq!(provider.tso_remain(), 0);
         assert_eq!(provider.tso_usage(), 1040);
 
@@ -949,23 +949,23 @@ pub mod tests {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
         for ts in 1101..=1300u64 {
             // renew on used-up, allocated: [1101, 1300]
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.get_ts().is_err()); // renew fail on used-up
+        provider.get_ts().unwrap_err(); // renew fail on used-up
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
 
         provider.flush().unwrap(); // allocated: [1301, 3300]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
         for ts in 1301..=3300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
     }
 }
