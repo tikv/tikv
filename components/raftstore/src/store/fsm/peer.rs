@@ -3258,14 +3258,6 @@ where
                 .unsafe_recovery_maybe_finish_wait_apply(/*force=*/ true);
         }
 
-        {
-            let engine_store_server_helper =
-                crate::engine_store_ffi::gen_engine_store_server_helper(
-                    self.ctx.cfg.engine_store_server_helper,
-                );
-            engine_store_server_helper.handle_destroy(region_id);
-        }
-
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {

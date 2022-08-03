@@ -5,6 +5,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use collections::HashMap;
 use engine_tiflash::FsStatsExt;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
+use raft::{eraftpb, StateRole};
 use sst_importer::SstImporter;
 use tikv_util::{debug, error};
 use yatp::{
@@ -144,10 +145,10 @@ impl TiFlashObserver {
         //     TIFLASH_OBSERVER_PRIORITY,
         //     BoxApplySnapshotObserver::new(self.clone()),
         // );
-        // coprocessor_host.registry.register_region_change_observer(
-        //     TIFLASH_OBSERVER_PRIORITY,
-        //     BoxRegionChangeObserver::new(self.clone()),
-        // );
+        coprocessor_host.registry.register_region_change_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxRegionChangeObserver::new(self.clone()),
+        );
         // coprocessor_host.registry.register_pd_task_observer(
         //     TIFLASH_OBSERVER_PRIORITY,
         //     BoxPdTaskObserver::new(self.clone()),
@@ -217,5 +218,19 @@ impl QueryObserver for TiFlashObserver {
             &cmd_dummy,
             RaftCmdHeader::new(ob_ctx.region().get_id(), index, term),
         );
+    }
+}
+
+impl RegionChangeObserver for TiFlashObserver {
+    fn on_region_changed(
+        &self,
+        ob_ctx: &mut ObserverContext<'_>,
+        e: RegionChangeEvent,
+        _: StateRole,
+    ) {
+        if e == RegionChangeEvent::Destroy {
+            self.engine_store_server_helper
+                .handle_destroy(ob_ctx.region().get_id());
+        }
     }
 }

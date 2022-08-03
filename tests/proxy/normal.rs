@@ -306,3 +306,60 @@ fn test_empty_cmd() {
 
     cluster.shutdown();
 }
+
+#[test]
+fn test_handle_destroy() {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+    // Disable raft log gc in this test case.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_put(b"k1", b"v1");
+    let eng_ids = cluster
+        .engines
+        .iter()
+        .map(|e| e.0.to_owned())
+        .collect::<Vec<_>>();
+
+    let region = cluster.get_region(b"k1");
+    let region_id = region.get_id();
+    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
+    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
+    cluster.must_transfer_leader(region_id, peer_1);
+
+    iter_ffi_helpers(
+        &cluster,
+        Some(vec![eng_ids[1]]),
+        &mut |_, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            assert!(server.kvstore.contains_key(&region_id));
+        },
+    );
+
+    pd_client.must_remove_peer(region_id, peer_2);
+
+    check_key(
+        &cluster,
+        b"k1",
+        b"k2",
+        Some(false),
+        None,
+        Some(vec![eng_ids[1]]),
+    );
+
+    // Region removed in server.
+    iter_ffi_helpers(
+        &cluster,
+        Some(vec![eng_ids[1]]),
+        &mut |_, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            assert!(!server.kvstore.contains_key(&region_id));
+        },
+    );
+
+    cluster.shutdown();
+}
