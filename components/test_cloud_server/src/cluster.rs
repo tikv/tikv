@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::Path, sync::Arc, thread::sleep, time::Dura
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
-use kvengine::dfs::InMemFS;
+use kvengine::{dfs::InMemFS, ShardStats};
 use kvproto::{
     kvrpcpb::{Mutation, Op},
     raft_cmdpb::RaftCmdRequest,
@@ -225,6 +225,16 @@ impl ServerCluster {
             store_ids: self.get_stores(),
         }
     }
+
+    pub fn get_data_stats(&self) -> ClusterDataStats {
+        let mut stats = ClusterDataStats::default();
+        for server in self.servers.values() {
+            let store_id = server.get_store_id();
+            let kv_engine = server.get_kv_engine();
+            stats.add(store_id, kv_engine.get_all_shard_stats());
+        }
+        stats
+    }
 }
 
 pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
@@ -292,4 +302,97 @@ where
         sleep(Duration::from_millis(100))
     }
     false
+}
+
+#[derive(Default)]
+pub struct ClusterDataStats {
+    regions: HashMap<u64, RegionShardStats>,
+}
+
+impl ClusterDataStats {
+    fn add(&mut self, store_id: u64, shard_stats: Vec<ShardStats>) {
+        for shard_stat in shard_stats {
+            let region_shard_stats = self
+                .regions
+                .entry(shard_stat.id)
+                .or_insert(RegionShardStats::new(shard_stat.id));
+            region_shard_stats.shard_stats.insert(store_id, shard_stat);
+        }
+    }
+
+    pub fn check_data(&self) -> Result<(), String> {
+        for stats in self.regions.values() {
+            let map_err_fn = |e| format!("err {} stats: {:?}", e, stats);
+            stats.check_consistency().map_err(map_err_fn)?;
+            stats.check_healthy().map_err(map_err_fn)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default, Debug)]
+#[allow(dead_code)]
+pub struct RegionShardStats {
+    region_id: u64,
+    // store_id -> ShardStats
+    shard_stats: HashMap<u64, ShardStats>,
+}
+
+impl RegionShardStats {
+    fn new(region_id: u64) -> Self {
+        Self {
+            region_id,
+            shard_stats: Default::default(),
+        }
+    }
+
+    fn check_consistency(&self) -> Result<(), String> {
+        if self.shard_stats.len() <= 1 {
+            return Ok(())
+        }
+        let store_ids: Vec<u64> = self.shard_stats.keys().map(|id|*id).collect();
+        let first_id = &store_ids[0];
+        let first_stats = self.shard_stats.get(&first_id).unwrap();
+        for store_id in &store_ids[1..] {
+            let stats = self.shard_stats.get(store_id).unwrap();
+            if stats.total_size != first_stats.total_size
+                || stats.mem_table_count != first_stats.mem_table_count
+                || stats.mem_table_size != first_stats.mem_table_size
+                || stats.entries != first_stats.entries
+                || stats.l0_table_count != first_stats.l0_table_count
+                || stats.ver != first_stats.ver
+                || stats.write_sequence != first_stats.write_sequence
+            {
+                return Err("inconsistent stats".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn check_healthy(&self) -> Result<(), String> {
+        let item = self
+            .shard_stats
+            .values()
+            .find(|stats| stats.active);
+        if item.is_none() {
+            return Err("no leader".into());
+        }
+        let stats = item.unwrap();
+        if stats.mem_table_count > 1 {
+            return Err(format!(
+                "mem table count {} too large",
+                stats.mem_table_count
+            ));
+        }
+        if !stats.flushed {
+            return Err("not initial flushed".into());
+        }
+        if stats.compaction_score > 2.0 {
+            return Err(format!(
+                "compaction score {} too large",
+                stats.compaction_score
+            ));
+        }
+        Ok(())
+    }
 }

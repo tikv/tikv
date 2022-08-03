@@ -74,7 +74,7 @@ impl RegionScheduler {
                     .iter()
                     .any(|peer| peer.id == peer_id && peer.role == PeerRole::Voter)
             },
-            5,
+            8,
             "failed to promote leaner",
         );
         must_wait(
