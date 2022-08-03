@@ -15,8 +15,8 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
-    inner: KvEngineFactory,
-    registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+    pub inner: KvEngineFactory,
+    pub registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
 }
 
 // Extract tablet id and tablet suffix from the path.
@@ -49,7 +49,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     }
 
     fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let mut reg = self.registry.lock().unwrap();
+        let reg = self.registry.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
             return Ok(db.clone());
         }
@@ -57,16 +57,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let db_path = self.tablet_path(id, suffix);
         let db = self.open_tablet_raw(db_path.as_path(), false)?;
         debug!("open tablet"; "key" => ?(id, suffix));
-        reg.insert((id, suffix), db.clone());
         Ok(db)
     }
 
     fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<RocksEngine> {
-        let reg = self.registry.lock().unwrap();
-        if let Some(db) = reg.get(&(id, suffix)) {
-            return Some(db.clone());
-        }
-        None
+        self.registry.lock().unwrap().get(&(id, suffix)).cloned()
     }
 
     fn open_tablet_cache_any(&self, id: u64) -> Option<RocksEngine> {
@@ -153,6 +148,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let new_engine = self.open_tablet_raw(db_path.as_path(), false);
         if new_engine.is_ok() {
             let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+            assert!(suffix > old_suffix);
             self.registry.lock().unwrap().remove(&(old_id, old_suffix));
         }
         new_engine
@@ -204,15 +200,6 @@ mod tests {
                 );
             })
         };
-    }
-
-    impl KvEngineFactoryV2 {
-        pub fn new(inner: KvEngineFactory) -> Self {
-            KvEngineFactoryV2 {
-                inner,
-                registry: Arc::new(Mutex::new(HashMap::default())),
-            }
-        }
     }
 
     #[test]
@@ -268,8 +255,8 @@ mod tests {
         if let Some(cache) = cache {
             builder = builder.block_cache(cache);
         }
-        let inner_factory = builder.build();
-        let factory = KvEngineFactoryV2::new(inner_factory);
+
+        let factory = builder.build_v2();
         let tablet = factory.create_tablet(1, 10).unwrap();
         let tablet2 = factory.open_tablet(1, 10).unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
@@ -314,8 +301,7 @@ mod tests {
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        let inner_factory = builder.build();
-        let factory = KvEngineFactoryV2::new(inner_factory);
+        let factory = builder.build_v2();
         factory.create_tablet(1, 10).unwrap();
         factory.create_tablet(2, 10).unwrap();
         let mut count = 0;
