@@ -1303,8 +1303,7 @@ mod tests {
         // return errors.
         assert!(result.is_err());
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
-        let result = new_key_manager(&tmp_dir, None, right_key, previous);
-        assert!(result.is_ok());
+        new_key_manager(&tmp_dir, None, right_key, previous).unwrap();
     }
 
     #[test]

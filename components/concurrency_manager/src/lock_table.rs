@@ -172,7 +172,7 @@ mod test {
         let key_k = Key::from_raw(b"k");
 
         // no lock found
-        assert!(lock_table.check_key(&key_k, |_| Err(())).is_ok());
+        lock_table.check_key(&key_k, |_| Err(())).unwrap();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -190,7 +190,7 @@ mod test {
         });
 
         // lock passes check_fn
-        assert!(lock_table.check_key(&key_k, |l| ts_check(l, 5)).is_ok());
+        lock_table.check_key(&key_k, |l| ts_check(l, 5)).unwrap();
 
         // lock does not pass check_fn
         assert_eq!(lock_table.check_key(&key_k, |l| ts_check(l, 20)), Err(lock));
@@ -231,22 +231,18 @@ mod test {
         });
 
         // no lock found
-        assert!(
-            lock_table
-                .check_range(
-                    Some(&Key::from_raw(b"m")),
-                    Some(&Key::from_raw(b"n")),
-                    |_, _| Err(())
-                )
-                .is_ok()
-        );
+        lock_table
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(()),
+            )
+            .unwrap();
 
         // lock passes check_fn
-        assert!(
-            lock_table
-                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-                .is_ok()
-        );
+        lock_table
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+            .unwrap();
 
         // first lock does not pass check_fn
         assert_eq!(

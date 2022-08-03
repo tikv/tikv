@@ -600,10 +600,9 @@ mod tests {
         // Try open as v1 file. Should success.
         {
             let file_dict_file = EncryptedFile::new(tempdir.path(), "test_file_dict_file");
-            let file_bytes = file_dict_file.read(&PlaintextBackend::default());
-            assert!(file_bytes.is_ok());
+            let file_bytes = file_dict_file.read(&PlaintextBackend::default()).unwrap();
             let mut file_dict = FileDictionary::default();
-            file_dict.merge_from_bytes(&file_bytes.unwrap()).unwrap();
+            file_dict.merge_from_bytes(&file_bytes).unwrap();
             assert_eq!(*file_dict.files.get("f1").unwrap(), info1);
             assert_eq!(file_dict.files.get("f2"), None);
             assert_eq!(file_dict.files.get("f3"), None);
