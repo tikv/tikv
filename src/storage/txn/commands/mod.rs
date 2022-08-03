@@ -523,6 +523,10 @@ impl<'a, S: Snapshot> ReaderWithStats<'a, S> {
     fn new(reader: SnapshotReader<S>, statistics: &'a mut Statistics) -> Self {
         Self { reader, statistics }
     }
+
+    fn set_print_info(&mut self, print_info: bool) {
+        self.reader.reader.print_info = print_info;
+    }
 }
 
 impl<'a, S: Snapshot> Deref for ReaderWithStats<'a, S> {

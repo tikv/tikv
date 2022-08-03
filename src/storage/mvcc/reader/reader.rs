@@ -139,6 +139,7 @@ pub struct MvccReader<S: EngineSnapshot> {
     term: u64,
     #[allow(dead_code)]
     version: u64,
+    pub print_info: bool
 }
 
 impl<S: EngineSnapshot> MvccReader<S> {
@@ -154,6 +155,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache,
             term: 0,
             version: 0,
+            print_info: false
         }
     }
 
@@ -169,6 +171,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
+            print_info: false,
         }
     }
 
@@ -202,7 +205,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 
     pub fn load_lock(&mut self, key: &Key) -> Result<Option<Lock>> {
+        if self.print_info {
+            info!("thd_name {:?} MvccReader::load_lock key {:?}, scan_mode {:?}",
+            std::thread::current().name(), key, self.scan_mode);
+        }
         if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
+            if self.print_info {
+                info!("thd_name {:?} MvccReader::load_lock, load lock from in_memory_pessimistic_lock, lock {:?}",
+                std::thread::current().name(), pessimistic_lock);
+            }
             return Ok(Some(pessimistic_lock));
         }
 
@@ -222,7 +233,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 None => None,
             }
         };
-
+        if self.print_info {
+            info!("thd_name {:?} MvccReader::load_lock, load lock from LOCK_CT, lock {:?}",
+            std::thread::current().name(), res);
+        }
         Ok(res)
     }
 

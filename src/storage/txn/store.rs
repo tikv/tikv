@@ -271,17 +271,22 @@ pub struct SnapshotStore<S: Snapshot> {
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
+    is_external: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+        if self.is_external {
+            info!("thd_name {:?} SnapshotStore::get key {:?}",std::thread::current().name(), key);
+        }
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
+            .set_is_exteranl(self.is_external)
             .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
@@ -412,6 +417,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         bypass_locks: TsSet,
         access_locks: TsSet,
         check_has_newer_ts_data: bool,
+        is_external: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -423,6 +429,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
+            is_external,
         }
     }
 
@@ -749,6 +756,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 false,
+                false,
             )
         }
     }
@@ -965,6 +973,7 @@ mod tests {
             Default::default(),
             Default::default(),
             false,
+            false,
         );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
@@ -1017,6 +1026,7 @@ mod tests {
             true,
             Default::default(),
             Default::default(),
+            false,
             false,
         );
         store2.scanner(false, false, false, None, None).unwrap();
