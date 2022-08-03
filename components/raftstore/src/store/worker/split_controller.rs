@@ -251,7 +251,7 @@ impl Samples {
         if best_index >= 0 {
             return self.0[best_index as usize].key.clone();
         }
-        return vec![];
+        vec![]
     }
 }
 

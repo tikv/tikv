@@ -1138,7 +1138,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 region,
             ));
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -1178,7 +1178,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 &region,
             )?;
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -1622,6 +1622,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
         let tag = format!("raftstore-{}", store.get_id());
+        let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -1669,6 +1670,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            coprocessor_host,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -2166,7 +2168,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // Now all checking passed
 
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
 
         peer.peer.local_first_replicate = is_local_first;
@@ -2788,7 +2790,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
         };
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
         peer.peer.activate(self.ctx);
 

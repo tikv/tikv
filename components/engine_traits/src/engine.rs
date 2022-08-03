@@ -363,8 +363,7 @@ mod tests {
         err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
         err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
-        let r = err.take_result();
-        assert!(r.is_err());
+        err.take_result().unwrap_err();
         assert_eq!(err.get_error_count(), 2);
     }
 }

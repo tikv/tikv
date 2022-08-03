@@ -301,7 +301,8 @@ mod tests {
 
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet(1, Some(10), OpenOptions::default().set_create_new(true));
-        assert!(result.is_err());
+        result.unwrap_err();
+
         factory
             .set_shared_block_cache_capacity(1024 * 1024)
             .unwrap();
@@ -332,8 +333,10 @@ mod tests {
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
+
         let result = factory.open_tablet(1, Some(20), OpenOptions::default());
-        assert!(result.is_err());
+        result.unwrap_err();
+
         assert!(!factory.is_single_engine());
     }
 

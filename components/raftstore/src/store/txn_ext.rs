@@ -408,7 +408,7 @@ mod tests {
         // Not exceeding the region limit, but exceeding the global limit
         GLOBAL_MEM_SIZE.set(101 << 20);
         let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
-        assert!(res.is_err());
+        res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
     }
 

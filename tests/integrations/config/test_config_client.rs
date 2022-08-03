@@ -33,23 +33,23 @@ fn test_update_config() {
 
     // update not support config
     let res = cfg_controller.update(change("server.addr", "localhost:3000"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update to invalid config
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // bad update request
     let res = cfg_controller.update(change("xxx.yyy", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raftstore.xxx", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 }
 

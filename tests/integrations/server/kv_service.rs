@@ -1936,7 +1936,7 @@ fn test_txn_api_version() {
                 // Pessimistic Lock
                 ts += 1;
                 let lock_ts = ts;
-                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+                must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
 
                 // Prewrite Pessimistic
                 let mut mutation = Mutation::default();
