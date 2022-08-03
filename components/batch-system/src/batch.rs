@@ -27,7 +27,6 @@ use crate::{
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},
     mailbox::BasicMailbox,
-    metrics::BATCH_ACTION_COUNTER,
     router::Router,
 };
 
@@ -307,7 +306,6 @@ pub trait PollHandler<N, C>: Send + 'static {
     where
         for<'a> F: FnOnce(&'a Config);
 
-    fn should_stop(&self, excceed_count: bool) -> bool;
     /// This function is called when handling readiness for control FSM.
     ///
     /// If returned value is Some, then it represents a length of channel. This
@@ -455,25 +453,14 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 }
             }
             let mut fsm_cnt = batch.normals.len();
-            while !self
-                .handler
-                .should_stop(batch.normals.len() >= max_batch_size)
-            {
+            while batch.normals.len() < max_batch_size {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
-                } else {
-                    // give a second chance to fetch fsm.
-                    // std::thread::sleep(Duration::from_micros(20));
-                    // if let Ok(fsm) = self.fsm_receiver.try_recv() {
-                    //     run = batch.push(fsm);
-                    // }
                 }
                 // If we receive a ControlFsm, break this cycle and call `end`. Because
                 // ControlFsm may change state of the handler, we shall deal with it immediately
                 // after calling `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
-                    // not reach max batch
-                    BATCH_ACTION_COUNTER.not_full.inc();
                     break;
                 }
                 let p = batch.normals[fsm_cnt].as_mut().unwrap();
@@ -489,12 +476,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     }
                 }
                 fsm_cnt += 1;
-            }
-            if self
-                .handler
-                .should_stop(batch.normals.len() >= max_batch_size)
-            {
-                BATCH_ACTION_COUNTER.full.inc();
             }
             self.handler.light_end(&mut batch.normals);
             for offset in &to_skip_end {

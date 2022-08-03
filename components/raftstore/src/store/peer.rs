@@ -87,13 +87,13 @@ use crate::{
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
-            apply::{self, ApplyRes, CatchUpLogs, Notifier},
+            apply::{self, CatchUpLogs},
             store::{PollContext, RaftRouter},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -2829,8 +2829,8 @@ where
                 // );
                 // if has_ready {
                 //     // trigger has ready check
-                //     ctx.router.notify_one(self.region_id, PeerMsg::CasualMessage(CasualMessage::SnapshotApplied));
-                // }
+                //     ctx.router.notify_one(self.region_id,
+                // PeerMsg::CasualMessage(CasualMessage::SnapshotApplied)); }
                 return;
             }
 
