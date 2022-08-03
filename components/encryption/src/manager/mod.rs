@@ -1341,54 +1341,45 @@ mod tests {
         }
     }
 
-    fn generate_file_name_by_encryption_algorithm(method: EncryptionMethod) -> String {
-        format!("{:?}", method)
-    }
-
-    fn generate_file_content_by_encryption_algorithm(method: EncryptionMethod) -> String {
-        format!("Encrypted with {:?}", method)
-    }
-
-    fn generate_encrypted_file<P: AsRef<Path>>(
-        manager: &DataKeyManager,
-        path: P,
-        content: &String,
-    ) {
+    fn generate_mock_file<P: AsRef<Path>>(dkm: Option<&DataKeyManager>, path: P, content: &String) {
         use std::io::Write;
-
-        let mut f = manager.create_file_for_write(&path).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
-        f.sync_all().unwrap();
+        match dkm {
+            Some(manager) => {
+                // Encryption enabled. Use DataKeyManager to manage file.
+                let mut f = manager.create_file_for_write(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+            None => {
+                // Encryption disabled. Write content in plaintext.
+                let mut f = File::create(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+        }
     }
 
-    fn check_encrypted_file_content<P: AsRef<Path>>(
-        manager: &DataKeyManager,
+    fn check_mock_file_content<P: AsRef<Path>>(
+        dkm: Option<&DataKeyManager>,
         path: P,
         expected: &String,
     ) {
         use std::io::Read;
 
-        let mut buffer = String::new();
-        let mut f = manager.open_file_for_read(&path).unwrap();
-        assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
-        assert_eq!(buffer, expected.to_string());
-    }
-
-    fn generate_plaintext_file<P: AsRef<Path>>(path: P, content: &String) {
-        use std::io::Write;
-
-        let mut f = File::create(&path).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
-        f.sync_all().unwrap();
-    }
-
-    fn check_plaintext_file_content<P: AsRef<Path>>(path: P, expected: &String) {
-        use std::io::Read;
-
-        let mut buffer = String::new();
-        let mut f = File::open(&path).unwrap();
-        assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
-        assert_eq!(buffer, expected.to_string());
+        match dkm {
+            Some(manager) => {
+                let mut buffer = String::new();
+                let mut f = manager.open_file_for_read(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+            None => {
+                let mut buffer = String::new();
+                let mut f = File::open(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+        }
     }
 
     fn test_change_method(from: EncryptionMethod, to: EncryptionMethod) {
@@ -1396,15 +1387,15 @@ mod tests {
             return;
         }
 
+        let generate_file_name = |method| format!("{:?}", method);
+        let generate_file_content = |method| format!("Encrypted with {:?}", method);
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let path_to_file1 = tmp_dir
-            .path()
-            .join(generate_file_name_by_encryption_algorithm(from));
-        let content1 = generate_file_content_by_encryption_algorithm(from);
+        let path_to_file1 = tmp_dir.path().join(generate_file_name(from));
+        let content1 = generate_file_content(from);
 
         if from == EncryptionMethod::Plaintext {
             // encryption not enabled.
@@ -1414,14 +1405,14 @@ mod tests {
                 DataKeyManager::new(master_key_backend, Box::new(move || Ok(previous)), args)
                     .unwrap();
             assert!(manager.is_none());
-            generate_plaintext_file(&path_to_file1, &content1);
-            check_plaintext_file_content(&path_to_file1, &content1);
+            generate_mock_file(None, &path_to_file1, &content1);
+            check_mock_file_content(None, &path_to_file1, &content1);
         } else {
             let manager =
                 new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
 
-            generate_encrypted_file(&manager, &path_to_file1, &content1);
-            check_encrypted_file_content(&manager, &path_to_file1, &content1);
+            generate_mock_file(Some(&manager), &path_to_file1, &content1);
+            check_mock_file_content(Some(&manager), &path_to_file1, &content1);
             // Close old manager
             drop(manager);
         }
@@ -1431,15 +1422,13 @@ mod tests {
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let previous = new_mock_backend() as Box<dyn Backend>;
         let manager = new_key_manager(&tmp_dir, Some(to), master_key_backend, previous).unwrap();
-        let path_to_file2 = tmp_dir
-            .path()
-            .join(generate_file_name_by_encryption_algorithm(to));
+        let path_to_file2 = tmp_dir.path().join(generate_file_name(to));
 
-        let content2 = generate_file_content_by_encryption_algorithm(to);
-        generate_encrypted_file(&manager, &path_to_file2, &content2);
-        check_encrypted_file_content(&manager, &path_to_file2, &content2);
+        let content2 = generate_file_content(to);
+        generate_mock_file(Some(&manager), &path_to_file2, &content2);
+        check_mock_file_content(Some(&manager), &path_to_file2, &content2);
         // check old file content
-        check_encrypted_file_content(&manager, &path_to_file1, &content1);
+        check_mock_file_content(Some(&manager), &path_to_file1, &content1);
     }
 
     #[test]
