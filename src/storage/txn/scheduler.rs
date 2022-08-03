@@ -1081,7 +1081,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     let wait_token = scheduler.inner.lock_mgr.allocate_token();
 
                     let first_batch_size = cmd_meta.keys_count - l.len();
-                    assert_eq!(first_batch_size, 0);
+
+                    if cmd_meta.allow_lock_with_conflict {
+                        // Only single-key requests are allowed in the new mode currently.
+                        assert_eq!(first_batch_size, 0);
+                    }
 
                     let lock_req_ctx = scheduler.convert_to_keywise_callbacks(
                         cid,

@@ -23,7 +23,7 @@ use crate::storage::{
             WriteCommand, WriteContext, WriteResult, WriteResultLockInfo,
         },
         scheduler::PartialPessimisticLockRequestSharedState,
-        Error, Result,
+        Error, ErrorInner, Result,
     },
     types::PessimisticLockKeyResult,
     PessimisticLockResults, ProcessResult, Result as StorageResult, Snapshot,
@@ -193,6 +193,20 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug)]
+struct InvalidPessimisticLockRequestError {
+    desc: String,
+}
+
+impl std::fmt::Display for InvalidPessimisticLockRequestError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for InvalidPessimisticLockRequestError {}
+
 impl AcquirePessimisticLock {
     fn process_write_for_single_request<S, L>(
         snapshot: S,
@@ -206,6 +220,14 @@ impl AcquirePessimisticLock {
         S: Snapshot,
         L: LockManager,
     {
+        if allow_lock_with_conflict && keys.len() > 1 {
+            return Err(Error::from(ErrorInner::Other(Box::new(
+                InvalidPessimisticLockRequestError {
+                    desc: "multiple keys in a single lock-first request is not allowed".into(),
+                },
+            ))));
+        }
+
         let term = snapshot.ext().get_term();
 
         let mut txn = MvccTxn::new(params.start_ts, context.concurrency_manager);
