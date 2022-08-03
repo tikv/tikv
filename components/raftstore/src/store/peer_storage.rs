@@ -1818,7 +1818,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start(runner);
-        assert!(s1.snapshot(0, 0).is_err());
+        s1.snapshot(0, 0).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
@@ -1909,7 +1909,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]
@@ -1959,7 +1959,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

@@ -584,7 +584,7 @@ mod tests {
                 .push_params(err_args)
                 .evaluate(ScalarFuncSig::JsonObjectSig);
 
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 
@@ -948,7 +948,7 @@ mod tests {
             if is_success {
                 assert_eq!(output.unwrap(), expected, "{:?}", vargs);
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }

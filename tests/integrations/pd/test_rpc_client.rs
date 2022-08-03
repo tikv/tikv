@@ -509,7 +509,7 @@ fn test_pd_client_heartbeat_send_failed() {
             assert!(rsp.is_ok());
             assert_eq!(rsp.unwrap().get_region_id(), 1);
         } else {
-            assert!(rsp.is_err());
+            rsp.unwrap_err();
         }
 
         let region = block_on(client.get_region_by_id(1));
@@ -519,7 +519,7 @@ fn test_pd_client_heartbeat_send_failed() {
             assert!(r.is_some());
             assert_eq!(1, r.unwrap().get_id());
         } else {
-            assert!(region.is_err());
+            region.unwrap_err();
         }
     };
     // send fail if network is block.
