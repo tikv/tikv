@@ -99,7 +99,6 @@ impl KvEngineFactoryBuilder {
         KvEngineFactoryV2 {
             inner: factory,
             registry: Arc::default(),
-            registry_latest: Arc::default(),
         }
     }
 }
@@ -245,10 +244,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
-        self.open_tablet_cache(0, 0)
-    }
-
-    fn open_tablet_cache_latest(&self, _id: u64) -> Option<RocksEngine> {
         self.open_tablet_cache(0, 0)
     }
 

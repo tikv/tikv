@@ -17,8 +17,6 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 pub struct KvEngineFactoryV2 {
     pub inner: KvEngineFactory,
     pub registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
-    // registry_latest stores tablet with the latest prefix for each region
-    pub registry_latest: Arc<Mutex<HashMap<u64, (u64, RocksEngine)>>>,
 }
 
 // Extract tablet id and tablet suffix from the path.
@@ -35,7 +33,6 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
         let mut reg = self.registry.lock().unwrap();
-        let mut reg_latest = self.registry_latest.lock().unwrap();
         if let Some(db) = reg.get(&(id, suffix)) {
             return Err(box_err!(
                 "region {} {} already exists",
@@ -47,13 +44,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
         debug!("inserting tablet"; "key" => ?(id, suffix));
         reg.insert((id, suffix), kv_engine.clone());
-
-        let (may_old_suffix, tablet) = reg_latest.entry(id).or_insert((suffix, kv_engine.clone()));
-        if *may_old_suffix < suffix {
-            *may_old_suffix = suffix;
-            *tablet = kv_engine.clone();
-        }
-
         self.inner.on_tablet_created(id, suffix);
         Ok(kv_engine)
     }
@@ -81,11 +71,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             return Some(reg.get(k).unwrap().clone());
         }
         None
-    }
-
-    fn open_tablet_cache_latest(&self, id: u64) -> Option<RocksEngine> {
-        let reg_latest = self.registry_latest.lock().unwrap();
-        reg_latest.get(&id).map(|(_, tablet)| tablet.clone())
     }
 
     fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<RocksEngine> {
@@ -140,14 +125,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
     fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
         let path = self.tablet_path(id, suffix);
         self.registry.lock().unwrap().remove(&(id, suffix));
-
-        let mut reg_latest = self.registry_latest.lock().unwrap();
-        if let Some((latest_suffix, _)) = reg_latest.get(&id) {
-            if *latest_suffix == suffix {
-                reg_latest.remove(&id);
-            }
-        }
-
         self.inner.destroy_tablet(&path)?;
         self.inner.on_tablet_destroy(id, suffix);
         Ok(())
@@ -334,38 +311,5 @@ mod tests {
             count += 1;
         });
         assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn test_tablet_cache() {
-        let cfg = TEST_CONFIG.clone();
-        assert!(cfg.storage.block_cache.shared);
-        let cache = cfg.storage.block_cache.build_shared_cache();
-        let dir = test_util::temp_dir("test_kvengine_factory_v2", false);
-        let env = cfg.build_shared_rocks_env(None, None).unwrap();
-
-        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
-        if let Some(cache) = cache {
-            builder = builder.block_cache(cache);
-        }
-        let factory = builder.build_v2();
-        let tablet = factory.create_tablet(1, 10).unwrap();
-        let tablet_latest_cache = factory.open_tablet_cache_latest(1).unwrap();
-        assert_eq!(
-            tablet.as_inner().path(),
-            tablet_latest_cache.as_inner().path()
-        );
-
-        let tablet_path = factory.tablet_path(1, 10);
-        // Update the suffix so the cache should be changed
-        let tablet = factory.load_tablet(&tablet_path, 1, 20).unwrap();
-        let tablet_latest_cache = factory.open_tablet_cache_latest(1).unwrap();
-        assert_eq!(
-            tablet.as_inner().path(),
-            tablet_latest_cache.as_inner().path()
-        );
-
-        assert!(factory.destroy_tablet(1, 20).is_ok());
-        assert!(factory.open_tablet_cache_latest(1).is_none());
     }
 }
