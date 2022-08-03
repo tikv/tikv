@@ -523,7 +523,7 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Int) -> Result<Option<DateTime>> {
 pub fn make_date(ctx: &mut EvalContext, year: &Int, day: &Int) -> Result<Option<DateTime>> {
     let mut year = *year;
     let mut day = *day;
-    if day <= 0 || !(0..=9999).contains(&year) || day > 366 * 9999 {
+    if !(1..=366 * 9999).contains(&day) || !(0..=9999).contains(&year) {
         return Ok(None);
     }
     if year < 70 {
