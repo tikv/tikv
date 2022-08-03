@@ -320,6 +320,14 @@ impl<'a> PeerMsgHandler<'a> {
     }
 
     fn on_apply_result(&mut self, res: MsgApplyResult) {
+        if res.peer_id != self.peer.peer_id() {
+            warn!(
+                "{} mismatch apply result peer_id {}",
+                self.peer.tag(),
+                res.peer_id
+            );
+            return;
+        }
         fail_point!("on_apply_res", |_| {});
         if !self.fsm.peer.pending_apply_results.is_empty() {
             // Apply results should be handled in order but there is a pending one, so
@@ -331,10 +339,12 @@ impl<'a> PeerMsgHandler<'a> {
             self.fsm.peer.pending_apply_results.push(res);
             // Some metadata change need to be handled by store FSM, so send the result to it
             // and store FSM will handle all pending results of the peer.
+            let region_id = self.region_id();
+            let peer_id = self.peer_id();
             self.ctx
                 .global
                 .router
-                .send_store(StoreMsg::ApplyResult(self.region_id()));
+                .send_store(StoreMsg::ApplyResult { region_id, peer_id });
             return;
         }
         debug!(
@@ -998,6 +1008,7 @@ impl<'a> PeerMsgHandler<'a> {
                     self.peer.mut_store().snapshot_term(),
                 );
                 let apply_result = MsgApplyResult {
+                    peer_id: self.peer.peer_id(),
                     results: VecDeque::new(),
                     apply_state,
                     metrics: ApplyMetrics::default(),

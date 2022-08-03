@@ -1,13 +1,18 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::atomic::AtomicU16, thread::sleep, time::Duration};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    sync::{
+        atomic::{AtomicU16, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread::sleep,
+    time::Duration,
+};
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use rand::{Rng, RngCore};
-use test_cloud_server::{ServerCluster, try_wait};
+use test_cloud_server::{try_wait, ServerCluster};
 use tikv_util::{config::ReadableSize, info, time::Instant};
 
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
@@ -64,17 +69,22 @@ fn test_random_workload() {
     for handle in handles {
         handle.join().unwrap();
     }
-    if !try_wait(|| {
-        let data_stats = cluster.get_data_stats();
-        data_stats.check_data().is_ok()
-    }, 10) {
+    if !try_wait(
+        || {
+            let data_stats = cluster.get_data_stats();
+            data_stats.check_data().is_ok()
+        },
+        10,
+    ) {
         cluster.get_data_stats().check_data().unwrap();
     }
     cluster.stop();
     let total_write_count = write_counter.load(Ordering::SeqCst);
     let region_number = pd_client.get_regions_number();
-    info!("total_write_count {}, region number {}, move count {}",
-        total_write_count, region_number, move_count);
+    info!(
+        "total_write_count {}, region number {}, move count {}",
+        total_write_count, region_number, move_count
+    );
 }
 
 fn i_to_key(i: usize) -> Vec<u8> {

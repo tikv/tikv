@@ -348,9 +348,9 @@ impl RegionShardStats {
 
     fn check_consistency(&self) -> Result<(), String> {
         if self.shard_stats.len() <= 1 {
-            return Ok(())
+            return Ok(());
         }
-        let store_ids: Vec<u64> = self.shard_stats.keys().map(|id|*id).collect();
+        let store_ids: Vec<u64> = self.shard_stats.keys().map(|id| *id).collect();
         let first_id = &store_ids[0];
         let first_stats = self.shard_stats.get(&first_id).unwrap();
         for store_id in &store_ids[1..] {
@@ -370,10 +370,7 @@ impl RegionShardStats {
     }
 
     fn check_healthy(&self) -> Result<(), String> {
-        let item = self
-            .shard_stats
-            .values()
-            .find(|stats| stats.active);
+        let item = self.shard_stats.values().find(|stats| stats.active);
         if item.is_none() {
             return Err("no leader".into());
         }

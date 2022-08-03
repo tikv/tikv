@@ -570,8 +570,8 @@ impl<'a> StoreMsgHandler<'a> {
             } => {
                 self.on_get_regions_in_range(start, end, callback);
             }
-            StoreMsg::ApplyResult(region_id) => {
-                apply_region = self.on_apply_result(region_id);
+            StoreMsg::ApplyResult { region_id, peer_id } => {
+                apply_region = self.on_apply_result(region_id, peer_id);
             }
             StoreMsg::Stop => {
                 self.store.stopped = true;
@@ -1129,7 +1129,7 @@ impl<'a> StoreMsgHandler<'a> {
         fail_point!("after_split", self.ctx.store_id() == 3, |_| { None });
     }
 
-    fn on_change_peer(&mut self, cp: ChangePeer) {
+    fn on_change_peer(&mut self, cp: ChangePeer) -> bool {
         let region_id = cp.region.id;
         let peer = self.get_peer(region_id);
         let mut peer_fsm = peer.peer_fsm.lock().unwrap();
@@ -1239,6 +1239,7 @@ impl<'a> StoreMsgHandler<'a> {
             drop(peer_fsm);
             self.on_destroy_peer(region_id, false);
         }
+        remove_self
     }
 
     fn maybe_apply(&mut self, region_id: u64) -> Option<u64> {
@@ -1382,7 +1383,12 @@ impl<'a> StoreMsgHandler<'a> {
         callback(regions)
     }
 
-    fn on_apply_result(&mut self, region_id: u64) -> Option<u64> {
+    fn on_apply_result(&mut self, region_id: u64, peer_id: u64) -> Option<u64> {
+        if !self.peer_exists(region_id, peer_id) {
+            let peer_tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, 0));
+            warn!("{} apply result peer doesn't exist", peer_tag);
+            return None;
+        }
         let peer = self.get_peer(region_id);
         let apply_results = {
             let mut peer_fsm = peer.peer_fsm.lock().unwrap();
@@ -1394,7 +1400,10 @@ impl<'a> StoreMsgHandler<'a> {
                 match result {
                     ExecResult::ChangePeer(cp) => {
                         if cp.index != raft::INVALID_INDEX {
-                            self.on_change_peer(cp);
+                            let remove_self = self.on_change_peer(cp);
+                            if remove_self {
+                                return None;
+                            }
                         }
                     }
                     ExecResult::SplitRegion { regions } => {
@@ -1405,6 +1414,7 @@ impl<'a> StoreMsgHandler<'a> {
                     }
                     ExecResult::UnsafeDestroy => {
                         self.on_destroy_peer(region_id, false);
+                        return None;
                     }
                 }
             }
@@ -1420,5 +1430,14 @@ impl<'a> StoreMsgHandler<'a> {
             .peer
             .handle_raft_ready(&mut self.ctx.raft_ctx, None);
         self.maybe_apply(region_id)
+    }
+
+    fn peer_exists(&mut self, region_id: u64, peer_id: u64) -> bool {
+        self.ctx
+            .store_meta
+            .regions
+            .get(&region_id)
+            .map(|region| region.get_peers().iter().any(|p| p.id == peer_id))
+            .unwrap_or(false)
     }
 }

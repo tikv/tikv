@@ -1015,7 +1015,10 @@ impl Applier {
     fn handle_unsafe_destroy(&mut self, ctx: &mut ApplyContext, region_id: u64) {
         assert_eq!(region_id, self.region.get_id());
         if !self.stopped {
+            let mut results = VecDeque::new();
+            results.push_back(ExecResult::UnsafeDestroy);
             self.destroy(ctx);
+            ctx.finish_for(&self, results);
         }
     }
 
@@ -1512,6 +1515,7 @@ impl ApplyContext {
     pub fn finish_for(&self, applier: &Applier, results: VecDeque<ExecResult>) {
         if let Some(router) = &self.router {
             let apply_res = MsgApplyResult {
+                peer_id: applier.id(),
                 results,
                 apply_state: applier.apply_state,
                 metrics: applier.metrics.clone(),

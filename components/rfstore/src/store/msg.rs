@@ -83,7 +83,10 @@ pub enum StoreMsg {
         end: Vec<u8>,
         callback: Box<dyn FnOnce(Vec<RegionIDVer>) + Send>,
     },
-    ApplyResult(u64 /* region_id */),
+    ApplyResult {
+        region_id: u64,
+        peer_id: u64,
+    },
     Stop,
 }
 
@@ -130,6 +133,7 @@ pub struct MsgApply {
 
 #[derive(Debug)]
 pub struct MsgApplyResult {
+    pub(crate) peer_id: u64,
     pub(crate) results: VecDeque<ExecResult>,
     pub(crate) apply_state: RaftApplyState,
     pub(crate) metrics: ApplyMetrics,
