@@ -139,7 +139,7 @@ impl TsoBatch {
 /// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
 /// the scenario of leader transfer). Other regions without the requirement can
 /// still use older TSO cache.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
 
@@ -288,7 +288,7 @@ struct RenewRequest {
     sender: oneshot::Sender<RenewResult>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RenewParameter {
     batch_min_size: u32,
     batch_max_size: u32,
@@ -304,6 +304,16 @@ pub struct BatchTsoProvider<C: PdClient> {
     renew_interval: Duration,
     renew_parameter: RenewParameter,
     renew_request_tx: Sender<RenewRequest>,
+}
+
+impl<C: PdClient> std::fmt::Debug for BatchTsoProvider<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchTsoProvider")
+            .field("batch_list", &self.batch_list)
+            .field("renew_interval", &self.renew_interval)
+            .field("renew_parameter", &self.renew_parameter)
+            .finish()
+    }
 }
 
 impl<C: PdClient + 'static> BatchTsoProvider<C> {
@@ -728,11 +738,9 @@ pub mod tests {
         assert_eq!(batch_list.remain(), 10);
         assert_eq!(batch_list.usage(), 10);
         // timestamp fall back
-        assert!(
-            batch_list
-                .push(10, TimeStamp::compose(1, 119), false)
-                .is_err()
-        );
+        batch_list
+            .push(10, TimeStamp::compose(1, 119), false)
+            .unwrap_err();
         batch_list
             .push(10, TimeStamp::compose(1, 200), false)
             .unwrap();
@@ -917,16 +925,14 @@ pub mod tests {
 
         {
             pd_cli.trigger_tso_failure();
-            assert!(
-                block_on(BatchTsoProvider::new_opt(
-                    pd_cli.clone(),
-                    Duration::ZERO,
-                    Duration::from_secs(3),
-                    100,
-                    8192,
-                ))
-                .is_err()
-            );
+            block_on(BatchTsoProvider::new_opt(
+                pd_cli.clone(),
+                Duration::ZERO,
+                Duration::from_secs(3),
+                100,
+                8192,
+            ))
+            .unwrap_err();
         }
 
         // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
