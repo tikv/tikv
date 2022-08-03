@@ -150,7 +150,12 @@ impl raft::Storage for PeerStorage {
             .engines
             .raft
             .get_term(self.get_region_id(), idx)
-            .unwrap())
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to get term: region {}, idx {}, first_index {}, last_index {}, applied_index {}, truncated_index {}, region_stats: {:?}",
+                    self.tag(), idx, self.first_index(), self.last_index(), self.applied_index(), self.truncated_index(), self.engines.raft.get_region_stats(self.get_region_id())
+                );
+            }))
     }
 
     fn first_index(&self) -> raft::Result<u64> {

@@ -133,7 +133,10 @@ impl Engine {
     }
 
     pub fn write(&self, wb: &mut WriteBatch) -> u64 {
-        let shard = self.get_shard(wb.shard_id).unwrap();
+        let shard = self.get_shard(wb.shard_id).unwrap_or_else(|| {
+            let tag = ShardTag::new(self.get_engine_id(), IDVer::new(wb.shard_id, 0));
+            panic!("{} unable to get shard", tag);
+        });
         let snap = shard.new_snap_access();
         let version = shard.base_version + wb.sequence;
         self.update_write_batch_version(wb, version);
