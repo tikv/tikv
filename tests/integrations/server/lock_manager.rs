@@ -159,7 +159,7 @@ fn must_merge_region(
     cluster.must_put(target_region_key, b"v");
 }
 
-fn find_peer(region: &Region, store_id: u64) -> Option<&Peer>{
+fn find_peer(region: &Region, store_id: u64) -> Option<&Peer> {
     region
         .get_peers()
         .iter()

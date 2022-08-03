@@ -68,8 +68,6 @@ use time::Timespec;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
-use crate::store::fsm::apply::Notifier;
-
 use super::{
     cmd_resp,
     local_metrics::{RaftMetrics, RaftReadyMetrics},
@@ -89,13 +87,13 @@ use crate::{
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
-            apply::{self, CatchUpLogs, ApplyRes},
+            apply::{self, ApplyRes, CatchUpLogs, Notifier},
             store::{PollContext, RaftRouter},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{PeerMsg, CasualMessage, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CasualMessage, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -2771,7 +2769,7 @@ where
                 vec![]
             };
 
-             // Note that the `commit_index` and `commit_term` here may be used to
+            // Note that the `commit_index` and `commit_term` here may be used to
             // forward the commit index. So it must be less than or equal to persist
             // index.
             let commit_index = cmp::min(
@@ -2781,10 +2779,13 @@ where
             let commit_term = self.get_store().term(commit_index).unwrap();
 
             if self.is_witness() {
-                committed_entries = committed_entries.into_iter().filter(|e| {
-                    let ctx = ProposalContext::from_bytes(&e.context);
-                    !ctx.contains(ProposalContext::NO_ADMIN)
-                }).collect();
+                committed_entries = committed_entries
+                    .into_iter()
+                    .filter(|e| {
+                        let ctx = ProposalContext::from_bytes(&e.context);
+                        !ctx.contains(ProposalContext::NO_ADMIN)
+                    })
+                    .collect();
             }
             if committed_entries.is_empty() {
                 // let metrics = ApplyMetrics::default();
@@ -2810,7 +2811,7 @@ where
             } else {
                 None
             };
-           
+
             let mut apply = Apply::new(
                 self.peer_id(),
                 self.region_id,
@@ -3658,58 +3659,64 @@ where
     }
 
     pub fn maybe_witness_transfer_leader<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        if self.is_leader() {
-            let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
-            if !has_witness {
-                // change one peer to witness
-                if let Some(mut peer) = self
-                    .region()
-                    .get_peers()
-                    .iter()
-                    .filter(|p| p.id != self.peer.id)
-                    .next()
-                    .cloned()
-                {
-                    info!(
-                        "change peer to witness";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer_id(),
-                        "change_peer" => peer.get_id(),
-                    );
-                    peer.set_is_witness(true);
+        // if self.is_leader() {
+        //     let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
+        //     if !has_witness {
+        //         // change one peer to witness
+        //         if let Some(mut peer) = self
+        //             .region()
+        //             .get_peers()
+        //             .iter()
+        //             .filter(|p| p.id != self.peer.id)
+        //             .next()
+        //             .cloned()
+        //         {
+        //             info!(
+        //                 "change peer to witness";
+        //                 "region_id" => self.region_id,
+        //                 "peer_id" => self.peer_id(),
+        //                 "change_peer" => peer.get_id(),
+        //             );
+        //             peer.set_is_witness(true);
 
-                    let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::ChangePeer);
-                    admin
-                        .mut_change_peer()
-                        .set_change_type(ConfChangeType::AddNode);
-                    admin.mut_change_peer().set_peer(peer);
+        //             let mut admin = AdminRequest::default();
+        //             admin.set_cmd_type(AdminCmdType::ChangePeer);
+        //             admin
+        //                 .mut_change_peer()
+        //                 .set_change_type(ConfChangeType::AddNode);
+        //             admin.mut_change_peer().set_peer(peer);
 
-                    let mut req = RaftCmdRequest::default();
-                    req.mut_header().set_region_id(self.region_id);
-                    req.mut_header()
-                        .set_region_epoch(self.region().get_region_epoch().clone());
-                    req.mut_header().set_peer(self.peer.clone());
-                    req.set_admin_request(admin);
+        //             let mut req = RaftCmdRequest::default();
+        //             req.mut_header().set_region_id(self.region_id);
+        //             req.mut_header()
+        //                 .set_region_epoch(self.region().get_region_epoch().clone());
+        //             req.mut_header().set_peer(self.peer.clone());
+        //             req.set_admin_request(admin);
 
-                    let cmd = RaftCommand::new(req, Callback::None);
-                    if let Err(e) = ctx.router.send_raft_command(cmd) {
-                        error!(
-                            "change to witness failed";
-                            "region_id" => self.region_id,
-                            "peer_id" => self.peer.get_id(),
-                            "err" => ?e,
-                        );
-                    }
-                }
-            }
-        }
+        //             let cmd = RaftCommand::new(req, Callback::None);
+        //             if let Err(e) = ctx.router.send_raft_command(cmd) {
+        //                 error!(
+        //                     "change to witness failed";
+        //                     "region_id" => self.region_id,
+        //                     "peer_id" => self.peer.get_id(),
+        //                     "err" => ?e,
+        //                 );
+        //             }
+        //         }
+        //     }
+        // }
 
         if !(self.is_witness() && self.is_leader()) {
             return;
         }
+        info!(
+            "witness try to transfer leader";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
 
         if self.raft_group.raft.lead_transferee.is_some() {
+            info!("witness already transferring leader");
             // already being in transfer leader
             return;
         }
@@ -3728,12 +3735,14 @@ where
                     if elapsed < ctx.cfg.max_peer_down_duration.0 {
                         return true;
                     }
+                } else {
+                    info!("can't find peer heartbeat"; "peer_id" => peer.get_id());
                 }
                 false
             })
             .fold((0, None), |(max_matched, chosen), peer| {
                 if let Some(pr) = prs.get(peer.id) {
-                    if pr.matched.cmp(&max_matched) == cmp::Ordering::Greater {
+                    if pr.matched > max_matched {
                         return (pr.matched, Some(peer));
                     }
                 }
@@ -3741,6 +3750,12 @@ where
             });
 
         if peer.is_none() {
+            info!(
+                "witness no target to transfer leader";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "region_peers" => ?self.region().get_peers(),
+            );
             return;
         }
 
@@ -4570,6 +4585,7 @@ where
             1 => peers.get(0).unwrap(),
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
+        info!("propose transfer leader"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "peer" => ?peer);
 
         let transferred = if peer.id == self.peer.id {
             false

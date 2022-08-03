@@ -4717,9 +4717,13 @@ where
             return Err(e);
         }
 
-        // Forbid reads and writes when it's a witness
+        // Forbid reads and writes when it's a witness except transfer leader
         if self.fsm.peer.is_witness() {
-            return Err(Error::RecoveryInProgress(self.region_id()));
+            if !(msg.has_admin_request()
+                && msg.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader)
+            {
+                return Err(Error::RecoveryInProgress(self.region_id()));
+            }
         }
 
         if self.fsm.peer.force_leader.is_some() {

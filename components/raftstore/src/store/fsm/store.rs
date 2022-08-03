@@ -820,7 +820,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
     }
 
     fn should_stop(&self, excceed_count: bool) -> bool {
-        return excceed_count
+        return excceed_count;
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm<EK>) -> Option<usize> {

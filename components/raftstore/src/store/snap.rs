@@ -1572,8 +1572,7 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
-    /// Get a `Snapshot` can be used for writting and then `save`. Concurrent calls
-    /// are allowed because only one caller can lock temporary disk files.
+    /// Get a `Snapshot` can be used for writing and then `save`. Concurrent calls are allowed because only one caller can lock temporary disk files.
     pub fn get_snapshot_for_receiving(
         &self,
         key: &SnapKey,

@@ -1052,12 +1052,6 @@ where
         let term = entry.get_term();
         let data = entry.get_data();
 
-        // let peer = util::find_peer_by_id(&self.region, self.id).unwrap();
-        // let skip = peer.is_witness
-        //     && ProposalContext::from_bytes(entry.get_context()).contains(ProposalContext::NO_ADMIN);
-        // if skip {
-        //     PEER_WRITE_CMD_COUNTER.skip.inc(); 
-        // }
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
@@ -1094,6 +1088,7 @@ where
 
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
+
         // we should observe empty cmd, aka leader change,
         // read index during confchange, or other situations.
         apply_ctx.host.on_empty_cmd(&self.region, index, term);

@@ -22,7 +22,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-
     pub static ref BATCH_ACTION_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_batch_action_total",
         "Total number of channel full errors.",
@@ -30,5 +29,5 @@ lazy_static! {
     )
     .unwrap();
     pub static ref BATCH_ACTION_COUNTER: BatchAction =
-    auto_flush_from!(BATCH_ACTION_COUNTER_VEC, BatchAction);
+        auto_flush_from!(BATCH_ACTION_COUNTER_VEC, BatchAction);
 }
