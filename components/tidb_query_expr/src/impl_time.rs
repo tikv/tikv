@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 20 19 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
