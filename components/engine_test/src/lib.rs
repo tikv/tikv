@@ -279,10 +279,9 @@ pub mod kv {
 
         fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
             let reg = self.registry.lock().unwrap();
-            if let Some(k) = reg.keys().find(|k| k.0 == id) {
-                return Some(reg.get(k).unwrap().clone());
-            }
-            None
+            reg.keys()
+                .find(|k| k.0 == id)
+                .map(|k| reg.get(k).unwrap().clone())
         }
 
         fn open_tablet_raw(&self, path: &Path, options: OpenOptions) -> Result<KvTestEngine> {
