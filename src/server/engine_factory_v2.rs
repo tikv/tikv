@@ -33,68 +33,77 @@ fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
-    fn create_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
+    /// open a tablet according to the OpenOptions.
+    ///
+    /// If options.cache_only is true, only open the relevant tablet from
+    /// `registry`, and if suffix is None, return an arbitrary tablet with the
+    /// target region id if there are any.
+    ///
+    /// If options.create_new is true, create a tablet by id and suffix. If the
+    /// tablet exists, it will fail.
+    ///
+    /// If options.create is true, open the tablet with id and suffix if it
+    /// exists or create it otherwise.
+    ///
+    /// Note: options.cache_only and options.create and/or options.create_new
+    /// cannot be true simultaneously
+    fn open_tablet(
+        &self,
+        id: u64,
+        suffix: Option<u64>,
+        options: OpenOptions,
+    ) -> Result<RocksEngine> {
+        options.validate()?;
+
         let mut reg = self.registry.lock().unwrap();
-        if let Some(db) = reg.get(&(id, suffix)) {
-            return Err(box_err!(
-                "region {} {} already exists",
-                id,
-                db.as_inner().path()
-            ));
+        if let Some(suffix) = suffix {
+            if let Some(db) = reg.get(&(id, suffix)) {
+                // Target tablet exist in the cache
+
+                if options.create_new() {
+                    return Err(box_err!(
+                        "region {} {} already exists",
+                        id,
+                        db.as_inner().path()
+                    ));
+                }
+                return Ok(db.clone());
+            } else if !options.cache_only() {
+                let tablet_path = self.tablet_path(id, suffix);
+                // Even though neither options.create nor options.create_new are true, if the
+                // tablet files already exists, we will open it by calling
+                // inner.create_tablet. In this case, the tablet exists but not in the cache
+                // (registry).
+                if options.create()
+                    || options.create_new()
+                    || RocksEngine::exists(tablet_path.to_str().unwrap_or_default())
+                {
+                    let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
+                    debug!("open and insert tablet"; "key" => ?(id, suffix));
+                    reg.insert((id, suffix), kv_engine.clone());
+                    self.inner.on_tablet_created(id, suffix);
+                    return Ok(kv_engine);
+                }
+            }
+        } else if options.cache_only() {
+            // This branch reads an arbitrary tablet with region id `id`
+
+            if let Some(k) = reg.keys().find(|k| k.0 == id) {
+                debug!("choose a random tablet"; "key" => ?k);
+                return Ok(reg.get(k).unwrap().clone());
+            }
         }
 
-        let tablet_path = self.tablet_path(id, suffix);
-        let kv_engine = self.open_tablet_raw(&tablet_path, OpenOptions::default().create(true))?;
-        reg.insert((id, suffix), kv_engine.clone());
-
-        Ok(kv_engine)
-    }
-
-    fn open_tablet(&self, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let mut reg = self.registry.lock().unwrap();
-        if let Some(db) = reg.get(&(id, suffix)) {
-            return Ok(db.clone());
-        }
-
-        let db_path = self.tablet_path(id, suffix);
-        let db = self.open_tablet_raw(db_path.as_path(), OpenOptions::default())?;
-        debug!("open tablet"; "key" => ?(id, suffix));
-        reg.insert((id, suffix), db.clone());
-        Ok(db)
-    }
-
-    fn open_tablet_raw(&self, path: &Path, option: OpenOptions) -> Result<RocksEngine> {
-        if !option.create && !RocksEngine::exists(path.to_str().unwrap_or_default()) {
-            return Err(box_err!(
-                "path {} does not have db",
-                path.to_str().unwrap_or_default()
-            ));
-        }
-
-        let (id, suffix) = get_id_and_suffix_from_path(path);
-        let kv_engine = self.inner.create_tablet(path, id, suffix)?;
-        debug!("inserting tablet"; "key" => ?(id, suffix));
-        self.inner.on_tablet_created(id, suffix);
-
-        Ok(kv_engine)
-    }
-
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<RocksEngine> {
-        self.registry.lock().unwrap().get(&(id, suffix)).cloned()
-    }
-
-    fn open_tablet_cache_any(&self, id: u64) -> Option<RocksEngine> {
-        let reg = self.registry.lock().unwrap();
-        if let Some(k) = reg.keys().find(|k| k.0 == id) {
-            debug!("choose a random tablet"; "key" => ?k);
-            return Some(reg.get(k).unwrap().clone());
-        }
-        None
+        Err(box_err!(
+            "tablet with region id {} suffix {:?} does not exist",
+            id,
+            suffix
+        ))
     }
 
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
-        self.create_tablet(0, 0)
+        self.open_tablet(0, Some(0), OpenOptions::default().set_create_new(true))
     }
 
     #[inline]
@@ -140,22 +149,24 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
     #[inline]
     fn load_tablet(&self, path: &Path, id: u64, suffix: u64) -> Result<RocksEngine> {
-        let mut reg = self.registry.lock().unwrap();
-        if let Some(db) = reg.get(&(id, suffix)) {
-            return Err(box_err!(
-                "region {} {} already exists",
-                id,
-                db.as_inner().path()
-            ));
+        {
+            let reg = self.registry.lock().unwrap();
+            if let Some(db) = reg.get(&(id, suffix)) {
+                return Err(box_err!(
+                    "region {} {} already exists",
+                    id,
+                    db.as_inner().path()
+                ));
+            }
         }
 
         let db_path = self.tablet_path(id, suffix);
         std::fs::rename(path, &db_path)?;
-        let new_engine = self.open_tablet_raw(db_path.as_path(), OpenOptions::default());
+        let new_engine =
+            self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
         if new_engine.is_ok() {
             let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
-            reg.remove(&(old_id, old_suffix));
-            reg.insert((id, suffix), new_engine.as_ref().unwrap().clone());
+            self.registry.lock().unwrap().remove(&(old_id, old_suffix));
         }
         new_engine
     }
@@ -222,19 +233,26 @@ mod tests {
         }
         let factory = builder.build();
         let shared_db = factory.create_shared_db().unwrap();
-        let tablet = TabletFactory::create_tablet(&factory, 1, 10).unwrap();
-        let tablet2 = factory.open_tablet(1, 10).unwrap();
-        assert_eq!(tablet.as_inner().path(), shared_db.as_inner().path());
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache_any(1).unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet_path = factory.tablet_path(1, 10);
-        let tablet2 = factory
-            .open_tablet_raw(&tablet_path, OpenOptions::default())
+
+        // V1 can only create tablet once
+        assert!(
+            factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+                .is_err()
+        );
+
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
             .unwrap();
-        assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
+        assert_eq!(tablet.as_inner().path(), shared_db.as_inner().path());
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap();
+        assert_eq!(tablet.as_inner().path(), shared_db.as_inner().path());
+        let tablet = factory
+            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
+            .unwrap();
+        assert_eq!(tablet.as_inner().path(), shared_db.as_inner().path());
         let mut count = 0;
         factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
             assert!(id == 0);
@@ -265,16 +283,24 @@ mod tests {
         }
 
         let factory = builder.build_v2();
-        let tablet = factory.create_tablet(1, 10).unwrap();
-        let tablet2 = factory.open_tablet(1, 10).unwrap();
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let tablet2 = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
+            .unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache(1, 10).unwrap();
+        let tablet2 = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
-        let tablet2 = factory.open_tablet_cache_any(1).unwrap();
+        let tablet2 = factory
+            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
+            .unwrap();
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
 
         let tablet_path = factory.tablet_path(1, 10);
-        let result = factory.open_tablet_raw(&tablet_path, OpenOptions::default());
+        let result = factory.open_tablet(1, Some(10), OpenOptions::default().set_create_new(true));
         assert!(result.is_err());
         factory
             .set_shared_block_cache_capacity(1024 * 1024)
@@ -292,13 +318,21 @@ mod tests {
         factory.load_tablet(&tablet_path, 1, 20).unwrap();
         // After we load it as with the new id or suffix, we should be unable to get it
         // with the old id and suffix in the cache.
-        assert!(factory.open_tablet_cache(1, 10).is_none());
-        assert!(factory.open_tablet_cache(1, 20).is_some());
+        assert!(
+            factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+                .is_err()
+        );
+        assert!(
+            factory
+                .open_tablet(1, Some(20), OpenOptions::default().set_cache_only(true))
+                .is_ok()
+        );
 
         factory.mark_tombstone(1, 20);
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
-        let result = factory.open_tablet(1, 20);
+        let result = factory.open_tablet(1, Some(20), OpenOptions::default());
         assert!(result.is_err());
         assert!(!factory.is_single_engine());
     }
@@ -317,11 +351,15 @@ mod tests {
         }
 
         let factory = builder.build_v2();
-        let tablet = factory.create_tablet(1, 10).unwrap();
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
         drop(tablet);
         let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
         drop(tablet);
-        let _ = factory.open_tablet(1, 10).unwrap();
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default())
+            .unwrap();
 
         assert!(factory.exists(1, 10));
     }
@@ -334,8 +372,12 @@ mod tests {
 
         let builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
         let factory = builder.build_v2();
-        factory.create_tablet(1, 10).unwrap();
-        factory.create_tablet(2, 10).unwrap();
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        factory
+            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
         let mut count = 0;
         factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
             assert!(id == 1 || id == 2);

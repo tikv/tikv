@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raft::{RawNode, INVALID_ID};
 use raftstore::store::{util::find_peer, Config};
@@ -71,7 +71,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 ));
             }
             // TODO: Perhaps we should stop create the tablet automatically.
-            Some(tablet_factory.open_tablet(region_id, tablet_index)?)
+            Some(tablet_factory.open_tablet(
+                region_id,
+                Some(tablet_index),
+                OpenOptions::default().set_create(true),
+            )?)
         } else {
             None
         };

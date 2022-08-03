@@ -8,7 +8,7 @@ use std::{
     vec::Vec,
 };
 
-use tikv_util::error;
+use tikv_util::{box_err, error};
 
 use crate::*;
 
@@ -155,22 +155,61 @@ impl Drop for TabletErrorCollector {
 
 #[derive(Default)]
 pub struct OpenOptions {
-    pub read_only: bool,
     // create tablet if non-exist
-    pub create: bool,
+    create: bool,
+    create_new: bool,
+    read_only: bool,
+    cache_only: bool,
 }
 
 impl OpenOptions {
     /// Sets the option to create a new file, or open it if it already exists.
-    pub fn create(mut self, create: bool) -> Self {
+    pub fn set_create(mut self, create: bool) -> Self {
         self.create = create;
         self
     }
 
-    /// Sets the option for read access.
-    pub fn read_only(mut self, read_only: bool) -> Self {
+    /// Sets the option to create a new file, failing if it already exists.
+    pub fn set_create_new(mut self, create_new: bool) -> Self {
+        self.create_new = create_new;
+        self
+    }
+
+    /// Sets the option for read only
+    pub fn set_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
+    }
+
+    /// Sets the option for only reading from cache.
+    pub fn set_cache_only(mut self, cache_only: bool) -> Self {
+        self.cache_only = cache_only;
+        self
+    }
+
+    pub fn create(&self) -> bool {
+        self.create
+    }
+
+    pub fn create_new(&self) -> bool {
+        self.create_new
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn cache_only(&self) -> bool {
+        self.cache_only
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.cache_only && (self.create || self.create_new) {
+            return Err(box_err!(
+                "cache_only and create/create_new cannot be set simultaneously"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -178,28 +217,15 @@ impl OpenOptions {
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: TabletAccessor<EK> {
-    /// Create an tablet by id and suffix. If the tablet exists, it will fail.
+    /// Open the tablet with id and suffix according to the OpenOptions. The
+    /// implementation for v1 and v2 are fairly different. See the comments
+    /// above their implementation.
+    ///
     /// The id is likely the region Id, the suffix could be the current raft log
     /// index. They together could specify a unique path for a region's
     /// tablet. The reason to have suffix is that we can keep more than one
     /// tablet for a region.
-    fn create_tablet(&self, id: u64, suffix: u64) -> Result<EK>;
-
-    /// Open a tablet by id and suffix. If the tablet exists, it will open it.
-    /// If the tablet does not exist, it will create it.
-    fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, suffix), OpenOptions::default())
-    }
-
-    /// Open a tablet by id and suffix from cache---that means it should already
-    /// be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK>;
-
-    /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
-
-    /// Open tablet by path and readonly flag
-    fn open_tablet_raw(&self, path: &Path, option: OpenOptions) -> Result<EK>;
+    fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -253,23 +279,11 @@ impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
     EK: CfOptionsExt + Clone + Send + 'static,
 {
-    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_raw(&self, _path: &Path, _option: OpenOptions) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<EK> {
-        Some(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
-        Some(self.engine.as_ref().unwrap().clone())
-    }
-
     fn create_shared_db(&self) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet(&self, _id: u64, _suffix: Option<u64>, _options: OpenOptions) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
