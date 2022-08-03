@@ -36,6 +36,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
     need_old_value: bool,
+    lock_if_exists: bool,
 ) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
@@ -140,8 +141,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     }
 
     // Following seek_write read the previous write.
+    let mut key_exists = false;
     let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+        key_exists = true;
         // Find a previous write.
         if need_old_value {
             prev_write = Some(write.clone());
@@ -243,7 +246,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         for_update_ts,
         min_commit_ts,
     };
-    txn.put_pessimistic_lock(key, lock);
+    if !lock_if_exists || key_exists {
+        txn.put_pessimistic_lock(key, lock);
+    } 
     // TODO don't we need to commit the modifies in txn?
 
     Ok((ret_val(need_value, need_check_existence, val), old_value))
@@ -301,6 +306,7 @@ pub mod tests {
             need_value,
             need_check_existence,
             min_commit_ts,
+            false,
             false,
         )
         .unwrap();
@@ -462,6 +468,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             false,
+            fasle,
         )
         .unwrap_err()
     }
@@ -929,6 +936,7 @@ pub mod tests {
                         *need_check_existence,
                         min_commit_ts,
                         need_old_value,
+                        false,
                     )
                     .unwrap();
                     assert_eq!(old_value, OldValue::None);
@@ -979,6 +987,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1012,6 +1021,7 @@ pub mod tests {
             false,
             min_commit_ts,
             true,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -1054,6 +1064,7 @@ pub mod tests {
                             *need_check_existence,
                             min_commit_ts,
                             need_old_value,
+                            false,
                         )?;
                         Ok(old_value)
                     });
@@ -1106,6 +1117,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap_err();
 
@@ -1139,6 +1151,7 @@ pub mod tests {
             check_existence,
             min_commit_ts,
             need_old_value,
+            false,
         )
         .unwrap_err();
     }
