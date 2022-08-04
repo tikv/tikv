@@ -396,14 +396,9 @@ where
         }
     }
 
-    fn flush_observer(&self) -> Box<dyn FlushObserver> {
+    fn flush_observer(&self) -> impl FlushObserver {
         let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
-        Box::new(CheckpointV3FlushObserver::new(
-            self.scheduler.clone(),
-            self.meta_client.clone(),
-            self.subs.clone(),
-            basic,
-        ))
+        CheckpointV3FlushObserver::new(self.scheduler.clone(), self.meta_client.clone(), basic)
     }
 
     /// Convert a batch of events to the cmd batch, and update the resolver

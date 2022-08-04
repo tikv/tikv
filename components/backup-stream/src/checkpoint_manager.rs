@@ -13,9 +13,7 @@ use txn_types::TimeStamp;
 use crate::{
     errors::{Error, Result},
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
-    metrics,
-    subscription_track::SubscriptionTracer,
-    try_send, RegionCheckpointOperation, Task,
+    metrics, try_send, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -227,26 +225,19 @@ pub struct CheckpointV3FlushObserver<S, O> {
     baseline: O,
     sched: Scheduler<Task>,
     meta_cli: MetadataClient<S>,
-    subs: SubscriptionTracer,
 
     checkpoints: Vec<(Region, TimeStamp)>,
     global_checkpoint_cache: HashMap<String, Checkpoint>,
 }
 
 impl<S, O> CheckpointV3FlushObserver<S, O> {
-    pub fn new(
-        sched: Scheduler<Task>,
-        meta_cli: MetadataClient<S>,
-        subs: SubscriptionTracer,
-        baseline: O,
-    ) -> Self {
+    pub fn new(sched: Scheduler<Task>, meta_cli: MetadataClient<S>, baseline: O) -> Self {
         Self {
             sched,
             meta_cli,
             checkpoints: vec![],
             // We almost always have only one entry.
             global_checkpoint_cache: HashMap::with_capacity(1),
-            subs,
             baseline,
         }
     }
@@ -282,7 +273,6 @@ where
     }
 
     async fn after(&mut self, task: &str, _rts: u64) -> Result<()> {
-        self.subs.update_status_for_v3();
         let t = Task::RegionCheckpointsOp(RegionCheckpointOperation::Update(std::mem::take(
             &mut self.checkpoints,
         )));
