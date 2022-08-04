@@ -106,17 +106,6 @@ where
     store_meta: Arc<Mutex<StoreMeta<E>>>,
 }
 
-impl<E> Deref for StoreMetaDelegate<E>
-where
-    E: KvEngine,
-{
-    type Target = Arc<Mutex<StoreMeta<E>>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.store_meta
-    }
-}
-
 impl<E> StoreMetaDelegate<E>
 where
     E: KvEngine,
@@ -130,13 +119,15 @@ impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    type Delegate = CachedReadDelegate<E>;
+    type Executor = CachedReadDelegate<E>;
 
     fn store_id(&self) -> Option<u64> {
         self.store_meta.as_ref().lock().unwrap().store_id
     }
 
-    fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>) {
+    /// get the ReadDelegate with region_id and the number of delegates in the
+    /// StoreMeta
+    fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>) {
         let meta = self.store_meta.as_ref().lock().unwrap();
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
@@ -163,13 +154,12 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
     };
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
         RaftCommand,
     };
-    use rocksdb::rocksdb::Writable;
     use tempfile::{Builder, TempDir};
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -213,7 +203,7 @@ mod tests {
         let tablet1;
         let tablet2;
         {
-            let mut meta = store_meta.as_ref().lock().unwrap();
+            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
 
             // Create read_delegate with region id 1
             let mut read_delegate = ReadDelegate::mock(1);
@@ -221,8 +211,7 @@ mod tests {
 
             // create tablet with region_id 1 and prepare some data
             tablet1 = factory.create_tablet(1, 10).unwrap();
-            let db = tablet1.get_sync_db();
-            db.put(b"a1", b"val1").unwrap();
+            tablet1.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
@@ -233,13 +222,12 @@ mod tests {
 
             // create tablet with region_id 1 and prepare some data
             tablet2 = factory.create_tablet(2, 10).unwrap();
-            let db = tablet2.get_sync_db();
-            db.put(b"a2", b"val2").unwrap();
+            tablet2.put_cf(CF_DEFAULT, b"a2", b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);
         }
 
-        let (_, delegate) = store_meta.get_delegate_and_len(1);
+        let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
@@ -252,7 +240,7 @@ mod tests {
                 .unwrap()
         );
 
-        let (_, delegate) = store_meta.get_delegate_and_len(2);
+        let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());

@@ -230,11 +230,13 @@ pub trait ReadExecutorProvider<E>: Send + Clone + 'static
 where
     E: KvEngine,
 {
-    type Delegate: ReadExecutor<E>;
+    type Executor: ReadExecutor<E>;
 
     fn store_id(&self) -> Option<u64>;
 
-    fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>);
+    /// get the ReadDelegate with region_id and the number of delegates in the
+    /// StoreMeta
+    fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
 }
 
 #[derive(Clone)]
@@ -258,29 +260,20 @@ where
     }
 }
 
-impl<E> Deref for StoreMetaDelegate<E>
-where
-    E: KvEngine,
-{
-    type Target = Arc<Mutex<StoreMeta>>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.store_meta
-    }
-}
-
 impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
 where
     E: KvEngine,
 {
-    type Delegate = CachedReadDelegate<E>;
+    type Executor = CachedReadDelegate<E>;
 
     fn store_id(&self) -> Option<u64> {
-        self.as_ref().lock().unwrap().store_id
+        self.store_meta.as_ref().lock().unwrap().store_id
     }
 
-    fn get_delegate_and_len(&self, region_id: u64) -> (usize, Option<Self::Delegate>) {
-        let meta = self.as_ref().lock().unwrap();
+    /// get the ReadDelegate with region_id and the number of delegates in the
+    /// StoreMeta
+    fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>) {
+        let meta = self.store_meta.as_ref().lock().unwrap();
         let reader = meta.readers.get(&region_id).cloned();
         if let Some(reader) = reader {
             return (
@@ -551,7 +544,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Delegate = D>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
@@ -602,7 +595,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Delegate = D>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
@@ -664,7 +657,7 @@ where
                 debug!("update local read delegate"; "region_id" => region_id);
                 self.metrics.rejected_by_cache_miss += 1;
 
-                let (meta_len, meta_reader) = { self.store_meta.get_delegate_and_len(region_id) };
+                let (meta_len, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
 
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
@@ -883,7 +876,7 @@ where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Delegate = D>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
     fn clone(&self) -> Self {
         LocalReader {
@@ -1078,7 +1071,6 @@ mod tests {
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
     use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::raft_cmdpb::*;
-    // use rocksdb::Writable;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -1569,7 +1561,7 @@ mod tests {
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
         {
-            let mut meta = store_meta.as_ref().lock().unwrap();
+            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
 
             // Create read_delegate with region id 1
             let read_delegate = ReadDelegate::mock(1);
@@ -1592,7 +1584,7 @@ mod tests {
             snap_cache: &mut snap_cache,
         });
 
-        let (_, delegate) = store_meta.get_delegate_and_len(1);
+        let (_, delegate) = store_meta.get_executor_and_len(1);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
@@ -1600,7 +1592,7 @@ mod tests {
         let val = snapshot.get_value(b"a1").unwrap().unwrap();
         assert_eq!(b"val1", val.deref());
 
-        let (_, delegate) = store_meta.get_delegate_and_len(2);
+        let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
