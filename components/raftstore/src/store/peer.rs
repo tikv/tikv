@@ -807,8 +807,9 @@ where
                             .get(0)
                             .map(|req| req.has_read_index())
                             .unwrap_or_default();
-                        // A read index request or a read with addition request always needs the response of
-                        // checking memory lock for async commit, so we cannot apply the optimization here
+                        // A read index request or a read with addition request always needs the
+                        // response of checking memory lock for async
+                        // commit, so we cannot apply the optimization here
                         if !is_read_index_request
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
@@ -877,9 +878,9 @@ where
         send_msg
     }
 
-    // When a replica cannot detect any leader, `MsgReadIndex` will be dropped, which would
-    // cause a long time waiting for a read response. Then we should return an error directly
-    // in this situation.
+    // When a replica cannot detect any leader, `MsgReadIndex` will be dropped,
+    // which would cause a long time waiting for a read response. Then we should
+    // return an error directly in this situation.
     // return true if callback should be called
     fn read_index_no_leader<T: Transport>(
         &mut self,
