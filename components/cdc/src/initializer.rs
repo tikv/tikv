@@ -16,7 +16,7 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
 };
 use raftstore::{
-    coprocessor::ObserveID,
+    coprocessor::ObserveId,
     router::RaftStoreRouter,
     store::{
         fsm::ChangeObserver,
@@ -47,11 +47,11 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
-    delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState},
+    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState},
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
-    service::ConnID,
+    service::ConnId,
     Error, Result, Task,
 };
 
@@ -81,10 +81,10 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) region_id: u64,
     pub(crate) region_epoch: RegionEpoch,
-    pub(crate) observe_id: ObserveID,
-    pub(crate) downstream_id: DownstreamID,
+    pub(crate) observe_id: ObserveId,
+    pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
-    pub(crate) conn_id: ConnID,
+    pub(crate) conn_id: ConnId,
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
@@ -632,10 +632,10 @@ mod tests {
 
             region_id: 1,
             region_epoch: RegionEpoch::default(),
-            observe_id: ObserveID::new(),
-            downstream_id: DownstreamID::new(),
+            observe_id: ObserveId::new(),
+            downstream_id: DownstreamId::new(),
             downstream_state,
-            conn_id: ConnID::new(),
+            conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
             speed_limiter: Limiter::new(speed_limit as _),

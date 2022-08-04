@@ -188,7 +188,7 @@ pub enum KeyMode {
     /// TiDB, but instead, it means that the key matches the definition of
     /// TiDB key in API V2, therefore, the key is treated as TiDB data in
     /// order to fulfill compatibility.
-    TiDB,
+    Tidb,
     /// Unrecognised key mode.
     Unknown,
 }
@@ -271,8 +271,8 @@ mod tests {
         );
         assert_eq!(ApiV2::parse_key_mode(&[RAW_KEY_PREFIX]), KeyMode::Raw);
         assert_eq!(ApiV2::parse_key_mode(&[TXN_KEY_PREFIX]), KeyMode::Txn);
-        assert_eq!(ApiV2::parse_key_mode(&b"t_a"[..]), KeyMode::TiDB);
-        assert_eq!(ApiV2::parse_key_mode(&b"m"[..]), KeyMode::TiDB);
+        assert_eq!(ApiV2::parse_key_mode(&b"t_a"[..]), KeyMode::Tidb);
+        assert_eq!(ApiV2::parse_key_mode(&b"m"[..]), KeyMode::Tidb);
         assert_eq!(ApiV2::parse_key_mode(&b"ot"[..]), KeyMode::Unknown);
     }
 
@@ -289,19 +289,19 @@ mod tests {
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"t_a"), Some(b"t_z"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"t"), Some(b"u"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"m"), Some(b"n"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"m_a"), Some(b"m_z"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"x\0a"), Some(b"x\0z"))),

@@ -1274,7 +1274,7 @@ mod tests {
             .push_column_ref_for_test(0)
             .push_column_ref_for_test(0)
             .push_fn_call_for_test(
-                compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                compare_fn_meta::<BasicComparer<Int, CmpOpLe>>(),
                 2,
                 FieldTypeTp::LongLong,
             )
@@ -1312,7 +1312,7 @@ mod tests {
             .push_column_ref_for_test(0)
             .push_column_ref_for_test(0)
             .push_fn_call_for_test(
-                compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                compare_fn_meta::<BasicComparer<Int, CmpOpLe>>(),
                 2,
                 FieldTypeTp::LongLong,
             )

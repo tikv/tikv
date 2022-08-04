@@ -215,7 +215,7 @@ fn run_dump_raft_engine_worker(
 
 #[cfg(test)]
 mod tests {
-    use tikv::config::TiKvConfig;
+    use tikv::config::TikvConfig;
 
     use super::*;
 
@@ -230,7 +230,7 @@ mod tests {
             raftdb_wal_path.push("test-wal");
         }
 
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();

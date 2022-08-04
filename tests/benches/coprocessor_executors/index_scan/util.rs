@@ -8,7 +8,7 @@ use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::{interface::*, BatchIndexScanExecutor};
 use tikv::{
-    coprocessor::{dag::TiKvStorage, RequestHandler},
+    coprocessor::{dag::TikvStorage, RequestHandler},
     storage::{RocksEngine, Statistics, Store as TxnStore},
 };
 use tipb::ColumnInfo;
@@ -33,7 +33,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         unique: bool,
     ) -> Self::E {
         let mut executor = BatchIndexScanExecutor::new(
-            black_box(TiKvStorage::new(
+            black_box(TikvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,
             )),
@@ -53,12 +53,12 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
     }
 }
 
-pub struct IndexScanExecutorDAGBuilder<T: TxnStore + 'static> {
+pub struct IndexScanExecutorDagBuilder<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
-    for IndexScanExecutorDAGBuilder<T>
+impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDagHandlerBuilder
+    for IndexScanExecutorDagBuilder<T>
 {
     type T = T;
     type P = IndexScanParam;
@@ -77,4 +77,4 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
 
 pub type BatchIndexScanNext1024Bencher<T> =
     scan_bencher::BatchScanNext1024Bencher<BatchIndexScanExecutorBuilder<T>>;
-pub type IndexScanDAGBencher<T> = scan_bencher::ScanDAGBencher<IndexScanExecutorDAGBuilder<T>>;
+pub type IndexScanDagBencher<T> = scan_bencher::ScanDagBencher<IndexScanExecutorDagBuilder<T>>;
