@@ -17,7 +17,7 @@ impl<EK: KvEngine> Apply<EK> {
     pub fn new<ER: RaftEngine>(peer: &Peer<EK, ER>) -> Self {
         Apply {
             tablet: peer.tablet().clone(),
-            logger: peer.logger().clone(),
+            logger: peer.logger.clone(),
         }
     }
 }

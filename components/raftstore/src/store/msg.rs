@@ -19,12 +19,12 @@ use kvproto::{
 };
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
-use raft::{GetEntriesContext, SnapshotStatus};
+use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
+use super::{local_metrics::TimeTracker, worker::FetchedLogs, AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -34,7 +34,7 @@ use crate::store::{
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
-    RaftlogFetchResult, SnapKey,
+    SnapKey,
 };
 
 #[derive(Debug)]
@@ -357,10 +357,7 @@ where
     LeaderCallback(Callback<SK>),
     RaftLogGcFlushed,
     // Reports the result of asynchronous Raft logs fetching.
-    RaftlogFetched {
-        context: GetEntriesContext,
-        res: Box<RaftlogFetchResult>,
-    },
+    RaftlogFetched(FetchedLogs),
     EnterForceLeaderState {
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,

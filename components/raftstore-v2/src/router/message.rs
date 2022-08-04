@@ -10,7 +10,8 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::store::{
-    fsm::ApplyTaskRes, metrics::RaftEventDurationType, InspectedRaftMessage, RegionSnapshot,
+    fsm::ApplyTaskRes, metrics::RaftEventDurationType, FetchedLogs, InspectedRaftMessage,
+    RegionSnapshot,
 };
 use tikv_util::{memory::HeapSize, time::Instant};
 
@@ -244,6 +245,7 @@ pub enum PeerMsg<EK: KvEngine> {
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,
     },
+    FetchedLogs(FetchedLogs),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
@@ -275,6 +277,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
+            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
         }
     }
 }

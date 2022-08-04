@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::RaftEngine;
 use fail::fail_point;
 use raft::GetEntriesContext;
 use tikv_util::worker::Runnable;
 
-use crate::store::{RaftlogFetchResult, SignificantMsg, SignificantRouter, MAX_INIT_ENTRY_COUNT};
+use crate::store::{RaftlogFetchResult, MAX_INIT_ENTRY_COUNT};
 
 pub enum Task {
     PeerStorage {
@@ -42,32 +42,39 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<EK, ER, R>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    R: SignificantRouter<EK>,
-{
-    router: R,
-    raft_engine: ER,
-    _phantom: std::marker::PhantomData<EK>,
+#[derive(Debug)]
+pub struct FetchedLogs {
+    pub context: GetEntriesContext,
+    pub logs: Box<RaftlogFetchResult>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine, R: SignificantRouter<EK>> Runner<EK, ER, R> {
-    pub fn new(router: R, raft_engine: ER) -> Runner<EK, ER, R> {
+/// A router for receiving fetched result.
+pub trait LogFetchedNotifier: Send {
+    fn notify(&self, region_id: u64, fetched: FetchedLogs);
+}
+
+pub struct Runner<ER, N>
+where
+    ER: RaftEngine,
+    N: LogFetchedNotifier,
+{
+    notifier: N,
+    raft_engine: ER,
+}
+
+impl<ER: RaftEngine, N: LogFetchedNotifier> Runner<ER, N> {
+    pub fn new(notifier: N, raft_engine: ER) -> Runner<ER, N> {
         Runner {
-            router,
+            notifier,
             raft_engine,
-            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<EK, ER, R> Runnable for Runner<EK, ER, R>
+impl<ER, N> Runnable for Runner<ER, N>
 where
-    EK: KvEngine,
     ER: RaftEngine,
-    R: SignificantRouter<EK>,
+    N: LogFetchedNotifier,
 {
     type Task = Task;
 
@@ -97,12 +104,11 @@ where
                     .map(|c| (*c as u64) != high - low)
                     .unwrap_or(false);
                 fail_point!("worker_async_fetch_raft_log");
-                // it may return a region not found error as the region could be merged.
-                let _ = self.router.significant_send(
+                self.notifier.notify(
                     region_id,
-                    SignificantMsg::RaftlogFetched {
+                    FetchedLogs {
                         context,
-                        res: Box::new(RaftlogFetchResult {
+                        logs: Box::new(RaftlogFetchResult {
                             ents: res.map(|_| ents).map_err(|e| e.into()),
                             low,
                             max_size: max_size as u64,

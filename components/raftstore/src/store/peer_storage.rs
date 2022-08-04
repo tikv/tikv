@@ -1160,7 +1160,9 @@ pub mod tests {
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
-            worker::{RaftlogFetchRunner, RegionRunner, RegionTask},
+            worker::{
+                FetchedLogs, LogFetchedNotifier, RaftlogFetchRunner, RegionRunner, RegionTask,
+            },
         },
     };
 
@@ -1383,35 +1385,20 @@ pub mod tests {
         }
     }
 
-    use crate::{
-        store::{SignificantMsg, SignificantRouter},
-        Result as RaftStoreResult,
-    };
-
-    pub struct TestRouter<EK: KvEngine> {
-        ch: SyncSender<SignificantMsg<EK::Snapshot>>,
+    pub struct TestRouter {
+        ch: SyncSender<FetchedLogs>,
     }
 
-    impl<EK: KvEngine> TestRouter<EK> {
-        pub fn new() -> (Self, Receiver<SignificantMsg<EK::Snapshot>>) {
+    impl TestRouter {
+        pub fn new() -> (Self, Receiver<FetchedLogs>) {
             let (tx, rx) = sync_channel(1);
             (Self { ch: tx }, rx)
         }
     }
 
-    impl<EK> SignificantRouter<EK> for TestRouter<EK>
-    where
-        EK: KvEngine,
-    {
-        /// Sends a significant message. We should guarantee that the message
-        /// can't be dropped.
-        fn significant_send(
-            &self,
-            _: u64,
-            msg: SignificantMsg<EK::Snapshot>,
-        ) -> RaftStoreResult<()> {
-            self.ch.send(msg).unwrap();
-            Ok(())
+    impl LogFetchedNotifier for TestRouter {
+        fn notify(&self, _region_id: u64, fetched_logs: FetchedLogs) {
+            self.ch.send(fetched_logs).unwrap();
         }
     }
 
@@ -1486,24 +1473,16 @@ pub mod tests {
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
-            raftlog_fetch_worker.start(RaftlogFetchRunner::<KvTestEngine, RaftTestEngine, _>::new(
-                router,
-                store.engines.raft.clone(),
-            ));
+            raftlog_fetch_worker.start(RaftlogFetchRunner::new(router, store.engines.raft.clone()));
             store.compact_entry_cache(5);
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
             )) {
                 let res = rx.recv().unwrap();
-                match res {
-                    SignificantMsg::RaftlogFetched { res, context } => {
-                        store.update_async_fetch_res(lo, Some(res));
-                        count += 1;
-                        e = store.entries(lo, hi, maxsize, context);
-                    }
-                    _ => unreachable!(),
-                };
+                store.update_async_fetch_res(lo, Some(res.logs));
+                count += 1;
+                e = store.entries(lo, hi, maxsize, res.context);
             }
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
