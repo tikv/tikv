@@ -33,17 +33,17 @@ thread_local! {
 }
 
 #[derive(Debug)]
-struct ThreadID {
+struct ThreadId {
     pid: Pid,
     tid: Pid,
     proc_reader: Option<BufReader<File>>,
 }
 
-impl ThreadID {
-    fn current() -> ThreadID {
+impl ThreadId {
+    fn current() -> ThreadId {
         let pid = thread::process_id();
         let tid = thread::thread_id();
-        ThreadID {
+        ThreadId {
             pid,
             tid,
             proc_reader: None,
@@ -102,7 +102,7 @@ impl ThreadID {
 }
 
 struct LocalIoStats {
-    id: ThreadID,
+    id: ThreadId,
     io_type: IoType,
     last_flushed: IoBytes,
 }
@@ -110,7 +110,7 @@ struct LocalIoStats {
 impl LocalIoStats {
     fn current() -> Self {
         LocalIoStats {
-            id: ThreadID::current(),
+            id: ThreadId::current(),
             io_type: IoType::Other,
             last_flushed: IoBytes::default(),
         }
@@ -197,7 +197,7 @@ mod tests {
     fn test_read_bytes() {
         let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
         let file_path = tmp.path().join("test_read_bytes.txt");
-        let mut id = ThreadID::current();
+        let mut id = ThreadId::current();
         let _type = WithIoType::new(IoType::Compaction);
         {
             let mut f = OpenOptions::new()
@@ -229,7 +229,7 @@ mod tests {
     fn test_write_bytes() {
         let tmp = tempdir_in("/var/tmp").unwrap_or_else(|_| tempdir().unwrap());
         let file_path = tmp.path().join("test_write_bytes.txt");
-        let mut id = ThreadID::current();
+        let mut id = ThreadId::current();
         let _type = WithIoType::new(IoType::Compaction);
         let mut f = OpenOptions::new()
             .write(true)
@@ -250,7 +250,7 @@ mod tests {
 
     #[bench]
     fn bench_fetch_thread_io_bytes(b: &mut test::Bencher) {
-        let mut id = ThreadID::current();
+        let mut id = ThreadId::current();
         b.iter(|| id.fetch_io_bytes().unwrap());
     }
 }

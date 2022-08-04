@@ -19,7 +19,7 @@ where
 {
     let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
-    // TODO: Change to use `DAGSelect` helper when it no longer place unnecessary
+    // TODO: Change to use `DagSelect` helper when it no longer place unnecessary
     // columns.
     let executors = &[
         table_scan(&[table["id"].as_column_info()]),
@@ -706,15 +706,15 @@ where
         rows_options.push(1);
     }
     let mut bencher_options: Vec<Box<dyn util::IntegratedBencher<M>>> = vec![
-        Box::new(util::DAGBencher::<RocksStore>::new(false)),
-        Box::new(util::DAGBencher::<RocksStore>::new(true)),
+        Box::new(util::DagBencher::<RocksStore>::new(false)),
+        Box::new(util::DagBencher::<RocksStore>::new(true)),
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_inputs: Vec<Box<dyn util::IntegratedBencher<M>>> = vec![
             Box::new(util::BatchBencher::<MemStore>::new()),
             Box::new(util::BatchBencher::<RocksStore>::new()),
-            Box::new(util::DAGBencher::<MemStore>::new(false)),
-            Box::new(util::DAGBencher::<MemStore>::new(true)),
+            Box::new(util::DagBencher::<MemStore>::new(false)),
+            Box::new(util::DagBencher::<MemStore>::new(true)),
         ];
         bencher_options.append(&mut additional_inputs);
     }
