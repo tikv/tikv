@@ -168,7 +168,6 @@ where
 }
 
 /// A router that routes messages to the raftstore
-#[allow(clippy::type_complexity)]
 pub struct ServerRaftStoreRouter<EK, ER>
 where
     EK: KvEngine,
