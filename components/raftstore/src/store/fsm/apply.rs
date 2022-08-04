@@ -5005,13 +5005,13 @@ mod tests {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_exec_query<'a>(
+        fn post_exec_query(
             &self,
             _: &mut ObserverContext<'_>,
             _: &Cmd,
             _: &RaftApplyState,
             _: &RegionState,
-            apply_info: &mut ApplyCtxInfo<'a>,
+            apply_info: &mut ApplyCtxInfo<'_>,
         ) -> bool {
             match apply_info.pending_handle_ssts {
                 Some(v) => {
@@ -5042,7 +5042,7 @@ mod tests {
     }
 
     impl AdminObserver for ApplyObserver {
-        fn post_exec_admin<'a>(
+        fn post_exec_admin(
             &self,
             _: &mut ObserverContext<'_>,
             cmd: &Cmd,
