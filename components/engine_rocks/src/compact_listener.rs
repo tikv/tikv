@@ -197,7 +197,7 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 
     fn cf(&self) -> &str {
-        &*self.cf
+        &self.cf
     }
 }
 

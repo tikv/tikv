@@ -7,3 +7,5 @@ disallowed-methods = [
     { path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start", reason = "Wrapper function `<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::after_start_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
     { path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop", reason = "Wrapper function `<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::before_stop_wrapper` should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details." },
 ]
+avoid-breaking-exported-api = false
+upper-case-acronyms-aggressive = true

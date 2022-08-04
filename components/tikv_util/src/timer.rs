@@ -221,7 +221,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+    #[derive(Debug, PartialEq, Copy, Clone)]
     enum Task {
         A,
         B,

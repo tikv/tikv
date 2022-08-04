@@ -277,7 +277,7 @@ mod tests {
         }
 
         let lit = BinaryLiteral::from_u64(100, -2);
-        assert!(lit.is_err());
+        lit.unwrap_err();
     }
 
     #[test]
@@ -463,12 +463,10 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (s, expected, err) in cs {
             if err {
-                assert!(
-                    BinaryLiteral::from_hex_str(s)
-                        .unwrap()
-                        .to_uint(&mut ctx)
-                        .is_err()
-                );
+                BinaryLiteral::from_hex_str(s)
+                    .unwrap()
+                    .to_uint(&mut ctx)
+                    .unwrap_err();
             } else {
                 let lit = BinaryLiteral::from_hex_str(s).unwrap();
                 assert_eq!(lit.to_uint(&mut ctx).unwrap(), expected)

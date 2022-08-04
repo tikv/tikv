@@ -425,7 +425,7 @@ impl Lock {
 
 /// A specialized lock only for pessimistic lock. This saves memory for cases
 /// that only pessimistic locks exist.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct PessimisticLock {
     /// The primary key in raw format.
     pub primary: Box<[u8]>,
@@ -695,7 +695,7 @@ mod tests {
         }
 
         // Test `Lock::parse()` handles incorrect input.
-        assert!(Lock::parse(b"").is_err());
+        Lock::parse(b"").unwrap_err();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -708,7 +708,7 @@ mod tests {
             TimeStamp::zero(),
         );
         let mut v = lock.to_bytes();
-        assert!(Lock::parse(&v[..4]).is_err());
+        Lock::parse(&v[..4]).unwrap_err();
         // Test `Lock::parse()` ignores unknown bytes.
         v.extend(b"unknown");
         let l = Lock::parse(&v).unwrap();

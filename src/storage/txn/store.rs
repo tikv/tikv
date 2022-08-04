@@ -1084,7 +1084,9 @@ mod tests {
             store.get(&Key::from_raw(b"ca"), &mut statistics).unwrap(),
             Some(b"hello".to_vec())
         );
-        assert!(store.get(&Key::from_raw(b"bba"), &mut statistics).is_err());
+        store
+            .get(&Key::from_raw(b"bba"), &mut statistics)
+            .unwrap_err();
         assert_eq!(
             store.get(&Key::from_raw(b"bbaa"), &mut statistics).unwrap(),
             None
@@ -1115,7 +1117,9 @@ mod tests {
             store.get(&Key::from_raw(b"ab"), &mut statistics).unwrap(),
             Some(b"bar".to_vec())
         );
-        assert!(store.get(&Key::from_raw(b"zz"), &mut statistics).is_err());
+        store
+            .get(&Key::from_raw(b"zz"), &mut statistics)
+            .unwrap_err();
         assert_eq!(
             store.get(&Key::from_raw(b"z"), &mut statistics).unwrap(),
             Some(b"beta".to_vec())
@@ -1147,7 +1151,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), b"alphaalpha".to_vec()))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), b"hello".to_vec()))
@@ -1156,13 +1160,13 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"z"), b"beta".to_vec()))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store.scanner(true, false, false, None, None).unwrap();
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(
@@ -1173,7 +1177,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), b"hello".to_vec()))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), b"alphaalpha".to_vec()))
@@ -1214,13 +1218,13 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"ca"), vec![]))
         );
         assert_eq!(scanner.next().unwrap(), Some((Key::from_raw(b"z"), vec![])));
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         // note: mvcc impl does not guarantee to work any more after meeting a non lock
         // error
         assert_eq!(scanner.next().unwrap(), None);
@@ -1278,7 +1282,7 @@ mod tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         assert_eq!(scanner.next().unwrap(), None);
 
         let mut scanner = store
@@ -1316,7 +1320,7 @@ mod tests {
                 Some(Key::from_raw(b"bba")),
             )
             .unwrap();
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
         assert_eq!(
             scanner.next().unwrap(),
             Some((Key::from_raw(b"bb"), vec![]))

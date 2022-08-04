@@ -177,7 +177,7 @@ impl BytesWriter {
     }
 }
 
-impl<'a> PartialBytesWriter {
+impl PartialBytesWriter {
     pub fn partial_write(&mut self, data: BytesRef<'_>) {
         self.chunked_vec.data.extend_from_slice(data);
     }

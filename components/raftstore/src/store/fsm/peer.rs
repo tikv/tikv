@@ -1078,6 +1078,7 @@ where
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
+            PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
         }
     }
 
@@ -3743,7 +3744,7 @@ where
                 }
             };
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            new_peer.peer.init_replication_mode(&mut *replication_state);
+            new_peer.peer.init_replication_mode(&mut replication_state);
             drop(replication_state);
 
             let meta_peer = new_peer.peer.peer.clone();
@@ -5091,6 +5092,19 @@ where
         {
             self.register_entry_cache_evict_tick();
         }
+    }
+
+    fn register_check_long_uncommitted_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckLongUncommitted)
+    }
+
+    fn on_check_long_uncommitted_tick(&mut self) {
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+        self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
+        self.register_check_long_uncommitted_tick();
     }
 
     fn register_check_leader_lease_tick(&mut self) {
