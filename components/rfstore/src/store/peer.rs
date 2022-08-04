@@ -579,7 +579,7 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
         );
         raft_wb.clear_region(self.region_id);
-        self.mut_store().clear_meta(raft_wb);
+        self.mut_store().clear_meta(raft_wb, true);
         let mut tomb_stone = RegionLocalState::new();
         tomb_stone.set_state(PeerState::Tombstone);
         tomb_stone.set_region(region.clone());

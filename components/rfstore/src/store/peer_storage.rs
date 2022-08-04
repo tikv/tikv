@@ -242,7 +242,7 @@ impl PeerStorage {
         PeerTag::new(self.store_id, RegionIDVer::from_region(&self.region))
     }
 
-    pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch) {
+    pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch, truncate_logs: bool) {
         let region_id = self.region.get_id();
         self.engines
             .raft
@@ -251,11 +251,13 @@ impl PeerStorage {
                 Ok(())
             })
             .unwrap();
-        rwb.truncate_raft_log(
-            region_id,
-            rfengine::TRUNCATE_ALL_INDEX,
-            self.raft_state.term,
-        );
+        if truncate_logs {
+            rwb.truncate_raft_log(
+                region_id,
+                rfengine::TRUNCATE_ALL_INDEX,
+                self.raft_state.term,
+            );
+        }
     }
 
     pub(crate) fn get_region_id(&self) -> u64 {
@@ -469,7 +471,7 @@ impl PeerStorage {
         }
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            self.clear_meta(&mut ctx.raft_wb);
+            self.clear_meta(&mut ctx.raft_wb, false);
         }
         write_peer_state(&mut ctx.raft_wb, &region);
         let last_index = snap.get_metadata().get_index();
