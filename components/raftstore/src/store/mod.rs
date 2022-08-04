@@ -68,10 +68,10 @@ pub use self::{
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
-        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
-        LocalReader, PdTask, QueryStats, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadStats,
-        RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats, FetchedLogs, LogFetchedNotifier,
+        CheckLeaderTask, FetchedLogs, FlowStatistics, FlowStatsReporter, KeyEntry,
+        LocalReadContext, LocalReader, LogFetchedNotifier, PdTask, QueryStats, RaftlogFetchRunner,
+        RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadMetrics,
+        ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
+        SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
     },
 };

@@ -220,7 +220,7 @@ pub mod kv {
 
     impl TestTabletFactoryV2 {
         pub fn new(
-            root_path: &str,
+            root_path: &Path,
             db_opt: DbOptions,
             cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         ) -> Self {
@@ -311,7 +311,9 @@ pub mod kv {
 
         #[inline]
         fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            self.inner.root_path.join(format!("tablets/{}_{}", id, suffix))
+            self.inner
+                .root_path
+                .join(format!("tablets/{}_{}", id, suffix))
         }
 
         #[inline]
