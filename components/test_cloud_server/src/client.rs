@@ -125,7 +125,13 @@ impl ClusterClient {
             prewrite_req.start_version = ts.into_inner();
             prewrite_req.lock_ttl = 3000;
             prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
-            let resp = kv_client.kv_prewrite(&prewrite_req).unwrap();
+            let result = kv_client.kv_prewrite(&prewrite_req);
+            if result.is_err() {
+                sleep(Duration::from_millis(100));
+                self.update_cache_by_id(region_id, None);
+                continue;
+            }
+            let resp = result.unwrap();
             if resp.has_region_error() {
                 let region_err = resp.get_region_error();
                 if self.handle_retryable_error(region_id, region_err) {
@@ -163,7 +169,13 @@ impl ClusterClient {
             commit_req.start_version = start_ts.into_inner();
             commit_req.set_keys(keys.clone().into());
             commit_req.commit_version = commit_ts.into_inner();
-            let commit_resp = kv_client.kv_commit(&commit_req).unwrap();
+            let result = kv_client.kv_commit(&commit_req);
+            if result.is_err() {
+                sleep(Duration::from_millis(100));
+                self.update_cache_by_id(region_id, None);
+                continue;
+            }
+            let commit_resp = result.unwrap();
             if commit_resp.has_region_error() {
                 let region_err = commit_resp.get_region_error();
                 if self.handle_retryable_error(region_id, region_err) {

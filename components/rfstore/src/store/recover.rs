@@ -114,7 +114,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
         let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;
         let low_idx = applied_index + 1;
         let high_idx = commit_idx + 1;
-        let mut entries = Vec::with_capacity((high_idx - low_idx) as usize);
+        let mut entries = Vec::with_capacity((high_idx.saturating_sub(low_idx)) as usize);
         self.rf_engine
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)
             .map_err(|_| kvengine::Error::ErrOpen("entries unavailable.".to_string()))?;

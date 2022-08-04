@@ -13,6 +13,7 @@ use futures::executor::block_on;
 use pd_client::PdClient;
 use rand::{Rng, RngCore};
 use test_cloud_server::{try_wait, ServerCluster};
+use tikv::config::TiKvConfig;
 use tikv_util::{config::ReadableSize, info, time::Instant};
 
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
@@ -33,9 +34,10 @@ fn test_random_workload() {
         alloc_node_id(),
         alloc_node_id(),
     ];
-    let mut cluster = ServerCluster::new(nodes.clone(), |_, conf| {
+    let update_conf_fn = |_, conf: &mut TiKvConfig| {
         conf.coprocessor.region_split_size = ReadableSize::kb(128);
-    });
+    };
+    let mut cluster = ServerCluster::new(nodes.clone(), update_conf_fn);
     cluster.wait_region_replicated(&[], 3);
     let concurrency = 4usize;
     let timeout = Duration::from_secs(60);
@@ -65,6 +67,17 @@ fn test_random_workload() {
         pd_client.set_gc_safe_point(ts.into_inner());
         scheduler.move_random_region();
         move_count += 1;
+        if move_count % 4 == 0 {
+            let mut rng = rand::thread_rng();
+            let node_idx = rng.gen_range(0..nodes.len());
+            let node_id = nodes[node_idx];
+            info!("stop node {}", node_id);
+            cluster.stop_node(node_id);
+            let sleep_sec = rng.gen_range(1..5);
+            sleep(Duration::from_secs(sleep_sec));
+            info!("start node {}", node_id);
+            cluster.start_node(node_id, update_conf_fn);
+        }
     }
     for handle in handles {
         handle.join().unwrap();
