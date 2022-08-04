@@ -87,14 +87,14 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());

@@ -116,7 +116,7 @@ pub mod kv {
         root_path: PathBuf,
         db_opt: DbOptions,
         cf_opts: Vec<(&'static str, KvTestCfOptions)>,
-        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+        root_db: Arc<Mutex<Option<KvTestEngine>>>,
     }
 
     impl TestTabletFactory {
@@ -129,7 +129,104 @@ pub mod kv {
                 root_path: root_path.to_path_buf(),
                 db_opt,
                 cf_opts,
-                registry: Arc::new(Mutex::new(HashMap::default())),
+                root_db: Arc::new(Mutex::default()),
+            }
+        }
+
+        fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
+            let kv_engine = KvTestEngine::new_kv_engine_opt(
+                tablet_path.to_str().unwrap(),
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
+            )?;
+            Ok(kv_engine)
+        }
+    }
+
+    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+        fn create_shared_db(&self) -> Result<KvTestEngine> {
+            let tablet_path = self.tablet_path(0, 0);
+            let tablet = self.create_tablet(&tablet_path)?;
+            let mut root_db = self.root_db.lock().unwrap();
+            root_db.replace(tablet.clone());
+            Ok(tablet)
+        }
+
+        fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
+            let db = self.root_db.lock().unwrap();
+            if let Some(cp) = db.as_ref() {
+                return Ok(cp.clone());
+            }
+
+            self.create_shared_db()
+        }
+
+        fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<KvTestEngine> {
+            self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
+        }
+
+        fn open_tablet_cache_any(&self, _id: u64) -> Option<KvTestEngine> {
+            self.open_tablet_cache(0, 0)
+        }
+
+        fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<KvTestEngine> {
+            TabletFactory::create_tablet(self, 0, 0)
+        }
+
+        fn exists_raw(&self, _path: &Path) -> bool {
+            false
+        }
+
+        #[inline]
+        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+            Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
+        }
+
+        #[inline]
+        fn tablets_path(&self) -> PathBuf {
+            Path::new(&self.root_path).join("tablets")
+        }
+
+        #[inline]
+        fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+            Ok(())
+        }
+
+        fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+            let db = self.root_db.lock().unwrap();
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+            Ok(())
+        }
+    }
+
+    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
+        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+            let db = self.root_db.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            f(0, 0, db);
+        }
+
+        fn is_single_engine(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct TestTabletFactoryV2 {
+        inner: TestTabletFactory,
+        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+    }
+
+    impl TestTabletFactoryV2 {
+        pub fn new(
+            root_path: &str,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+        ) -> Self {
+            Self {
+                inner: TestTabletFactory::new(root_path, db_opt, cf_opts),
+                registry: Arc::default(),
             }
         }
     }
@@ -145,7 +242,7 @@ pub mod kv {
         (tablet_id, tablet_suffix)
     }
 
-    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+    impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
         fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
             let mut reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
@@ -155,35 +252,27 @@ pub mod kv {
                     db.as_inner().path()
                 ));
             }
+
             let tablet_path = self.tablet_path(id, suffix);
-            let tablet_path = tablet_path.to_str().unwrap();
-            let kv_engine = KvTestEngine::new_kv_engine_opt(
-                tablet_path,
-                self.db_opt.clone(),
-                self.cf_opts.clone(),
-            )?;
+            let kv_engine = self.inner.create_tablet(&tablet_path)?;
             reg.insert((id, suffix), kv_engine.clone());
+
             Ok(kv_engine)
         }
 
         fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            let mut reg = self.registry.lock().unwrap();
+            let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
             }
 
             let db_path = self.tablet_path(id, suffix);
             let db = self.open_tablet_raw(db_path.as_path(), false)?;
-            reg.insert((id, suffix), db.clone());
             Ok(db)
         }
 
         fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Some(db.clone());
-            }
-            None
+            self.registry.lock().unwrap().get(&(id, suffix)).cloned()
         }
 
         fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
@@ -217,12 +306,12 @@ pub mod kv {
 
         #[inline]
         fn tablets_path(&self) -> PathBuf {
-            self.root_path.join("tablets")
+            self.inner.root_path.join("tablets")
         }
 
         #[inline]
         fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            self.root_path.join(format!("tablets/{}_{}", id, suffix))
+            self.inner.root_path.join(format!("tablets/{}_{}", id, suffix))
         }
 
         #[inline]
@@ -281,7 +370,7 @@ pub mod kv {
         }
     }
 
-    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
+    impl TabletAccessor<KvTestEngine> for TestTabletFactoryV2 {
         #[inline]
         fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
             let reg = self.registry.lock().unwrap();

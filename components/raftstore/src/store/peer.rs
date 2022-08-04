@@ -79,7 +79,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob,
+    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -113,7 +113,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum StaleState {
     Valid,
     ToValidate,
@@ -4653,7 +4653,7 @@ where
             }
         }
 
-        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None);
+        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
@@ -5485,11 +5485,15 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn get_engine(&self) -> &EK {
+    fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }
 
-    fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<EK::Snapshot> {
+    fn get_snapshot(
+        &mut self,
+        _: Option<ThreadReadId>,
+        _: &mut Option<LocalReadContext<'_, EK>>,
+    ) -> Arc<EK::Snapshot> {
         Arc::new(self.engines.kv.snapshot())
     }
 }
@@ -5808,7 +5812,7 @@ mod tests {
                 applied_to_index_term: true,
                 lease_state: LeaseState::Valid,
             };
-            assert!(inspector.inspect(&req).is_err());
+            inspector.inspect(&req).unwrap_err();
         }
     }
 

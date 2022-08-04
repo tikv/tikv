@@ -410,7 +410,7 @@ impl<'a, T: Evaluable + EvaluableRet> EvaluableRef<'a> for &'a T {
     }
 }
 
-impl<'a, A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
+impl<A: UnsafeRefInto<B>, B> UnsafeRefInto<Option<B>> for Option<A> {
     unsafe fn unsafe_into(self) -> Option<B> {
         self.map(|x| x.unsafe_into())
     }
@@ -698,7 +698,7 @@ mod tests {
             .as_bytes()
             .to_vec()
             .as_mysql_bool(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
 
         let mut ctx = EvalContext::default();
         let val: Result<bool> = f64::NEG_INFINITY
@@ -706,7 +706,7 @@ mod tests {
             .as_bytes()
             .to_vec()
             .as_mysql_bool(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
     }
 
     #[test]

@@ -1,13 +1,38 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use batch_system::Fsm;
+use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::metapb::Store;
-use raftstore::store::Config;
+use raftstore::store::{Config, ReadDelegate};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
-use crate::{batch::StoreContext, StoreMsg};
+use crate::{batch::StoreContext, tablet::CachedTablet, StoreMsg};
+
+pub struct StoreMeta<E>
+where
+    E: KvEngine,
+{
+    pub store_id: Option<u64>,
+    /// region_id -> reader
+    pub readers: HashMap<u64, ReadDelegate>,
+    /// region_id -> tablet cache
+    pub tablet_caches: HashMap<u64, CachedTablet<E>>,
+}
+
+impl<E> StoreMeta<E>
+where
+    E: KvEngine,
+{
+    pub fn new() -> StoreMeta<E> {
+        StoreMeta {
+            store_id: None,
+            readers: HashMap::default(),
+            tablet_caches: HashMap::default(),
+        }
+    }
+}
 
 pub struct StoreFsm {
     store: Store,

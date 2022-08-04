@@ -386,10 +386,10 @@ mod tests {
         cfg.validate().unwrap();
 
         cfg.scheduler_worker_pool_size = 0;
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
 
         cfg.scheduler_worker_pool_size = max_pool_size + 1;
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
     }
 
     #[test]

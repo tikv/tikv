@@ -67,10 +67,11 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
-        AutoSplitController, Bucket, BucketRange, CheckLeaderRunner, CheckLeaderTask, FetchedLogs,
-        FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, LogFetchedNotifier, PdTask,
-        QueryStats, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadStats,
+        AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
+        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
+        LocalReader, PdTask, QueryStats, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadStats,
         RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, TrackVer, WriteStats,
+        SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats, FetchedLogs, LogFetchedNotifier,
     },
 };

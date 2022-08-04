@@ -147,20 +147,20 @@ mod tests {
             max_resource_groups: 2000,
             precision: ReadableDuration::secs(1),
         };
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
         let cfg = Config {
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: usize::MAX, // invalid
             precision: ReadableDuration::secs(1),
         };
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
         let cfg = Config {
             receiver_address: "127.0.0.1:6666".to_string(),
             report_receiver_interval: ReadableDuration::minutes(1),
             max_resource_groups: 2000,
             precision: ReadableDuration::days(999), // invalid
         };
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
     }
 }

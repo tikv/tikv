@@ -181,7 +181,7 @@ fn test_node_switch_api_version() {
                 cluster.shutdown();
             } else {
                 // Should not be able to switch to `to_api`.
-                assert!(cluster.start().is_err());
+                cluster.start().unwrap_err();
             }
         }
     }

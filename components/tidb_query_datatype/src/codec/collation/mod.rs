@@ -49,10 +49,10 @@ macro_rules! match_template_charset {
 
          match_template::match_template! {
              $t = [
-                 UTF8 => EncodingUtf8,
-                 UTF8Mb4 => EncodingUtf8Mb4,
+                 Utf8 => EncodingUtf8,
+                 Utf8Mb4 => EncodingUtf8Mb4,
                  Latin1 => EncodingLatin1,
-                 GBK => EncodingGBK,
+                 Gbk => EncodingGbk,
                  Binary => EncodingBinary,
                  Ascii => EncodingAscii,
             ],

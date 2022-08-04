@@ -133,7 +133,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
 pub enum PeerTick {
     Raft = 0,

@@ -38,7 +38,7 @@ where
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
-            apply(*cf, &mut opt);
+            apply(cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 TestPropertiesCollectorFactory::new(*cf),

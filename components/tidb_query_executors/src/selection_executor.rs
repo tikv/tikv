@@ -655,6 +655,6 @@ mod tests {
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.is_err());
+        r.is_drained.unwrap_err();
     }
 }
