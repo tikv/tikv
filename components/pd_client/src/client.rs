@@ -854,15 +854,15 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let executor = move |client: &Client, req: pdpb::GetGcSafePointRequest| {
-            let option = Self::call_option(client);
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_gc_safe_point_async_opt(&req, option)
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_gc_safe_point_async_opt(&req, Self::call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
+                    })
+            };
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
