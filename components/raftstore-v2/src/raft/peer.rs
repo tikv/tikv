@@ -145,11 +145,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn region_id(&self) -> u64 {
-        self.raft_group.store().region_state().get_region().get_id()
-    }
-
-    #[inline]
     pub fn storage(&self) -> &Storage<ER> {
         self.raft_group.store()
     }
@@ -443,27 +438,27 @@ where
     }
 
     #[inline]
-    fn get_region_id(&self) -> u64 {
-        self.region_id()
+    fn region_id(&self) -> u64 {
+        self.raft_group.store().region_state().get_region().get_id()
     }
 
     #[inline]
-    fn get_tag(&self) -> &String {
+    fn tag(&self) -> &String {
         &self.tag
     }
 
     #[inline]
-    fn get_txn_ext(&self) -> Arc<TxnExt> {
+    fn txn_ext(&self) -> Arc<TxnExt> {
         self.txn_ext.clone()
     }
 
     #[inline]
-    fn get_read_progress(&self) -> Arc<RegionReadProgress> {
+    fn read_progress(&self) -> Arc<RegionReadProgress> {
         self.read_progress.clone()
     }
 
     #[inline]
-    fn get_peer(&self) -> &metapb::Peer {
+    fn peer(&self) -> &metapb::Peer {
         self.raft_group.store().peer()
     }
 

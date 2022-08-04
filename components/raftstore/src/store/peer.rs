@@ -739,13 +739,13 @@ where
     fn term(&self) -> u64;
     fn store_commit_index(&self) -> u64;
     fn leader_id(&self) -> u64;
-    fn get_region_id(&self) -> u64;
-    fn get_tag(&self) -> &String;
-    fn get_txn_ext(&self) -> Arc<TxnExt>;
-    fn get_read_progress(&self) -> Arc<RegionReadProgress>;
-    fn get_peer(&self) -> &metapb::Peer;
+    fn region_id(&self) -> u64;
+    fn tag(&self) -> &String;
+    fn txn_ext(&self) -> Arc<TxnExt>;
+    fn read_progress(&self) -> Arc<RegionReadProgress>;
+    fn peer(&self) -> &metapb::Peer;
     fn bucket_meta(&self) -> Option<Arc<BucketMeta>>;
-    fn get_txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>>;
+    fn txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>>;
     fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<EK::Snapshot>;
     fn mut_bcast_wake_up_time(&mut self) -> &mut Option<TiInstant>;
     fn set_should_wake_up(&mut self, should_wake_up: bool);
@@ -758,7 +758,7 @@ where
             } else {
                 Err(box_err!(
                     "{} can not read due to injected failure",
-                    self.get_tag()
+                    self.tag()
                 ))
             }
         );
@@ -767,13 +767,13 @@ where
         if self.is_splitting() {
             return Err(Error::ReadIndexNotReady {
                 reason: "can not read index due to split",
-                region_id: self.get_region_id(),
+                region_id: self.region_id(),
             });
         }
         if self.is_merging() {
             return Err(Error::ReadIndexNotReady {
                 reason: "can not read index due to merge",
-                region_id: self.get_region_id(),
+                region_id: self.region_id(),
             });
         }
         Ok(())
@@ -845,7 +845,7 @@ where
         let mut send_msg = self.prepare_raft_message();
         let ty = msg.get_type();
         debug!("send extra msg";
-            "region_id" => self.get_region_id(),
+            "region_id" => self.region_id(),
             "peer_id" => self.peer_id(),
             "msg_type" => ?ty,
             "to" => to.get_id()
@@ -856,7 +856,7 @@ where
             error!(?e;
                 "failed to send extra message";
                 "type" => ?ty,
-                "region_id" => self.get_region_id(),
+                "region_id" => self.region_id(),
                 "peer_id" => self.peer_id(),
                 "target" => ?to,
             );
@@ -865,10 +865,10 @@ where
 
     fn prepare_raft_message(&self) -> RaftMessage {
         let mut send_msg = RaftMessage::default();
-        send_msg.set_region_id(self.get_region_id());
+        send_msg.set_region_id(self.region_id());
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
-        send_msg.set_from_peer(self.get_peer().clone());
+        send_msg.set_from_peer(self.peer().clone());
         send_msg
     }
 
@@ -897,19 +897,19 @@ where
                     .replace(TiInstant::now_coarse());
 
                 let task = PdTask::QueryRegionLeader {
-                    region_id: self.get_region_id(),
+                    region_id: self.region_id(),
                 };
                 if let Err(e) = pd_scheduler.schedule(task) {
                     error!(
                         "failed to notify pd";
-                        "region_id" => self.get_region_id(),
+                        "region_id" => self.region_id(),
                         "peer_id" => self.peer_id(),
                         "err" => %e,
                     )
                 }
             }
             self.set_should_wake_up(true);
-            cmd_resp::bind_error(err_resp, Error::NotLeader(self.get_region_id(), None));
+            cmd_resp::bind_error(err_resp, Error::NotLeader(self.region_id(), None));
             return true;
         }
         false
@@ -938,13 +938,13 @@ where
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-            let safe_ts = self.get_read_progress().safe_ts();
+            let safe_ts = self.read_progress().safe_ts();
             if safe_ts < read_ts {
                 warn!(
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
                     "read ts" => read_ts,
-                    "tag" => self.get_tag(),
+                    "tag" => self.tag(),
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {
                     region_id: region.get_id(),
@@ -962,10 +962,10 @@ where
 
         let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
-            snap.txn_ext = Some(self.get_txn_ext());
+            snap.txn_ext = Some(self.txn_ext());
             snap.bucket_meta = self.bucket_meta();
         }
-        resp.txn_extra_op = self.get_txn_extra_op().load();
+        resp.txn_extra_op = self.txn_extra_op().load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
     }
@@ -4989,7 +4989,7 @@ where
     }
 
     #[inline]
-    fn get_region_id(&self) -> u64 {
+    fn region_id(&self) -> u64 {
         self.region_id
     }
 
@@ -5030,27 +5030,27 @@ where
     }
 
     #[inline]
-    fn get_tag(&self) -> &String {
+    fn tag(&self) -> &String {
         &self.tag
     }
 
     #[inline]
-    fn get_txn_ext(&self) -> Arc<TxnExt> {
+    fn txn_ext(&self) -> Arc<TxnExt> {
         self.txn_ext.clone()
     }
 
     #[inline]
-    fn get_read_progress(&self) -> Arc<RegionReadProgress> {
+    fn read_progress(&self) -> Arc<RegionReadProgress> {
         self.read_progress.clone()
     }
 
     #[inline]
-    fn get_peer(&self) -> &metapb::Peer {
+    fn peer(&self) -> &metapb::Peer {
         &self.peer
     }
 
     #[inline]
-    fn get_txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>> {
+    fn txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>> {
         self.txn_extra_op.clone()
     }
 

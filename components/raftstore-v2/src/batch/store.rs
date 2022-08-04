@@ -10,7 +10,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures_util::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raftstore::store::{
-    fsm::store::PeerTickBatch,
+    fsm::store::{PeerTickBatch, StoreMeta},
     worker::{RaftlogFetchRunner, RaftlogFetchTask},
     Config, PdTask, RaftRouter, Transport,
 };
@@ -46,10 +46,18 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub timer: SteadyTimer,
     /// pd task scheduler
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
+    /// store meta
+    pub store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
-    fn new(cfg: Config, trans: T, logger: Logger, pd_scheduler: Scheduler<PdTask<EK, ER>>) -> Self {
+    fn new(
+        cfg: Config,
+        trans: T,
+        logger: Logger,
+        pd_scheduler: Scheduler<PdTask<EK, ER>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+    ) -> Self {
         Self {
             logger,
             trans,
@@ -57,6 +65,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
             pd_scheduler,
+            store_meta,
         }
     }
 }
@@ -194,6 +203,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     /// pd task scheduler
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    store_meta: Arc<Mutex<StoreMeta>>, 
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -206,6 +216,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         logger: Logger,
         pd_scheduler: Scheduler<PdTask<EK, ER>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Self {
         StorePollerBuilder {
             cfg,
@@ -216,6 +227,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             logger,
             pd_scheduler,
             raftlog_fetch_scheduler,
+            store_meta,
         }
     }
 
@@ -273,6 +285,7 @@ where
             self.trans.clone(),
             self.logger.clone(),
             self.pd_scheduler.clone(),
+            self.store_meta.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -299,6 +312,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         raft_router: RaftRouter<EK, ER>,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         raft_log_worker: Worker,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -315,6 +329,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 "raftlog-fetch-worker",
                 RaftlogFetchRunner::new(raft_router, raft_engine),
             ),
+            store_meta,
         );
         let peers = builder.init()?;
         self.apply_system
