@@ -197,7 +197,15 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     }
 }
 
-pub struct WriteCompactionFilterFactory;
+pub struct WriteCompactionFilterFactory {
+    db: RocksEngine,
+}
+
+impl WriteCompactionFilterFactory {
+    pub fn new(db: RocksEngine) -> Self {
+        Self { db }
+    }
+}
 
 impl CompactionFilterFactory for WriteCompactionFilterFactory {
     fn create_compaction_filter(
@@ -226,7 +234,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             )
         };
 
-        let db = gc_context.db.clone();
         let gc_scheduler = gc_context.gc_scheduler.clone();
         let store_id = gc_context.store_id;
         let region_info_provider = gc_context.region_info_provider.clone();
@@ -237,7 +244,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db.is_stalled_or_stopped() {
+        if self.db.is_stalled_or_stopped() {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
@@ -266,7 +273,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         );
 
         let filter = WriteCompactionFilter::new(
-            db,
+            self.db.clone(),
             safe_point,
             context,
             gc_scheduler,

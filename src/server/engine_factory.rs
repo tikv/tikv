@@ -153,10 +153,11 @@ impl KvEngineFactory {
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
+
         let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
-            kv_cfs_opts,
+            kv_cfs_opts.clone(),
         );
         let mut kv_engine = match kv_engine {
             Ok(e) => e,
@@ -167,6 +168,9 @@ impl KvEngineFactory {
         };
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
+        // RocksEngine is there now, we can set its write compaction filter factory
+        DbConfig::set_write_compaction_filter_factory(kv_engine.clone(), kv_cfs_opts);
+
         Ok(kv_engine)
     }
 
