@@ -113,7 +113,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
 /// The returned states of the peer after checking whether it is stale
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum StaleState {
     Valid,
     ToValidate,
@@ -5812,7 +5812,7 @@ mod tests {
                 applied_to_index_term: true,
                 lease_state: LeaseState::Valid,
             };
-            assert!(inspector.inspect(&req).is_err());
+            inspector.inspect(&req).unwrap_err();
         }
     }
 

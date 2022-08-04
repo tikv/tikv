@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
-        assert!(result.is_err());
+        result.unwrap_err();
         factory
             .set_shared_block_cache_capacity(1024 * 1024)
             .unwrap();
@@ -299,7 +299,7 @@ mod tests {
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
         let result = factory.open_tablet(1, 20);
-        assert!(result.is_err());
+        result.unwrap_err();
         assert!(!factory.is_single_engine());
     }
 

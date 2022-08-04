@@ -446,7 +446,7 @@ pub(crate) mod tests {
         must_commit(&engine, k1, 1, 2);
 
         // "k1" already exist, returns AlreadyExist error.
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 3).is_err());
+        try_prewrite_check_not_exists(&engine, k1, k1, 3).unwrap_err();
 
         // Delete "k1"
         must_prewrite_delete(&engine, k1, k1, 4);
@@ -461,7 +461,7 @@ pub(crate) mod tests {
         // Rollback
         must_prewrite_put(&engine, k1, v3, k1, 9);
         must_rollback(&engine, k1, 9, false);
-        assert!(try_prewrite_check_not_exists(&engine, k1, k1, 10).is_err());
+        try_prewrite_check_not_exists(&engine, k1, k1, 10).unwrap_err();
 
         // Delete "k1" again
         must_prewrite_delete(&engine, k1, k1, 11);
@@ -479,7 +479,7 @@ pub(crate) mod tests {
     fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
-        assert!(try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).is_err())
+        try_pessimistic_prewrite_check_not_exists(&engine, k, k, 3).unwrap_err();
     }
 
     #[test]
@@ -792,17 +792,15 @@ pub(crate) mod tests {
         let cm = ConcurrencyManager::new(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
-        assert!(
-            prewrite(
-                &mut txn,
-                &mut reader,
-                &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
-                Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                &None,
-                false,
-            )
-            .is_err()
-        );
+        prewrite(
+            &mut txn,
+            &mut reader,
+            &txn_props(5.into(), key, CommitKind::TwoPc, None, 0, false),
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            &None,
+            false,
+        )
+        .unwrap_err();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(5.into(), cm);
@@ -990,7 +988,7 @@ pub(crate) mod tests {
         // start_ts = 5,  commit_ts = 15, Lock
 
         must_get(&engine, k, 19, v);
-        assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
+        try_prewrite_insert(&engine, k, v, k, 20).unwrap_err();
     }
 
     #[test]
