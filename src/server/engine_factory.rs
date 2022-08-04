@@ -96,10 +96,7 @@ impl KvEngineFactoryBuilder {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
         };
-        KvEngineFactoryV2 {
-            inner: factory,
-            registry: Arc::default(),
-        }
+        KvEngineFactoryV2::new(factory)
     }
 }
 
