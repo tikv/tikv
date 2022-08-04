@@ -24,7 +24,7 @@ use kvproto::{
     },
 };
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
@@ -45,7 +45,7 @@ use crate::{
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct DownstreamId(usize);
 
 impl DownstreamId {
@@ -614,19 +614,20 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_raw_downstream(raw_rows, index)
+        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
     }
 
-    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
+    pub fn raw_untrack_ts(&mut self, cdc_id: ObserveId, max_ts: TimeStamp) {
+        // Stale CmdBatch, drop it silently.
+        if cdc_id != self.handle.id {
+            return;
         }
         // the entry's timestamp is non-decreasing, the last has the max ts.
-        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
+        // use prev ts, see reason at CausalObserver::pre_propose_query
+        let max_raw_ts = max_ts.prev();
         match self.resolver {
             Some(ref mut resolver) => {
-                // use prev ts, see reason at CausalObserver::pre_propose_query
-                resolver.raw_untrack_lock(max_raw_ts.prev());
+                resolver.raw_untrack_lock(max_raw_ts);
             }
             None => {
                 assert!(self.pending.is_some(), "region resolver not ready");
@@ -636,7 +637,6 @@ impl Delegate {
                     .push(PendingLock::RawUntrack { ts: max_raw_ts });
             }
         }
-        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
     }
 
     pub fn raw_track_ts(&mut self, ts: TimeStamp) {
@@ -907,6 +907,16 @@ impl Delegate {
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
+    }
+
+    // if raw data and tidb data both exist in this region, it will return false.
+    pub fn is_raw_region(&self) -> bool {
+        if let Some(region) = &self.region {
+            ApiV2::parse_range_mode((Some(&region.start_key), Some(&region.end_key)))
+                == KeyMode::Raw
+        } else {
+            false
+        }
     }
 }
 
@@ -1219,7 +1229,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
@@ -1263,6 +1273,35 @@ mod tests {
             } else {
                 assert_eq!(row.expire_ts_unix_secs, 0);
             }
+        }
+    }
+
+    #[test]
+    fn test_is_raw_region() {
+        let region_id = 10;
+        let mut region = Region::default();
+        region.set_id(region_id);
+
+        // start-key, end-key, is_raw
+        let test_cases = vec![
+            (vec![b'r', 0, 0, 0, b'a'], vec![b'r', 0, 0, 0, b'z'], true),
+            (vec![b'a', 0, 0, 0, b'a'], vec![b'r', 0, 0, 0, b'z'], false),
+            (vec![b'r', 0, 0, 0, b'a'], vec![b'z', 0, 0, 0, b'z'], false),
+            (vec![b'r', 0, 0, 0, b'a'], vec![b's'], true),
+            (vec![b'r', 0, 0, 0, b'a'], vec![], false),
+            (vec![], vec![], false),
+        ];
+        for (start_key, end_key, is_raw) in &test_cases {
+            region.set_start_key(start_key.clone());
+            region.set_end_key(end_key.clone());
+            let resolver = Resolver::new(region_id);
+            let mut delegate = Delegate::new(region_id, Default::default());
+            assert!(
+                delegate
+                    .on_region_ready(resolver, region.clone())
+                    .is_empty()
+            );
+            assert_eq!(delegate.is_raw_region(), *is_raw);
         }
     }
 }

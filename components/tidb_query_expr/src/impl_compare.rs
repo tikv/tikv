@@ -545,7 +545,7 @@ mod tests {
     use super::*;
     use crate::test_util::RpnFnScalarEvaluator;
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, PartialEq)]
     enum TestCaseCmpOp {
         Gt,
         Ge,

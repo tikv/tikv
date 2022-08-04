@@ -548,7 +548,7 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(coll.unwrap(), c);
             } else {
-                assert!(coll.is_err());
+                coll.unwrap_err();
             }
         }
     }
@@ -574,7 +574,7 @@ mod tests {
             if let Some(c) = expected {
                 assert_eq!(charset.unwrap(), c);
             } else {
-                assert!(charset.is_err());
+                charset.unwrap_err();
             }
         }
     }

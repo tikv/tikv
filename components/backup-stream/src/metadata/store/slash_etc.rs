@@ -49,7 +49,7 @@ impl std::fmt::Debug for Key {
 }
 
 /// A value (maybe tombstone.)
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 enum Value {
     Val(Vec<u8>),
     Del,

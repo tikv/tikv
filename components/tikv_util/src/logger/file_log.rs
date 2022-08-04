@@ -376,7 +376,7 @@ mod tests {
 
         // Rename failed.
         logger.write_all(&[0xff; 1025]).unwrap();
-        assert!(logger.flush().is_err());
+        logger.flush().unwrap_err();
 
         // dropping the logger still should not panic.
         drop(logger);

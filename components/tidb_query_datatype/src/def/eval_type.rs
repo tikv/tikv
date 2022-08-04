@@ -137,7 +137,7 @@ mod tests {
             if let Some(etype) = etype {
                 assert_eq!(ftt.unwrap(), etype);
             } else {
-                assert!(ftt.is_err());
+                ftt.unwrap_err();
             }
         }
     }

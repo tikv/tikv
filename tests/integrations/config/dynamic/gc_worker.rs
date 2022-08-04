@@ -17,7 +17,7 @@ fn test_gc_config_validate() {
 
     let mut invalid_cfg = GcConfig::default();
     invalid_cfg.batch_keys = 0;
-    assert!(invalid_cfg.validate().is_err());
+    invalid_cfg.validate().unwrap_err();
 }
 
 fn setup_cfg_controller(
