@@ -15,7 +15,7 @@ mod async_io;
 mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
-mod local_metrics;
+pub mod local_metrics;
 mod peer;
 mod peer_storage;
 mod read_queue;
@@ -29,8 +29,8 @@ mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
-        write::{Worker as WriteWorker, WriteMsg, WriteTask},
-        write_router::WriteRouter,
+        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
+        write_router::{WriteRouter, WriteRouterContext},
     },
     bootstrap::{
         bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,
@@ -67,9 +67,11 @@ pub use self::{
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
-        AutoSplitController, Bucket, BucketRange, CheckLeaderRunner, CheckLeaderTask,
-        FlowStatistics, FlowStatsReporter, KeyEntry, LocalReader, PdTask, QueryStats, ReadDelegate,
-        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
-        SplitConfigManager, TrackVer, WriteStats,
+        AutoSplitController, Bucket, BucketRange, CachedReadDelegate, CheckLeaderRunner,
+        CheckLeaderTask, FlowStatistics, FlowStatsReporter, KeyEntry, LocalReadContext,
+        LocalReader, PdTask, QueryStats, RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadStats,
+        RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
+        SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
     },
 };

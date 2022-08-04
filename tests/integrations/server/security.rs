@@ -44,5 +44,5 @@ fn test_check_cn_fail() {
 
     let client = TikvClient::new(channel);
     let status = client.kv_get(&GetRequest::default());
-    assert!(status.is_err());
+    status.unwrap_err();
 }

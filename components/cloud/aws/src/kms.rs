@@ -86,7 +86,7 @@ impl KmsProvider for AwsKms {
     // possible that a wrong master key has been used, or other error otherwise.
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
         let decrypt_request = DecryptRequest {
-            ciphertext_blob: bytes::Bytes::copy_from_slice(&*data_key),
+            ciphertext_blob: bytes::Bytes::copy_from_slice(data_key),
             // Use default algorithm SYMMETRIC_DEFAULT.
             encryption_algorithm: None,
             // Use key_id encoded in ciphertext.

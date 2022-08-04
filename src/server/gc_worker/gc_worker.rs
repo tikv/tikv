@@ -2064,17 +2064,15 @@ mod tests {
         }
         // Then, it will fail to schedule another gc command.
         let (tx, rx) = mpsc::channel();
-        assert!(
-            gc_worker
-                .gc(
-                    TimeStamp::from(1),
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    })
-                )
-                .is_err()
-        );
-        assert!(rx.recv().unwrap().is_err());
+        gc_worker
+            .gc(
+                TimeStamp::from(1),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap_err();
+        rx.recv().unwrap().unwrap_err();
 
         let (tx, rx) = mpsc::channel();
         // When the gc_worker is full, scheduling an unsafe destroy range task should be

@@ -826,10 +826,8 @@ mod tests {
     fn test_max_columns_check() {
         // Col offset = 0. The minimum success max_columns is 1.
         let node = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
-        assert!(
-            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, 0)
-                .is_err()
-        );
+        RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, 0)
+            .unwrap_err();
         for i in 1..10 {
             RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
                 .unwrap();
@@ -838,14 +836,8 @@ mod tests {
         // Col offset = 3. The minimum success max_columns is 4.
         let node = ExprDefBuilder::column_ref(3, FieldTypeTp::LongLong).build();
         for i in 0..=3 {
-            assert!(
-                RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                    node.clone(),
-                    fn_mapper,
-                    i
-                )
-                .is_err()
-            );
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
+                .unwrap_err();
         }
         for i in 4..10 {
             RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
@@ -861,14 +853,8 @@ mod tests {
                 .build();
 
         for i in 0..=5 {
-            assert!(
-                RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                    node.clone(),
-                    fn_mapper,
-                    i
-                )
-                .is_err()
-            );
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)
+                .unwrap_err();
         }
         for i in 6..10 {
             RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node.clone(), fn_mapper, i)

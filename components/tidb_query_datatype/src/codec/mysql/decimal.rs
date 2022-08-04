@@ -3045,7 +3045,7 @@ mod tests {
         // error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
-            assert!(Decimal::from_bytes(case).is_err());
+            Decimal::from_bytes(case).unwrap_err();
         }
     }
 

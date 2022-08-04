@@ -4,7 +4,7 @@ use derive_more::{Add, AddAssign};
 
 /// Execution summaries to support `EXPLAIN ANALYZE` statements. We don't use
 /// `ExecutorExecutionSummary` directly since it is less efficient.
-#[derive(Debug, Default, Copy, Clone, Add, AddAssign, PartialEq, Eq)]
+#[derive(Debug, Default, Copy, Clone, Add, AddAssign, PartialEq)]
 pub struct ExecSummary {
     /// Total time cost in this executor.
     pub time_processed_ns: usize,
