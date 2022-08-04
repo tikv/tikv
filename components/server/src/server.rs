@@ -13,6 +13,7 @@
 
 use std::{
     cmp,
+    collections::HashMap,
     convert::TryFrom,
     env, fmt,
     net::SocketAddr,
@@ -1876,12 +1877,27 @@ impl EnginesResourceInfo {
         if let Some(raft_engine) = &self.raft_engine {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
-        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            self.tablet_factory
-                .for_each_opened_tablet(&mut |_id, _suffix, db: &RocksEngine| {
-                    fetch_engine_cf(db, cf, &mut normalized_pending_bytes);
-                });
+
+        // tablets record the tablet with the latest suffix in each region
+        let mut tabltes = HashMap::<u64, (u64, RocksEngine)>::new();
+        self.tablet_factory.for_each_opened_tablet(
+            &mut |id, suffix, db: &RocksEngine| match tabltes.entry(id) {
+                collections::HashMapEntry::Occupied(mut slot) => {
+                    if slot.get().0 < suffix {
+                        slot.insert((suffix, db.clone()));
+                    }
+                }
+                collections::HashMapEntry::Vacant(slot) => {
+                    slot.insert((suffix, db.clone()));
+                }
+            },
+        );
+        for (_, (_, tablet)) in tabltes {
+            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+                fetch_engine_cf(&tablet, cf, &mut normalized_pending_bytes);
+            }
         }
+
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
