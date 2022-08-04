@@ -115,7 +115,11 @@ impl<ER: RaftEngine> Storage<ER> {
         let region_state: RegionLocalState = match engine.get_region_state(region_id) {
             Ok(Some(s)) => s,
             res => {
-                return Err(box_err!("failed to get region state: {:?}", res));
+                return Err(box_err!(
+                    "failed to get region state for region {}: {:?}",
+                    region_id,
+                    res
+                ));
             }
         };
 

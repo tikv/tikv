@@ -15,6 +15,7 @@ use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures_util::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
+use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
     RaftlogFetchTask, StoreWriters, Transport, WriteMsg,
@@ -252,6 +253,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         let cfg = self.cfg.value();
         self.engine
             .for_each_raft_group::<Error, _>(&mut |region_id| {
+                assert_ne!(region_id, INVALID_ID);
                 let peer = match Peer::new(
                     &cfg,
                     region_id,

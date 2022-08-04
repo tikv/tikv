@@ -563,12 +563,17 @@ impl RaftEngine for RaftLogEngine {
         Ok(self.0.get_used_size() as u64)
     }
 
-    fn for_each_raft_group<E, F>(&self, _f: &mut F) -> std::result::Result<(), E>
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<engine_traits::Error>,
     {
-        unimplemented!()
+        for id in self.0.raft_groups() {
+            if id != STORE_REGION_ID {
+                f(id)?;
+            }
+        }
+        Ok(())
     }
 }
 

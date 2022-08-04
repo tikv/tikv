@@ -19,10 +19,10 @@ use engine_test::{
     kv::{KvTestEngine, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::ALL_CFS;
+use engine_traits::{TabletFactory, ALL_CFS};
 use kvproto::{metapb::Store, raft_serverpb::RaftMessage};
 use pd_client::RpcClient;
-use raftstore::store::{Config, Transport};
+use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{create_store_batch_system, Bootstrap, StoreRouter, StoreSystem};
 use slog::{o, Logger};
 use tempfile::TempDir;
@@ -68,7 +68,13 @@ impl TestNode {
         let store_id = bootstrap.bootstrap_store().unwrap();
         let mut store = Store::default();
         store.set_id(store_id);
-        bootstrap.bootstrap_first_region(&store, store_id).unwrap();
+        let region = bootstrap
+            .bootstrap_first_region(&store, store_id)
+            .unwrap()
+            .unwrap();
+        factory
+            .create_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
+            .unwrap();
 
         TestNode {
             _pd_server: pd_server,
