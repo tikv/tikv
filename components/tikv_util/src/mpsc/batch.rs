@@ -196,8 +196,9 @@ impl<T> Receiver<T> {
     }
 }
 
-/// Creates a unbounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a unbounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -215,8 +216,9 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     )
 }
 
-/// Creates a bounded channel with a given `notify_size`, which means if there are more pending
-/// messages in the channel than `notify_size`, the `Sender` will auto notify the `Receiver`.
+/// Creates a bounded channel with a given `notify_size`, which means if there
+/// are more pending messages in the channel than `notify_size`, the `Sender`
+/// will auto notify the `Receiver`.
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
@@ -285,9 +287,10 @@ where
     I: Fn() -> E + Unpin,
     C: BatchCollector<E, T> + Unpin,
 {
-    /// Creates a new `BatchReceiver` with given `initializer` and `collector`. `initializer` is
-    /// used to generate a initial value, and `collector` will collect every (at most
-    /// `max_batch_size`) raw items into the batched value.
+    /// Creates a new `BatchReceiver` with given `initializer` and `collector`.
+    /// `initializer` is used to generate a initial value, and `collector`
+    /// will collect every (at most `max_batch_size`) raw items into the
+    /// batched value.
     pub fn new(rx: Receiver<T>, max_batch_size: usize, initializer: I, collector: C) -> Self {
         BatchReceiver {
             rx,
@@ -388,7 +391,7 @@ mod tests {
         }
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -401,7 +404,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..4 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 5);
@@ -439,7 +442,7 @@ mod tests {
         polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -452,7 +455,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..16 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);
@@ -486,7 +489,7 @@ mod tests {
             let mut future_slot = self.future.lock().unwrap();
             if let Some(mut future) = future_slot.take() {
                 let waker = task::waker_ref(&task);
-                let cx = &mut Context::from_waker(&*waker);
+                let cx = &mut Context::from_waker(&waker);
                 match future.as_mut().poll(cx) {
                     Poll::Pending => {
                         *future_slot = Some(future);

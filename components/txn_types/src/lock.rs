@@ -331,7 +331,8 @@ impl Lock {
         info
     }
 
-    /// Checks whether the lock conflicts with the given `ts`. If `ts == TimeStamp::max()`, the primary lock will be ignored.
+    /// Checks whether the lock conflicts with the given `ts`. If `ts ==
+    /// TimeStamp::max()`, the primary lock will be ignored.
     fn check_ts_conflict_si(
         lock: Cow<'_, Self>,
         key: &Key,
@@ -358,8 +359,9 @@ impl Lock {
         let raw_key = key.to_raw()?;
 
         if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
-            // When `ts == TimeStamp::max()` (which means to get latest committed version for
-            // primary key), and current key is the primary key, we ignore this lock.
+            // When `ts == TimeStamp::max()` (which means to get latest committed version
+            // for primary key), and current key is the primary key, we ignore
+            // this lock.
             return Ok(());
         }
 
@@ -421,9 +423,9 @@ impl Lock {
     }
 }
 
-/// A specialized lock only for pessimistic lock. This saves memory for cases that only
-/// pessimistic locks exist.
-#[derive(Clone, PartialEq, Eq)]
+/// A specialized lock only for pessimistic lock. This saves memory for cases
+/// that only pessimistic locks exist.
+#[derive(Clone, PartialEq)]
 pub struct PessimisticLock {
     /// The primary key in raw format.
     pub primary: Box<[u8]>,
@@ -693,7 +695,7 @@ mod tests {
         }
 
         // Test `Lock::parse()` handles incorrect input.
-        assert!(Lock::parse(b"").is_err());
+        Lock::parse(b"").unwrap_err();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -706,7 +708,7 @@ mod tests {
             TimeStamp::zero(),
         );
         let mut v = lock.to_bytes();
-        assert!(Lock::parse(&v[..4]).is_err());
+        Lock::parse(&v[..4]).unwrap_err();
         // Test `Lock::parse()` ignores unknown bytes.
         v.extend(b"unknown");
         let l = Lock::parse(&v).unwrap();
@@ -803,7 +805,8 @@ mod tests {
         )
         .unwrap();
 
-        // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
+        // Ignore the primary lock when reading the latest committed version by setting
+        // u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
         Lock::check_ts_conflict(
@@ -815,7 +818,8 @@ mod tests {
         )
         .unwrap();
 
-        // Should not ignore the primary lock of an async commit transaction even if setting u64::MAX as ts
+        // Should not ignore the primary lock of an async commit transaction even if
+        // setting u64::MAX as ts
         let async_commit_lock = lock.clone().use_async_commit(vec![]);
         Lock::check_ts_conflict(
             Cow::Borrowed(&async_commit_lock),

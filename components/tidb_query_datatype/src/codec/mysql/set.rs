@@ -69,7 +69,7 @@ impl PartialOrd for Set {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Set {
+impl crate::codec::data_type::AsMySqlBool for Set {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(self.value > 0)

@@ -51,9 +51,9 @@ pub const MAX_THREAD_REGISTER_RETRY: u32 = 10;
 
 /// This structure is used as a label to distinguish different request contexts.
 ///
-/// In order to associate `ResourceMeteringTag` with a certain piece of code logic,
-/// we added a function to [Future] to bind `ResourceMeteringTag` to the specified
-/// future context. It is used in the main business logic of TiKV.
+/// In order to associate `ResourceMeteringTag` with a certain piece of code
+/// logic, we added a function to [Future] to bind `ResourceMeteringTag` to the
+/// specified future context. It is used in the main business logic of TiKV.
 ///
 /// [Future]: futures::Future
 pub struct ResourceMeteringTag {
@@ -143,15 +143,12 @@ impl Drop for Guard {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
-            match records.get(&tag) {
-                Some(record) => {
-                    record.merge(&cur_record);
-                }
-                None => {
-                    // See MAX_SUMMARY_RECORDS_LEN.
-                    if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                        records.insert(tag, cur_record);
-                    }
+            if let Some(record) = records.get(&tag) {
+                record.merge(&cur_record);
+            } else {
+                // See MAX_SUMMARY_RECORDS_LEN.
+                if records.len() < MAX_SUMMARY_RECORDS_LEN {
+                    records.insert(tag, cur_record);
                 }
             }
         })
@@ -214,14 +211,15 @@ impl ResourceTagFactory {
 
 /// This trait extends the standard [Future].
 ///
-/// When the user imports [FutureExt], all futures in its module (such as async block)
-/// will additionally support the [FutureExt::in_resource_metering_tag] method. This method
-/// can bind a [ResourceMeteringTag] to the scope of this future (actually, it is stored in
-/// the local storage of the thread where `Future` is located). During the polling period of
-/// the future, we can continue to observe the system resources used by the thread in which
-/// it is located, which is associated with `ResourceMeteringTag` and is also stored in thread
-/// local storage. There is a background thread that continuously summarizes the storage of
-/// each thread and reports it regularly.
+/// When the user imports [FutureExt], all futures in its module (such as async
+/// block) will additionally support the [FutureExt::in_resource_metering_tag]
+/// method. This method can bind a [ResourceMeteringTag] to the scope of this
+/// future (actually, it is stored in the local storage of the thread where
+/// `Future` is located). During the polling period of the future, we can
+/// continue to observe the system resources used by the thread in which it is
+/// located, which is associated with `ResourceMeteringTag` and is also stored
+/// in thread local storage. There is a background thread that continuously
+/// summarizes the storage of each thread and reports it regularly.
 ///
 /// [Future]: futures::Future
 pub trait FutureExt: Sized {
@@ -245,8 +243,9 @@ pub trait StreamExt: Sized {
 
 impl<T: futures::Stream> StreamExt for T {}
 
-/// This structure is the return value of the [FutureExt::in_resource_metering_tag] method,
-/// which wraps the original [Future] with a [ResourceMeteringTag].
+/// This structure is the return value of the
+/// [FutureExt::in_resource_metering_tag] method, which wraps the original
+/// [Future] with a [ResourceMeteringTag].
 ///
 /// see [FutureExt] for more information.
 ///

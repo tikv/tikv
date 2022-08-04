@@ -237,6 +237,7 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
+            iter_opt.set_fill_cache(false);
             let (raw_key_prefix, raw_key_prefix_end) = ApiV2::get_rawkv_range();
             iter_opt.set_lower_bound(&[raw_key_prefix], DATA_KEY_PREFIX_LEN);
             iter_opt.set_upper_bound(&[raw_key_prefix_end], DATA_KEY_PREFIX_LEN);
@@ -305,8 +306,9 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    // It's extracted from `Initializer::scan_batch` to avoid becoming an asynchronous block,
-    // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
+    // It's extracted from `Initializer::scan_batch` to avoid becoming an
+    // asynchronous block, so that we can limit scan speed based on the thread
+    // disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut Scanner<S>,
@@ -472,10 +474,10 @@ impl<E: KvEngine> Initializer<E> {
     pub(crate) fn deregister_downstream(&self, err: Error) {
         let deregister = if self.build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
-            // * It fails to build a resolver. A delegate requires a resolver
-            //   to advance resolved ts.
-            // * A region error. It usually mean a peer is not leader or
-            //   a leader meets an error and can not serve.
+            // * It fails to build a resolver. A delegate requires a resolver to advance
+            //   resolved ts.
+            // * A region error. It usually mean a peer is not leader or a leader meets an
+            //   error and can not serve.
             Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_id,

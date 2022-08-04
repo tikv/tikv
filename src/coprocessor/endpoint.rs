@@ -32,8 +32,9 @@ use crate::{
     },
 };
 
-/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as light ones,
-/// which means they don't need a permit from the semaphore before execution.
+/// Requests that need time of less than `LIGHT_TASK_THRESHOLD` is considered as
+/// light ones, which means they don't need a permit from the semaphore before
+/// execution.
 const LIGHT_TASK_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// A pool to build and run Coprocessor request handlers.
@@ -79,9 +80,9 @@ impl<E: Engine> Endpoint<E> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Self {
-        // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
-        // using too much memory. However, if there are a number of large requests, small requests
-        // will still be blocked. This needs to be improved.
+        // FIXME: When yatp is used, we need to limit coprocessor requests in progress
+        // to avoid using too much memory. However, if there are a number of large
+        // requests, small requests will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
             ReadPoolHandle::Yatp { .. } => {
                 Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
@@ -139,8 +140,8 @@ impl<E: Engine> Endpoint<E> {
         Ok(())
     }
 
-    /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
-    /// Returns `Err` if fails.
+    /// Parse the raw `Request` to create `RequestHandlerBuilder` and
+    /// `ReqContext`. Returns `Err` if fails.
     ///
     /// It also checks if there are locks in memory blocking this read request.
     fn parse_request_and_check_memory_locks(
@@ -373,16 +374,17 @@ impl<E: Engine> Endpoint<E> {
 
     /// The real implementation of handling a unary request.
     ///
-    /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
-    /// the given `handler_builder`. Finally, it calls the unary request interface of the
-    /// `RequestHandler` to process the request and produce a result.
+    /// It first retrieves a snapshot, then builds the `RequestHandler` over the
+    /// snapshot and the given `handler_builder`. Finally, it calls the unary
+    /// request interface of the `RequestHandler` to process the request and
+    /// produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
-        // When this function is being executed, it may be queued for a long time, so that
-        // deadline may exceed.
+        // When this function is being executed, it may be queued for a long time, so
+        // that deadline may exceed.
         tracker.on_scheduled();
         tracker.req_ctx.deadline.check()?;
 
@@ -445,8 +447,8 @@ impl<E: Engine> Endpoint<E> {
 
     /// Handle a unary request and run on the read pool.
     ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in other cases.
-    /// The future inside may be an error however.
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
+    /// other cases. The future inside may be an error however.
     fn handle_unary_request(
         &self,
         req_ctx: ReqContext,
@@ -477,9 +479,9 @@ impl<E: Engine> Endpoint<E> {
         async move { res.await? }
     }
 
-    /// Parses and handles a unary request. Returns a future that will never fail. If there are
-    /// errors during parsing or handling, they will be converted into a `Response` as the success
-    /// result of the future.
+    /// Parses and handles a unary request. Returns a future that will never
+    /// fail. If there are errors during parsing or handling, they will be
+    /// converted into a `Response` as the success result of the future.
     #[inline]
     pub fn parse_and_handle_unary_request(
         &self,
@@ -510,9 +512,10 @@ impl<E: Engine> Endpoint<E> {
 
     /// The real implementation of handling a stream request.
     ///
-    /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
-    /// the given `handler_builder`. Finally, it calls the stream request interface of the
-    /// `RequestHandler` multiple times to process the request and produce multiple results.
+    /// It first retrieves a snapshot, then builds the `RequestHandler` over the
+    /// snapshot and the given `handler_builder`. Finally, it calls the stream
+    /// request interface of the `RequestHandler` multiple times to process the
+    /// request and produce multiple results.
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
@@ -585,8 +588,8 @@ impl<E: Engine> Endpoint<E> {
 
     /// Handle a stream request and run on the read pool.
     ///
-    /// Returns `Err(err)` if the read pool is full. Returns `Ok(stream)` in other cases.
-    /// The stream inside may produce errors however.
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(stream)` in
+    /// other cases. The stream inside may produce errors however.
     fn handle_stream_request(
         &self,
         req_ctx: ReqContext,
@@ -621,9 +624,10 @@ impl<E: Engine> Endpoint<E> {
         Ok(rx)
     }
 
-    /// Parses and handles a stream request. Returns a stream that produce each result in a
-    /// `Response` and will never fail. If there are errors during parsing or handling, they will
-    /// be converted into a `Response` as the only stream item.
+    /// Parses and handles a stream request. Returns a stream that produce each
+    /// result in a `Response` and will never fail. If there are errors during
+    /// parsing or handling, they will be converted into a `Response` as the
+    /// only stream item.
     #[inline]
     pub fn parse_and_handle_stream_request(
         &self,
@@ -883,7 +887,7 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-        assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
+        block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
     }
 
     #[test]
@@ -1034,7 +1038,7 @@ mod tests {
 
         // verify
         for _ in 2..5 {
-            assert!(rx.recv().unwrap().is_err());
+            rx.recv().unwrap().unwrap_err();
         }
         for i in 0..2 {
             let resp = rx.recv().unwrap().unwrap();
@@ -1292,12 +1296,13 @@ mod tests {
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: u64 = 500;
 
-        /// Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
-        /// This is mostly for CI.
+        /// Asserted that the delay caused by OS scheduling other tasks is
+        /// smaller than 200ms. This is mostly for CI.
         const HANDLE_ERROR_MS: u64 = 200;
 
-        /// The acceptable error range for a coarse timer. Note that we use CLOCK_MONOTONIC_COARSE
-        /// which can be slewed by time adjustment code (e.g., NTP, PTP).
+        /// The acceptable error range for a coarse timer. Note that we use
+        /// CLOCK_MONOTONIC_COARSE which can be slewed by time
+        /// adjustment code (e.g., NTP, PTP).
         const COARSE_ERROR_MS: u64 = 50;
 
         /// The duration that payload executes.
@@ -1460,11 +1465,12 @@ mod tests {
 
             // Response 1
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
-            // Someday it will be separated, but for now, let's just consider the combination.
+            // Note: `process_wall_time_ms` includes `total_process_time` and
+            // `total_suspend_time`. Someday it will be separated, but for now,
+            // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req2 payload. So here:
-            // req1 payload <= process time <= (req1 payload + req2 payload)
+            // In the worst case, `total_suspend_time` could be totally req2 payload.
+            // So here: req1 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
             assert_ge!(
@@ -1482,11 +1488,12 @@ mod tests {
 
             // Response 2
             //
-            // Note: `process_wall_time_ms` includes `total_process_time` and `total_suspend_time`.
-            // Someday it will be separated, but for now, let's just consider the combination.
+            // Note: `process_wall_time_ms` includes `total_process_time` and
+            // `total_suspend_time`. Someday it will be separated, but for now,
+            // let's just consider the combination.
             //
-            // In the worst case, `total_suspend_time` could be totally req1 payload. So here:
-            // req2 payload <= process time <= (req1 payload + req2 payload)
+            // In the worst case, `total_suspend_time` could be totally req1 payload.
+            // So here: req2 payload <= process time <= (req1 payload + req2 payload)
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
             assert_ge!(

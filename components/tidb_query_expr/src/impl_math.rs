@@ -639,15 +639,22 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input
+// is positive
 //
 // # Examples
 // ```
 // assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
 // assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
 // assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
+// assert_eq!(
+//     i64_to_usize(u64::max_value() as i64, true),
+//     (u64::max_value() as usize, true)
+// );
+// assert_eq!(
+//     i64_to_usize(u64::max_value() as i64, false),
+//     (1_usize, false)
+// );
 // ```
 #[inline]
 pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
@@ -1197,7 +1204,7 @@ mod tests {
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::new(x).unwrap()))
                 .evaluate(ScalarFuncSig::Exp);
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 
@@ -1272,7 +1279,8 @@ mod tests {
             (std::f64::consts::PI, 0.0_f64),
             (
                 (std::f64::consts::PI * 3.0) / 4.0,
-                f64::tan((std::f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+                f64::tan((std::f64::consts::PI * 3.0) / 4.0), /* in mysql and rust, it equals
+                                                               * -1.0000000000000002, not -1 */
             ),
         ];
         for (input, expect) in test_cases {
@@ -1309,12 +1317,10 @@ mod tests {
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
-        assert!(
-            RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::new(0.0_f64).unwrap()))
-                .evaluate::<Real>(ScalarFuncSig::Cot)
-                .is_err()
-        );
+        RpnFnScalarEvaluator::new()
+            .push_param(Some(Real::new(0.0_f64).unwrap()))
+            .evaluate::<Real>(ScalarFuncSig::Cot)
+            .unwrap_err();
     }
 
     #[test]
@@ -1366,13 +1372,11 @@ mod tests {
         ];
 
         for (lhs, rhs) in invalid_cases {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::Pow)
-                    .is_err()
-            );
+            RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .unwrap_err();
         }
     }
 

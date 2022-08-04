@@ -77,8 +77,9 @@ pub fn compress(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
         return Ok(writer.write_ref(Some(b"")));
     }
     let mut e = ZlibEncoder::new(input, Compression::default());
-    // preferred capacity is input length plus four bytes length header and one extra end "."
-    // max capacity is isize::max_value(), or will panic with "capacity overflow"
+    // preferred capacity is input length plus four bytes length header and one
+    // extra end "." max capacity is isize::max_value(), or will panic with
+    // "capacity overflow"
     let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
     vec.resize(4, 0);
     LittleEndian::write_u32(&mut vec, input.len() as u32);
@@ -116,10 +117,11 @@ pub fn uncompress(
     let mut d = ZlibDecoder::new(&input[4..]);
     let mut vec = Vec::with_capacity(len);
 
-    // if the length of uncompressed string is greater than the length we read from the first
-    //     four bytes, return null and generate a length corrupted warning.
-    // if the length of uncompressed string is zero or uncompress fail, return null and generate
-    //     a data corrupted warning
+    // - if the length of uncompressed string is greater than the length we read
+    //   from the first four bytes, return null and generate a length corrupted
+    //   warning.
+    // - if the length of uncompressed string is zero or uncompress fail, return
+    //   null and generate a data corrupted warning match d.read_to_end(&mut vec) {
     match d.read_to_end(&mut vec) {
         Ok(decoded_len) if len >= decoded_len && decoded_len != 0 => {
             Ok(writer.write_ref(Some(vec.as_ref())))
@@ -450,15 +452,13 @@ mod tests {
         ];
 
         for len in overflow_tests {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(len)
-                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-                    .is_err(),
-            );
+            RpnFnScalarEvaluator::new()
+                .push_param(len)
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap_err();
         }
 
-        //test NULL case
+        // test NULL case
         assert!(
             RpnFnScalarEvaluator::new()
                 .push_param(ScalarValue::Int(None))

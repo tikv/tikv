@@ -21,9 +21,9 @@ impl MemComparableByteCodec {
         (src_len / MEMCMP_GROUP_SIZE + 1) * (MEMCMP_GROUP_SIZE + 1)
     }
 
-    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
-    /// the memory-comparable format. If the buffer is not complete, the length of buffer will be
-    /// returned.
+    /// Gets the length of the first encoded byte sequence in the given buffer,
+    /// which is encoded in the memory-comparable format. If the buffer is
+    /// not complete, the length of buffer will be returned.
     #[inline]
     fn get_first_encoded_len_internal<T: MemComparableCodecHelper>(encoded: &[u8]) -> usize {
         let mut idx = MEMCMP_GROUP_SIZE;
@@ -39,23 +39,25 @@ impl MemComparableByteCodec {
         }
     }
 
-    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
-    /// the ascending memory-comparable format.
+    /// Gets the length of the first encoded byte sequence in the given buffer,
+    /// which is encoded in the ascending memory-comparable format.
     pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
         Self::get_first_encoded_len_internal::<Ascending>(encoded)
     }
 
-    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
-    /// the descending memory-comparable format.
+    /// Gets the length of the first encoded byte sequence in the given buffer,
+    /// which is encoded in the descending memory-comparable format.
     pub fn get_first_encoded_len_desc(encoded: &[u8]) -> usize {
         Self::get_first_encoded_len_internal::<Descending>(encoded)
     }
 
-    /// Encodes all bytes in the `src` into `dest` in ascending memory-comparable format.
+    /// Encodes all bytes in the `src` into `dest` in ascending
+    /// memory-comparable format.
     ///
     /// Returns the number of bytes encoded.
     ///
-    /// `dest` must not overlaps `src`, otherwise encoded results will be incorrect.
+    /// `dest` must not overlaps `src`, otherwise encoded results will be
+    /// incorrect.
     ///
     /// # Panics
     ///
@@ -99,7 +101,8 @@ impl MemComparableByteCodec {
         }
     }
 
-    /// Encodes the bytes `src[..len]` in ascending memory-comparable format in place.
+    /// Encodes the bytes `src[..len]` in ascending memory-comparable format in
+    /// place.
     ///
     /// Returns the number of bytes encoded.
     ///
@@ -159,11 +162,13 @@ impl MemComparableByteCodec {
         }
     }
 
-    /// Encodes all bytes in the `src` into `dest` in descending memory-comparable format.
+    /// Encodes all bytes in the `src` into `dest` in descending
+    /// memory-comparable format.
     ///
     /// Returns the number of bytes encoded.
     ///
-    /// `dest` must not overlaps `src`, otherwise encoded results will be incorrect.
+    /// `dest` must not overlaps `src`, otherwise encoded results will be
+    /// incorrect.
     ///
     /// # Panics
     ///
@@ -176,7 +181,8 @@ impl MemComparableByteCodec {
         encoded_len
     }
 
-    /// Encodes the bytes `src[..len]` in descending memory-comparable format in place.
+    /// Encodes the bytes `src[..len]` in descending memory-comparable format in
+    /// place.
     ///
     /// Returns the number of bytes encoded.
     ///
@@ -189,21 +195,25 @@ impl MemComparableByteCodec {
         encoded_len
     }
 
-    /// Decodes bytes in ascending memory-comparable format in the `src` into `dest`.
+    /// Decodes bytes in ascending memory-comparable format in the `src` into
+    /// `dest`.
     ///
-    /// If there are multiple encoded byte slices in `src`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `src`, only the first one
+    /// will be decoded.
     ///
-    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read in
-    /// `src` and `written_bytes` is the number of bytes written in `dest`.
+    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number
+    /// of bytes read in `src` and `written_bytes` is the number of bytes
+    /// written in `dest`.
     ///
-    /// Note that actual written data may be larger than `written_bytes`. Bytes more than
-    /// `written_bytes` are junk and should be ignored.
+    /// Note that actual written data may be larger than `written_bytes`. Bytes
+    /// more than `written_bytes` are junk and should be ignored.
     ///
     /// If `src == dest`, please use `try_decode_first_in_place`.
     ///
     /// # Panics
     ///
-    /// Panics if `dest.len() < src.len()`, although actual written data may be less.
+    /// Panics if `dest.len() < src.len()`, although actual written data may be
+    /// less.
     ///
     /// When there is a panic, `dest` may contain partially written data.
     ///
@@ -223,21 +233,25 @@ impl MemComparableByteCodec {
         )
     }
 
-    /// Decodes bytes in descending memory-comparable format in the `src` into `dest`.
+    /// Decodes bytes in descending memory-comparable format in the `src` into
+    /// `dest`.
     ///
-    /// If there are multiple encoded byte slices in `src`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `src`, only the first one
+    /// will be decoded.
     ///
-    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read in
-    /// `src` and `written_bytes` is the number of bytes written in `dest`.
+    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number
+    /// of bytes read in `src` and `written_bytes` is the number of bytes
+    /// written in `dest`.
     ///
-    /// Note that actual written data may be larger than `written_bytes`. Bytes more than
-    /// `written_bytes` are junk and should be ignored.
+    /// Note that actual written data may be larger than `written_bytes`. Bytes
+    /// more than `written_bytes` are junk and should be ignored.
     ///
     /// If `src == dest`, please use `try_decode_first_in_place_desc`.
     ///
     /// # Panics
     ///
-    /// Panics if `dest.len() < src.len()`, although actual written data may be less.
+    /// Panics if `dest.len() < src.len()`, although actual written data may be
+    /// less.
     ///
     /// When there is a panic, `dest` may contain partially written data.
     ///
@@ -259,16 +273,17 @@ impl MemComparableByteCodec {
         Ok((read_bytes, written_bytes))
     }
 
-    /// Decodes bytes in ascending memory-comparable format in place, i.e. decoded data will
-    /// overwrite the encoded data.
+    /// Decodes bytes in ascending memory-comparable format in place, i.e.
+    /// decoded data will overwrite the encoded data.
     ///
-    /// If there are multiple encoded byte slices in `buffer`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `buffer`, only the first
+    /// one will be decoded.
     ///
-    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read
-    /// and `written_bytes` is the number of bytes written.
+    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number
+    /// of bytes read and `written_bytes` is the number of bytes written.
     ///
-    /// Note that actual written data may be larger than `written_bytes`. Bytes more than
-    /// `written_bytes` are junk and should be ignored.
+    /// Note that actual written data may be larger than `written_bytes`. Bytes
+    /// more than `written_bytes` are junk and should be ignored.
     ///
     /// # Errors
     ///
@@ -286,16 +301,17 @@ impl MemComparableByteCodec {
         )
     }
 
-    /// Decodes bytes in descending memory-comparable format in place, i.e. decoded data will
-    /// overwrite the encoded data.
+    /// Decodes bytes in descending memory-comparable format in place, i.e.
+    /// decoded data will overwrite the encoded data.
     ///
-    /// If there are multiple encoded byte slices in `buffer`, only the first one will be decoded.
+    /// If there are multiple encoded byte slices in `buffer`, only the first
+    /// one will be decoded.
     ///
-    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number of bytes read
-    /// and `written_bytes` is the number of bytes written.
+    /// Returns `(read_bytes, written_bytes)` where `read_bytes` is the number
+    /// of bytes read and `written_bytes` is the number of bytes written.
     ///
-    /// Note that actual written data may be larger than `written_bytes`. Bytes more than
-    /// `written_bytes` are junk and should be ignored.
+    /// Note that actual written data may be larger than `written_bytes`. Bytes
+    /// more than `written_bytes` are junk and should be ignored.
     ///
     /// # Errors
     ///
@@ -323,10 +339,12 @@ impl MemComparableByteCodec {
     ///
     /// This function uses pointers to accept the scenario that `src == dest`.
     ///
-    /// This function also uses generics to specialize different code path for ascending and
-    /// descending decoding, which performs better than inlining a flag.
+    /// This function also uses generics to specialize different code path for
+    /// ascending and descending decoding, which performs better than
+    /// inlining a flag.
     ///
-    /// Please refer to `try_decode_first` for the meaning of return values, panics and errors.
+    /// Please refer to `try_decode_first` for the meaning of return values,
+    /// panics and errors.
     #[inline]
     fn try_decode_first_internal<T: MemComparableCodecHelper>(
         mut src_ptr: *const u8,
@@ -395,7 +413,8 @@ impl MemComparableByteCodec {
 trait MemComparableCodecHelper {
     const PADDING: [u8; MEMCMP_GROUP_SIZE];
 
-    /// Given a raw padding size byte, interprets the padding size according to correct order.
+    /// Given a raw padding size byte, interprets the padding size according to
+    /// correct order.
     fn parse_padding_size(raw_marker: u8) -> usize;
 }
 
@@ -476,8 +495,9 @@ impl<T: BufferReader> MemComparableByteDecoder for T {}
 pub struct CompactByteCodec;
 
 impl CompactByteCodec {
-    /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
-    /// the compact format. If the buffer is not complete, the length of buffer will be returned.
+    /// Gets the length of the first encoded byte sequence in the given buffer,
+    /// which is encoded in the compact format. If the buffer is not complete,
+    /// the length of buffer will be returned.
     pub fn get_first_encoded_len(encoded: &[u8]) -> usize {
         let result = NumberCodec::try_decode_var_i64(encoded);
         match result {
@@ -951,7 +971,7 @@ mod tests {
             let result = panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
-            assert!(result.is_err());
+            result.unwrap_err();
 
             let mut src_in_place = vec![0; dest_len];
             let result = panic_hook::recover_safe(move || {
@@ -960,7 +980,7 @@ mod tests {
                     src_len,
                 );
             });
-            assert!(result.is_err());
+            result.unwrap_err();
         }
     }
 
@@ -968,8 +988,9 @@ mod tests {
     fn test_memcmp_try_decode_first() {
         use super::MEMCMP_GROUP_SIZE as N;
 
-        // We have ensured correctness in `test_memcmp_encode_all`, so we use `encode_all` to
-        // generate fixtures in different length, used for decoding.
+        // We have ensured correctness in `test_memcmp_encode_all`, so we use
+        // `encode_all` to generate fixtures in different length, used for
+        // decoding.
 
         fn do_test(
             is_desc: bool,
@@ -1120,7 +1141,7 @@ mod tests {
                 invalid_src.as_slice(),
                 dest.as_mut_slice(),
             );
-            assert!(result.is_err());
+            result.unwrap_err();
         }
     }
 
@@ -1141,7 +1162,7 @@ mod tests {
                         dest.as_mut_slice(),
                     );
                 });
-                assert!(result.is_err());
+                result.unwrap_err();
             }
             {
                 let mut dest = vec![0; src.len()];

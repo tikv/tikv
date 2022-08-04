@@ -211,7 +211,8 @@ fn test_stale_peer_cache() {
 // 4. peer 1 sends a snapshot with latest configuration [1, 2, 3] to peer 3;
 // 5. peer 3 restores the snapshot into memory;
 // 6. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
-// 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
+// 7. so the disk configuration `[1, 2, 3]` is different from memory
+// configuration `[1, 2, 3, 4]`.
 #[test]
 fn test_redundant_conf_change_by_snapshot() {
     let mut cluster = new_node_cluster(0, 4);
@@ -269,7 +270,7 @@ fn test_redundant_conf_change_by_snapshot() {
     fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
-    assert!(rx.try_recv().is_err());
+    rx.try_recv().unwrap_err();
 
     fail::remove("apply_on_conf_change_3_1");
 }

@@ -46,8 +46,8 @@ impl CommandExt for Cleanup {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
+        // It is not allowed for commit to overwrite a protected rollback. So we update
+        // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);

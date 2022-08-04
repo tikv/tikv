@@ -118,8 +118,8 @@ where
         ))
     }
 
-    // scan scans database using an iterator in range [start_key, end_key), calls function f for
-    // each iteration, if f returns false, terminates this scan.
+    // scan scans database using an iterator in range [start_key, end_key), calls
+    // function f for each iteration, if f returns false, terminates this scan.
     pub fn scan<F>(
         &self,
         cf: &str,
@@ -175,13 +175,13 @@ impl<S> Peekable for RegionSnapshot<S>
 where
     S: Snapshot,
 {
-    type DBVector = <S as Peekable>::DBVector;
+    type DbVector = <S as Peekable>::DbVector;
 
     fn get_value_opt(
         &self,
         opts: &ReadOptions,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -200,7 +200,7 @@ where
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -492,7 +492,7 @@ mod tests {
         assert!(v0.is_none());
 
         let v4 = snap.get_value(b"key5");
-        assert!(v4.is_err());
+        v4.unwrap_err();
     }
 
     #[allow(clippy::type_complexity)]

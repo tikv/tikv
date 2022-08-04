@@ -52,7 +52,8 @@ impl<'a> BinaryModifier<'a> {
         self.rebuild()
     }
 
-    /// Replaces the existing value JSON specified by the expression path with `new`
+    /// Replaces the existing value JSON specified by the expression path with
+    /// `new`
     pub fn replace(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old, path.legs.as_slice())?;
         if result.is_empty() {
@@ -63,8 +64,8 @@ impl<'a> BinaryModifier<'a> {
         self.rebuild()
     }
 
-    /// Inserts a `new` into `old` JSON document by given expression path without replacing
-    /// existing values
+    /// Inserts a `new` into `old` JSON document by given expression path
+    /// without replacing existing values
     pub fn insert(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old, path.legs.as_slice())?;
         if !result.is_empty() {
@@ -86,7 +87,7 @@ impl<'a> BinaryModifier<'a> {
             return Ok(());
         }
         let parent_node = &result[0];
-        match &*last_leg {
+        match last_leg {
             PathLeg::Index(_) => {
                 // Record the parent node value offset, as it's actually relative to `old`
                 self.to_be_modified_ptr = parent_node.as_ptr();
@@ -97,7 +98,8 @@ impl<'a> BinaryModifier<'a> {
                         for i in 0..elem_count {
                             elems.push(parent_node.array_get_elem(i)?);
                         }
-                        // We can ignore the idx in the PathLeg here since we have checked the path-value existence
+                        // We can ignore the idx in the PathLeg here since we have checked the
+                        // path-value existence
                         elems.push(new.as_ref());
                         self.new_value = Some(Json::from_ref_array(elems)?);
                     }
@@ -165,7 +167,7 @@ impl<'a> BinaryModifier<'a> {
             return Ok(());
         }
         let parent_node = &result[0];
-        match &*last_leg {
+        match last_leg {
             PathLeg::Index(remove_idx) => {
                 if parent_node.get_type() == JsonType::Array {
                     self.to_be_modified_ptr = parent_node.as_ptr();

@@ -61,10 +61,10 @@ fn test_replica_read_not_applied() {
     configure_for_lease_read(&mut cluster, Some(50), Some(30));
     let max_lease = Duration::from_secs(1);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
-    // After the leader has committed to its term, pending reads on followers can be responsed.
-    // However followers can receive `ReadIndexResp` after become candidate if the leader has
-    // hibernated. So, disable the feature to avoid read requests on followers to be cleared as
-    // stale.
+    // After the leader has committed to its term, pending reads on followers can be
+    // responsed. However followers can receive `ReadIndexResp` after become
+    // candidate if the leader has hibernated. So, disable the feature to avoid
+    // read requests on followers to be cleared as stale.
     cluster.cfg.raft_store.hibernate_regions = false;
 
     cluster.pd_client.disable_default_operator();
@@ -101,15 +101,17 @@ fn test_replica_read_not_applied() {
 
     // Read index on follower should be blocked instead of get an old value.
     let resp1_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), r1.clone(), b"k1", true, true);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
+    resp1_ch.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
-    // Unpark all append responses so that the new leader can commit its first entry.
+    // Unpark all append responses so that the new leader can commit its first
+    // entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
     for raft_msg in mem::take::<Vec<_>>(dropped_msgs.lock().unwrap().as_mut()) {
         router.send_raft_message(raft_msg).unwrap();
     }
 
-    // The old read index request won't be blocked forever as it's retried internally.
+    // The old read index request won't be blocked forever as it's retried
+    // internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
     let resp1 = resp1_ch.recv_timeout(Duration::from_secs(6)).unwrap();
@@ -128,8 +130,6 @@ fn test_replica_read_on_hibernate() {
     let mut cluster = new_node_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
-    // let max_lease = Duration::from_secs(2);
-    // cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -151,7 +151,7 @@ fn test_replica_read_on_hibernate() {
 
     // Read index on follower should be blocked.
     let resp1_ch = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
+    resp1_ch.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
     let (tx, rx) = mpsc::sync_channel(1024);
     let cb = Arc::new(move |msg: &RaftMessage| {
@@ -278,7 +278,9 @@ fn test_replica_read_on_stale_peer() {
     cluster.must_put(b"k2", b"v2");
     let resp1_ch = async_read_on_peer(&mut cluster, peer_on_store3, region, b"k2", true, true);
     // must be timeout
-    assert!(resp1_ch.recv_timeout(Duration::from_micros(100)).is_err());
+    resp1_ch
+        .recv_timeout(Duration::from_micros(100))
+        .unwrap_err();
 }
 
 #[test]
@@ -311,14 +313,14 @@ fn test_read_index_out_of_order() {
     // Can't get read resonse because heartbeat responses are blocked.
     let r1 = cluster.get_region(b"k1");
     let resp1 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1.clone(), b"k1", true, true);
-    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
+    resp1.recv_timeout(Duration::from_secs(2)).unwrap_err();
 
     pd_client.must_remove_peer(rid, new_peer(2, 2));
 
     // After peer 2 is removed, we can get 2 read responses.
     let resp2 = async_read_on_peer(&mut cluster, new_peer(1, 1), r1, b"k1", true, true);
-    assert!(resp2.recv_timeout(Duration::from_secs(1)).is_ok());
-    assert!(resp1.recv_timeout(Duration::from_secs(1)).is_ok());
+    resp2.recv_timeout(Duration::from_secs(1)).unwrap();
+    resp1.recv_timeout(Duration::from_secs(1)).unwrap();
 }
 
 #[test]
@@ -353,8 +355,8 @@ fn test_read_index_retry_lock_checking() {
     let r1 = cluster.get_region(b"k1");
     let resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
     let resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
-    assert!(resp1.recv_timeout(Duration::from_secs(2)).is_err());
-    assert!(resp2.try_recv().is_err());
+    resp1.recv_timeout(Duration::from_secs(2)).unwrap_err();
+    resp2.try_recv().unwrap_err();
 
     // k1 has a memory lock
     let leader_cm = cluster.sim.rl().get_concurrency_manager(1);
@@ -418,7 +420,8 @@ fn test_split_isolation() {
     let r1 = cluster.get_region(b"k2");
     cluster.must_split(&r1, b"k2");
     let idx = cluster.truncated_state(1, 1).get_index();
-    // Trigger a log compaction, so the left region ['', 'k2'] cannot created through split cmd.
+    // Trigger a log compaction, so the left region ['', 'k2'] cannot created
+    // through split cmd.
     for i in 2..cluster.cfg.raft_store.raft_log_gc_count_limit() * 2 {
         cluster.must_put(format!("k{}", i).as_bytes(), format!("v{}", i).as_bytes());
     }
@@ -439,7 +442,8 @@ fn test_split_isolation() {
     }
     let peer = peer.unwrap();
     cluster.run_node(2).unwrap();
-    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer cannot be created.
+    // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer
+    // cannot be created.
     for _ in 0..10 {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
         let resp = resp.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -451,8 +455,9 @@ fn test_split_isolation() {
     panic!("test failed");
 }
 
-/// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta` will be replace with
-/// the new `ReadDelegate`, and the `ReadDelegate` stored at `LocalReader` should also be updated
+/// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta`
+/// will be replace with the new `ReadDelegate`, and the `ReadDelegate` stored
+/// at `LocalReader` should also be updated
 #[test]
 fn test_read_local_after_snapshpot_replace_peer() {
     let mut cluster = new_node_cluster(0, 3);
@@ -472,8 +477,9 @@ fn test_read_local_after_snapshpot_replace_peer() {
         must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
     }
 
-    // send read request to peer 3, so the local reader will cache the `ReadDelegate` of peer 3
-    // it is okey only send one request because the read pool thread count is 1
+    // send read request to peer 3, so the local reader will cache the
+    // `ReadDelegate` of peer 3 it is okay only send one request because the
+    // read pool thread count is 1
     let r = cluster.get_region(b"k1");
     // wait applying snapshot finish
     sleep_ms(100);
@@ -516,7 +522,8 @@ fn test_read_local_after_snapshpot_replace_peer() {
     assert_eq!(exp_value, b"v3");
 }
 
-/// The case checks if a malformed request should not corrupt the leader's read queue.
+/// The case checks if a malformed request should not corrupt the leader's read
+/// queue.
 #[test]
 fn test_malformed_read_index() {
     let mut cluster = new_node_cluster(0, 3);

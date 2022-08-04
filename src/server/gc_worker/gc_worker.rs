@@ -19,7 +19,7 @@ use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{Context, LockInfo},
@@ -59,12 +59,12 @@ use crate::{
     },
 };
 
-/// After the GC scan of a key, output a message to the log if there are at least this many
-/// versions of the key.
+/// After the GC scan of a key, output a message to the log if there are at
+/// least this many versions of the key.
 const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 
-/// After the GC delete versions of a key, output a message to the log if at least this many
-/// versions are deleted.
+/// After the GC delete versions of a key, output a message to the log if at
+/// least this many versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
@@ -120,13 +120,14 @@ where
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     },
-    /// If GC in compaction filter is enabled, versions on default CF will be handled with
-    /// `DB::delete` in write CF's compaction filter. However if the compaction filter finds
-    /// the DB is stalled, it will send the task to GC worker to ensure the compaction can be
-    /// continued.
+    /// If GC in compaction filter is enabled, versions on default CF will be
+    /// handled with `DB::delete` in write CF's compaction filter. However if
+    /// the compaction filter finds the DB is stalled, it will send the task
+    /// to GC worker to ensure the compaction can be continued.
     ///
-    /// NOTE: It's possible that the TiKV instance fails after a compaction result is installed
-    /// but its orphan versions are not deleted. Those orphan versions will never get cleaned
+    /// NOTE: It's possible that the TiKV instance fails after a compaction
+    /// result is installed but its orphan versions are not deleted. Those
+    /// orphan versions will never get cleaned
     /// until `DefaultCompactionFilter` is introduced.
     ///
     /// The tracking issue: <https://github.com/tikv/tikv/issues/9719>.
@@ -308,8 +309,8 @@ where
     }
 
     /// Check need gc without getting snapshot.
-    /// If this is not supported or any error happens, returns true to do further check after
-    /// getting snapshot.
+    /// If this is not supported or any error happens, returns true to do
+    /// further check after getting snapshot.
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
         let props = match self
             .engine
@@ -629,8 +630,8 @@ where
         let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
-        // TODO: Logic coupled with raftstore's implementation. Maybe better design is to do it in
-        // somewhere of the same layer with apply_worker.
+        // TODO: Logic coupled with raftstore's implementation. Maybe better design is
+        // to do it in somewhere of the same layer with apply_worker.
         let start_data_key = keys::data_key(start_key.as_encoded());
         let end_data_key = keys::data_end_key(end_key.as_encoded());
 
@@ -766,7 +767,7 @@ where
 
     #[inline]
     fn run(&mut self, task: GcTask<E::Local>) {
-        let _io_type_guard = WithIOType::new(IOType::Gc);
+        let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
 
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -904,7 +905,8 @@ where
     }
 }
 
-/// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
+/// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the
+/// `ScheduleError`.
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Result<()> {
     error!("failed to schedule gc task"; "err" => %e);
     let res = Err(box_err!("failed to schedule gc task: {:?}", e));
@@ -915,7 +917,8 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
         GcTask::PhysicalScanLock { callback, .. } => {
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)))
         }
-        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a callback.
+        // Attention: If you are adding a new GcTask, do not forget to call the callback if it has a
+        // callback.
         GcTask::GcKeys { .. } | GcTask::RawGcKeys { .. } | GcTask::OrphanVersions { .. } => {}
         #[cfg(any(test, feature = "testexport"))]
         GcTask::Validate(_) => {}
@@ -968,7 +971,8 @@ where
 {
     engine: E,
 
-    /// `raft_store_router` is useful to signal raftstore clean region size informations.
+    /// `raft_store_router` is useful to signal raftstore clean region size
+    /// informations.
     raft_store_router: RR,
     /// Used to signal unsafe destroy range is executed.
     flow_info_sender: Option<Sender<FlowInfo>>,
@@ -1150,11 +1154,12 @@ where
             .or_else(handle_gc_task_schedule_error)
     }
 
-    /// Cleans up all keys in a range and quickly free the disk space. The range might span over
-    /// multiple regions, and the `ctx` doesn't indicate region. The request will be done directly
-    /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
-    /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
-    /// multiple times on an single range.
+    /// Cleans up all keys in a range and quickly free the disk space. The range
+    /// might span over multiple regions, and the `ctx` doesn't indicate region.
+    /// The request will be done directly on RocksDB, bypassing the Raft layer.
+    /// User must promise that, after calling `destroy_range`, the range will
+    /// never be accessed any more. However, `destroy_range` is allowed to be
+    /// called multiple times on an single range.
     pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
@@ -1287,9 +1292,10 @@ mod tests {
     };
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
-    /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
-    /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
-    /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
+    /// For test engines, they writes keys into db directly, but in production a
+    /// 'z' prefix will be added to keys by raftstore layer before writing
+    /// to db. Some functionalities of `GcWorker` bypasses Raft layer, so
+    /// they needs to know how data is actually represented in db. This
     /// wrapper allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]
     struct PrefixedEngine(kv::RocksEngine);
@@ -1388,8 +1394,8 @@ mod tests {
         }
     }
 
-    /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
-    /// be encoded form without ts.
+    /// Assert the data in `storage` is the same as `expected_data`. Keys in
+    /// `expected_data` should be encoded form without ts.
     fn check_data<E: Engine, F: KvFormat>(
         storage: &Storage<E, DummyLockManager, F>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
@@ -1988,13 +1994,15 @@ mod tests {
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
 
-        // Test rebuilding snapshot when GC write batch limit reached (gc_info.is_completed == false).
-        // Build a key with versions that will just reach the limit `MAX_TXN_WRITE_SIZE`.
+        // Test rebuilding snapshot when GC write batch limit reached
+        // (gc_info.is_completed == false). Build a key with versions that will
+        // just reach the limit `MAX_TXN_WRITE_SIZE`.
         let key_size = Modify::Delete(CF_WRITE, Key::from_raw(b"k2").append_ts(1.into())).size();
         // versions = ceil(MAX_TXN_WRITE_SIZE/write_size) + 3
         // Write CF: Put@N, Put@N-2,    Put@N-4, ... Put@5,   Put@3
         //                 ^            ^^^^^^^^^^^^^^^^^^^
-        //           safepoint=N-1      Deleted in the first batch, `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
+        //           safepoint=N-1      Deleted in the first batch,
+        // `ceil(MAX_TXN_WRITE_SIZE/write_size)` versions.
         let versions = (MAX_TXN_WRITE_SIZE - 1) / key_size + 4;
         for start_ts in (1..versions).map(|x| x as u64 * 2) {
             let commit_ts = start_ts + 1;
@@ -2012,9 +2020,9 @@ mod tests {
                 Some((1, ri_provider)),
             )
             .unwrap();
-        // The first batch will leave tombstones that will be seen while processing the second
-        // batch, but it will be seen in `next` after seeking the latest unexpired version,
-        // therefore `seek_tombstone` is not affected.
+        // The first batch will leave tombstones that will be seen while processing the
+        // second batch, but it will be seen in `next` after seeking the latest
+        // unexpired version, therefore `seek_tombstone` is not affected.
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         // ... and next_tombstone indicates there's indeed more than one batches.
         assert_eq!(runner.stats.write.next_tombstone, versions - 3);
@@ -2043,54 +2051,48 @@ mod tests {
 
         // Before starting gc_worker, fill the scheduler to full.
         for _ in 0..GC_MAX_PENDING_TASKS {
-            assert!(
-                gc_worker
-                    .scheduler()
-                    .schedule(GcTask::Gc {
-                        region_id: 0,
-                        start_key: vec![],
-                        end_key: vec![],
-                        safe_point: TimeStamp::from(100),
-                        callback: Box::new(|_res| {})
-                    })
-                    .is_ok()
-            );
+            gc_worker
+                .scheduler()
+                .schedule(GcTask::Gc {
+                    region_id: 0,
+                    start_key: vec![],
+                    end_key: vec![],
+                    safe_point: TimeStamp::from(100),
+                    callback: Box::new(|_res| {}),
+                })
+                .unwrap();
         }
         // Then, it will fail to schedule another gc command.
         let (tx, rx) = mpsc::channel();
-        assert!(
-            gc_worker
-                .gc(
-                    TimeStamp::from(1),
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    })
-                )
-                .is_err()
-        );
-        assert!(rx.recv().unwrap().is_err());
+        gc_worker
+            .gc(
+                TimeStamp::from(1),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap_err();
+        rx.recv().unwrap().unwrap_err();
 
         let (tx, rx) = mpsc::channel();
         // When the gc_worker is full, scheduling an unsafe destroy range task should be
         // still allowed.
-        assert!(
-            gc_worker
-                .unsafe_destroy_range(
-                    Context::default(),
-                    Key::from_raw(b"a"),
-                    Key::from_raw(b"z"),
-                    Box::new(move |res| {
-                        tx.send(res).unwrap();
-                    })
-                )
-                .is_ok()
-        );
+        gc_worker
+            .unsafe_destroy_range(
+                Context::default(),
+                Key::from_raw(b"a"),
+                Key::from_raw(b"z"),
+                Box::new(move |res| {
+                    tx.send(res).unwrap();
+                }),
+            )
+            .unwrap();
 
         gc_worker.start().unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
-        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_ok());
+        rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
         must_get_none(&engine, b"key", 30);
     }
 }

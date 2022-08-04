@@ -15,9 +15,10 @@ use crate::{debug, metrics::TRACK_REGION, utils};
 #[derive(Clone, Default, Debug)]
 pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SubscriptionState {
-    /// When it is newly added (maybe after split or leader transfered from other store), without any flush.
+    /// When it is newly added (maybe after split or leader transfered from
+    /// other store), without any flush.
     Fresh,
     /// It has been flushed, and running normally.
     Normal,
@@ -95,8 +96,9 @@ impl SubscriptionTracer {
 
     // Register a region as tracing.
     // The `start_ts` is used to tracking the progress of initial scanning.
-    // (Note: the `None` case of `start_ts` is for testing / refresh region status when split / merge,
-    //    maybe we'd better provide some special API for those cases and remove the `Option`?)
+    // Note: the `None` case of `start_ts` is for testing / refresh region status
+    // when split / merge, maybe we'd better provide some special API for those
+    // cases and remove the `Option`?
     pub fn register_region(
         &self,
         region: &Region,
@@ -132,7 +134,7 @@ impl SubscriptionTracer {
     pub fn warn_if_gap_too_huge(&self, ts: TimeStamp) {
         let gap = TimeStamp::physical_now() - ts.physical();
         if gap >= 10 * 60 * 1000
-        /* 10 mins */
+        // 10 mins
         {
             let far_resolver = self
                 .0
@@ -155,7 +157,8 @@ impl SubscriptionTracer {
     }
 
     /// try to mark a region no longer be tracked by this observer.
-    /// returns whether success (it failed if the region hasn't been observed when calling this.)
+    /// returns whether success (it failed if the region hasn't been observed
+    /// when calling this.)
     pub fn deregister_region_if(
         &self,
         region: &Region,
@@ -170,9 +173,12 @@ impl SubscriptionTracer {
                 // use this method to check whether a key exists:
                 // ```
                 // let mut present = false;
-                // deregister_region_if(42, |..| { present = true; });
+                // deregister_region_if(42, |..| {
+                //     present = true;
+                // });
                 // ```
-                // At that time, if we call the callback with stale value, the called may get false positive.
+                // At that time, if we call the callback with stale value, the called may get
+                // false positive.
                 if o.state == SubscriptionState::Removal {
                     return false;
                 }
@@ -195,7 +201,8 @@ impl SubscriptionTracer {
     ///
     /// # return
     ///
-    /// Whether the status can be updated internally without deregister-and-register.
+    /// Whether the status can be updated internally without
+    /// deregister-and-register.
     pub fn try_update_region(&self, new_region: &Region) -> bool {
         let mut sub = match self.get_subscription_of(new_region.get_id()) {
             Some(sub) => sub,
@@ -282,7 +289,8 @@ impl SubscriptionTracer {
 }
 
 /// This enhanced version of `Resolver` allow some unordered lock events.  
-/// The name "2-phase" means this is used for 2 *concurrency* phases of observing a region:
+/// The name "2-phase" means this is used for 2 *concurrency* phases of
+/// observing a region:
 /// 1. Doing the initial scanning.
 /// 2. Listening at the incremental data.
 ///
@@ -294,25 +302,31 @@ impl SubscriptionTracer {
 /// +-> Phase 1: Initial scanning scans writes between start ts and now.
 /// ```
 ///
-/// In backup-stream, we execute these two tasks parallel. Which may make some race conditions:
-/// - When doing initial scanning, there may be a flush triggered, but the default resolver
-///   would probably resolved to the tip of incremental events.
-/// - When doing initial scanning, we meet and track a lock already meet by the incremental events,
-///   then the default resolver cannot untrack this lock any more.
+/// In backup-stream, we execute these two tasks parallel. Which may make some
+/// race conditions:
+/// - When doing initial scanning, there may be a flush triggered, but the
+///   default resolver would probably resolved to the tip of incremental events.
+/// - When doing initial scanning, we meet and track a lock already meet by the
+///   incremental events, then the default resolver cannot untrack this lock any
+///   more.
 ///
 /// This version of resolver did some change for solve these problems:
-/// - The resolver won't advance the resolved ts to greater than `stable_ts` if there is some. This
-///   can help us prevent resolved ts from advancing when initial scanning hasn't finished yet.
-/// - When we `untrack` a lock haven't been tracked, this would record it, and skip this lock if we want to track it then.
-///   This would be safe because:
+/// - The resolver won't advance the resolved ts to greater than `stable_ts` if
+///   there is some. This can help us prevent resolved ts from advancing when
+///   initial scanning hasn't finished yet.
+/// - When we `untrack` a lock haven't been tracked, this would record it, and
+///   skip this lock if we want to track it then. This would be safe because:
 ///   - untracking a lock not be tracked is no-op for now.
-///   - tracking a lock have already being untracked (unordered call of `track` and `untrack`) wouldn't happen at phase 2 for same region.
-///     but only when phase 1 and phase 2 happened concurrently, at that time, we wouldn't and cannot advance the resolved ts.
+///   - tracking a lock have already being untracked (unordered call of `track`
+///     and `untrack`) wouldn't happen at phase 2 for same region. but only when
+///     phase 1 and phase 2 happened concurrently, at that time, we wouldn't and
+///     cannot advance the resolved ts.
 pub struct TwoPhaseResolver {
     resolver: Resolver,
     future_locks: Vec<FutureLock>,
     /// When `Some`, is the start ts of the initial scanning.
-    /// And implies the phase 1 (initial scanning) is keep running asynchronously.
+    /// And implies the phase 1 (initial scanning) is keep running
+    /// asynchronously.
     stable_ts: Option<TimeStamp>,
 }
 
