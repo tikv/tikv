@@ -104,21 +104,20 @@ impl<ER: RaftEngine> Storage<ER> {
         };
 
         let peer_id = peer.get_id();
+        let entry_storage = EntryStorage::new(
+            peer_id,
+            engine.clone(),
+            raft_state,
+            apply_state,
+            region_state.get_region(),
+            raftlog_fetch_scheduler,
+        )?;
         let mut s = Storage {
-            engine: engine.clone(),
+            engine,
             peer: peer.clone(),
             region_state,
             logger,
-            entry_storage: EntryStorage::new(
-                region_id,
-                peer_id,
-                engine,
-                raft_state,
-                apply_state,
-                0, /*last_term*/
-                0, /*applied_term*/
-                raftlog_fetch_scheduler,
-            ),
+            entry_storage,
         };
         s.validate_state()?;
         Ok(Some(s))

@@ -19,7 +19,7 @@ use raftstore::{
         peer::{propose_read_index, RaftPeer, RequestInspector},
         read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
         util::{check_region_epoch, find_peer, Lease, LeaseState, RegionReadProgress},
-        worker::{RaftlogFetchTask, ReadExecutor},
+        worker::{LocalReadContext, RaftlogFetchTask, ReadExecutor},
         Callback, Config, PdTask, Transport, TxnExt,
     },
     Error,
@@ -211,10 +211,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let now = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
-                // Here combine the new read request with the previous one even if the lease expired is
-                // ok because in this case, the previous read index must be sent out with a valid
-                // lease instead of a suspect lease. So there must no pending transfer-leader proposals
-                // before or after the previous read index, and the lease can be renewed when get
+                // Here combine the new read request with the previous one even if the lease expired
+                // is ok because in this case, the previous read index must be sent
+                // out with a valid lease instead of a suspect lease. So there must
+                // no pending transfer-leader proposals before or after the previous
+                // read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
                     // Must use the commit index of `PeerStorage` instead of the commit index
@@ -228,14 +229,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             .get(0)
                             .map(|req| req.has_read_index())
                             .unwrap_or_default();
-                        // A read index request or a read with addition request always needs the response of
-                        // checking memory lock for async commit, so we cannot apply the optimization here
+                        // A read index request or a read with addition request always needs the
+                        // response of checking memory lock for async
+                        // commit, so we cannot apply the optimization here
                         if !is_read_index_request
                             && read.addition_request.is_none()
                             && read.propose_time + max_lease > now
                         {
-                            // A read request proposed in the current lease is found; combine the new
-                            // read request to that previous one, so that no proposing needed.
+                            // A read request proposed in the current lease is found; combine the
+                            // new read request to that previous one, so
+                            // that no proposing needed.
                             read.push_command(req, cb, commit_index);
                             return false;
                         }
@@ -248,9 +251,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
-        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped, which would
-        // cause a long time waiting for a read response. Then we should return an error directly
-        // in this situation.
+        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped,
+        // which would cause a long time waiting for a read response. Then we
+        // should return an error directly in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             // poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             // The leader may be hibernated, send a message for trying to awaken the leader.
@@ -282,7 +285,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return false;
         }
 
-        //poll_ctx.raft_metrics.propose.read_index += 1;
+        // poll_ctx.raft_metrics.propose.read_index += 1;
         self.bcast_wake_up_time = None;
 
         let request = req
@@ -294,7 +297,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             notify_stale_req(self.term(), cb);
-            //poll_ctx.raft_metrics.propose.dropped_read_index += 1;
+            // poll_ctx.raft_metrics.propose.dropped_read_index += 1;
             return false;
         }
 
@@ -317,16 +320,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.leader_lease.is_suspect() {
             let req = RaftCmdRequest::default();
             if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
-                /*let p = Proposal {
-                    is_conf_change: false,
-                    index,
-                    term: self.term(),
-                    cb: Callback::None,
-                    propose_time: Some(now),
-                    must_pass_epoch_check: false,
-                };
-                self.post_propose(poll_ctx, p);
-                */
+                // let p = Proposal {
+                // is_conf_change: false,
+                // index,
+                // term: self.term(),
+                // cb: Callback::None,
+                // propose_time: Some(now),
+                // must_pass_epoch_check: false,
+                // };
+                // self.post_propose(poll_ctx, p);
             }
         }
 
@@ -345,49 +347,48 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         cb.invoke_read(self.handle_read(&mut reader, req, false, Some(commit_index)))
     }
 
-    /*
-    pub fn propose<T: Transport>(
-        &mut self,
-        ctx: &mut StoreContext<T>,
-        mut cb: Callback<EK::Snapshot>,
-        req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
-        disk_full_opt: DiskFullOpt,
-    ) -> bool {
-        /*if self.pending_remove {
-            return false;
-        }
-
-        ctx.raft_metrics.propose.all += 1;*/
-
-        let req_admin_cmd_type = if !req.has_admin_request() {
-            None
-        } else {
-            Some(req.get_admin_request().get_cmd_type())
-        };
-        let is_urgent = is_request_urgent(&req);
-
-        let policy = self.inspect(&req);
-        let res = match policy {
-            Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
-                self.read_local(ctx, req, cb);
-                return false;
-            }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
-            Ok(_) => {},
-            Err(e) => Err(e),
-        };
-        fail_point!("after_propose");
-
-        match res {
-            Err(e) => {
-                cmd_resp::bind_error(&mut err_resp, e);
-                cb.invoke_with_response(err_resp);
-                // self.post_propose_fail(req_admin_cmd_type);
-                false
-            }
-        }
-    }*/
+    // pub fn propose<T: Transport>(
+    // &mut self,
+    // ctx: &mut StoreContext<T>,
+    // mut cb: Callback<EK::Snapshot>,
+    // req: RaftCmdRequest,
+    // mut err_resp: RaftCmdResponse,
+    // disk_full_opt: DiskFullOpt,
+    // ) -> bool {
+    // if self.pending_remove {
+    // return false;
+    // }
+    //
+    // ctx.raft_metrics.propose.all += 1;*/
+    //
+    // let req_admin_cmd_type = if !req.has_admin_request() {
+    // None
+    // } else {
+    // Some(req.get_admin_request().get_cmd_type())
+    // };
+    // let is_urgent = is_request_urgent(&req);
+    //
+    // let policy = self.inspect(&req);
+    // let res = match policy {
+    // Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
+    // self.read_local(ctx, req, cb);
+    // return false;
+    // }
+    // Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp,
+    // cb), Ok(_) => {},
+    // Err(e) => Err(e),
+    // };
+    // fail_point!("after_propose");
+    //
+    // match res {
+    // Err(e) => {
+    // cmd_resp::bind_error(&mut err_resp, e);
+    // cb.invoke_with_response(err_resp);
+    // self.post_propose_fail(req_admin_cmd_type);
+    // false
+    // }
+    // }
+    // }
 }
 
 impl<EK, ER> RaftPeer<EK, ER> for Peer<EK, ER>
@@ -493,14 +494,16 @@ impl<EK> ReadExecutor<EK> for CachedTablet<EK>
 where
     EK: KvEngine,
 {
-    fn get_engine(&self) -> &EK {
-        // TODO: should check the cache is latest here?
-        // If that, get_engine should sue &mut self instead
-        self.cache().unwrap()
+    fn get_tablet(&mut self) -> &EK {
+        self.latest().unwrap()
     }
 
-    fn get_snapshot(&mut self, _: Option<ThreadReadId>) -> Arc<EK::Snapshot> {
-        Arc::new(self.get_engine().snapshot())
+    fn get_snapshot(
+        &mut self,
+        _: Option<ThreadReadId>,
+        _: &mut Option<LocalReadContext<'_, EK>>,
+    ) -> Arc<EK::Snapshot> {
+        Arc::new(self.get_tablet().snapshot())
     }
 }
 
