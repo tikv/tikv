@@ -370,11 +370,7 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "async-channel",
-<<<<<<< HEAD
-=======
  "aws",
- "causal_ts",
->>>>>>> 82e8f865c... br: Adjust the backup organization structure (#12958)
  "collections",
  "concurrency_manager",
  "crc64fast",

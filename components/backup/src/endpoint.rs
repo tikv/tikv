@@ -806,6 +806,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let limit = self.softlimit.limit();
 
         self.pool.borrow_mut().spawn(async move {
+            let storage_name = backend.name();
             let storage = LimitedStorage {
                 limiter: request.limiter,
                 storage: backend,
@@ -860,7 +861,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                         };
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
-                    let name = backup_file_name(store_id, &brange.region, key, _backend.name());
+                    let name = backup_file_name(store_id, &brange.region, key, storage_name);
                     let ct = to_sst_compression_type(request.compression_type);
 
                     let stat = if is_raw_kv {
@@ -896,7 +897,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 backup_ts,
                                 start_ts,
                                 saver_tx.clone(),
-                                _backend.name(),
+                                storage_name,
                             )
                             .await
                     };
