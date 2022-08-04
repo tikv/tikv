@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be
-//! two different kind of Fsm-s in TiKV's Fsm system. One is normal Fsm, which
+//! two different kind of Fsms in TiKV's Fsm system. One is normal Fsm, which
 //! usually represents a peer, the other is control Fsm, which usually
 //! represents something that controls how the former is created or metrics are
 //! collected.
@@ -30,7 +30,7 @@ use crate::{
     router::Router,
 };
 
-/// A unify type for Fsm-s so that they can be sent to channel easily.
+/// A unify type for Fsms so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
     Normal(Box<N>),
     Control(Box<C>),
@@ -207,7 +207,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     /// Schedules the normal Fsm located at `index`.
     ///
-    /// If `inplace`, the relative position of all Fsm-s will not be changed;
+    /// If `inplace`, the relative position of all Fsms will not be changed;
     /// otherwise, the Fsm will be popped and the last Fsm will be swap in to
     /// reduce memory copy.
     pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize, inplace: bool) {
@@ -318,10 +318,10 @@ pub trait PollHandler<N, C>: Send + 'static {
     /// Fsm `control` in the next round, unless it is stopped.
     fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
-    /// This function is called when some normal Fsm-s are ready.
+    /// This function is called when some normal Fsms are ready.
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = N>) -> HandleResult;
 
-    /// This function is called after [`handle_normal`] is called for all Fsm-s
+    /// This function is called after [`handle_normal`] is called for all Fsms
     /// and before calling [`end`]. The function is expected to run lightweight
     /// works.
     fn light_end(&mut self, _batch: &mut [Option<impl DerefMut<Target = N>>]) {}
@@ -500,7 +500,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let left_fsm_cnt = batch.normals.len();
         if left_fsm_cnt > 0 {
             info!(
-                "poller will exit, schedule {} left NormalFsm-s",
+                "poller will exit, schedule {} left NormalFsms",
                 left_fsm_cnt
             );
             for i in 0..left_fsm_cnt {
@@ -522,9 +522,9 @@ pub trait HandlerBuilder<N, C> {
     fn build(&mut self, priority: Priority) -> Self::Handler;
 }
 
-/// A system that can poll Fsm-s concurrently and in batch.
+/// A system that can poll Fsms concurrently and in batch.
 ///
-/// To use the system, two type of Fsm-s and their PollHandlers need to be
+/// To use the system, two type of Fsms and their PollHandlers need to be
 /// defined: Normal and Control. Normal Fsm handles the general task while
 /// Control Fsm creates normal Fsm instances.
 pub struct BatchSystem<N: Fsm, C: Fsm> {

@@ -42,12 +42,12 @@ enum CheckDoResult<T> {
 /// Router routes messages to its target Fsm's mailbox.
 ///
 /// In our abstract model, every batch system has two different kind of
-/// Fsm-s. First is normal Fsm, which does the common work like peers in a
+/// Fsms. First is normal Fsm, which does the common work like peers in a
 /// raftstore model or apply delegate in apply model. Second is control Fsm,
 /// which does some work that requires a global view of resources or creates
 /// missing Fsm for specified address.
 ///
-/// There are one control Fsm and multiple normal Fsm-s in a system. Each Fsm
+/// There are one control Fsm and multiple normal Fsms in a system. Each Fsm
 /// has its own mailbox. We maintain an address book to deliver messages to the
 /// specified normal Fsm.
 ///
@@ -63,8 +63,9 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     pub(crate) normal_scheduler: Ns,
     pub(crate) control_scheduler: Cs,
 
-    // Count of Mailboxes that is not destroyed.
-    // Added when a Mailbox created, and subtracted it when a Mailbox destroyed.
+    // Number of active mailboxes.
+    // Added when a mailbox is created, and subtracted it when a mailbox is
+    // destroyed.
     state_cnt: Arc<AtomicUsize>,
     // Indicates the router is shutdown down or not.
     shutdown: Arc<AtomicBool>,
@@ -287,7 +288,7 @@ where
         }
     }
 
-    /// Try to notify all normal Fsm-s a message.
+    /// Try to notify all normal Fsms a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let mailboxes = self.normals.lock().unwrap();
         for mailbox in mailboxes.map.values() {
@@ -295,7 +296,7 @@ where
         }
     }
 
-    /// Try to notify all Fsm-s that the cluster is being shutdown.
+    /// Try to notify all Fsms that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         self.shutdown.store(true, Ordering::SeqCst);

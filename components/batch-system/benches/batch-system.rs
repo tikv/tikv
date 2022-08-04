@@ -48,9 +48,9 @@ fn bench_spawn_many(c: &mut Criterion) {
     system.shutdown();
 }
 
-/// Bench how it performs if two hot Fsm-s are shown up at the same time.
+/// Bench how it performs if two hot Fsms are shown up at the same time.
 ///
-/// A good scheduling algorithm should be able to spread the hot Fsm-s to
+/// A good scheduling algorithm should be able to spread the hot Fsms to
 /// all available threads as soon as possible.
 fn bench_imbalance(c: &mut Criterion) {
     let (control_tx, control_fsm) = Runner::new(100000);
