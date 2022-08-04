@@ -16,14 +16,20 @@ use std::{
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
 use fail::fail_point;
-use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState};
+use kvproto::{
+    metapb,
+    raft_serverpb::{RaftApplyState, RaftLocalState},
+};
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
-use tikv_util::{debug, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
 
-use super::{metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE};
-use crate::{bytes_capacity, store::worker::RaftlogFetchTask};
+use super::{
+    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
+};
+use crate::{bytes_capacity, store::worker::RaftlogFetchTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -415,6 +421,115 @@ impl AsyncFetchStats {
     }
 }
 
+fn validate_states<ER: RaftEngine>(
+    region_id: u64,
+    raft_engine: &ER,
+    raft_state: &mut RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
+    let last_index = raft_state.get_last_index();
+    let mut commit_index = raft_state.get_hard_state().get_commit();
+    let recorded_commit_index = apply_state.get_commit_index();
+    let state_str = || -> String {
+        format!(
+            "region {}, raft state {:?}, apply state {:?}",
+            region_id, raft_state, apply_state
+        )
+    };
+    // The commit index of raft state may be less than the recorded commit index.
+    // If so, forward the commit index.
+    if commit_index < recorded_commit_index {
+        let entry = raft_engine.get_entry(region_id, recorded_commit_index)?;
+        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+            return Err(box_err!(
+                "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
+                apply_state.get_commit_term(),
+                recorded_commit_index,
+                state_str()
+            ));
+        }
+        info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
+        commit_index = recorded_commit_index;
+    }
+    // Invariant: applied index <= max(commit index, recorded commit index)
+    if apply_state.get_applied_index() > commit_index {
+        return Err(box_err!(
+            "applied index > max(commit index, recorded commit index), {}",
+            state_str()
+        ));
+    }
+    // Invariant: max(commit index, recorded commit index) <= last index
+    if commit_index > last_index {
+        return Err(box_err!(
+            "max(commit index, recorded commit index) > last index, {}",
+            state_str()
+        ));
+    }
+    // Since the entries must be persisted before applying, the term of raft state
+    // should also be persisted. So it should be greater than the commit term of
+    // apply state.
+    if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
+        return Err(box_err!(
+            "term of raft state < commit term of apply state, {}",
+            state_str()
+        ));
+    }
+
+    raft_state.mut_hard_state().set_commit(commit_index);
+
+    Ok(())
+}
+
+pub fn init_last_term<ER: RaftEngine>(
+    raft_engine: &ER,
+    region: &metapb::Region,
+    raft_state: &RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<u64> {
+    let last_idx = raft_state.get_last_index();
+    if last_idx == 0 {
+        return Ok(0);
+    } else if last_idx == RAFT_INIT_LOG_INDEX {
+        return Ok(RAFT_INIT_LOG_TERM);
+    } else if last_idx == apply_state.get_truncated_state().get_index() {
+        return Ok(apply_state.get_truncated_state().get_term());
+    } else {
+        assert!(last_idx > RAFT_INIT_LOG_INDEX);
+    }
+    let entry = raft_engine.get_entry(region.get_id(), last_idx)?;
+    match entry {
+        None => Err(box_err!(
+            "[region {}] entry at {} doesn't exist, may lose data.",
+            region.get_id(),
+            last_idx
+        )),
+        Some(e) => Ok(e.get_term()),
+    }
+}
+
+pub fn init_applied_term<ER: RaftEngine>(
+    raft_engine: &ER,
+    region: &metapb::Region,
+    apply_state: &RaftApplyState,
+) -> Result<u64> {
+    if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
+        return Ok(RAFT_INIT_LOG_TERM);
+    }
+    let truncated_state = apply_state.get_truncated_state();
+    if apply_state.applied_index == truncated_state.get_index() {
+        return Ok(truncated_state.get_term());
+    }
+
+    match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
+        Some(e) => Ok(e.term),
+        None => Err(box_err!(
+            "[region {}] entry at apply index {} doesn't exist, may lose data.",
+            region.get_id(),
+            apply_state.applied_index
+        )),
+    }
+}
+
 /// A subset of `PeerStorage` that focus on accessing log entries.
 pub struct EntryStorage<ER> {
     region_id: u64,
@@ -432,17 +547,25 @@ pub struct EntryStorage<ER> {
 
 impl<ER: RaftEngine> EntryStorage<ER> {
     pub fn new(
-        region_id: u64,
         peer_id: u64,
         raft_engine: ER,
-        raft_state: RaftLocalState,
+        mut raft_state: RaftLocalState,
         apply_state: RaftApplyState,
-        last_term: u64,
-        applied_term: u64,
+        region: &metapb::Region,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    ) -> Self {
-        EntryStorage {
-            region_id,
+    ) -> Result<Self> {
+        if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
+            return Err(box_err!(
+                "[region {}] {} validate state fail: {:?}",
+                region.id,
+                peer_id,
+                e
+            ));
+        }
+        let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        Ok(Self {
+            region_id: region.id,
             peer_id,
             raft_engine,
             cache: EntryCache::default(),
@@ -453,7 +576,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             raftlog_fetch_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
-        }
+        })
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -1032,7 +1155,7 @@ pub mod tests {
             assert_eq!(e, cache.entry(e.get_index()).unwrap());
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

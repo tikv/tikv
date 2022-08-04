@@ -65,11 +65,11 @@ pub trait Extract: Sized {
 
 #[inline]
 fn type_error(eval_type: EvalType, expr_type: ExprType) -> Error {
-    return other_err!(
+    other_err!(
         "Unexpected ExprType {:?} and EvalType {:?}",
         expr_type,
         eval_type
-    );
+    )
 }
 
 impl Extract for Int {

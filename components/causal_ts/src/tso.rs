@@ -433,7 +433,7 @@ pub mod tests {
 
         batch.renew(10, TimeStamp::compose(1, 110)).unwrap();
         // timestamp fall back
-        assert!(batch.renew(10, TimeStamp::compose(1, 119)).is_err());
+        batch.renew(10, TimeStamp::compose(1, 119)).unwrap_err();
 
         batch.renew(10, TimeStamp::compose(1, 200)).unwrap();
         for logical in 191..=195 {
@@ -500,7 +500,7 @@ pub mod tests {
         for ts in 1101..=1200u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
 
         provider.flush().unwrap(); // allocated: [1201, 1400]
         assert_eq!(provider.batch_size(), 200);
@@ -517,7 +517,7 @@ pub mod tests {
         for ts in 1401..=1500u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
 
         // renew on used-up
         for ts in 1501..=2500u64 {
@@ -560,23 +560,23 @@ pub mod tests {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
         for ts in 1101..=1300u64 {
             // renew on used-up, allocated: [1101, 1300]
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.get_ts().is_err()); // renew fail on used-up
+        provider.get_ts().unwrap_err(); // renew fail on used-up
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
 
         provider.flush().unwrap(); // allocated: [1301, 1700]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
         for ts in 1301..=1700u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
     }
 }
