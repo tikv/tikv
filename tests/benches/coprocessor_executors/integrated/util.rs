@@ -7,7 +7,7 @@ use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tikv::{
-    coprocessor::dag::TiKvStorage,
+    coprocessor::dag::TikvStorage,
     storage::{RocksEngine, Store as TxnStore},
 };
 use tipb::Executor as PbExecutor;
@@ -73,7 +73,7 @@ where
         crate::util::bencher::BatchNextAllBencher::new(|| {
             tidb_query_executors::runner::build_executors(
                 black_box(executors.to_vec()),
-                black_box(TiKvStorage::new(ToTxnStore::<T>::to_store(store), false)),
+                black_box(TikvStorage::new(ToTxnStore::<T>::to_store(store), false)),
                 black_box(ranges.to_vec()),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(false),

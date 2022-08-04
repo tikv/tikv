@@ -50,7 +50,7 @@ impl KvFormat for ApiV2 {
         match key[0] {
             RAW_KEY_PREFIX => KeyMode::Raw,
             TXN_KEY_PREFIX => KeyMode::Txn,
-            TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDb,
+            TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::Tidb,
             _ => KeyMode::Unknown,
         }
     }

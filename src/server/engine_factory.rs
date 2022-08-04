@@ -19,7 +19,7 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use super::engine_factory_v2::KvEngineFactoryV2;
-use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -39,7 +39,7 @@ pub struct KvEngineFactoryBuilder {
 }
 
 impl KvEngineFactoryBuilder {
-    pub fn new(env: Arc<Env>, config: &TiKvConfig, store_path: impl Into<PathBuf>) -> Self {
+    pub fn new(env: Arc<Env>, config: &TikvConfig, store_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: FactoryInner {
                 env,
