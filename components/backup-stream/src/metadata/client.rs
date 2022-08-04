@@ -72,7 +72,7 @@ impl PartialEq for MetadataEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CheckpointProvider {
     Store(u64),
     Region { id: u64, version: u64 },
@@ -82,7 +82,7 @@ pub enum CheckpointProvider {
 
 /// The polymorphic checkpoint.
 /// The global checkpoint should be the minimal checkpoint of all checkpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Checkpoint {
     pub provider: CheckpointProvider,
     pub ts: TimeStamp,

@@ -213,7 +213,7 @@ impl TitanCfConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BackgroundJobLimits {
     max_background_jobs: u32,
     max_background_flushes: u32,
@@ -1935,26 +1935,26 @@ mod unified_read_pool_tests {
             min_thread_count: 0,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 1,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let invalid_cfg = UnifiedReadPoolConfig {
             stack_size: ReadableSize::mb(1),
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let invalid_cfg = UnifiedReadPoolConfig {
             max_tasks_per_worker: 1,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
         let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: cmp::max(
@@ -1963,7 +1963,7 @@ mod unified_read_pool_tests {
             ) + 1,
             ..cfg
         };
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
     }
 }
 
@@ -2258,7 +2258,7 @@ mod readpool_tests {
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
         };
-        assert!(unified.validate().is_err());
+        unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
@@ -2285,7 +2285,7 @@ mod readpool_tests {
             high_concurrency: 0,
             ..Default::default()
         };
-        assert!(storage.validate().is_err());
+        storage.validate().unwrap_err();
         let coprocessor = CoprReadPoolConfig {
             use_unified_pool: Some(false),
             ..Default::default()
@@ -2296,7 +2296,7 @@ mod readpool_tests {
             coprocessor,
         };
         assert!(!invalid_cfg.is_unified_pool_enabled());
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
     }
 
     #[test]
@@ -2307,7 +2307,7 @@ mod readpool_tests {
             max_thread_count: 0,
             ..Default::default()
         };
-        assert!(unified.validate().is_err());
+        unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {
             use_unified_pool: Some(true),
             ..Default::default()
@@ -2322,7 +2322,7 @@ mod readpool_tests {
         };
         cfg.adjust_use_unified_pool();
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
     }
 
     #[test]
@@ -2366,7 +2366,7 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
         cfg.storage.low_concurrency = 1;
         cfg.validate().unwrap();
 
@@ -2387,7 +2387,7 @@ mod readpool_tests {
             ..Default::default()
         };
         assert!(cfg.is_unified_pool_enabled());
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
         cfg.coprocessor.low_concurrency = 1;
         cfg.validate().unwrap();
     }
@@ -2707,7 +2707,7 @@ pub struct LogConfig {
 }
 
 /// LogLevel is a wrapper type of `slog::Level`
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LogLevel(slog::Level);
 
 impl From<LogLevel> for slog::Level {
@@ -4127,7 +4127,7 @@ mod tests {
         let mut last_cfg = TiKvConfig::default();
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4137,7 +4137,7 @@ mod tests {
         let mut last_cfg = TiKvConfig::default();
         tikv_cfg.storage.data_dir = "/data1".to_owned();
         tikv_cfg.validate().unwrap();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.storage.data_dir = "/data1".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4151,7 +4151,7 @@ mod tests {
 
         tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4165,7 +4165,7 @@ mod tests {
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4173,7 +4173,7 @@ mod tests {
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         tikv_cfg.validate().unwrap();
-        assert!(tikv_cfg.check_critical_cfg_with(&last_cfg).is_err());
+        tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
         tikv_cfg.validate().unwrap();
@@ -4310,7 +4310,7 @@ mod tests {
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
         let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
-        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.validate().unwrap_err();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
         tikv_cfg.validate().unwrap();
     }
@@ -4324,7 +4324,7 @@ mod tests {
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
         tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
-        assert!(tikv_cfg.validate().is_err());
+        tikv_cfg.validate().unwrap_err();
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
@@ -4438,7 +4438,7 @@ mod tests {
         for (name, value) in cases {
             let mut change = HashMap::new();
             change.insert(name, value);
-            assert!(to_config_change(change).is_err());
+            to_config_change(change).unwrap_err();
         }
     }
 
@@ -4606,21 +4606,15 @@ mod tests {
         cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
 
         // Return error if try to update not support config or unknow config
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.enable", "false")
-                .is_err()
-        );
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.scan-lock-pool-size", "10")
-                .is_err()
-        );
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.xxx", "false")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("resolved-ts.enable", "false")
+            .unwrap_err();
+        cfg_controller
+            .update_config("resolved-ts.scan-lock-pool-size", "10")
+            .unwrap_err();
+        cfg_controller
+            .update_config("resolved-ts.xxx", "false")
+            .unwrap_err();
 
         let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
         // Default value
@@ -4640,11 +4634,9 @@ mod tests {
         );
 
         // Return error if try to update `advance-ts-interval` to an invalid value
-        assert!(
-            cfg_controller
-                .update_config("resolved-ts.advance-ts-interval", "0m")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("resolved-ts.advance-ts-interval", "0m")
+            .unwrap_err();
         assert_eq!(
             resolved_ts_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
@@ -4734,11 +4726,9 @@ mod tests {
 
         // Can not update block cache through storage module
         // when shared block cache is disabled
-        assert!(
-            cfg_controller
-                .update_config("storage.block-cache.capacity", "512MB")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("storage.block-cache.capacity", "512MB")
+            .unwrap_err();
     }
 
     #[test]
@@ -4774,11 +4764,9 @@ mod tests {
         let db = storage.get_engine().get_rocksdb();
 
         // Can not update shared block cache through rocksdb module
-        assert!(
-            cfg_controller
-                .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("rocksdb.defaultcf.block-cache-size", "256MB")
+            .unwrap_err();
 
         cfg_controller
             .update_config("storage.block-cache.capacity", "256MB")
@@ -4805,11 +4793,9 @@ mod tests {
             LogLevel(Level::Warning)
         );
 
-        assert!(
-            cfg_controller
-                .update_config("log.level", "invalid")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("log.level", "invalid")
+            .unwrap_err();
         assert_eq!(
             cfg_controller.get_current().log.level,
             LogLevel(Level::Warning)
@@ -4878,7 +4864,7 @@ mod tests {
                 res.unwrap();
                 (size, std::cmp::max(size / 2, 1))
             } else {
-                assert!(res.is_err());
+                res.unwrap_err();
                 (origin_pool_size, origin_pool_size_high)
             };
             assert_eq!(
@@ -4934,11 +4920,9 @@ mod tests {
         assert_eq!(cfg_controller.get_current(), cfg);
 
         // u64::MAX ns casts to 213503d.
-        assert!(
-            cfg_controller
-                .update_config("quota.max-delay-duration", "213504d")
-                .is_err()
-        );
+        cfg_controller
+            .update_config("quota.max-delay-duration", "213504d")
+            .unwrap_err();
         assert_eq!(cfg_controller.get_current(), cfg);
 
         cfg_controller
@@ -5207,7 +5191,7 @@ mod tests {
 
         // Test validating memory_usage_limit when it's greater than max.
         cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = None;
@@ -5246,7 +5230,7 @@ mod tests {
             let mut cfg = TiKvConfig::default();
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
-            assert!(cfg.validate().is_err());
+            cfg.validate().unwrap_err();
         }
 
         {
@@ -5255,7 +5239,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            assert!(cfg.validate().is_err());
+            cfg.validate().unwrap_err();
         }
 
         {
@@ -5264,14 +5248,14 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
-            assert!(cfg.validate().is_err());
+            cfg.validate().unwrap_err();
         }
 
         {
             let mut cfg = TiKvConfig::default();
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            assert!(cfg.validate().is_err());
+            cfg.validate().unwrap_err();
         }
 
         {
@@ -5639,7 +5623,7 @@ mod tests {
         let r = panic_hook::recover_safe(|| {
             let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
         });
-        assert!(r.is_err());
+        r.unwrap_err();
 
         let bad_string_config = r#"
             compaction-style = 4
@@ -5647,7 +5631,7 @@ mod tests {
         let r = panic_hook::recover_safe(|| {
             let _: DefaultCfConfig = toml::from_str(bad_string_config).unwrap();
         });
-        assert!(r.is_err());
+        r.unwrap_err();
 
         // rate-limiter-mode default values is 2
         let config_str = r#"

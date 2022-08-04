@@ -57,7 +57,7 @@ enum Cli {
 }
 
 arg_enum! {
-    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    #[derive(Debug, PartialEq, Clone, Copy)]
     enum Fuzzer {
         Afl,
         Honggfuzz,

@@ -28,7 +28,7 @@ fn delete_old_data<E: RaftEngineDebug>(engine: &E, id: u64) {
 }
 
 /// Allow lost situation.
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 enum DataLost {
     /// The leader loses commit index.
     ///

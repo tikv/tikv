@@ -67,7 +67,7 @@ fn new_engine_readonly_dir() {
     let path = path.to_str().unwrap();
     let err = KvTestEngine::new_kv_engine(path, ALL_CFS);
 
-    assert!(err.is_err());
+    err.unwrap_err();
 }
 
 #[test]
@@ -88,5 +88,5 @@ fn new_engine_opt_readonly_dir() {
     let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let err = KvTestEngine::new_kv_engine_opt(path, db_opts, cf_opts);
 
-    assert!(err.is_err());
+    err.unwrap_err();
 }

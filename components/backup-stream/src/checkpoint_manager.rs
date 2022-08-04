@@ -136,7 +136,7 @@ fn epoch_not_match(id: u64, sent: u64, real: u64) -> PbError {
     err
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Hash, Clone, Copy)]
 /// A simple region id, but versioned.
 pub struct RegionIdWithVersion {
     pub region_id: u64,

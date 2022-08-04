@@ -8931,7 +8931,7 @@ mod tests {
             .unwrap();
         // DummyLockManager just drops the callback, so it will fail to receive
         // anything.
-        assert!(rx.recv().is_err());
+        rx.recv().unwrap_err();
 
         let (tx, rx) = channel();
         storage
