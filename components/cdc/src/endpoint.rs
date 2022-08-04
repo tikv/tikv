@@ -29,7 +29,7 @@ use kvproto::{
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
 use raftstore::{
-    coprocessor::{CmdBatch, ObserveID},
+    coprocessor::{CmdBatch, ObserveId},
     router::RaftStoreRouter,
     store::{
         fsm::{ChangeObserver, StoreMeta},
@@ -56,11 +56,11 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, MemoryQuota, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamID, DownstreamState},
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnID, FeatureGate},
+    service::{Conn, ConnId, FeatureGate},
     CdcObserver, Error,
 };
 
@@ -77,16 +77,16 @@ const RAW_RESOLVED_TS_OUTLIER_COUNT_THRESHOLD: usize = 10;
 pub enum Deregister {
     Downstream {
         region_id: u64,
-        downstream_id: DownstreamID,
-        conn_id: ConnID,
+        downstream_id: DownstreamId,
+        conn_id: ConnId,
         err: Option<Error>,
     },
     Delegate {
         region_id: u64,
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         err: Error,
     },
-    Conn(ConnID),
+    Conn(ConnId),
 }
 
 impl_display_as_debug!(Deregister);
@@ -136,7 +136,7 @@ pub enum Task {
     Register {
         request: ChangeDataRequest,
         downstream: Downstream,
-        conn_id: ConnID,
+        conn_id: ConnId,
         version: semver::Version,
     },
     Deregister(Deregister),
@@ -147,13 +147,13 @@ pub enum Task {
         multi: Vec<CmdBatch>,
         old_value_cb: OldValueCallback,
     },
-    MinTS {
+    MinTs {
         regions: Vec<u64>,
         min_ts: TimeStamp,
         current_ts: TimeStamp,
     },
     ResolverReady {
-        observe_id: ObserveID,
+        observe_id: ObserveId,
         region: Region,
         resolver: Resolver,
     },
@@ -162,7 +162,7 @@ pub enum Task {
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
         region_id: u64,
-        downstream_id: DownstreamID,
+        downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
         // are delivered to the downstream. And then incremental scan can start.
@@ -211,7 +211,7 @@ impl fmt::Debug for Task {
                 .field("type", &"multi_batch")
                 .field("multi_batch", &multi.len())
                 .finish(),
-            Task::MinTS {
+            Task::MinTs {
                 ref min_ts,
                 ref current_ts,
                 ..
@@ -380,7 +380,7 @@ pub struct Endpoint<T, E> {
     cluster_id: u64,
 
     capture_regions: HashMap<u64, Delegate>,
-    connections: HashMap<ConnID, Conn>,
+    connections: HashMap<ConnId, Conn>,
     scheduler: Scheduler<Task>,
     raft_router: T,
     engine: E,
@@ -603,7 +603,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     let oid = self.observer.unsubscribe_region(region_id, id);
                     assert!(
                         oid.is_some(),
-                        "unsubscribe region {} failed, ObserveID {:?}",
+                        "unsubscribe region {} failed, ObserveId {:?}",
                         region_id,
                         id
                     );
@@ -616,7 +616,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             } => {
                 // Something went wrong, deregister all downstreams of the region.
 
-                // To avoid ABA problem, we must check the unique ObserveID.
+                // To avoid ABA problem, we must check the unique ObserveId.
                 let need_remove = self
                     .capture_regions
                     .get(&region_id)
@@ -634,7 +634,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 assert_eq!(
                     need_remove,
                     oid.is_some(),
-                    "unsubscribe region {} failed, ObserveID {:?}",
+                    "unsubscribe region {} failed, ObserveId {:?}",
                     region_id,
                     observe_id
                 );
@@ -653,7 +653,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                                     let oid = self.observer.unsubscribe_region(region_id, id);
                                     assert!(
                                         oid.is_some(),
-                                        "unsubscribe region {} failed, ObserveID {:?}",
+                                        "unsubscribe region {} failed, ObserveId {:?}",
                                         region_id,
                                         id
                                     );
@@ -670,7 +670,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         &mut self,
         mut request: ChangeDataRequest,
         mut downstream: Downstream,
-        conn_id: ConnID,
+        conn_id: ConnId,
         version: semver::Version,
     ) {
         let region_id = request.region_id;
@@ -776,7 +776,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let old_observe_id = self.observer.subscribe_region(region_id, observe_id);
             assert!(
                 old_observe_id.is_none(),
-                "region {} must not be observed twice, old ObserveID {:?}, new ObserveID {:?}",
+                "region {} must not be observed twice, old ObserveId {:?}, new ObserveId {:?}",
                 region_id,
                 old_observe_id,
                 observe_id
@@ -859,7 +859,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
 
-    fn on_region_ready(&mut self, observe_id: ObserveID, resolver: Resolver, region: Region) {
+    fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
         let mut failed_downstreams = Vec::new();
         if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
@@ -1108,7 +1108,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let raft_router = self.raft_router.clone();
-        let regions: Vec<(u64, ObserveID)> = self
+        let regions: Vec<(u64, ObserveId)> = self
             .capture_regions
             .iter()
             .map(|(region_id, delegate)| (*region_id, delegate.handle.id))
@@ -1131,8 +1131,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
-            // Note: This step must be done before scheduling `Task::MinTS` task, and the
-            // resolver must be checked in or after `Task::MinTS`' execution.
+            // Note: This step must be done before scheduling `Task::MinTs` task, and the
+            // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
@@ -1148,7 +1148,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
 
-            // If flush_causal_timestamp fails, cannot schedule MinTS task
+            // If flush_causal_timestamp fails, cannot schedule MinTs task
             // as new coming raw data may use timestamp smaller than min_ts
             if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
                 error!("cdc flush causal timestamp failed"; "err" => ?e);
@@ -1181,7 +1181,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 };
 
             if !regions.is_empty() {
-                match scheduler.schedule(Task::MinTS {
+                match scheduler.schedule(Task::MinTs {
                     regions,
                     min_ts,
                     current_ts: min_ts_pd,
@@ -1204,7 +1204,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     }
 
     async fn region_resolved_ts_raft(
-        regions: Vec<(u64, ObserveID)>,
+        regions: Vec<(u64, ObserveId)>,
         scheduler: &Scheduler<Task>,
         raft_router: T,
         min_ts: TimeStamp,
@@ -1272,7 +1272,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Runnable for Endpoint<T, E> {
         debug!("cdc run task"; "task" => %task);
 
         match task {
-            Task::MinTS {
+            Task::MinTs {
                 regions,
                 min_ts,
                 current_ts,
@@ -2216,7 +2216,7 @@ mod tests {
             .unwrap()
             .handle
             .id;
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: region_ids,
             min_ts: cur_tso,
             current_ts: cur_tso,
@@ -2309,7 +2309,7 @@ mod tests {
         let resolver = Resolver::new(1);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite.on_region_ready(observe_id, resolver, region.clone());
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
             current_ts: TimeStamp::zero(),
@@ -2345,7 +2345,7 @@ mod tests {
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
             current_ts: TimeStamp::zero(),
@@ -2390,7 +2390,7 @@ mod tests {
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite.on_region_ready(observe_id, resolver, region);
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
             current_ts: TimeStamp::zero(),
@@ -2550,8 +2550,8 @@ mod tests {
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
         let deregister = Deregister::Delegate {
             region_id: 1,
-            // A stale ObserveID (different from the actual one).
-            observe_id: ObserveID::new(),
+            // A stale ObserveId (different from the actual one).
+            observe_id: ObserveId::new(),
             err: Error::request(err_header),
         };
         suite.run(Task::Deregister(deregister));
@@ -2624,7 +2624,7 @@ mod tests {
             }
         };
 
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
             current_ts: TimeStamp::zero(),
@@ -2638,7 +2638,7 @@ mod tests {
         )
         .unwrap_err();
 
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
             current_ts: TimeStamp::zero(),
@@ -2652,7 +2652,7 @@ mod tests {
         )
         .unwrap_err();
 
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
             current_ts: TimeStamp::zero(),
@@ -2662,7 +2662,7 @@ mod tests {
         // conn b must receive a resolved ts that contains region 3.
         assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
 
-        suite.run(Task::MinTS {
+        suite.run(Task::MinTs {
             regions: vec![1, 3],
             min_ts: TimeStamp::from(4),
             current_ts: TimeStamp::zero(),

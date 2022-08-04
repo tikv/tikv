@@ -137,7 +137,7 @@ pub enum Error {
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
     #[error("CF {0} not found")]
-    CFName(String),
+    CfName(String),
     #[error("Codec {0}")]
     Codec(#[from] tikv_util::codec::Error),
     #[error("The entries of region is unavailable")]
@@ -155,7 +155,7 @@ impl ErrorCodeExt for Error {
             Error::NotInRange { .. } => error_code::engine::NOT_IN_RANGE,
             Error::Protobuf(_) => error_code::engine::PROTOBUF,
             Error::Io(_) => error_code::engine::IO,
-            Error::CFName(_) => error_code::engine::CF_NAME,
+            Error::CfName(_) => error_code::engine::CF_NAME,
             Error::Codec(_) => error_code::engine::CODEC,
             Error::Other(_) => error_code::UNKNOWN,
             Error::EntriesUnavailable => error_code::engine::DATALOSS,

@@ -806,7 +806,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
-            tikv::config::Module::CDC,
+            tikv::config::Module::Cdc,
             Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
 

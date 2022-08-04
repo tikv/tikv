@@ -36,7 +36,7 @@ pub enum FieldTypeTp {
     NewDate = 14,
     VarChar = 15,
     Bit = 16,
-    JSON = 0xf5,
+    Json = 0xf5,
     NewDecimal = 0xf6,
     Enum = 0xf7,
     Set = 0xf8,
@@ -52,7 +52,7 @@ pub enum FieldTypeTp {
 impl FieldTypeTp {
     fn from_i32(i: i32) -> Option<FieldTypeTp> {
         if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
-            || (i >= FieldTypeTp::JSON as i32 && i <= FieldTypeTp::Geometry as i32)
+            || (i >= FieldTypeTp::Json as i32 && i <= FieldTypeTp::Geometry as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
         } else {
@@ -61,7 +61,7 @@ impl FieldTypeTp {
     }
 
     pub fn from_u8(i: u8) -> Option<FieldTypeTp> {
-        if i <= FieldTypeTp::Bit as u8 || i >= FieldTypeTp::JSON as u8 {
+        if i <= FieldTypeTp::Bit as u8 || i >= FieldTypeTp::Json as u8 {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i32::from(i)) })
         } else {
             None
@@ -148,10 +148,10 @@ impl fmt::Display for Collation {
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Charset {
-    UTF8,
-    UTF8Mb4,
+    Utf8,
+    Utf8Mb4,
     Latin1,
-    GBK,
+    Gbk,
     Binary,
     Ascii,
 }
@@ -159,10 +159,10 @@ pub enum Charset {
 impl Charset {
     pub fn from_name(name: &str) -> Result<Self, DataTypeError> {
         match name {
-            "utf8mb4" => Ok(Charset::UTF8Mb4),
-            "utf8" => Ok(Charset::UTF8),
+            "utf8mb4" => Ok(Charset::Utf8Mb4),
+            "utf8" => Ok(Charset::Utf8),
             "latin1" => Ok(Charset::Latin1),
-            "gbk" => Ok(Charset::GBK),
+            "gbk" => Ok(Charset::Gbk),
             "binary" => Ok(Charset::Binary),
             "ascii" => Ok(Charset::Ascii),
             _ => Err(DataTypeError::UnsupportedCharset {
@@ -471,7 +471,7 @@ mod tests {
             FieldTypeTp::NewDate,
             FieldTypeTp::VarChar,
             FieldTypeTp::Bit,
-            FieldTypeTp::JSON,
+            FieldTypeTp::Json,
             FieldTypeTp::NewDecimal,
             FieldTypeTp::Enum,
             FieldTypeTp::Set,
@@ -556,9 +556,9 @@ mod tests {
     #[test]
     fn test_charset_from_str() {
         let cases = vec![
-            ("gbk", Some(Charset::GBK)),
-            ("utf8mb4", Some(Charset::UTF8Mb4)),
-            ("utf8", Some(Charset::UTF8)),
+            ("gbk", Some(Charset::Gbk)),
+            ("utf8mb4", Some(Charset::Utf8Mb4)),
+            ("utf8", Some(Charset::Utf8)),
             ("binary", Some(Charset::Binary)),
             ("latin1", Some(Charset::Latin1)),
             ("ascii", Some(Charset::Ascii)),

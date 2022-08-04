@@ -284,7 +284,7 @@ fn unflatten(
                     FieldTypeTp::VarChar,
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
-                    FieldTypeTp::JSON
+                    FieldTypeTp::Json,
                 ]
                 .contains(&t),
                 "unknown type {} {}",
@@ -631,7 +631,7 @@ mod tests {
             (1, FieldTypeTp::LongLong.into()),
             (2, FieldTypeTp::VarChar.into()),
             (3, FieldTypeTp::NewDecimal.into()),
-            (5, FieldTypeTp::JSON.into()),
+            (5, FieldTypeTp::Json.into()),
             (6, duration_col),
         ]);
 
