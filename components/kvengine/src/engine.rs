@@ -299,7 +299,7 @@ impl EngineCore {
             .unwrap_or(0)
     }
 
-    pub(crate) fn trigger_flush(&self, shard: &Arc<Shard>) {
+    pub(crate) fn trigger_flush(&self, shard: &Shard) {
         if !shard.is_active() {
             return;
         }
@@ -319,7 +319,7 @@ impl EngineCore {
         }
     }
 
-    fn trigger_initial_flush(&self, shard: &Arc<Shard>) {
+    fn trigger_initial_flush(&self, shard: &Shard) {
         let guard = shard.parent_snap.read().unwrap();
         let parent_snap = guard.as_ref().unwrap().clone();
         let mut mem_tbls = vec![];

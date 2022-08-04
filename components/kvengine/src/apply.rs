@@ -156,6 +156,9 @@ impl EngineCore {
         );
         shard.set_data(new_data);
         store_bool(&shard.initial_flushed, true);
+        // Switched memtables can't be flushed until initial flush finished, so we trigger it
+        // actively.
+        self.trigger_flush(shard);
     }
 
     fn apply_compaction(&self, shard: &Shard, cs: &ChangeSet) {
