@@ -195,6 +195,8 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        self.base_file_system
+            .rename(src_path.as_ref(), dst_path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             // Note: `rename` will reuse the old entryption info from `src_path`.
             manager.link_file(
@@ -203,11 +205,12 @@ impl FileSystem for ManagedFileSystem {
             )?;
             manager.delete_file(src_path.as_ref().to_str().unwrap())?;
         }
-        self.base_file_system
-            .rename(src_path.as_ref(), dst_path.as_ref())
+        Ok(())
     }
 
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        self.base_file_system
+            .rename(src_path.as_ref(), dst_path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             // Note: `reuse` won't update the data block by the new encrypted
             // key. Users should be responsible for the data security by
@@ -215,8 +218,7 @@ impl FileSystem for ManagedFileSystem {
             manager.delete_file(src_path.as_ref().to_str().unwrap())?;
             manager.new_file(dst_path.as_ref().to_str().unwrap())?;
         }
-        self.base_file_system
-            .rename(src_path.as_ref(), dst_path.as_ref())
+        Ok(())
     }
 
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
