@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-// #[PerformanceCriticalPath]: Tikv gRPC APIs implementation
+// #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{mem, sync::Arc};
 
 use api_version::KvFormat;

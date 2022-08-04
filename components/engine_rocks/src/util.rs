@@ -307,7 +307,7 @@ pub fn to_raw_perf_level(level: engine_traits::PerfLevel) -> rocksdb::PerfLevel 
         engine_traits::PerfLevel::EnableTimeExceptForMutex => {
             rocksdb::PerfLevel::EnableTimeExceptForMutex
         }
-        engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
+        engine_traits::PerfLevel::EnableTimeAndCpuTimeExceptForMutex => {
             rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
         }
         engine_traits::PerfLevel::EnableTime => rocksdb::PerfLevel::EnableTime,
@@ -324,7 +324,7 @@ pub fn from_raw_perf_level(level: rocksdb::PerfLevel) -> engine_traits::PerfLeve
             engine_traits::PerfLevel::EnableTimeExceptForMutex
         }
         rocksdb::PerfLevel::EnableTimeAndCPUTimeExceptForMutex => {
-            engine_traits::PerfLevel::EnableTimeAndCPUTimeExceptForMutex
+            engine_traits::PerfLevel::EnableTimeAndCpuTimeExceptForMutex
         }
         rocksdb::PerfLevel::EnableTime => engine_traits::PerfLevel::EnableTime,
         rocksdb::PerfLevel::OutOfBounds => engine_traits::PerfLevel::OutOfBounds,

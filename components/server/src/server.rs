@@ -9,7 +9,7 @@
 //! The entry point is `run_tikv`.
 //!
 //! Components are often used to initialize other components, and/or must be
-//! explicitly stopped. We keep these components in the `TiKvServer` struct.
+//! explicitly stopped. We keep these components in the `TikvServer` struct.
 
 use std::{
     cmp,
@@ -82,7 +82,7 @@ use raftstore::{
 };
 use security::SecurityManager;
 use tikv::{
-    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TiKvConfig},
+    config::{ConfigController, DbConfigManger, DbType, LogConfigManager, TikvConfig},
     coprocessor::{self, MEMTRACE_ROOT as MEMTRACE_COPROCESSOR},
     coprocessor_v2,
     import::{ImportSstService, SstImporter},
@@ -140,10 +140,10 @@ const SYSTEM_HEALTHY_THRESHOLD: f64 = 0.50;
 const CPU_QUOTA_ADJUSTMENT_PACE: f64 = 200.0; // 0.2 vcpu
 
 #[inline]
-fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
-    let mut tikv = TiKvServer::<CER>::init::<F>(config);
+fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
+    let mut tikv = TikvServer::<CER>::init::<F>(config);
 
-    // Must be called after `TiKvServer::init`.
+    // Must be called after `TikvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
     let high_water = (tikv.config.memory_usage_high_water * memory_limit as f64) as u64;
     register_memory_usage_high_water(high_water);
@@ -170,7 +170,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TiKvConfig) {
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TiKvConfig) {
+pub fn run_tikv(config: TikvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
@@ -207,8 +207,8 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A complete TiKV server.
-struct TiKvServer<ER: RaftEngine> {
-    config: TiKvConfig,
+struct TikvServer<ER: RaftEngine> {
+    config: TikvConfig,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
@@ -221,7 +221,7 @@ struct TiKvServer<ER: RaftEngine> {
     store_path: PathBuf,
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     encryption_key_manager: Option<Arc<DataKeyManager>>,
-    engines: Option<TiKvEngines<RocksEngine, ER>>,
+    engines: Option<TikvEngines<RocksEngine, ER>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
@@ -236,7 +236,7 @@ struct TiKvServer<ER: RaftEngine> {
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
-struct TiKvEngines<EK: KvEngine, ER: RaftEngine> {
+struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
     engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
@@ -257,11 +257,11 @@ type LocalServer<EK, ER> =
     Server<RaftRouter<EK, ER>, resolve::PdStoreAddrResolver, LocalRaftKv<EK, ER>>;
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
-impl<ER> TiKvServer<ER>
+impl<ER> TikvServer<ER>
 where
     ER: RaftEngine,
 {
-    fn init<F: KvFormat>(mut config: TiKvConfig) -> TiKvServer<ER> {
+    fn init<F: KvFormat>(mut config: TikvConfig) -> TikvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -331,7 +331,7 @@ where
             info!("Causal timestamp provider startup.");
         }
 
-        TiKvServer {
+        TikvServer {
             config,
             cfg_controller: Some(cfg_controller),
             security_mgr,
@@ -373,7 +373,7 @@ where
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
-    fn init_config(mut config: TiKvConfig) -> ConfigController {
+    fn init_config(mut config: TikvConfig) -> ConfigController {
         validate_and_persist_config(&mut config, true);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
@@ -408,7 +408,7 @@ where
     }
 
     fn connect_to_pd_cluster(
-        config: &mut TiKvConfig,
+        config: &mut TikvConfig,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
@@ -573,7 +573,7 @@ where
             engines.kv.clone(),
         );
 
-        self.engines = Some(TiKvEngines {
+        self.engines = Some(TikvEngines {
             engines,
             store_meta,
             engine,
@@ -813,7 +813,7 @@ where
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
-            tikv::config::Module::CDC,
+            tikv::config::Module::Cdc,
             Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
 
@@ -1535,7 +1535,7 @@ where
 
 pub trait ConfiguredRaftEngine: RaftEngine {
     fn build(
-        _: &TiKvConfig,
+        _: &TikvConfig,
         _: &Arc<Env>,
         _: &Option<Arc<DataKeyManager>>,
         _: &Option<Cache>,
@@ -1548,7 +1548,7 @@ pub trait ConfiguredRaftEngine: RaftEngine {
 
 impl ConfiguredRaftEngine for RocksEngine {
     fn build(
-        config: &TiKvConfig,
+        config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Option<Cache>,
@@ -1600,7 +1600,7 @@ impl ConfiguredRaftEngine for RocksEngine {
 
 impl ConfiguredRaftEngine for RaftLogEngine {
     fn build(
-        config: &TiKvConfig,
+        config: &TikvConfig,
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Option<Cache>,
@@ -1637,7 +1637,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
     }
 }
 
-impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
+impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
@@ -1724,7 +1724,7 @@ fn pre_start() {
     }
 }
 
-fn check_system_config(config: &TiKvConfig) {
+fn check_system_config(config: &TikvConfig) {
     info!("beginning system configuration check");
     let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
     if config.rocksdb.titan.enabled {

@@ -24,7 +24,7 @@ use tidb_query_common::storage::{
 };
 use tikv::{
     config::BackupConfig,
-    coprocessor::{checksum_crc64_xor, dag::TiKvStorage},
+    coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
         kv::{Engine, SnapContext},
         SnapshotStore,
@@ -355,7 +355,7 @@ impl TestSuite {
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKvStorage::new(snap_store, false),
+            storage: TikvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,
