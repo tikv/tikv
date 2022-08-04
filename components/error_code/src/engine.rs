@@ -6,7 +6,7 @@ define_error_codes!(
     ENGINE => ("Engine", "", ""),
     NOT_IN_RANGE => ("NotInRange", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
-    IO => ("IO", "", ""),
+    IO => ("Io", "", ""),
     CF_NAME => ("CfName", "", ""),
     CODEC => ("Codec", "", ""),
     DATALOSS => ("DataLoss", "", ""),

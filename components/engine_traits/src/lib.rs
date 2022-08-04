@@ -191,7 +191,7 @@
 //!
 //! At the end of this phase the `engine` crate will be deleted.
 //!
-//! ## 3) "Pulling up" the generic abstractions through Tikv
+//! ## 3) "Pulling up" the generic abstractions through TiKV
 //!
 //! With all of TiKV using the `engine_traits` traits in conjunction with the
 //! concrete `engine_rocks` types, we can push generic type parameters up

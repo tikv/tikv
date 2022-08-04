@@ -3,7 +3,7 @@
 define_error_codes! {
     "KV:LogBackup:",
 
-    ETCD => ("ETCD",
+    ETCD => ("Etcd",
         "Error during requesting the meta store(etcd)",
         "Please check the connectivity between TiKV and PD."),
     PROTO => ("Proto",
@@ -23,7 +23,7 @@ define_error_codes! {
         "Malformed metadata found.",
         "The metadata format is unexpected, please check the compatibility between TiKV / BR."
     ),
-    IO => ("IO",
+    IO => ("Io",
         "Error during doing Input / Output operations.",
         "This is a generic error, please check the error message for further information."
     ),
@@ -35,7 +35,7 @@ define_error_codes! {
         "Error during scheduling internal task.",
         "This is an internal error, and may happen if there are too many changes to observe, please ask the community for help."
     ),
-    PD => ("PD",
+    PD => ("Pd",
         "Error during requesting the Placement Driver.",
         "Please check the connectivity between TiKV and PD."
     ),
