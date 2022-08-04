@@ -51,9 +51,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         &self,
         id: u64,
         suffix: Option<u64>,
-        options: OpenOptions,
+        mut options: OpenOptions,
     ) -> Result<RocksEngine> {
-        options.validate()?;
+        if options.create() || options.create_new() {
+            options = options.set_cache_only(false);
+        }
 
         let mut reg = self.registry.lock().unwrap();
         if let Some(suffix) = suffix {
@@ -79,9 +81,12 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
                     || RocksEngine::exists(tablet_path.to_str().unwrap_or_default())
                 {
                     let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
-                    debug!("open and insert tablet"; "key" => ?(id, suffix));
-                    reg.insert((id, suffix), kv_engine.clone());
-                    self.inner.on_tablet_created(id, suffix);
+                    debug!("open tablet"; "key" => ?(id, suffix));
+                    if !options.skip_cache() {
+                        debug!("insert a tablet"; "key" => ?(id, suffix));
+                        reg.insert((id, suffix), kv_engine.clone());
+                        self.inner.on_tablet_created(id, suffix);
+                    }
                     return Ok(kv_engine);
                 }
             }
@@ -99,6 +104,21 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             id,
             suffix
         ))
+    }
+
+    fn open_tablet_raw(&self, path: &Path) -> Result<RocksEngine> {
+        if !RocksEngine::exists(path.to_str().unwrap_or_default()) {
+            return Err(box_err!(
+                "path {} does not have db",
+                path.to_str().unwrap_or_default()
+            ));
+        };
+        let (id, suffix) = get_id_and_suffix_from_path(path);
+        self.open_tablet(
+            id,
+            Some(suffix),
+            OpenOptions::default().set_skip_cache(true),
+        )
     }
 
     #[inline]

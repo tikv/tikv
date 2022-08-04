@@ -8,7 +8,7 @@ use std::{
     vec::Vec,
 };
 
-use tikv_util::{box_err, error};
+use tikv_util::error;
 
 use crate::*;
 
@@ -153,6 +153,7 @@ impl Drop for TabletErrorCollector {
     }
 }
 
+/// OpenOptionsn is used for specifiying the way of opening a tablet.
 #[derive(Default)]
 pub struct OpenOptions {
     // create tablet if non-exist
@@ -160,6 +161,7 @@ pub struct OpenOptions {
     create_new: bool,
     read_only: bool,
     cache_only: bool,
+    skip_cache: bool,
 }
 
 impl OpenOptions {
@@ -187,6 +189,12 @@ impl OpenOptions {
         self
     }
 
+    /// Sets the option to open a tablet without updating the cache.
+    pub fn set_skip_cache(mut self, skip_cache: bool) -> Self {
+        self.skip_cache = skip_cache;
+        self
+    }
+
     pub fn create(&self) -> bool {
         self.create
     }
@@ -203,13 +211,8 @@ impl OpenOptions {
         self.cache_only
     }
 
-    pub fn validate(&self) -> Result<()> {
-        if self.cache_only && (self.create || self.create_new) {
-            return Err(box_err!(
-                "cache_only and create/create_new cannot be set simultaneously"
-            ));
-        }
-        Ok(())
+    pub fn skip_cache(&self) -> bool {
+        self.skip_cache
     }
 }
 
@@ -226,6 +229,9 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// tablet. The reason to have suffix is that we can keep more than one
     /// tablet for a region.
     fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
+
+    /// Open tablet by raw path without updating cache.
+    fn open_tablet_raw(&self, path: &Path) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -284,6 +290,10 @@ where
     }
 
     fn open_tablet(&self, _id: u64, _suffix: Option<u64>, _options: OpenOptions) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_raw(&self, _path: &Path) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
 

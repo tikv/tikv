@@ -158,8 +158,6 @@ pub mod kv {
             _suffix: Option<u64>,
             options: OpenOptions,
         ) -> Result<KvTestEngine> {
-            options.validate()?;
-
             if let Some(db) = self.root_db.lock().unwrap().as_ref() {
                 if options.create_new() {
                     return Err(box_err!(
@@ -173,6 +171,10 @@ pub mod kv {
             }
 
             Err(box_err!("root tablet has not been initialized"))
+        }
+
+        fn open_tablet_raw(&self, _path: &Path) -> Result<KvTestEngine> {
+            self.open_tablet(0, Some(0), OpenOptions::default().set_create(true))
         }
 
         fn exists_raw(&self, _path: &Path) -> bool {
@@ -250,9 +252,11 @@ pub mod kv {
             &self,
             id: u64,
             suffix: Option<u64>,
-            options: OpenOptions,
+            mut options: OpenOptions,
         ) -> Result<KvTestEngine> {
-            options.validate()?;
+            if options.create_new() || options.create() {
+                options = options.set_cache_only(false);
+            }
 
             let mut reg = self.registry.lock().unwrap();
             if let Some(suffix) = suffix {
@@ -278,7 +282,9 @@ pub mod kv {
                         || KvTestEngine::exists(tablet_path.to_str().unwrap_or_default())
                     {
                         let kv_engine = self.inner.create_tablet(&tablet_path)?;
-                        reg.insert((id, suffix), kv_engine.clone());
+                        if !options.skip_cache() {
+                            reg.insert((id, suffix), kv_engine.clone());
+                        }
                         return Ok(kv_engine);
                     }
                 }
@@ -295,6 +301,21 @@ pub mod kv {
                 id,
                 suffix
             ))
+        }
+
+        fn open_tablet_raw(&self, path: &Path) -> Result<KvTestEngine> {
+            if !KvTestEngine::exists(path.to_str().unwrap_or_default()) {
+                return Err(box_err!(
+                    "path {} does not have db",
+                    path.to_str().unwrap_or_default()
+                ));
+            };
+            let (id, suffix) = get_id_and_suffix_from_path(path);
+            self.open_tablet(
+                id,
+                Some(suffix),
+                OpenOptions::default().set_skip_cache(true),
+            )
         }
 
         #[inline]

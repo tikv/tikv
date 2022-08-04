@@ -243,8 +243,6 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         _suffix: Option<u64>,
         options: OpenOptions,
     ) -> Result<RocksEngine> {
-        options.validate()?;
-
         if let Some(db) = self.inner.root_db.lock().unwrap().as_ref() {
             if options.create_new() {
                 return Err(box_err!(
@@ -258,6 +256,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         }
 
         Err(box_err!("root tablet has not been initialized"))
+    }
+
+    fn open_tablet_raw(&self, _path: &Path) -> Result<RocksEngine> {
+        self.open_tablet(0, Some(0), OpenOptions::default().set_create(true))
     }
 
     fn exists_raw(&self, _path: &Path) -> bool {
