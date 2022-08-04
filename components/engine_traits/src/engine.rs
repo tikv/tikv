@@ -229,7 +229,13 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
 
     /// Open tablet by raw path without updating cache.
-    fn open_tablet_raw(&self, path: &Path, options: OpenOptions) -> Result<EK>;
+    fn open_tablet_raw(
+        &self,
+        path: &Path,
+        id: u64,
+        suffix: u64,
+        options: OpenOptions,
+    ) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -291,7 +297,13 @@ where
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
-    fn open_tablet_raw(&self, _path: &Path, _options: OpenOptions) -> Result<EK> {
+    fn open_tablet_raw(
+        &self,
+        _path: &Path,
+        _id: u64,
+        _suffix: u64,
+        _options: OpenOptions,
+    ) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
