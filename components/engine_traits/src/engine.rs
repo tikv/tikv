@@ -23,9 +23,9 @@ pub trait KvEngine:
     + SyncMutable
     + Iterable
     + WriteBatchExt
-    + DBOptionsExt
-    + CFNamesExt
-    + CFOptionsExt
+    + DbOptionsExt
+    + CfNamesExt
+    + CfOptionsExt
     + ImportExt
     + SstExt
     + CompactExt
@@ -172,17 +172,10 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
 
     /// Open a tablet by id and suffix from cache---that means it should already
     /// be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
-            return Some(engine);
-        }
-        None
-    }
+    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK>;
 
     /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
-        self.open_tablet_cache(id, 0)
-    }
+    fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
 
     /// Open tablet by path and readonly flag
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
@@ -229,7 +222,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
 
 pub struct DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     pub engine: Option<EK>,
     pub root_path: String,
@@ -237,26 +230,40 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
+        Some(self.engine.as_ref().unwrap().clone())
+    }
+
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
+
     fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         true
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
+
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
@@ -271,9 +278,10 @@ where
         opt.set_block_cache_capacity(capacity)
     }
 }
+
 impl<EK> TabletAccessor<EK> for DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
         if let Some(engine) = &self.engine {
@@ -288,14 +296,14 @@ where
 
 impl<EK> DummyFactory<EK>
 where
-    EK: CFOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
         DummyFactory { engine, root_path }
     }
 }
 
-impl<EK: CFOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
+impl<EK: CfOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
         Self::new(None, "/tmp".to_string())
     }
@@ -309,7 +317,7 @@ mod tests {
     fn test_tablet_error_collector_ok() {
         let mut err = TabletErrorCollector::new();
         err.add_result(1, 1, Ok(()));
-        assert!(err.take_result().is_ok());
+        err.take_result().unwrap();
         assert_eq!(err.get_error_count(), 0);
     }
 
@@ -320,8 +328,7 @@ mod tests {
         err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
         err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
         err.add_result(1, 1, Ok(()));
-        let r = err.take_result();
-        assert!(r.is_err());
+        err.take_result().unwrap_err();
         assert_eq!(err.get_error_count(), 2);
     }
 }

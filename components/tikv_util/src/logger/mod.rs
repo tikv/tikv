@@ -781,7 +781,7 @@ mod tests {
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
@@ -829,7 +829,7 @@ mod tests {
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             for (output_line, expect_line) in output.lines().zip(expect.lines()) {
@@ -862,7 +862,7 @@ mod tests {
         let check_log = |log: &str| {
             BUFFER.with(|buffer| {
                 let mut buffer = buffer.borrow_mut();
-                let output = from_utf8(&*buffer).unwrap();
+                let output = from_utf8(&buffer).unwrap();
                 // only check the log len here as some field like timestamp, location may
                 // change.
                 assert_eq!(output.len(), log.len());
@@ -1014,8 +1014,8 @@ mod tests {
         }
     }
 
-    struct RaftDBWriter;
-    impl Write for RaftDBWriter {
+    struct RaftDbWriter;
+    impl Write for RaftDbWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }
@@ -1029,7 +1029,7 @@ mod tests {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter), true);
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter), true);
         let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter), true);
-        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter), true);
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDbWriter), true);
         let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
@@ -1048,7 +1048,7 @@ mod tests {
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let output_segments = re.captures(output).unwrap();
             assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
         });
@@ -1060,7 +1060,7 @@ mod tests {
 "#;
         SLOW_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let expect_re = Regex::new(r"(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
             assert_eq!(output.lines().count(), slow_expect.lines().count());
             for (output, expect) in output.lines().zip(slow_expect.lines()) {

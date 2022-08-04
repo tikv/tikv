@@ -324,7 +324,7 @@ fn test_scale_scheduler_pool() {
     scale_pool(1);
     fail::cfg(snapshot_fp, "1*pause").unwrap();
     // propose one prewrite to block the only worker
-    assert!(do_prewrite(b"k1", b"v1").is_err());
+    do_prewrite(b"k1", b"v1").unwrap_err();
 
     scale_pool(2);
 
@@ -1311,7 +1311,7 @@ fn test_resolve_lock_deadline() {
             }),
         )
         .unwrap();
-    assert!(rx.recv().unwrap().is_ok());
+    rx.recv().unwrap().unwrap();
 
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.

@@ -100,7 +100,7 @@ use crate::{
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
 /// The types of `Json` which follows <https://tools.ietf.org/html/rfc7159#section-3>
-#[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
+#[derive(PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
     Array = 0x03,
@@ -487,7 +487,7 @@ impl ConvertTo<Json> for Duration {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Json {
+impl crate::codec::data_type::AsMySqlBool for Json {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         // TODO: This logic is not correct. See pingcap/tidb#9593
@@ -536,7 +536,7 @@ mod tests {
             ],
         ];
         for d in cases {
-            assert!(json_object(d).is_err());
+            json_object(d).unwrap_err();
         }
 
         let cases = vec![

@@ -81,7 +81,7 @@ fn check_nanos_part(nanos: u32) -> Result<u32> {
 
 #[inline]
 fn check_nanos(nanos: i64) -> Result<i64> {
-    if nanos < -MAX_NANOS || nanos > MAX_NANOS {
+    if !(-MAX_NANOS..=MAX_NANOS).contains(&nanos) {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)
@@ -703,7 +703,7 @@ pub trait DurationDecoder: NumberDecoder {
 
 impl<T: BufferReader> DurationDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Duration {
+impl crate::codec::data_type::AsMySqlBool for Duration {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())

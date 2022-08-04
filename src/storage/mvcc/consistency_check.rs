@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_mvcc_info_collector() {
-        use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
+        use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::SyncMutable;
         use txn_types::TimeStamp;
 
@@ -494,12 +494,12 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_test::kv::new_engine_opt(
             path,
-            DBOptions::default(),
+            DbOptions::default(),
             vec![
-                (CF_DEFAULT, ColumnFamilyOptions::new()),
-                (CF_WRITE, ColumnFamilyOptions::new()),
-                (CF_LOCK, ColumnFamilyOptions::new()),
-                (CF_RAFT, ColumnFamilyOptions::new()),
+                (CF_DEFAULT, CfOptions::new()),
+                (CF_WRITE, CfOptions::new()),
+                (CF_LOCK, CfOptions::new()),
+                (CF_RAFT, CfOptions::new()),
             ],
         )
         .unwrap();
@@ -567,7 +567,7 @@ mod tests {
 
         let mut count = 0;
         for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
-            assert!(key_and_mvcc.is_ok());
+            key_and_mvcc.unwrap();
             count += 1;
         }
         assert_eq!(count, 7);

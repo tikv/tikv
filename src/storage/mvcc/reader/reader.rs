@@ -632,7 +632,7 @@ pub mod tests {
 
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::{
-        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDBOptions, RocksEngine,
+        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
         RocksSnapshot,
     };
     use engine_traits::{
@@ -900,7 +900,7 @@ pub mod tests {
     }
 
     pub fn open_db(path: &str, with_properties: bool) -> RocksEngine {
-        let db_opt = RocksDBOptions::default();
+        let db_opt = RocksDbOptions::default();
         let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {

@@ -2,20 +2,20 @@
 
 use std::ffi::CString;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SstPartitionerRequest<'a> {
     pub prev_user_key: &'a [u8],
     pub current_user_key: &'a [u8],
     pub current_output_file_size: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SstPartitionerResult {
     NotRequired,
     Required,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SstPartitionerContext<'a> {
     pub is_full_compaction: bool,
     pub is_manual_compaction: bool,

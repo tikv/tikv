@@ -811,7 +811,7 @@ pub struct TestPdClient {
     pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct GcSafePoint {
     pub serivce: String,
     pub ttl: Duration,

@@ -19,7 +19,7 @@ use engine_traits::{
     Engines, Iterable, Peekable, RaftEngineDebug, RaftEngineReadOnly, TabletFactory, ALL_CFS,
     CF_DEFAULT, CF_RAFT,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -131,10 +131,10 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
 }
 
 lazy_static! {
-    static ref TEST_CONFIG: TiKvConfig = {
+    static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
@@ -144,13 +144,13 @@ lazy_static! {
     };
 }
 
-pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+pub fn new_tikv_config(cluster_id: u64) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg
 }
 
-pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TiKvConfig {
+pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg.storage.set_api_version(api_ver);
@@ -625,7 +625,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
-    limiter: Option<Arc<IORateLimiter>>,
+    limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
     Engines<RocksEngine, RaftTestEngine>,

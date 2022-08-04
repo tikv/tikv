@@ -24,7 +24,7 @@ use super::{
 use crate::{
     codec::{
         convert::{ConvertTo, ToInt},
-        data_type::AsMySQLBool,
+        data_type::AsMySqlBool,
     },
     expr::EvalContext,
     FieldTypeTp,
@@ -1975,7 +1975,7 @@ mod tests {
         ];
 
         for d in illegal_cases {
-            assert!(d.cast_as_json().is_err());
+            d.cast_as_json().unwrap_err();
         }
     }
 
@@ -1996,7 +1996,7 @@ mod tests {
         let illegal_cases = vec![Datum::Max, Datum::Min];
 
         for d in illegal_cases {
-            assert!(d.into_json().is_err());
+            d.into_json().unwrap_err();
         }
     }
 

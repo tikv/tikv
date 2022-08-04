@@ -8,7 +8,7 @@ use engine_traits::{
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
-    db_vector::RocksDBVector,
+    db_vector::RocksDbVector,
     options::RocksReadOptions,
     r2e,
     rocks_metrics::{
@@ -142,12 +142,12 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    type DBVector = RocksDBVector;
+    type DbVector = RocksDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
         let v = self.db.get_opt(key, &opt.into_raw()).map_err(r2e)?;
-        Ok(v.map(RocksDBVector::from_raw))
+        Ok(v.map(RocksDbVector::from_raw))
     }
 
     fn get_value_cf_opt(
@@ -155,14 +155,14 @@ impl Peekable for RocksEngine {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<RocksDBVector>> {
+    ) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.db, cf)?;
         let v = self
             .db
             .get_cf_opt(handle, key, &opt.into_raw())
             .map_err(r2e)?;
-        Ok(v.map(RocksDBVector::from_raw))
+        Ok(v.map(RocksDbVector::from_raw))
     }
 }
 
@@ -250,7 +250,7 @@ mod tests {
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        engine.get_value_cf("foo", b"k1").unwrap_err();
         assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 

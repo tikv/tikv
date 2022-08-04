@@ -10,7 +10,7 @@ use crate::{e2r, r2e, raw::Env};
 // Use engine::Env directly since Env is not abstracted.
 pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
-    limiter: Option<Arc<file_system::IORateLimiter>>,
+    limiter: Option<Arc<file_system::IoRateLimiter>>,
 ) -> engine_traits::Result<Arc<Env>> {
     let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
     Ok(Arc::new(
@@ -43,19 +43,19 @@ mod tests {
     use std::sync::Arc;
 
     use engine_traits::{CompactExt, MiscExt, SyncMutable, CF_DEFAULT};
-    use file_system::{IOOp, IORateLimiter, IORateLimiterStatistics, IOType};
+    use file_system::{IoOp, IoRateLimiter, IoRateLimiterStatistics, IoType};
     use keys::data_key;
     use tempfile::Builder;
 
     use super::*;
     use crate::{
         event_listener::RocksEventListener, raw::DBCompressionType, util::new_engine_opt,
-        RocksCfOptions, RocksDBOptions, RocksEngine,
+        RocksCfOptions, RocksDbOptions, RocksEngine,
     };
 
-    fn new_test_db(dir: &str) -> (RocksEngine, Arc<IORateLimiterStatistics>) {
-        let limiter = Arc::new(IORateLimiter::new_for_test());
-        let mut db_opts = RocksDBOptions::default();
+    fn new_test_db(dir: &str) -> (RocksEngine, Arc<IoRateLimiterStatistics>) {
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
+        let mut db_opts = RocksDbOptions::default();
         db_opts.add_event_listener(RocksEventListener::new("test_db", None));
         let env = get_env(None, Some(limiter.clone())).unwrap();
         db_opts.set_env(env);
@@ -81,16 +81,16 @@ mod tests {
 
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
-        assert_eq!(stats.fetch(IOType::Flush, IOOp::Write), 0);
+        assert_eq!(stats.fetch(IoType::Flush, IoOp::Write), 0);
         db.flush(true /* sync */).unwrap();
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
+        assert!(stats.fetch(IoType::Flush, IoOp::Write) > value_size * 2);
+        assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
         db.flush(true /* sync */).unwrap();
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) > value_size * 2);
-        assert!(stats.fetch(IOType::Flush, IOOp::Write) < value_size * 2 + amplification_bytes);
+        assert!(stats.fetch(IoType::Flush, IoOp::Write) > value_size * 2);
+        assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.compact_range(
             CF_DEFAULT, None,  // start_key
@@ -99,14 +99,14 @@ mod tests {
             1,     // max_subcompactions
         )
         .unwrap();
-        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Read) > value_size * 4);
+        assert!(stats.fetch(IoType::LevelZeroCompaction, IoOp::Read) > value_size * 4);
         assert!(
-            stats.fetch(IOType::LevelZeroCompaction, IOOp::Read)
+            stats.fetch(IoType::LevelZeroCompaction, IoOp::Read)
                 < value_size * 4 + amplification_bytes
         );
-        assert!(stats.fetch(IOType::LevelZeroCompaction, IOOp::Write) > value_size * 3);
+        assert!(stats.fetch(IoType::LevelZeroCompaction, IoOp::Write) > value_size * 3);
         assert!(
-            stats.fetch(IOType::LevelZeroCompaction, IOOp::Write)
+            stats.fetch(IoType::LevelZeroCompaction, IoOp::Write)
                 < value_size * 3 + amplification_bytes
         );
     }

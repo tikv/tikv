@@ -238,7 +238,7 @@ fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> Sc
         let stopped = stopped.clone();
         pool.spawn(move |_: &mut YatpHandle<'_>| {
             tikv_alloc::add_thread_memory_accessor();
-            let _io_guard = file_system::WithIOType::new(file_system::IOType::Replication);
+            let _io_guard = file_system::WithIoType::new(file_system::IoType::Replication);
             scan_executor_loop(init, rx, stopped);
             tikv_alloc::remove_thread_memory_accessor();
         })

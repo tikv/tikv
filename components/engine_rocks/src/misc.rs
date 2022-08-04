@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CFNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
+    CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
@@ -343,7 +343,7 @@ mod tests {
     use crate::{
         engine::RocksEngine,
         util::{new_engine, new_engine_opt},
-        RocksCfOptions, RocksDBOptions,
+        RocksCfOptions, RocksDbOptions,
     };
 
     fn check_data(db: &RocksEngine, cfs: &[&str], expected: &[(&[u8], &[u8])]) {
@@ -400,10 +400,7 @@ mod tests {
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
-            kvs_left = kvs_left
-                .into_iter()
-                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
-                .collect();
+            kvs_left.retain(|k| k.0 < r.start_key || k.0 >= r.end_key);
         }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
@@ -520,7 +517,7 @@ mod tests {
                 (*cf, cf_opts)
             })
             .collect();
-        let db = new_engine_opt(path_str, RocksDBOptions::default(), cfs_opts).unwrap();
+        let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
 
         let keys = vec![b"k1", b"k2", b"k3", b"k4"];
 
@@ -552,7 +549,7 @@ mod tests {
             .unwrap();
         let path_str = path.path().to_str().unwrap();
 
-        let mut opts = RocksDBOptions::default();
+        let mut opts = RocksDbOptions::default();
         opts.create_if_missing(true);
         opts.enable_multi_batch_write(true);
 

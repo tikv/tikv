@@ -689,7 +689,7 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
     cluster.must_split(&r, b"k4");
     let regions: Vec<_> = [b"k0", b"k2", b"k3", b"k4"]
         .iter()
-        .map(|k| pd_client.get_region(*k).unwrap())
+        .map(|&k| pd_client.get_region(k).unwrap())
         .collect();
 
     let new = regions[3].clone();
@@ -973,14 +973,12 @@ fn test_split_with_in_memory_pessimistic_locks() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        assert!(
-            locks
-                .insert(vec![
-                    (Key::from_raw(b"a"), lock_a.clone()),
-                    (Key::from_raw(b"c"), lock_c.clone())
-                ])
-                .is_ok()
-        );
+        locks
+            .insert(vec![
+                (Key::from_raw(b"a"), lock_a.clone()),
+                (Key::from_raw(b"c"), lock_c.clone()),
+            ])
+            .unwrap();
     }
 
     let region = cluster.get_region(b"");

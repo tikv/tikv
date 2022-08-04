@@ -13,7 +13,7 @@ use engine_traits::{
 use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{Db as DBType, *},
+    debugpb::{Db as DbType, *},
     kvrpcpb::MvccInfo,
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
@@ -27,7 +27,7 @@ use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::SecurityManager;
 use serde_json::json;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, TikvConfig},
     server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
 };
 use tikv_util::escape;
@@ -43,7 +43,7 @@ pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 pub fn new_debug_executor(
-    cfg: &TiKvConfig,
+    cfg: &TikvConfig,
     data_dir: Option<&str>,
     skip_paranoid_checks: bool,
     host: Option<&str>,
@@ -359,7 +359,7 @@ pub trait DebugExecutor {
         region: u64,
         to_host: Option<&str>,
         to_data_dir: Option<&str>,
-        to_config: &TiKvConfig,
+        to_config: &TikvConfig,
         mgr: Arc<SecurityManager>,
     ) {
         let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, false, to_host, mgr);
@@ -464,7 +464,7 @@ pub trait DebugExecutor {
     fn compact(
         &self,
         address: Option<&str>,
-        db: DBType,
+        db: DbType,
         cf: &str,
         from: Option<Vec<u8>>,
         to: Option<Vec<u8>>,
@@ -487,7 +487,7 @@ pub trait DebugExecutor {
     fn compact_region(
         &self,
         address: Option<&str>,
-        db: DBType,
+        db: DbType,
         cf: &str,
         region_id: u64,
         threads: u32,
@@ -604,7 +604,7 @@ pub trait DebugExecutor {
 
     fn do_compaction(
         &self,
-        db: DBType,
+        db: DbType,
         cf: &str,
         from: &[u8],
         to: &[u8],
@@ -649,7 +649,7 @@ impl DebugExecutor for DebugClient {
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
         let mut req = GetRequest::default();
-        req.set_db(DBType::Kv);
+        req.set_db(DbType::Kv);
         req.set_cf(cf.to_owned());
         req.set_key(key);
         self.get(&req)
@@ -718,7 +718,7 @@ impl DebugExecutor for DebugClient {
 
     fn do_compaction(
         &self,
-        db: DBType,
+        db: DbType,
         cf: &str,
         from: &[u8],
         to: &[u8],
@@ -858,7 +858,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        self.get(DBType::Kv, cf, &key)
+        self.get(DbType::Kv, cf, &key)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
@@ -902,7 +902,7 @@ impl<ER: RaftEngine> DebugExecutor for Debugger<ER> {
 
     fn do_compaction(
         &self,
-        db: DBType,
+        db: DbType,
         cf: &str,
         from: &[u8],
         to: &[u8],

@@ -65,9 +65,9 @@ pub mod raft {
     #[cfg(feature = "test-engine-raft-raft-engine")]
     pub use raft_log_engine::RaftLogEngine as RaftTestEngine;
 
-    use crate::ctor::{RaftDBOptions, RaftEngineConstructorExt};
+    use crate::ctor::{RaftDbOptions, RaftEngineConstructorExt};
 
-    pub fn new_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<RaftTestEngine> {
+    pub fn new_engine(path: &str, db_opt: Option<RaftDbOptions>) -> Result<RaftTestEngine> {
         RaftTestEngine::new_raft_engine(path, db_opt)
     }
 }
@@ -91,11 +91,11 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-        CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+        CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
     };
     use tikv_util::box_err;
 
-    use crate::ctor::{ColumnFamilyOptions as KvTestCFOptions, DBOptions, KvEngineConstructorExt};
+    use crate::ctor::{CfOptions as KvTestCfOptions, DbOptions, KvEngineConstructorExt};
 
     pub fn new_engine(path: &str, cfs: &[&str]) -> Result<KvTestEngine> {
         KvTestEngine::new_kv_engine(path, cfs)
@@ -103,8 +103,8 @@ pub mod kv {
 
     pub fn new_engine_opt(
         path: &str,
-        db_opt: DBOptions,
-        cfs_opts: Vec<(&str, KvTestCFOptions)>,
+        db_opt: DbOptions,
+        cfs_opts: Vec<(&str, KvTestCfOptions)>,
     ) -> Result<KvTestEngine> {
         KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
     }
@@ -114,22 +114,119 @@ pub mod kv {
     #[derive(Clone)]
     pub struct TestTabletFactory {
         root_path: String,
-        db_opt: DBOptions,
-        cf_opts: Vec<(&'static str, KvTestCFOptions)>,
-        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+        db_opt: DbOptions,
+        cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+        root_db: Arc<Mutex<Option<KvTestEngine>>>,
     }
 
     impl TestTabletFactory {
         pub fn new(
             root_path: &str,
-            db_opt: DBOptions,
-            cf_opts: Vec<(&'static str, KvTestCFOptions)>,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         ) -> Self {
             Self {
                 root_path: root_path.to_string(),
                 db_opt,
                 cf_opts,
-                registry: Arc::new(Mutex::new(HashMap::default())),
+                root_db: Arc::new(Mutex::default()),
+            }
+        }
+
+        fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
+            let kv_engine = KvTestEngine::new_kv_engine_opt(
+                tablet_path.to_str().unwrap(),
+                self.db_opt.clone(),
+                self.cf_opts.clone(),
+            )?;
+            Ok(kv_engine)
+        }
+    }
+
+    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+        fn create_shared_db(&self) -> Result<KvTestEngine> {
+            let tablet_path = self.tablet_path(0, 0);
+            let tablet = self.create_tablet(&tablet_path)?;
+            let mut root_db = self.root_db.lock().unwrap();
+            root_db.replace(tablet.clone());
+            Ok(tablet)
+        }
+
+        fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
+            let db = self.root_db.lock().unwrap();
+            if let Some(cp) = db.as_ref() {
+                return Ok(cp.clone());
+            }
+
+            self.create_shared_db()
+        }
+
+        fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<KvTestEngine> {
+            self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
+        }
+
+        fn open_tablet_cache_any(&self, _id: u64) -> Option<KvTestEngine> {
+            self.open_tablet_cache(0, 0)
+        }
+
+        fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<KvTestEngine> {
+            TabletFactory::create_tablet(self, 0, 0)
+        }
+
+        fn exists_raw(&self, _path: &Path) -> bool {
+            false
+        }
+
+        #[inline]
+        fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
+            Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
+        }
+
+        #[inline]
+        fn tablets_path(&self) -> PathBuf {
+            Path::new(&self.root_path).join("tablets")
+        }
+
+        #[inline]
+        fn destroy_tablet(&self, _id: u64, _suffix: u64) -> engine_traits::Result<()> {
+            Ok(())
+        }
+
+        fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+            let db = self.root_db.lock().unwrap();
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
+            Ok(())
+        }
+    }
+
+    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
+        fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
+            let db = self.root_db.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            f(0, 0, db);
+        }
+
+        fn is_single_engine(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct TestTabletFactoryV2 {
+        inner: TestTabletFactory,
+        registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
+    }
+
+    impl TestTabletFactoryV2 {
+        pub fn new(
+            root_path: &str,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&'static str, KvTestCfOptions)>,
+        ) -> Self {
+            Self {
+                inner: TestTabletFactory::new(root_path, db_opt, cf_opts),
+                registry: Arc::default(),
             }
         }
     }
@@ -145,7 +242,7 @@ pub mod kv {
         (tablet_id, tablet_suffix)
     }
 
-    impl TabletFactory<KvTestEngine> for TestTabletFactory {
+    impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
         fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
             let mut reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
@@ -155,35 +252,27 @@ pub mod kv {
                     db.as_inner().path()
                 ));
             }
+
             let tablet_path = self.tablet_path(id, suffix);
-            let tablet_path = tablet_path.to_str().unwrap();
-            let kv_engine = KvTestEngine::new_kv_engine_opt(
-                tablet_path,
-                self.db_opt.clone(),
-                self.cf_opts.clone(),
-            )?;
+            let kv_engine = self.inner.create_tablet(&tablet_path)?;
             reg.insert((id, suffix), kv_engine.clone());
+
             Ok(kv_engine)
         }
 
         fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            let mut reg = self.registry.lock().unwrap();
+            let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
             }
 
             let db_path = self.tablet_path(id, suffix);
             let db = self.open_tablet_raw(db_path.as_path(), false)?;
-            reg.insert((id, suffix), db.clone());
             Ok(db)
         }
 
         fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Some(db.clone());
-            }
-            None
+            self.registry.lock().unwrap().get(&(id, suffix)).cloned()
         }
 
         fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
@@ -217,12 +306,12 @@ pub mod kv {
 
         #[inline]
         fn tablets_path(&self) -> PathBuf {
-            Path::new(&self.root_path).join("tablets")
+            Path::new(&self.inner.root_path).join("tablets")
         }
 
         #[inline]
         fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            Path::new(&self.root_path).join(format!("tablets/{}_{}", id, suffix))
+            Path::new(&self.inner.root_path).join(format!("tablets/{}_{}", id, suffix))
         }
 
         #[inline]
@@ -281,7 +370,7 @@ pub mod kv {
         }
     }
 
-    impl TabletAccessor<KvTestEngine> for TestTabletFactory {
+    impl TabletAccessor<KvTestEngine> for TestTabletFactoryV2 {
         #[inline]
         fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
             let reg = self.registry.lock().unwrap();
@@ -312,7 +401,7 @@ pub mod ctor {
 
     use encryption::DataKeyManager;
     use engine_traits::Result;
-    use file_system::IORateLimiter;
+    use file_system::IoRateLimiter;
 
     /// Kv engine construction
     ///
@@ -341,30 +430,30 @@ pub mod ctor {
         /// If that directory does not exist, then it is created.
         fn new_kv_engine_opt(
             path: &str,
-            db_opt: DBOptions,
-            cf_opts: Vec<(&str, ColumnFamilyOptions)>,
+            db_opt: DbOptions,
+            cf_opts: Vec<(&str, CfOptions)>,
         ) -> Result<Self>;
     }
 
     /// Raft engine construction
     pub trait RaftEngineConstructorExt: Sized {
         /// Create a new raft engine.
-        fn new_raft_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<Self>;
+        fn new_raft_engine(path: &str, db_opt: Option<RaftDbOptions>) -> Result<Self>;
     }
 
     #[derive(Clone, Default)]
-    pub struct DBOptions {
+    pub struct DbOptions {
         key_manager: Option<Arc<DataKeyManager>>,
-        rate_limiter: Option<Arc<IORateLimiter>>,
+        rate_limiter: Option<Arc<IoRateLimiter>>,
         enable_multi_batch_write: bool,
     }
 
-    impl DBOptions {
+    impl DbOptions {
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
 
-        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
+        pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IoRateLimiter>>) {
             self.rate_limiter = rate_limiter;
         }
 
@@ -373,7 +462,7 @@ pub mod ctor {
         }
     }
 
-    pub type RaftDBOptions = DBOptions;
+    pub type RaftDbOptions = DbOptions;
 
     /// Properties for a single column family
     ///
@@ -397,7 +486,7 @@ pub mod ctor {
     /// In the future TiKV will probably have engine-specific configuration
     /// options.
     #[derive(Clone)]
-    pub struct ColumnFamilyOptions {
+    pub struct CfOptions {
         disable_auto_compactions: bool,
         level_zero_file_num_compaction_trigger: Option<i32>,
         level_zero_slowdown_writes_trigger: Option<i32>,
@@ -409,9 +498,9 @@ pub mod ctor {
         no_table_properties: bool,
     }
 
-    impl ColumnFamilyOptions {
-        pub fn new() -> ColumnFamilyOptions {
-            ColumnFamilyOptions {
+    impl CfOptions {
+        pub fn new() -> CfOptions {
+            CfOptions {
                 disable_auto_compactions: false,
                 level_zero_file_num_compaction_trigger: None,
                 level_zero_slowdown_writes_trigger: None,
@@ -461,7 +550,7 @@ pub mod ctor {
         }
     }
 
-    impl Default for ColumnFamilyOptions {
+    impl Default for CfOptions {
         fn default() -> Self {
             Self::new()
         }
@@ -471,9 +560,7 @@ pub mod ctor {
         use engine_panic::PanicEngine;
         use engine_traits::Result;
 
-        use super::{
-            ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftEngineConstructorExt,
-        };
+        use super::{CfOptions, DbOptions, KvEngineConstructorExt, RaftEngineConstructorExt};
 
         impl KvEngineConstructorExt for engine_panic::PanicEngine {
             fn new_kv_engine(_path: &str, _cfs: &[&str]) -> Result<Self> {
@@ -482,15 +569,15 @@ pub mod ctor {
 
             fn new_kv_engine_opt(
                 _path: &str,
-                _db_opt: DBOptions,
-                _cfs_opts: Vec<(&str, ColumnFamilyOptions)>,
+                _db_opt: DbOptions,
+                _cfs_opts: Vec<(&str, CfOptions)>,
             ) -> Result<Self> {
                 Ok(PanicEngine)
             }
         }
 
         impl RaftEngineConstructorExt for engine_panic::PanicEngine {
-            fn new_raft_engine(_path: &str, _db_opt: Option<DBOptions>) -> Result<Self> {
+            fn new_raft_engine(_path: &str, _db_opt: Option<DbOptions>) -> Result<Self> {
                 Ok(PanicEngine)
             }
         }
@@ -501,21 +588,20 @@ pub mod ctor {
             get_env,
             properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
             util::new_engine_opt as rocks_new_engine_opt,
-            RocksCfOptions, RocksDBOptions,
+            RocksCfOptions, RocksDbOptions,
         };
-        use engine_traits::{ColumnFamilyOptions as ColumnFamilyOptionsTrait, Result, CF_DEFAULT};
+        use engine_traits::{CfOptions as _, Result, CF_DEFAULT};
 
         use super::{
-            ColumnFamilyOptions, DBOptions, KvEngineConstructorExt, RaftDBOptions,
-            RaftEngineConstructorExt,
+            CfOptions, DbOptions, KvEngineConstructorExt, RaftDbOptions, RaftEngineConstructorExt,
         };
 
         impl KvEngineConstructorExt for engine_rocks::RocksEngine {
             // FIXME this is duplicating behavior from engine_rocks::util in order to
             // call set_standard_cf_opts.
             fn new_kv_engine(path: &str, cfs: &[&str]) -> Result<Self> {
-                let rocks_db_opt = RocksDBOptions::default();
-                let default_cf_opt = ColumnFamilyOptions::new();
+                let rocks_db_opt = RocksDbOptions::default();
+                let default_cf_opt = CfOptions::new();
                 let rocks_cfs_opts = cfs
                     .iter()
                     .map(|cf_name| (*cf_name, get_rocks_cf_opts(&default_cf_opt)))
@@ -525,8 +611,8 @@ pub mod ctor {
 
             fn new_kv_engine_opt(
                 path: &str,
-                db_opt: DBOptions,
-                cfs_opts: Vec<(&str, ColumnFamilyOptions)>,
+                db_opt: DbOptions,
+                cfs_opts: Vec<(&str, CfOptions)>,
             ) -> Result<Self> {
                 let rocks_db_opts = get_rocks_db_opts(db_opt)?;
                 let rocks_cfs_opts = cfs_opts
@@ -538,18 +624,18 @@ pub mod ctor {
         }
 
         impl RaftEngineConstructorExt for engine_rocks::RocksEngine {
-            fn new_raft_engine(path: &str, db_opt: Option<RaftDBOptions>) -> Result<Self> {
+            fn new_raft_engine(path: &str, db_opt: Option<RaftDbOptions>) -> Result<Self> {
                 let rocks_db_opts = match db_opt {
                     Some(db_opt) => get_rocks_db_opts(db_opt)?,
-                    None => RocksDBOptions::default(),
+                    None => RocksDbOptions::default(),
                 };
-                let rocks_cf_opts = get_rocks_cf_opts(&ColumnFamilyOptions::new());
+                let rocks_cf_opts = get_rocks_cf_opts(&CfOptions::new());
                 let default_cfs_opts = vec![(CF_DEFAULT, rocks_cf_opts)];
                 rocks_new_engine_opt(path, rocks_db_opts, default_cfs_opts)
             }
         }
 
-        fn get_rocks_cf_opts(cf_opts: &ColumnFamilyOptions) -> RocksCfOptions {
+        fn get_rocks_cf_opts(cf_opts: &CfOptions) -> RocksCfOptions {
             let mut rocks_cf_opts = RocksCfOptions::new();
             if !cf_opts.get_no_range_properties() {
                 rocks_cf_opts.add_table_properties_collector_factory(
@@ -576,8 +662,8 @@ pub mod ctor {
             rocks_cf_opts
         }
 
-        fn get_rocks_db_opts(db_opts: DBOptions) -> Result<RocksDBOptions> {
-            let mut rocks_db_opts = RocksDBOptions::default();
+        fn get_rocks_db_opts(db_opts: DbOptions) -> Result<RocksDbOptions> {
+            let mut rocks_db_opts = RocksDbOptions::default();
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
             if db_opts.enable_multi_batch_write {
@@ -593,10 +679,10 @@ pub mod ctor {
         use engine_traits::Result;
         use raft_log_engine::{RaftEngineConfig, RaftLogEngine};
 
-        use super::{RaftDBOptions, RaftEngineConstructorExt};
+        use super::{RaftDbOptions, RaftEngineConstructorExt};
 
         impl RaftEngineConstructorExt for raft_log_engine::RaftLogEngine {
-            fn new_raft_engine(path: &str, db_opts: Option<RaftDBOptions>) -> Result<Self> {
+            fn new_raft_engine(path: &str, db_opts: Option<RaftDbOptions>) -> Result<Self> {
                 let mut config = RaftEngineConfig::default();
                 config.dir = path.to_owned();
                 RaftLogEngine::new(

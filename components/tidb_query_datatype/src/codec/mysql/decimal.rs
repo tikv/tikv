@@ -1943,7 +1943,7 @@ impl Display for Decimal {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Decimal {
+impl crate::codec::data_type::AsMySqlBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
@@ -3045,7 +3045,7 @@ mod tests {
         // error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
-            assert!(Decimal::from_bytes(case).is_err());
+            Decimal::from_bytes(case).unwrap_err();
         }
     }
 
@@ -3734,11 +3734,9 @@ mod tests {
         )));
         let truncated_res = Res::Truncated(2333);
 
-        assert!(
-            truncated_res
-                .into_result_impl(&mut ctx, Some(Error::truncated()), None)
-                .is_ok()
-        );
+        truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .unwrap();
 
         // Overflow cases
         let mut ctx = EvalContext::default();
@@ -3757,10 +3755,8 @@ mod tests {
             Flag::OVERFLOW_AS_WARNING,
         )));
         let error = Error::overflow("", "");
-        assert!(
-            overflow_res
-                .into_result_impl(&mut ctx, None, Some(error))
-                .is_ok()
-        );
+        overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .unwrap();
     }
 }

@@ -320,7 +320,7 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             server.shutdown();
         }
         if let Some(pool) = self.stats_pool.take() {
-            let _ = pool.shutdown_background();
+            pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
         self.health_service.shutdown();
@@ -581,7 +581,7 @@ mod tests {
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);

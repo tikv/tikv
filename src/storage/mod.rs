@@ -449,7 +449,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
-                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::TiDB {
+                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::Tidb {
                         return Err(ErrorInner::invalid_key_mode(
                             cmd,
                             storage_api_version,
@@ -513,7 +513,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB {
+                    if ApiV2::parse_range_mode(range) != KeyMode::Tidb {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -3152,7 +3152,7 @@ mod tests {
         *,
     };
     use crate::{
-        config::TitanDBConfig,
+        config::TitanDbConfig,
         coprocessor::checksum_crc64_xor,
         storage::{
             config::BlockCacheConfig,
@@ -3668,7 +3668,7 @@ mod tests {
     #[test]
     fn test_scan_with_key_only() {
         let db_config = crate::config::DbConfig {
-            titan: TitanDBConfig {
+            titan: TitanDbConfig {
                 enabled: true,
                 ..Default::default()
             },
@@ -7758,7 +7758,7 @@ mod tests {
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved or committed locks.
         ctx.set_resolved_locks(vec![10]);
-        assert!(block_on(storage.get(ctx.clone(), Key::from_raw(b"key"), 100.into())).is_ok());
+        block_on(storage.get(ctx.clone(), Key::from_raw(b"key"), 100.into())).unwrap();
         ctx.take_resolved_locks();
 
         // Test batch_get
@@ -7773,7 +7773,7 @@ mod tests {
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved locks.
         ctx.set_resolved_locks(vec![10]);
-        assert!(batch_get(ctx.clone()).is_ok());
+        batch_get(ctx.clone()).unwrap();
         ctx.take_resolved_locks();
 
         // Test scan
@@ -7784,13 +7784,13 @@ mod tests {
             extract_key_error(&scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"a"), None, false).is_ok());
+        scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap();
         ctx.take_resolved_locks();
         let key_error =
             extract_key_error(&scan(ctx.clone(), Key::from_raw(b"\xff"), None, true).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"\xff"), None, false).is_ok());
+        scan(ctx.clone(), Key::from_raw(b"\xff"), None, false).unwrap();
         ctx.take_resolved_locks();
         // Ignore memory locks in resolved or committed locks.
 
@@ -7816,14 +7816,14 @@ mod tests {
             consumer.take_data()
         };
         let res = batch_get_command(req2.clone());
-        assert!(res[0].is_ok());
+        res[0].as_ref().unwrap();
         let key_error = extract_key_error(res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved or committed locks.
         req2.mut_context().set_resolved_locks(vec![10]);
         let res = batch_get_command(req2.clone());
-        assert!(res[0].is_ok());
-        assert!(res[1].is_ok());
+        res[0].as_ref().unwrap();
+        res[1].as_ref().unwrap();
         req2.mut_context().take_resolved_locks();
     }
 
@@ -8661,7 +8661,7 @@ mod tests {
                 assert!(res.is_err(), "case {}", i);
                 assert_eq!(res.unwrap_err().error_code(), err, "case {}", i);
             } else {
-                assert!(res.is_ok(), "case {}", i);
+                assert!(res.is_ok(), "case {} {:?}", i, res);
             }
         }
     }
@@ -8717,7 +8717,7 @@ mod tests {
                 assert!(res.is_err());
                 assert_eq!(res.unwrap_err().error_code(), err);
             } else {
-                assert!(res.is_ok());
+                res.unwrap();
             }
         };
 
@@ -8931,7 +8931,7 @@ mod tests {
             .unwrap();
         // DummyLockManager just drops the callback, so it will fail to receive
         // anything.
-        assert!(rx.recv().is_err());
+        rx.recv().unwrap_err();
 
         let (tx, rx) = channel();
         storage
@@ -8955,7 +8955,7 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert!(rx.recv().unwrap().is_ok());
+        rx.recv().unwrap().unwrap();
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
@@ -9014,6 +9014,6 @@ mod tests {
             )
             .unwrap();
         // Prewrite still succeeds
-        assert!(rx.recv().unwrap().is_ok());
+        rx.recv().unwrap().unwrap();
     }
 }

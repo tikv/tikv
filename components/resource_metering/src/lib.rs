@@ -143,15 +143,12 @@ impl Drop for Guard {
                 return;
             }
             let mut records = ls.summary_records.lock().unwrap();
-            match records.get(&tag) {
-                Some(record) => {
-                    record.merge(&cur_record);
-                }
-                None => {
-                    // See MAX_SUMMARY_RECORDS_LEN.
-                    if records.len() < MAX_SUMMARY_RECORDS_LEN {
-                        records.insert(tag, cur_record);
-                    }
+            if let Some(record) = records.get(&tag) {
+                record.merge(&cur_record);
+            } else {
+                // See MAX_SUMMARY_RECORDS_LEN.
+                if records.len() < MAX_SUMMARY_RECORDS_LEN {
+                    records.insert(tag, cur_record);
                 }
             }
         })

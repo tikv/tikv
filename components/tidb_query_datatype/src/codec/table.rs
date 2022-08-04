@@ -284,7 +284,7 @@ fn unflatten(
                     FieldTypeTp::VarChar,
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
-                    FieldTypeTp::JSON
+                    FieldTypeTp::Json,
                 ]
                 .contains(&t),
                 "unknown type {} {}",
@@ -631,7 +631,7 @@ mod tests {
             (1, FieldTypeTp::LongLong.into()),
             (2, FieldTypeTp::VarChar.into()),
             (3, FieldTypeTp::NewDecimal.into()),
-            (5, FieldTypeTp::JSON.into()),
+            (5, FieldTypeTp::Json.into()),
             (6, duration_col),
         ]);
 
@@ -790,18 +790,18 @@ mod tests {
         let mut range = KeyRange::default();
         range.set_start(small_key.clone());
         range.set_end(large_key.clone());
-        assert!(check_table_ranges(&[range]).is_ok());
+        check_table_ranges(&[range]).unwrap();
         // test range.start > range.end
         let mut range = KeyRange::default();
         range.set_end(small_key.clone());
         range.set_start(large_key);
-        assert!(check_table_ranges(&[range]).is_err());
+        check_table_ranges(&[range]).unwrap_err();
 
         // test invalid end
         let mut range = KeyRange::default();
         range.set_start(small_key);
         range.set_end(b"xx".to_vec());
-        assert!(check_table_ranges(&[range]).is_err());
+        check_table_ranges(&[range]).unwrap_err();
     }
 
     #[test]
@@ -812,23 +812,23 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             let k = encode_index_seek_key(tid, 1, &k);
             assert_eq!(tid, decode_table_id(&k).unwrap());
-            assert!(decode_table_id(b"xxx").is_err());
+            decode_table_id(b"xxx").unwrap_err();
         }
     }
 
     #[test]
     fn test_check_key_type() {
         let record_key = encode_row_key(TABLE_ID, 1);
-        assert!(check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
-        assert!(check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        check_key_type(record_key.as_slice(), RECORD_PREFIX_SEP).unwrap();
+        check_key_type(record_key.as_slice(), INDEX_PREFIX_SEP).unwrap_err();
 
         let (_, index_key) =
             generate_index_data_for_test(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
-        assert!(check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+        check_key_type(index_key.as_slice(), RECORD_PREFIX_SEP).unwrap_err();
+        check_key_type(index_key.as_slice(), INDEX_PREFIX_SEP).unwrap();
 
         let too_small_key = vec![0];
-        assert!(check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
-        assert!(check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+        check_key_type(too_small_key.as_slice(), RECORD_PREFIX_SEP).unwrap_err();
+        check_key_type(too_small_key.as_slice(), INDEX_PREFIX_SEP).unwrap_err();
     }
 }

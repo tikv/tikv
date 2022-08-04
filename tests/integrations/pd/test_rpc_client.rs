@@ -32,11 +32,11 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
+        RpcClient::new(&cfg, None, m_mgr).unwrap();
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
-    assert_eq!(child.join().is_ok(), true);
+    child.join().unwrap();
 }
 
 #[test]
@@ -509,7 +509,7 @@ fn test_pd_client_heartbeat_send_failed() {
             assert!(rsp.is_ok());
             assert_eq!(rsp.unwrap().get_region_id(), 1);
         } else {
-            assert!(rsp.is_err());
+            rsp.unwrap_err();
         }
 
         let region = block_on(client.get_region_by_id(1));
@@ -519,7 +519,7 @@ fn test_pd_client_heartbeat_send_failed() {
             assert!(r.is_some());
             assert_eq!(1, r.unwrap().get_id());
         } else {
-            assert!(region.is_err());
+            region.unwrap_err();
         }
     };
     // send fail if network is block.

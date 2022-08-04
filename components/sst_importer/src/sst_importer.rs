@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
+use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
@@ -33,7 +33,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     import_file::{ImportDir, ImportFile},
-    import_mode::{ImportModeSwitcher, RocksDBMetricsFn},
+    import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     Config, Error, Result,
@@ -211,11 +211,11 @@ impl SstImporter {
         }
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
 
-    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_import_mode(&db, mf)
     }
 
@@ -488,7 +488,7 @@ impl SstImporter {
         let path = self.dir.join(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: encryption_method_to_db_encryption_method(c.cipher_type),
+            method: to_engine_encryption_method(c.cipher_type),
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });
@@ -823,7 +823,7 @@ mod tests {
             check_file_not_exists(&path.clone, key_manager.as_deref());
 
             // Cannot create the same file again.
-            assert!(dir.create(&meta, key_manager.clone()).is_err());
+            dir.create(&meta, key_manager.clone()).unwrap_err();
         }
 
         // Test ImportDir::delete()
@@ -912,12 +912,10 @@ mod tests {
             let mut f =
                 ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
             // Cannot create the same file again.
-            assert!(
-                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).is_err()
-            );
+            ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap_err();
             f.append(data).unwrap();
             // Invalid crc32 and length.
-            assert!(f.finish().is_err());
+            f.finish().unwrap_err();
             check_file_exists(&path.temp, data_key_manager.as_deref());
             check_file_not_exists(&path.save, data_key_manager.as_deref());
         }
@@ -966,7 +964,6 @@ mod tests {
         // test with tde
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
-        assert!(key_manager.is_ok());
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }
 
@@ -1596,7 +1593,7 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
+            importer.ingest(&[meta_info.clone()], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15

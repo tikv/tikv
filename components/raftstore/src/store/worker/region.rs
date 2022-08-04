@@ -18,7 +18,7 @@ use std::{
 
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -322,10 +322,10 @@ where
         }
 
         let start = Instant::now();
-        let _io_type_guard = WithIOType::new(if for_balance {
-            IOType::LoadBalance
+        let _io_type_guard = WithIoType::new(if for_balance {
+            IoType::LoadBalance
         } else {
-            IOType::Replication
+            IoType::Replication
         });
 
         if let Err(e) = self.generate_snap(
@@ -821,7 +821,7 @@ mod tests {
     };
 
     use engine_test::{
-        ctor::ColumnFamilyOptions,
+        ctor::CfOptions,
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
@@ -990,7 +990,7 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![

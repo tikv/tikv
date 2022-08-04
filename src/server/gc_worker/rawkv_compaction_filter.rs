@@ -201,7 +201,7 @@ impl RawCompactionFilter {
             self.versions += 1;
             let raw_value = ApiV2::decode_raw_value(value)?;
             // If it's the latest version, and it's deleted or expired, it needs to be sent
-            // to GCWorker to be processed asynchronously.
+            // to GcWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
@@ -314,7 +314,7 @@ pub mod tests {
 
     use super::*;
     use crate::{
-        config::DbConfig, server::gc_worker::TestGCRunner, storage::kv::TestEngineBuilder,
+        config::DbConfig, server::gc_worker::TestGcRunner, storage::kv::TestEngineBuilder,
     };
 
     pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -334,7 +334,7 @@ pub mod tests {
             .build_with_cfg(&cfg)
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let user_key = b"r\0aaaaaaaaaaa";
 
@@ -399,7 +399,7 @@ pub mod tests {
             .build()
             .unwrap();
         let raw_engine = engine.get_rocksdb();
-        let mut gc_runner = TestGCRunner::new(0);
+        let mut gc_runner = TestGcRunner::new(0);
 
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);

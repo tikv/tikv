@@ -6,7 +6,7 @@ use std::{
 };
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use tikv_util::{
     debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
 };
@@ -74,7 +74,7 @@ where
                 )))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    set_io_type(IOType::ForegroundWrite);
+                    set_io_type(IoType::ForegroundWrite);
                     poller.poll();
                 })
                 .unwrap();

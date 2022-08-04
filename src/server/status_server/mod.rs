@@ -952,7 +952,7 @@ mod tests {
     use tikv_util::logger::get_log_level;
 
     use crate::{
-        config::{ConfigController, TiKvConfig},
+        config::{ConfigController, TikvConfig},
         server::status_server::{profile::TEST_PROFILE_MUTEX, LogLevelRequest, StatusServer},
     };
 
@@ -1045,12 +1045,12 @@ mod tests {
                 .await
                 .unwrap();
             let resp_json = String::from_utf8_lossy(&v).to_string();
-            let cfg = TiKvConfig::default();
+            let cfg = TikvConfig::default();
             serde_json::to_string(&cfg.get_encoder())
                 .map(|cfg_json| {
                     assert_eq!(resp_json, cfg_json);
                 })
-                .expect("Could not convert TiKvConfig to string");
+                .expect("Could not convert TikvConfig to string");
         });
         block_on(handle).unwrap();
         status_server.stop();
@@ -1420,7 +1420,7 @@ mod tests {
         let resp = block_on(handle).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body_bytes = block_on(hyper::body::to_bytes(resp.into_body())).unwrap();
-        assert!(String::from_utf8(body_bytes.as_ref().to_owned()).is_ok());
+        String::from_utf8(body_bytes.as_ref().to_owned()).unwrap();
 
         // test gzip
         let handle = status_server.thread_pool.spawn(async move {
@@ -1440,7 +1440,7 @@ mod tests {
         GzDecoder::new(body_bytes.reader())
             .read_to_end(&mut decoded_bytes)
             .unwrap();
-        assert!(String::from_utf8(decoded_bytes).is_ok());
+        String::from_utf8(decoded_bytes).unwrap();
 
         status_server.stop();
     }

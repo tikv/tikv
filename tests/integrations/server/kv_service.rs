@@ -1345,7 +1345,7 @@ fn test_prewrite_check_max_commit_ts() {
     }
 
     // There shouldn't be locks remaining in the lock table.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
 #[test]
@@ -1936,7 +1936,7 @@ fn test_txn_api_version() {
                 // Pessimistic Lock
                 ts += 1;
                 let lock_ts = ts;
-                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+                must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
 
                 // Prewrite Pessimistic
                 let mut mutation = Mutation::default();

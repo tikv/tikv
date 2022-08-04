@@ -371,7 +371,7 @@ enum RestoreData<'a> {
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum DecodePartitionIdOp<'a> {
     Nop,
-    PID(&'a [u8]),
+    Pid(&'a [u8]),
 }
 
 impl IndexScanExecutorImpl {
@@ -662,7 +662,7 @@ impl IndexScanExecutorImpl {
             } else if partition_id_bytes.is_empty() {
                 DecodePartitionIdOp::Nop
             } else {
-                DecodePartitionIdOp::PID(partition_id_bytes)
+                DecodePartitionIdOp::Pid(partition_id_bytes)
             }
         };
 
@@ -803,7 +803,7 @@ impl IndexScanExecutorImpl {
     ) -> Result<()> {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}
-            DecodePartitionIdOp::PID(pid) => {
+            DecodePartitionIdOp::Pid(pid) => {
                 // If need partition id, append partition id to the last column
                 // before physical table id column if exists.
                 let pid = NumberCodec::decode_i64(pid);
@@ -817,7 +817,7 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn split_common_handle(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
-            .get(0)
+            .first()
             .map_or(false, |c| *c == table::INDEX_VALUE_COMMON_HANDLE_FLAG)
         {
             let handle_len = (&value[1..]).read_u16().map_err(|_| {
@@ -839,7 +839,7 @@ impl IndexScanExecutorImpl {
     #[inline]
     fn split_partition_id(value: &[u8]) -> Result<(&[u8], &[u8])> {
         if value
-            .get(0)
+            .first()
             .map_or(false, |c| *c == table::INDEX_VALUE_PARTITION_ID_FLAG)
         {
             if value.len() < 9 {
@@ -858,7 +858,7 @@ impl IndexScanExecutorImpl {
     fn split_restore_data(value: &[u8]) -> Result<(&[u8], &[u8])> {
         Ok(
             if value
-                .get(0)
+                .first()
                 .map_or(false, |c| *c == table::INDEX_VALUE_RESTORED_DATA_FLAG)
             {
                 (value, &value[value.len()..])
@@ -1106,17 +1106,13 @@ mod tests {
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
-            assert!(
-                result.physical_columns[0]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
-                    .is_err()
-            );
+            result.physical_columns[0]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap_err();
             assert!(result.physical_columns[1].is_raw());
-            assert!(
-                result.physical_columns[1]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[0])
-                    .is_err()
-            );
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[0])
+                .unwrap_err();
         }
 
         {
@@ -1163,17 +1159,13 @@ mod tests {
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.physical_columns[1].is_raw());
-            assert!(
-                result.physical_columns[1]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[3])
-                    .is_err()
-            );
+            result.physical_columns[1]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[3])
+                .unwrap_err();
             assert!(result.physical_columns[2].is_raw());
-            assert!(
-                result.physical_columns[2]
-                    .ensure_all_decoded_for_test(&mut ctx, &schema[1])
-                    .is_err()
-            );
+            result.physical_columns[2]
+                .ensure_all_decoded_for_test(&mut ctx, &schema[1])
+                .unwrap_err();
         }
 
         {
