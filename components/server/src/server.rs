@@ -1878,24 +1878,26 @@ impl EnginesResourceInfo {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
 
-        // tablets record the tablet with the latest suffix in each region
-        let mut tabltes = HashMap::<u64, (u64, RocksEngine)>::new();
-        self.tablet_factory.for_each_opened_tablet(
-            &mut |id, suffix, db: &RocksEngine| match tabltes.entry(id) {
-                collections::HashMapEntry::Occupied(mut slot) => {
-                    if slot.get().0 < suffix {
-                        slot.insert((suffix, db.clone()));
+        let mut pending_bytes_record = HashMap::<_, (_, _)>::new();
+        self.tablet_factory
+            .for_each_opened_tablet(&mut |id, suffix, db: &RocksEngine| {
+                let mut normalized_pending_bytes = 0;
+                for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+                    fetch_engine_cf(db, cf, &mut normalized_pending_bytes);
+                    match pending_bytes_record.entry(id) {
+                        collections::HashMapEntry::Occupied(mut slot) => {
+                            if slot.get().0 < suffix {
+                                slot.insert((suffix, normalized_pending_bytes));
+                            }
+                        }
+                        collections::HashMapEntry::Vacant(slot) => {
+                            slot.insert((suffix, normalized_pending_bytes));
+                        }
                     }
                 }
-                collections::HashMapEntry::Vacant(slot) => {
-                    slot.insert((suffix, db.clone()));
-                }
-            },
-        );
-        for (_, (_, tablet)) in tabltes {
-            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-                fetch_engine_cf(&tablet, cf, &mut normalized_pending_bytes);
-            }
+            });
+        for (_, (_, tablet_bytes)) in pending_bytes_record {
+            normalized_pending_bytes = std::cmp::max(normalized_pending_bytes, tablet_bytes);
         }
 
         let (_, avg) = self
