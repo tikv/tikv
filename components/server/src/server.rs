@@ -1878,6 +1878,8 @@ impl EnginesResourceInfo {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
 
+        // Record the compaction pending bytes of the tablet with the latest suffix for
+        // each region
         let mut pending_bytes_record = HashMap::<_, (_, _)>::new();
         self.tablet_factory
             .for_each_opened_tablet(&mut |id, suffix, db: &RocksEngine| {
