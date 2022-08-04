@@ -228,25 +228,19 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let cp = db.as_ref().unwrap().clone();
-            return Ok(cp);
+        let db = self.inner.root_db.lock().unwrap();
+        if let Some(cp) = db.as_ref() {
+            return Ok(cp.clone());
         }
+
         self.create_shared_db()
     }
 
     fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
-            return Some(engine);
-        }
-        None
+        self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
     }
 
     fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
-        self.open_tablet_cache(0, 0)
-    }
-
-    fn open_tablet_cache_latest(&self, _id: u64) -> Option<RocksEngine> {
         self.open_tablet_cache(0, 0)
     }
 
@@ -272,20 +266,18 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-            opt.set_block_cache_capacity(capacity)?;
-        }
+        let db = self.inner.root_db.lock().unwrap();
+        let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+        opt.set_block_cache_capacity(capacity)?;
         Ok(())
     }
 }
 
 impl TabletAccessor<RocksEngine> for KvEngineFactory {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let db = db.as_ref().unwrap();
-            f(0, 0, db);
-        }
+        let db = self.inner.root_db.lock().unwrap();
+        let db = db.as_ref().unwrap();
+        f(0, 0, db);
     }
 
     fn is_single_engine(&self) -> bool {

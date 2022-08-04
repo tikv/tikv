@@ -153,25 +153,19 @@ pub mod kv {
         }
 
         fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
-            if let Ok(db) = self.root_db.lock() {
-                let cp = db.as_ref().unwrap().clone();
-                return Ok(cp);
+            let db = self.root_db.lock().unwrap();
+            if let Some(cp) = db.as_ref() {
+                return Ok(cp.clone());
             }
+
             self.create_shared_db()
         }
 
         fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<KvTestEngine> {
-            if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(0, 0), false) {
-                return Some(engine);
-            }
-            None
+            self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
         }
 
         fn open_tablet_cache_any(&self, _id: u64) -> Option<KvTestEngine> {
-            self.open_tablet_cache(0, 0)
-        }
-
-        fn open_tablet_cache_latest(&self, _id: u64) -> Option<KvTestEngine> {
             self.open_tablet_cache(0, 0)
         }
 
@@ -199,20 +193,18 @@ pub mod kv {
         }
 
         fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-            if let Ok(db) = self.root_db.lock() {
-                let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-                opt.set_block_cache_capacity(capacity)?;
-            }
+            let db = self.root_db.lock().unwrap();
+            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+            opt.set_block_cache_capacity(capacity)?;
             Ok(())
         }
     }
 
     impl TabletAccessor<KvTestEngine> for TestTabletFactory {
         fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &KvTestEngine)) {
-            if let Ok(db) = self.root_db.lock() {
-                let db = db.as_ref().unwrap();
-                f(0, 0, db);
-            }
+            let db = self.root_db.lock().unwrap();
+            let db = db.as_ref().unwrap();
+            f(0, 0, db);
         }
 
         fn is_single_engine(&self) -> bool {
@@ -224,8 +216,6 @@ pub mod kv {
     pub struct TestTabletFactoryV2 {
         inner: TestTabletFactory,
         registry: Arc<Mutex<HashMap<(u64, u64), KvTestEngine>>>,
-        // registry_latest stores tablet with the latest prefix for each region
-        pub registry_latest: Arc<Mutex<HashMap<u64, (u64, KvTestEngine)>>>,
     }
 
     impl TestTabletFactoryV2 {
@@ -236,8 +226,7 @@ pub mod kv {
         ) -> Self {
             Self {
                 inner: TestTabletFactory::new(root_path, db_opt, cf_opts),
-                registry: Arc::new(Mutex::new(HashMap::default())),
-                registry_latest: Arc::new(Mutex::new(HashMap::default())),
+                registry: Arc::default(),
             }
         }
     }
@@ -256,7 +245,6 @@ pub mod kv {
     impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
         fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
             let mut reg = self.registry.lock().unwrap();
-            let mut reg_latest = self.registry_latest.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Err(box_err!(
                     "region {} {} already exists",
@@ -264,55 +252,33 @@ pub mod kv {
                     db.as_inner().path()
                 ));
             }
+
             let tablet_path = self.tablet_path(id, suffix);
             let kv_engine = self.inner.create_tablet(&tablet_path)?;
             reg.insert((id, suffix), kv_engine.clone());
-
-            if let Some((old_suffix, _)) = reg_latest.get(&id) {
-                if *old_suffix < suffix {
-                    reg_latest.insert(id, (suffix, kv_engine.clone()));
-                }
-            } else {
-                reg_latest.insert(id, (suffix, kv_engine.clone()));
-            }
 
             Ok(kv_engine)
         }
 
         fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            let mut reg = self.registry.lock().unwrap();
-            let mut reg_latest = self.registry_latest.lock().unwrap();
+            let reg = self.registry.lock().unwrap();
             if let Some(db) = reg.get(&(id, suffix)) {
                 return Ok(db.clone());
             }
 
             let db_path = self.tablet_path(id, suffix);
             let db = self.open_tablet_raw(db_path.as_path(), false)?;
-            reg.insert((id, suffix), db.clone());
-            reg_latest.insert(id, (suffix, db.clone()));
             Ok(db)
         }
 
         fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
-            let reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Some(db.clone());
-            }
-            None
+            self.registry.lock().unwrap().get(&(id, suffix)).cloned()
         }
 
         fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
             let reg = self.registry.lock().unwrap();
             if let Some(k) = reg.keys().find(|k| k.0 == id) {
                 return Some(reg.get(k).unwrap().clone());
-            }
-            None
-        }
-
-        fn open_tablet_cache_latest(&self, id: u64) -> Option<KvTestEngine> {
-            let reg_latest = self.registry_latest.lock().unwrap();
-            if let Some((_, tablet)) = reg_latest.get(&id) {
-                return Some(tablet.clone());
             }
             None
         }
@@ -366,14 +332,6 @@ pub mod kv {
         fn destroy_tablet(&self, id: u64, suffix: u64) -> engine_traits::Result<()> {
             let path = self.tablet_path(id, suffix);
             self.registry.lock().unwrap().remove(&(id, suffix));
-
-            let mut reg_latest = self.registry_latest.lock().unwrap();
-            if let Some((latest_suffix, _)) = reg_latest.get(&id) {
-                if *latest_suffix == suffix {
-                    reg_latest.remove(&id);
-                }
-            }
-
             let _ = std::fs::remove_dir_all(path);
             Ok(())
         }

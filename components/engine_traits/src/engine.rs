@@ -177,9 +177,6 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     /// Open a tablet by id and any suffix from cache
     fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
 
-    /// Open a tablet by id and latest available suffix from cache
-    fn open_tablet_cache_latest(&self, id: u64) -> Option<EK>;
-
     /// Open tablet by path and readonly flag
     fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
 
@@ -248,10 +245,6 @@ where
     }
 
     fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
-        Some(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_cache_latest(&self, _id: u64) -> Option<EK> {
         Some(self.engine.as_ref().unwrap().clone())
     }
 
