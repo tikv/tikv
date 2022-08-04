@@ -21,7 +21,7 @@ use raftstore::store::{
         ApplyNotifier,
     },
     util::LatencyInspector,
-    Config,
+    Config, RaftPeer,
 };
 use slog::Logger;
 use tikv_util::config::{Tracker, VersionTrack};

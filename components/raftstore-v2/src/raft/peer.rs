@@ -469,7 +469,7 @@ where
     }
 
     #[inline]
-    fn get_txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>> {
+    fn txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>> {
         self.txn_extra_op.clone()
     }
 

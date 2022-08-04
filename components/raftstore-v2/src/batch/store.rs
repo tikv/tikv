@@ -1,6 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{mem, ops::DerefMut, sync::Arc, time::Duration};
+use std::{
+    mem,
+    ops::DerefMut,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
@@ -203,7 +208,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     /// pd task scheduler
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    store_meta: Arc<Mutex<StoreMeta>>, 
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
