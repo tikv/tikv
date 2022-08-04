@@ -374,11 +374,28 @@ mod tests {
         drop(tablet);
         let tablet = factory.registry.lock().unwrap().remove(&(1, 10)).unwrap();
         drop(tablet);
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap_err();
+
+        let tablet_path = factory.tablet_path(1, 10);
+        let tablet = factory.open_tablet_raw(&tablet_path).unwrap();
+        // the tablet will not inserted in the cache
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap_err();
+        drop(tablet);
+
+        let tablet_path = factory.tablet_path(1, 20);
+        factory.open_tablet_raw(&tablet_path).unwrap_err();
+
         let _ = factory
-            .open_tablet(1, Some(10), OpenOptions::default())
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
 
-        assert!(factory.exists(1, 10));
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap();
     }
 
     #[test]
