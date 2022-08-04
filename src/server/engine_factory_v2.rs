@@ -395,12 +395,6 @@ mod tests {
             .open_tablet_raw(&tablet_path, 1, 10, OpenOptions::default())
             .unwrap_err();
 
-        let path = Path::new("tablet_wrong_path");
-        // Incorrect tablet path name, so error will be returned.
-        factory
-            .open_tablet_raw(path, 1, 10, OpenOptions::default().set_create(true))
-            .unwrap_err();
-
         let _ = factory
             .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
