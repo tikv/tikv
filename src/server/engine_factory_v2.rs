@@ -408,7 +408,7 @@ mod tests {
         let path = Path::new("tablet_wrong_path");
         // Incorrect tablet path name, so error will be returned.
         factory
-            .open_tablet_raw(path, OpenOptions::default())
+            .open_tablet_raw(path, OpenOptions::default().set_create(true))
             .unwrap_err();
 
         let _ = factory
