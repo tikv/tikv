@@ -361,7 +361,6 @@ impl RegionShardStats {
                 || stats.entries != first_stats.entries
                 || stats.l0_table_count != first_stats.l0_table_count
                 || stats.ver != first_stats.ver
-                || stats.write_sequence != first_stats.write_sequence
             {
                 return Err("inconsistent stats".into());
             }
