@@ -173,8 +173,8 @@ pub mod kv {
             Err(box_err!("root tablet has not been initialized"))
         }
 
-        fn open_tablet_raw(&self, _path: &Path) -> Result<KvTestEngine> {
-            self.open_tablet(0, Some(0), OpenOptions::default().set_create(true))
+        fn open_tablet_raw(&self, _path: &Path, _options: OpenOptions) -> Result<KvTestEngine> {
+            self.create_shared_db()
         }
 
         fn exists_raw(&self, _path: &Path) -> bool {
@@ -236,14 +236,28 @@ pub mod kv {
     }
 
     // Extract tablet id and tablet suffix from the path.
-    fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+    fn get_id_and_suffix_from_path(path: &Path) -> Result<(u64, u64)> {
         let (mut tablet_id, mut tablet_suffix) = (0, 1);
         if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
             let mut split = s.split('_');
-            tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            let decode = split.next().and_then(|s| s.parse().ok());
+            if decode.is_none() {
+                return Err(box_err!(
+                    "path {} is not a valid name",
+                    path.to_str().unwrap_or_default()
+                ));
+            }
+            tablet_id = decode.unwrap();
+            let decode = split.next().and_then(|s| s.parse().ok());
+            if decode.is_none() {
+                return Err(box_err!(
+                    "path {} is not a valid name",
+                    path.to_str().unwrap_or_default()
+                ));
+            }
+            tablet_suffix = decode.unwrap();
         }
-        (tablet_id, tablet_suffix)
+        Ok((tablet_id, tablet_suffix))
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
@@ -260,33 +274,24 @@ pub mod kv {
 
             let mut reg = self.registry.lock().unwrap();
             if let Some(suffix) = suffix {
-                if let Some(db) = reg.get(&(id, suffix)) {
+                if let Some(tablet) = reg.get(&(id, suffix)) {
                     // Target tablet exist in the cache
 
                     if options.create_new() {
                         return Err(box_err!(
                             "region {} {} already exists",
                             id,
-                            db.as_inner().path()
+                            tablet.as_inner().path()
                         ));
                     }
-                    return Ok(db.clone());
+                    return Ok(tablet.clone());
                 } else if !options.cache_only() {
                     let tablet_path = self.tablet_path(id, suffix);
-                    // Even though neither options.create nor options.create_new are true, if the
-                    // tablet files already exists, we will open it by calling
-                    // inner.create_tablet. In this case, the tablet exists but not in the cache
-                    // (registry).
-                    if options.create()
-                        || options.create_new()
-                        || KvTestEngine::exists(tablet_path.to_str().unwrap_or_default())
-                    {
-                        let kv_engine = self.inner.create_tablet(&tablet_path)?;
-                        if !options.skip_cache() {
-                            reg.insert((id, suffix), kv_engine.clone());
-                        }
-                        return Ok(kv_engine);
+                    let tablet = self.open_tablet_raw(&tablet_path, options.clone())?;
+                    if !options.skip_cache() {
+                        reg.insert((id, suffix), tablet.clone());
                     }
+                    return Ok(tablet);
                 }
             } else if options.cache_only() {
                 // This branch reads an arbitrary tablet with region id `id`
@@ -303,19 +308,25 @@ pub mod kv {
             ))
         }
 
-        fn open_tablet_raw(&self, path: &Path) -> Result<KvTestEngine> {
-            if !KvTestEngine::exists(path.to_str().unwrap_or_default()) {
+        fn open_tablet_raw(&self, path: &Path, options: OpenOptions) -> Result<KvTestEngine> {
+            // Even though neither options.create nor options.create_new are true, if the
+            // tablet files already exists, we will open it by calling
+            // inner.create_tablet. In this case, the tablet exists but not in the cache
+            // (registry).
+            if !options.create()
+                && !options.create_new()
+                && !KvTestEngine::exists(path.to_str().unwrap_or_default())
+            {
                 return Err(box_err!(
                     "path {} does not have db",
                     path.to_str().unwrap_or_default()
                 ));
             };
-            let (id, suffix) = get_id_and_suffix_from_path(path);
-            self.open_tablet(
-                id,
-                Some(suffix),
-                OpenOptions::default().set_skip_cache(true),
-            )
+
+            // Check the validity of the path
+            get_id_and_suffix_from_path(path)?;
+
+            self.inner.create_tablet(path)
         }
 
         #[inline]
@@ -378,7 +389,7 @@ pub mod kv {
             let new_engine =
                 self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
             if new_engine.is_ok() {
-                let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+                let (old_id, old_suffix) = get_id_and_suffix_from_path(path).unwrap();
                 self.registry.lock().unwrap().remove(&(old_id, old_suffix));
             }
             new_engine

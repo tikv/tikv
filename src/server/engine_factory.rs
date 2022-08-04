@@ -258,8 +258,8 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         Err(box_err!("root tablet has not been initialized"))
     }
 
-    fn open_tablet_raw(&self, _path: &Path) -> Result<RocksEngine> {
-        self.open_tablet(0, Some(0), OpenOptions::default().set_create(true))
+    fn open_tablet_raw(&self, _path: &Path, _options: OpenOptions) -> Result<RocksEngine> {
+        self.create_shared_db()
     }
 
     fn exists_raw(&self, _path: &Path) -> bool {

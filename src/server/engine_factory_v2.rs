@@ -22,14 +22,28 @@ pub struct KvEngineFactoryV2 {
 }
 
 // Extract tablet id and tablet suffix from the path.
-fn get_id_and_suffix_from_path(path: &Path) -> (u64, u64) {
+fn get_id_and_suffix_from_path(path: &Path) -> Result<(u64, u64)> {
     let (mut tablet_id, mut tablet_suffix) = (0, 1);
     if let Some(s) = path.file_name().map(|s| s.to_string_lossy()) {
         let mut split = s.split('_');
-        tablet_id = split.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        tablet_suffix = split.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+        let decode = split.next().and_then(|s| s.parse().ok());
+        if decode.is_none() {
+            return Err(box_err!(
+                "path {} is not a valid name",
+                path.to_str().unwrap_or_default()
+            ));
+        }
+        tablet_id = decode.unwrap();
+        let decode = split.next().and_then(|s| s.parse().ok());
+        if decode.is_none() {
+            return Err(box_err!(
+                "path {} is not a valid name",
+                path.to_str().unwrap_or_default()
+            ));
+        }
+        tablet_suffix = decode.unwrap();
     }
-    (tablet_id, tablet_suffix)
+    Ok((tablet_id, tablet_suffix))
 }
 
 impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
@@ -59,36 +73,25 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
 
         let mut reg = self.registry.lock().unwrap();
         if let Some(suffix) = suffix {
-            if let Some(db) = reg.get(&(id, suffix)) {
+            if let Some(tablet) = reg.get(&(id, suffix)) {
                 // Target tablet exist in the cache
 
                 if options.create_new() {
                     return Err(box_err!(
                         "region {} {} already exists",
                         id,
-                        db.as_inner().path()
+                        tablet.as_inner().path()
                     ));
                 }
-                return Ok(db.clone());
+                return Ok(tablet.clone());
             } else if !options.cache_only() {
                 let tablet_path = self.tablet_path(id, suffix);
-                // Even though neither options.create nor options.create_new are true, if the
-                // tablet files already exists, we will open it by calling
-                // inner.create_tablet. In this case, the tablet exists but not in the cache
-                // (registry).
-                if options.create()
-                    || options.create_new()
-                    || RocksEngine::exists(tablet_path.to_str().unwrap_or_default())
-                {
-                    let kv_engine = self.inner.create_tablet(&tablet_path, id, suffix)?;
-                    debug!("open tablet"; "key" => ?(id, suffix));
-                    if !options.skip_cache() {
-                        debug!("insert a tablet"; "key" => ?(id, suffix));
-                        reg.insert((id, suffix), kv_engine.clone());
-                        self.inner.on_tablet_created(id, suffix);
-                    }
-                    return Ok(kv_engine);
+                let tablet = self.open_tablet_raw(&tablet_path, options.clone())?;
+                if !options.skip_cache() {
+                    debug!("Insert a tablet"; "key" => ?(id, suffix));
+                    reg.insert((id, suffix), tablet.clone());
                 }
+                return Ok(tablet);
             }
         } else if options.cache_only() {
             // This branch reads an arbitrary tablet with region id `id`
@@ -106,19 +109,27 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         ))
     }
 
-    fn open_tablet_raw(&self, path: &Path) -> Result<RocksEngine> {
-        if !RocksEngine::exists(path.to_str().unwrap_or_default()) {
+    fn open_tablet_raw(&self, path: &Path, options: OpenOptions) -> Result<RocksEngine> {
+        // Even though neither options.create nor options.create_new are true, if the
+        // tablet files already exists, we will open it by calling
+        // inner.create_tablet. In this case, the tablet exists but not in the cache
+        // (registry).
+        if !options.create()
+            && !options.create_new()
+            && !RocksEngine::exists(path.to_str().unwrap_or_default())
+        {
             return Err(box_err!(
                 "path {} does not have db",
                 path.to_str().unwrap_or_default()
             ));
         };
-        let (id, suffix) = get_id_and_suffix_from_path(path);
-        self.open_tablet(
-            id,
-            Some(suffix),
-            OpenOptions::default().set_skip_cache(true),
-        )
+
+        let (id, suffix) = get_id_and_suffix_from_path(path)?;
+
+        let tablet = self.inner.create_tablet(path, id, suffix)?;
+        debug!("open tablet"; "key" => ?(id, suffix));
+        self.inner.on_tablet_created(id, suffix);
+        Ok(tablet)
     }
 
     #[inline]
@@ -185,7 +196,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         let new_engine =
             self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
         if new_engine.is_ok() {
-            let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
+            let (old_id, old_suffix) = get_id_and_suffix_from_path(path).unwrap();
             self.registry.lock().unwrap().remove(&(old_id, old_suffix));
         }
         new_engine
@@ -379,7 +390,9 @@ mod tests {
             .unwrap_err();
 
         let tablet_path = factory.tablet_path(1, 10);
-        let tablet = factory.open_tablet_raw(&tablet_path).unwrap();
+        let tablet = factory
+            .open_tablet_raw(&tablet_path, OpenOptions::default())
+            .unwrap();
         // the tablet will not inserted in the cache
         factory
             .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
@@ -387,7 +400,16 @@ mod tests {
         drop(tablet);
 
         let tablet_path = factory.tablet_path(1, 20);
-        factory.open_tablet_raw(&tablet_path).unwrap_err();
+        // No such tablet, so error will be returned.
+        factory
+            .open_tablet_raw(&tablet_path, OpenOptions::default())
+            .unwrap_err();
+
+        let path = Path::new("tablet_wrong_path");
+        // Incorrect tablet path name, so error will be returned.
+        factory
+            .open_tablet_raw(path, OpenOptions::default())
+            .unwrap_err();
 
         let _ = factory
             .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))

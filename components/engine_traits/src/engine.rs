@@ -154,7 +154,7 @@ impl Drop for TabletErrorCollector {
 }
 
 /// OpenOptionsn is used for specifiying the way of opening a tablet.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct OpenOptions {
     // create tablet if non-exist
     create: bool,
@@ -165,13 +165,13 @@ pub struct OpenOptions {
 }
 
 impl OpenOptions {
-    /// Sets the option to create a new file, or open it if it already exists.
+    /// Sets the option to create a tablet, or open it if it already exists.
     pub fn set_create(mut self, create: bool) -> Self {
         self.create = create;
         self
     }
 
-    /// Sets the option to create a new file, failing if it already exists.
+    /// Sets the option to create a new tablet, failing if it already exists.
     pub fn set_create_new(mut self, create_new: bool) -> Self {
         self.create_new = create_new;
         self
@@ -220,9 +220,7 @@ impl OpenOptions {
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: TabletAccessor<EK> {
-    /// Open the tablet with id and suffix according to the OpenOptions. The
-    /// implementation for v1 and v2 are fairly different. See the comments
-    /// above their implementation.
+    /// Open the tablet with id and suffix according to the OpenOptions.
     ///
     /// The id is likely the region Id, the suffix could be the current raft log
     /// index. They together could specify a unique path for a region's
@@ -231,7 +229,7 @@ pub trait TabletFactory<EK>: TabletAccessor<EK> {
     fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
 
     /// Open tablet by raw path without updating cache.
-    fn open_tablet_raw(&self, path: &Path) -> Result<EK>;
+    fn open_tablet_raw(&self, path: &Path, options: OpenOptions) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -293,7 +291,7 @@ where
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
-    fn open_tablet_raw(&self, _path: &Path) -> Result<EK> {
+    fn open_tablet_raw(&self, _path: &Path, _options: OpenOptions) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
 
