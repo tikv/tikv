@@ -44,7 +44,7 @@ pub trait PerfContextExt {
 ///
 /// This is a leaky abstraction that supports the encapsulation of metrics
 /// reporting by the subsystems that use PerfContext.
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,

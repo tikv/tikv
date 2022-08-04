@@ -400,10 +400,7 @@ mod tests {
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
-            kvs_left = kvs_left
-                .into_iter()
-                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
-                .collect();
+            kvs_left.retain(|k| k.0 < r.start_key || k.0 >= r.end_key);
         }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }

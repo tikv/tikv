@@ -12,9 +12,9 @@ use tikv_util::time::ThreadReadId;
 use crate::{
     store::{
         fsm::RaftRouter,
-        transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter},
-        Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts, RaftCommand,
-        SignificantMsg, StoreMsg,
+        transport::{CasualRouter, ProposalRouter, SignificantRouter},
+        CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
+        RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -168,12 +168,21 @@ where
 }
 
 /// A router that routes messages to the raftstore
-pub struct ServerRaftStoreRouter<EK: KvEngine, ER: RaftEngine> {
+pub struct ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<LocalReader<RaftRouter<EK, ER>, EK>>,
+    local_reader:
+        RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
 }
 
-impl<EK: KvEngine, ER: RaftEngine> Clone for ServerRaftStoreRouter<EK, ER> {
+impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     fn clone(&self) -> Self {
         ServerRaftStoreRouter {
             router: self.router.clone(),
@@ -186,7 +195,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<RaftRouter<EK, ER>, EK>,
+        reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {

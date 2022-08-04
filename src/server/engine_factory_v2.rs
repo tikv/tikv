@@ -15,8 +15,17 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
-    pub inner: KvEngineFactory,
-    pub registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+    inner: KvEngineFactory,
+    registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+}
+
+impl KvEngineFactoryV2 {
+    pub fn new(inner: KvEngineFactory) -> Self {
+        KvEngineFactoryV2 {
+            inner,
+            registry: Arc::new(Mutex::new(HashMap::default())),
+        }
+    }
 }
 
 // Extract tablet id and tablet suffix from the path.
@@ -266,7 +275,7 @@ mod tests {
         assert_eq!(tablet.as_inner().path(), tablet2.as_inner().path());
         let tablet_path = factory.tablet_path(1, 10);
         let result = factory.open_tablet_raw(&tablet_path, false);
-        assert!(result.is_err());
+        result.unwrap_err();
         factory
             .set_shared_block_cache_capacity(1024 * 1024)
             .unwrap();
@@ -290,7 +299,7 @@ mod tests {
         assert!(factory.is_tombstoned(1, 20));
         factory.destroy_tablet(1, 20).unwrap();
         let result = factory.open_tablet(1, 20);
-        assert!(result.is_err());
+        result.unwrap_err();
         assert!(!factory.is_single_engine());
     }
 

@@ -266,7 +266,7 @@ pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SendError {
     Full,
     Disconnected,

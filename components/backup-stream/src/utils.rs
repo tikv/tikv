@@ -698,7 +698,7 @@ mod test {
                         drop(work);
                     });
                 }
-                let _ = block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
+                block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
                 assert_eq!(cnt.load(Ordering::SeqCst), 0, "{:?}@{}", c, i);
             }
         }

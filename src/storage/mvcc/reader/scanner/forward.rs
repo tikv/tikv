@@ -1550,7 +1550,7 @@ mod latest_kv_tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(key1), val1.to_vec()))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
 
         // Scanner has met a lock though lock.ts > read_ts.
         let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -1583,7 +1583,7 @@ mod latest_kv_tests {
             scanner.next().unwrap(),
             Some((Key::from_raw(key5), val5.to_vec()))
         );
-        assert!(scanner.next().is_err());
+        scanner.next().unwrap_err();
     }
 }
 

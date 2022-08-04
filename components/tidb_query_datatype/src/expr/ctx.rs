@@ -336,7 +336,7 @@ mod tests {
         // ignore_truncate = false, truncate_as_warning = false
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::new()));
         ctx.handle_truncate(false).unwrap();
-        assert!(ctx.handle_truncate(true).is_err());
+        ctx.handle_truncate(true).unwrap_err();
         assert!(ctx.take_warnings().warnings.is_empty());
         // ignore_truncate = false;
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
