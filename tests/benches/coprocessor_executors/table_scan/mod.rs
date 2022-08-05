@@ -240,14 +240,14 @@ where
 {
     let mut inputs = vec![
         Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::TableScanDAGBencher::<RocksStore>::new(false, ROWS)),
-        Input::new(util::TableScanDAGBencher::<RocksStore>::new(true, ROWS)),
+        Input::new(util::TableScanDagBencher::<RocksStore>::new(false, ROWS)),
+        Input::new(util::TableScanDagBencher::<RocksStore>::new(true, ROWS)),
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_inputs = vec![
             Input::new(util::BatchTableScanNext1024Bencher::<RocksStore>::new()),
-            Input::new(util::TableScanDAGBencher::<MemStore>::new(false, ROWS)),
-            Input::new(util::TableScanDAGBencher::<MemStore>::new(true, ROWS)),
+            Input::new(util::TableScanDagBencher::<MemStore>::new(false, ROWS)),
+            Input::new(util::TableScanDagBencher::<MemStore>::new(true, ROWS)),
         ];
         inputs.append(&mut additional_inputs);
     }

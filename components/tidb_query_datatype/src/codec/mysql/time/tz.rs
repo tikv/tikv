@@ -188,7 +188,7 @@ impl TimeZone for Tz {
 /// `Tz::Local` -> `TzOffset::Local`
 /// `Tz::Offset` -> `TzOffset::Fixed`
 /// `Tz::Name` -> `TzOffset::NonFixed`
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum TzOffset {
     Local(FixedOffset),
     Fixed(FixedOffset),

@@ -251,7 +251,7 @@ impl Samples {
         if best_index >= 0 {
             return self.0[best_index as usize].key.clone();
         }
-        return vec![];
+        vec![]
     }
 }
 
@@ -555,7 +555,7 @@ impl SplitInfo {
 #[derive(PartialEq, Debug)]
 pub enum SplitConfigChange {
     Noop,
-    UpdateRegionCPUCollector(bool),
+    UpdateRegionCpuCollector(bool),
 }
 
 pub struct AutoSplitController {
@@ -927,12 +927,12 @@ impl AutoSplitController {
             if self.cfg.region_cpu_overload_threshold_ratio <= 0.0
                 && incoming.region_cpu_overload_threshold_ratio > 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(true);
+                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(true);
             }
             if self.cfg.region_cpu_overload_threshold_ratio > 0.0
                 && incoming.region_cpu_overload_threshold_ratio <= 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(false);
+                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(false);
             }
             self.cfg = incoming.clone();
         }
@@ -1638,7 +1638,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCPUCollector(false),
+            SplitConfigChange::UpdateRegionCpuCollector(false),
         );
         assert_eq!(
             auto_split_controller
@@ -1658,7 +1658,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCPUCollector(true),
+            SplitConfigChange::UpdateRegionCpuCollector(true),
         );
         assert_eq!(
             auto_split_controller

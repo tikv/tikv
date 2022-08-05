@@ -131,10 +131,10 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
 }
 
 lazy_static! {
-    static ref TEST_CONFIG: TiKvConfig = {
+    static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
@@ -144,13 +144,13 @@ lazy_static! {
     };
 }
 
-pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+pub fn new_tikv_config(cluster_id: u64) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg
 }
 
-pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TiKvConfig {
+pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg.storage.set_api_version(api_ver);

@@ -164,32 +164,6 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     Ok(())
 }
 
-fn init_applied_term<EK: KvEngine, ER: RaftEngine>(
-    engines: &Engines<EK, ER>,
-    region: &Region,
-    apply_state: &RaftApplyState,
-) -> Result<u64> {
-    if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
-        return Ok(RAFT_INIT_LOG_TERM);
-    }
-    let truncated_state = apply_state.get_truncated_state();
-    if apply_state.applied_index == truncated_state.get_index() {
-        return Ok(truncated_state.get_term());
-    }
-
-    match engines
-        .raft
-        .get_entry(region.get_id(), apply_state.applied_index)?
-    {
-        Some(e) => Ok(e.term),
-        None => Err(box_err!(
-            "[region {}] entry at apply index {} doesn't exist, may lose data.",
-            region.get_id(),
-            apply_state.applied_index
-        )),
-    }
-}
-
 fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
     engines: &Engines<EK, ER>,
     region: &Region,
@@ -231,92 +205,6 @@ fn init_apply_state<EK: KvEngine, ER: RaftEngine>(
             }
         },
     )
-}
-
-fn init_last_term<EK: KvEngine, ER: RaftEngine>(
-    engines: &Engines<EK, ER>,
-    region: &Region,
-    raft_state: &RaftLocalState,
-    apply_state: &RaftApplyState,
-) -> Result<u64> {
-    let last_idx = raft_state.get_last_index();
-    if last_idx == 0 {
-        return Ok(0);
-    } else if last_idx == RAFT_INIT_LOG_INDEX {
-        return Ok(RAFT_INIT_LOG_TERM);
-    } else if last_idx == apply_state.get_truncated_state().get_index() {
-        return Ok(apply_state.get_truncated_state().get_term());
-    } else {
-        assert!(last_idx > RAFT_INIT_LOG_INDEX);
-    }
-    let entry = engines.raft.get_entry(region.get_id(), last_idx)?;
-    match entry {
-        None => Err(box_err!(
-            "[region {}] entry at {} doesn't exist, may lose data.",
-            region.get_id(),
-            last_idx
-        )),
-        Some(e) => Ok(e.get_term()),
-    }
-}
-
-fn validate_states<EK: KvEngine, ER: RaftEngine>(
-    region_id: u64,
-    engines: &Engines<EK, ER>,
-    raft_state: &mut RaftLocalState,
-    apply_state: &RaftApplyState,
-) -> Result<()> {
-    let last_index = raft_state.get_last_index();
-    let mut commit_index = raft_state.get_hard_state().get_commit();
-    let recorded_commit_index = apply_state.get_commit_index();
-    let state_str = || -> String {
-        format!(
-            "region {}, raft state {:?}, apply state {:?}",
-            region_id, raft_state, apply_state
-        )
-    };
-    // The commit index of raft state may be less than the recorded commit index.
-    // If so, forward the commit index.
-    if commit_index < recorded_commit_index {
-        let entry = engines.raft.get_entry(region_id, recorded_commit_index)?;
-        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
-            return Err(box_err!(
-                "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
-                apply_state.get_commit_term(),
-                recorded_commit_index,
-                state_str()
-            ));
-        }
-        info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
-        commit_index = recorded_commit_index;
-    }
-    // Invariant: applied index <= max(commit index, recorded commit index)
-    if apply_state.get_applied_index() > commit_index {
-        return Err(box_err!(
-            "applied index > max(commit index, recorded commit index), {}",
-            state_str()
-        ));
-    }
-    // Invariant: max(commit index, recorded commit index) <= last index
-    if commit_index > last_index {
-        return Err(box_err!(
-            "max(commit index, recorded commit index) > last index, {}",
-            state_str()
-        ));
-    }
-    // Since the entries must be persisted before applying, the term of raft state
-    // should also be persisted. So it should be greater than the commit term of
-    // apply state.
-    if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
-        return Err(box_err!(
-            "term of raft state < commit term of apply state, {}",
-            state_str()
-        ));
-    }
-
-    raft_state.mut_hard_state().set_commit(commit_index);
-
-    Ok(())
 }
 
 pub struct PeerStorage<EK, ER>
@@ -411,23 +299,17 @@ where
             "peer_id" => peer_id,
             "path" => ?engines.kv.path(),
         );
-        let mut raft_state = init_raft_state(&engines, region)?;
+        let raft_state = init_raft_state(&engines, region)?;
         let apply_state = init_apply_state(&engines, region)?;
-        if let Err(e) = validate_states(region.get_id(), &engines, &mut raft_state, &apply_state) {
-            return Err(box_err!("{} validate state fail: {:?}", tag, e));
-        }
-        let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
-        let applied_term = init_applied_term(&engines, region, &apply_state)?;
+
         let entry_storage = EntryStorage::new(
-            region.id,
             peer_id,
             engines.raft.clone(),
             raft_state,
             apply_state,
-            last_term,
-            applied_term,
+            region,
             raftlog_fetch_scheduler,
-        );
+        )?;
 
         Ok(PeerStorage {
             engines,
@@ -694,11 +576,8 @@ where
         if task.raft_wb.is_none() {
             task.raft_wb = Some(self.engines.raft.log_batch(64));
         }
-        if task.kv_wb.is_none() {
-            task.kv_wb = Some(self.engines.kv.write_batch());
-        }
         let raft_wb = task.raft_wb.as_mut().unwrap();
-        let kv_wb = task.kv_wb.as_mut().unwrap();
+        let kv_wb = task.extra_write.ensure_v1(|| self.engines.kv.write_batch());
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
@@ -1017,9 +896,9 @@ where
             // in case of recv raft log after snapshot.
             self.save_snapshot_raft_state_to(
                 ready.snapshot().get_metadata().get_index(),
-                write_task.kv_wb.as_mut().unwrap(),
+                write_task.extra_write.v1_mut().unwrap(),
             )?;
-            self.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())?;
+            self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
         }
 
         if !write_task.has_data() {
@@ -1325,7 +1204,8 @@ pub mod tests {
         ents: &[Entry],
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
         let mut store = new_storage(region_scheduler, raftlog_fetch_scheduler, path);
-        let mut write_task = WriteTask::new(store.get_region_id(), store.peer_id, 1);
+        let mut write_task: WriteTask<KvTestEngine, _> =
+            WriteTask::new(store.get_region_id(), store.peer_id, 1);
         store.append(ents[1..].to_vec(), &mut write_task);
         store.update_cache_persisted(ents.last().unwrap().get_index());
         store
@@ -1339,12 +1219,10 @@ pub mod tests {
         store
             .apply_state_mut()
             .set_applied_index(ents.last().unwrap().get_index());
-        if write_task.kv_wb.is_none() {
-            write_task.kv_wb = Some(store.engines.kv.write_batch());
-        }
-        store
-            .save_apply_state_to(write_task.kv_wb.as_mut().unwrap())
-            .unwrap();
+        let kv_wb = write_task
+            .extra_write
+            .ensure_v1(|| store.engines.kv.write_batch());
+        store.save_apply_state_to(kv_wb).unwrap();
         write_task.raft_state = Some(store.raft_state().clone());
         write_to_db_for_test(&store.engines, write_task);
         store
@@ -1779,11 +1657,10 @@ pub mod tests {
         s.raft_state_mut().set_last_index(7);
         s.apply_state_mut().set_applied_index(7);
         write_task.raft_state = Some(s.raft_state().clone());
-        if write_task.kv_wb.is_none() {
-            write_task.kv_wb = Some(s.engines.kv.write_batch());
-        }
-        s.save_apply_state_to(write_task.kv_wb.as_mut().unwrap())
-            .unwrap();
+        let kv_wb = write_task
+            .extra_write
+            .ensure_v1(|| s.engines.kv.write_batch());
+        s.save_apply_state_to(kv_wb).unwrap();
         write_to_db_for_test(&s.engines, write_task);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, s.entry_storage.apply_state_mut(), 7, term).unwrap();
@@ -1941,7 +1818,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start(runner);
-        assert!(s1.snapshot(0, 0).is_err());
+        s1.snapshot(0, 0).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
@@ -2032,7 +1909,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]
@@ -2082,7 +1959,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

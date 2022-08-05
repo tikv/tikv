@@ -1045,7 +1045,7 @@ pub mod tests {
     #[test]
     fn test_get_approximate_split_keys() {
         for cf in LARGE_CFS {
-            test_get_approximate_split_keys_impl(*cf);
+            test_get_approximate_split_keys_impl(cf);
         }
     }
 

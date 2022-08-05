@@ -291,7 +291,11 @@ impl Simulator for NodeCluster {
             Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =

@@ -1167,7 +1167,7 @@ mod tests {
 
         for index in indices {
             for order in orders {
-                test_split_impl(*index, *order);
+                test_split_impl(*index, order.as_slice());
             }
         }
     }
