@@ -295,34 +295,34 @@ static OBSERVE_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier for checking stale observed commands.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct ObserveID(usize);
+pub struct ObserveId(usize);
 
-impl ObserveID {
-    pub fn new() -> ObserveID {
-        ObserveID(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl ObserveId {
+    pub fn new() -> ObserveId {
+        ObserveId(OBSERVE_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
 /// ObserveHandle is the status of a term of observing, it contains the
-/// `ObserveID` and the `observing` flag indicate whether the observing is
+/// `ObserveId` and the `observing` flag indicate whether the observing is
 /// ongoing
 #[derive(Clone, Default, Debug)]
 pub struct ObserveHandle {
-    pub id: ObserveID,
+    pub id: ObserveId,
     observing: Arc<AtomicBool>,
 }
 
 impl ObserveHandle {
     pub fn new() -> ObserveHandle {
         ObserveHandle {
-            id: ObserveID::new(),
+            id: ObserveId::new(),
             observing: Arc::new(AtomicBool::new(true)),
         }
     }
 
     pub fn with_id(id: usize) -> ObserveHandle {
         ObserveHandle {
-            id: ObserveID(id),
+            id: ObserveId(id),
             observing: Arc::new(AtomicBool::new(true)),
         }
     }
@@ -412,9 +412,9 @@ pub enum ObserveLevel {
 #[derive(Clone, Debug)]
 pub struct CmdBatch {
     pub level: ObserveLevel,
-    pub cdc_id: ObserveID,
-    pub rts_id: ObserveID,
-    pub pitr_id: ObserveID,
+    pub cdc_id: ObserveId,
+    pub rts_id: ObserveId,
+    pub pitr_id: ObserveId,
     pub region_id: u64,
     pub cmds: Vec<Cmd>,
 }

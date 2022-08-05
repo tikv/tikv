@@ -15,8 +15,17 @@ const TOMBSTONE_MARK: &str = "TOMBSTONE_TABLET";
 
 #[derive(Clone)]
 pub struct KvEngineFactoryV2 {
-    pub inner: KvEngineFactory,
-    pub registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+    inner: KvEngineFactory,
+    registry: Arc<Mutex<HashMap<(u64, u64), RocksEngine>>>,
+}
+
+impl KvEngineFactoryV2 {
+    pub fn new(inner: KvEngineFactory) -> Self {
+        KvEngineFactoryV2 {
+            inner,
+            registry: Arc::new(Mutex::new(HashMap::default())),
+        }
+    }
 }
 
 // Extract tablet id and tablet suffix from the path.
@@ -185,14 +194,14 @@ mod tests {
     use engine_traits::{TabletFactory, CF_WRITE};
 
     use super::*;
-    use crate::{config::TiKvConfig, server::KvEngineFactoryBuilder};
+    use crate::{config::TikvConfig, server::KvEngineFactoryBuilder};
 
     lazy_static! {
-        static ref TEST_CONFIG: TiKvConfig = {
+        static ref TEST_CONFIG: TikvConfig = {
             let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
             let common_test_cfg =
                 manifest_dir.join("components/test_raftstore/src/common-test.toml");
-            TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+            TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
                 panic!(
                     "invalid auto generated configuration file {}, err {}",
                     manifest_dir.display(),

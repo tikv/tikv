@@ -188,7 +188,7 @@ mod tests {
             FieldTypeTp::DateTime.into(),
             FieldTypeTp::Duration.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
             FieldTypeTp::String.into(),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
@@ -229,7 +229,7 @@ mod tests {
             FieldTypeTp::DateTime.into(),
             FieldTypeTp::Duration.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
             FieldTypeTp::String.into(),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
@@ -329,7 +329,7 @@ mod tests {
     fn bench_encode_from_raw_json_datum(b: &mut Bencher) {
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
         let datum = Datum::Json(json);
-        bench_encode_from_raw_datum_impl(b, datum, FieldTypeTp::JSON);
+        bench_encode_from_raw_datum_impl(b, datum, FieldTypeTp::Json);
     }
 
     #[test]
@@ -341,7 +341,7 @@ mod tests {
             FieldTypeTp::VarChar.into(),
             FieldTypeTp::VarChar.into(),
             FieldTypeTp::NewDecimal.into(),
-            FieldTypeTp::JSON.into(),
+            FieldTypeTp::Json.into(),
         ];
         let mut chunk = Chunk::new(&fields, rows);
 
