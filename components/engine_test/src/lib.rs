@@ -91,7 +91,7 @@ pub mod kv {
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
     };
     use engine_traits::{
-        CfOptions, CfOptionsExt, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+        CfOptions, CfOptionsExt, OpenOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
     };
     use tikv_util::box_err;
 
@@ -134,12 +134,11 @@ pub mod kv {
         }
 
         fn create_tablet(&self, tablet_path: &Path) -> Result<KvTestEngine> {
-            let kv_engine = KvTestEngine::new_kv_engine_opt(
+            KvTestEngine::new_kv_engine_opt(
                 tablet_path.to_str().unwrap(),
                 self.db_opt.clone(),
                 self.cf_opts.clone(),
-            )?;
-            Ok(kv_engine)
+            )
         }
     }
 
@@ -152,25 +151,36 @@ pub mod kv {
             Ok(tablet)
         }
 
-        fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<KvTestEngine> {
-            let db = self.root_db.lock().unwrap();
-            if let Some(cp) = db.as_ref() {
-                return Ok(cp.clone());
+        /// See the comment above the same name method in KvEngineFactory
+        fn open_tablet(
+            &self,
+            _id: u64,
+            _suffix: Option<u64>,
+            options: OpenOptions,
+        ) -> Result<KvTestEngine> {
+            if let Some(db) = self.root_db.lock().unwrap().as_ref() {
+                if options.create_new() {
+                    return Err(box_err!(
+                        "root tablet {} already exists",
+                        db.as_inner().path()
+                    ));
+                }
+                return Ok(db.clone());
+            } else if options.create_new() || options.create() {
+                return self.create_shared_db();
             }
 
+            Err(box_err!("root tablet has not been initialized"))
+        }
+
+        fn open_tablet_raw(
+            &self,
+            _path: &Path,
+            _id: u64,
+            _suffix: u64,
+            _options: OpenOptions,
+        ) -> Result<KvTestEngine> {
             self.create_shared_db()
-        }
-
-        fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<KvTestEngine> {
-            self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
-        }
-
-        fn open_tablet_cache_any(&self, _id: u64) -> Option<KvTestEngine> {
-            self.open_tablet_cache(0, 0)
-        }
-
-        fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<KvTestEngine> {
-            TabletFactory::create_tablet(self, 0, 0)
         }
 
         fn exists_raw(&self, _path: &Path) -> bool {
@@ -243,59 +253,86 @@ pub mod kv {
     }
 
     impl TabletFactory<KvTestEngine> for TestTabletFactoryV2 {
-        fn create_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
+        /// See the comment above the same name method in KvEngineFactoryV2
+        fn open_tablet(
+            &self,
+            id: u64,
+            suffix: Option<u64>,
+            mut options: OpenOptions,
+        ) -> Result<KvTestEngine> {
+            if options.create_new() || options.create() {
+                options = options.set_cache_only(false);
+            }
+
             let mut reg = self.registry.lock().unwrap();
-            if let Some(db) = reg.get(&(id, suffix)) {
-                return Err(box_err!(
-                    "region {} {} already exists",
-                    id,
-                    db.as_inner().path()
-                ));
+            if let Some(suffix) = suffix {
+                if let Some(tablet) = reg.get(&(id, suffix)) {
+                    // Target tablet exist in the cache
+
+                    if options.create_new() {
+                        return Err(box_err!(
+                            "region {} {} already exists",
+                            id,
+                            tablet.as_inner().path()
+                        ));
+                    }
+                    return Ok(tablet.clone());
+                } else if !options.cache_only() {
+                    let tablet_path = self.tablet_path(id, suffix);
+                    let tablet = self.open_tablet_raw(&tablet_path, id, suffix, options.clone())?;
+                    if !options.skip_cache() {
+                        reg.insert((id, suffix), tablet.clone());
+                    }
+                    return Ok(tablet);
+                }
+            } else if options.cache_only() {
+                // This branch reads an arbitrary tablet with region id `id`
+
+                if let Some(k) = reg.keys().find(|k| k.0 == id) {
+                    return Ok(reg.get(k).unwrap().clone());
+                }
             }
 
-            let tablet_path = self.tablet_path(id, suffix);
-            let kv_engine = self.inner.create_tablet(&tablet_path)?;
-            reg.insert((id, suffix), kv_engine.clone());
-
-            Ok(kv_engine)
+            Err(box_err!(
+                "tablet with region id {} suffix {:?} does not exist",
+                id,
+                suffix
+            ))
         }
 
-        fn open_tablet(&self, id: u64, suffix: u64) -> Result<KvTestEngine> {
-            if let Some(db) = self.registry.lock().unwrap().get(&(id, suffix)) {
-                return Ok(db.clone());
-            }
-
-            let db_path = self.tablet_path(id, suffix);
-            let db = self.open_tablet_raw(db_path.as_path(), false)?;
-            Ok(db)
-        }
-
-        fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<KvTestEngine> {
-            self.registry.lock().unwrap().get(&(id, suffix)).cloned()
-        }
-
-        fn open_tablet_cache_any(&self, id: u64) -> Option<KvTestEngine> {
-            let reg = self.registry.lock().unwrap();
-            if let Some(k) = reg.keys().find(|k| k.0 == id) {
-                return Some(reg.get(k).unwrap().clone());
-            }
-            None
-        }
-
-        fn open_tablet_raw(&self, path: &Path, _readonly: bool) -> Result<KvTestEngine> {
-            if !KvTestEngine::exists(path.to_str().unwrap_or_default()) {
+        fn open_tablet_raw(
+            &self,
+            path: &Path,
+            id: u64,
+            _suffix: u64,
+            options: OpenOptions,
+        ) -> Result<KvTestEngine> {
+            let engine_exist = KvTestEngine::exists(path.to_str().unwrap_or_default());
+            // Even though neither options.create nor options.create_new are true, if the
+            // tablet files already exists, we will open it by calling
+            // inner.create_tablet. In this case, the tablet exists but not in the cache
+            // (registry).
+            if !options.create() && !options.create_new() && !engine_exist {
                 return Err(box_err!(
                     "path {} does not have db",
                     path.to_str().unwrap_or_default()
                 ));
+            };
+
+            if options.create_new() && engine_exist {
+                return Err(box_err!(
+                    "region {} {} already exists",
+                    id,
+                    path.to_str().unwrap()
+                ));
             }
-            let (tablet_id, tablet_suffix) = get_id_and_suffix_from_path(path);
-            self.create_tablet(tablet_id, tablet_suffix)
+
+            self.inner.create_tablet(path)
         }
 
         #[inline]
         fn create_shared_db(&self) -> Result<KvTestEngine> {
-            self.create_tablet(0, 0)
+            self.open_tablet(0, Some(0), OpenOptions::default().set_create_new(true))
         }
 
         #[inline]
@@ -350,7 +387,8 @@ pub mod kv {
 
             let db_path = self.tablet_path(id, suffix);
             std::fs::rename(path, &db_path)?;
-            let new_engine = self.open_tablet_raw(db_path.as_path(), false);
+            let new_engine =
+                self.open_tablet(id, Some(suffix), OpenOptions::default().set_create(true));
             if new_engine.is_ok() {
                 let (old_id, old_suffix) = get_id_and_suffix_from_path(path);
                 self.registry.lock().unwrap().remove(&(old_id, old_suffix));
