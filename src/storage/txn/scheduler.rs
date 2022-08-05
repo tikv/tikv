@@ -70,7 +70,8 @@ use crate::{
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
         txn::{
             commands::{
-                self, CallbackWithArcError, Command, PessimisticLockKeyCallback, ReleasedLocks,
+                self, wake_up_legacy_pessimistic_lock_waits::WakeUpLegacyPessimisticLockWaits,
+                CallbackWithArcError, Command, PessimisticLockKeyCallback, ReleasedLocks,
                 ResponsePolicy, SyncCommandContext, WriteContext, WriteResult, WriteResultLockInfo,
             },
             flow_controller::FlowController,
@@ -434,10 +435,40 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
         );
-        Scheduler {
+        let scheduler = Scheduler {
             inner,
             _engine: PhantomData,
-        }
+        };
+
+        let scheduler1 = scheduler.clone();
+
+        scheduler
+            .inner
+            .lock_mgr
+            .set_key_wake_up_delay_callback(Box::new(
+                move |key: &txn_types::Key,
+                      conflicting_start_ts: TimeStamp,
+                      conflicting_commit_ts: TimeStamp,
+                      wake_up_before: std::time::Instant| {
+                    scheduler1.schedule_command(
+                        None,
+                        WakeUpLegacyPessimisticLockWaits::new(
+                            key.clone(),
+                            conflicting_start_ts,
+                            conflicting_commit_ts,
+                            wake_up_before,
+                            Context::default(),
+                        )
+                        .into(),
+                        SchedulerTaskCallback::NormalRequestCallback(StorageCallback::Boolean(
+                            Box::new(|_| ()),
+                        )),
+                        None,
+                    );
+                },
+            ));
+
+        scheduler
     }
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
@@ -522,6 +553,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 wake_up_events.push(lock_manager::KeyWakeUpEvent {
                     key: lock.key.clone(),
                     released_start_ts: 0.into(),
+                    released_commit_ts: 0.into(),
                     awakened_start_ts: lock.parameters.start_ts,
                     awakened_allow_resuming: lock.allow_lock_with_conflict,
                 })
@@ -1062,7 +1094,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
         let mut pr = Some(pr);
-        let lock_info = if tag == CommandKind::acquire_pessimistic_lock
+        let mut lock_info = if tag == CommandKind::acquire_pessimistic_lock
             || tag == CommandKind::acquire_pessimistic_lock_resumed
         {
             if let Some(cmd_meta) = pessimistic_lock_single_request_meta {
@@ -1148,6 +1180,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             None
         };
+
+        if let Some(lock_info) = lock_info.as_mut() {
+            // Set the start time of lock waiting
+            let now = std::time::Instant::now();
+            lock_info
+                .iter_mut()
+                .for_each(|i| i.wait_start_time = Some(now));
+        }
 
         if let Some(released_locks) = released_locks.as_mut() {
             scheduler.on_release_locks_pre_persist(cid, released_locks);
@@ -1553,6 +1593,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     wake_up_events.push(lock_manager::KeyWakeUpEvent {
                         key: released_lock.key.clone(),
                         released_start_ts: released_lock.start_ts,
+                        released_commit_ts: released_lock.commit_ts,
                         awakened_start_ts: front.0.parameters.start_ts,
                         awakened_allow_resuming: front.0.allow_lock_with_conflict,
                     });

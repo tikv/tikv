@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kvproto::{kvrpcpb::LockInfo, metapb::RegionEpoch};
 use txn_types::{Key, TimeStamp};
@@ -95,6 +95,7 @@ impl LockWaitToken {
 pub struct KeyWakeUpEvent {
     pub key: Key,
     pub released_start_ts: TimeStamp,
+    pub released_commit_ts: TimeStamp,
     pub awakened_start_ts: TimeStamp,
     pub awakened_allow_resuming: bool,
 }
@@ -103,7 +104,10 @@ pub struct KeyWakeUpEvent {
 /// transactions. It has responsibility to handle deadlocks between
 /// transactions.
 pub trait LockManager: Clone + Send + 'static {
-    fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&Key) + Send>);
+    fn set_key_wake_up_delay_callback(
+        &self,
+        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
+    );
 
     fn allocate_token(&self) -> LockWaitToken;
     /// Transaction with `start_ts` waits for `lock` released.
@@ -153,7 +157,11 @@ pub trait LockManager: Clone + Send + 'static {
 pub struct DummyLockManager;
 
 impl LockManager for DummyLockManager {
-    fn set_key_wake_up_delay_callback(&self, _cb: Box<dyn Fn(&Key) + Send>) {}
+    fn set_key_wake_up_delay_callback(
+        &self,
+        _cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
+    ) {
+    }
 
     fn allocate_token(&self) -> LockWaitToken {
         LockWaitToken(None)

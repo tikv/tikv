@@ -7972,7 +7972,11 @@ mod tests {
     }
 
     impl LockManager for ProxyLockMgr {
-        fn set_key_wake_up_delay_callback(&self, _cb: Box<dyn Fn(&Key) + Send>) {}
+        fn set_key_wake_up_delay_callback(
+            &self,
+            _cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, std::time::Instant) + Send>,
+        ) {
+        }
 
         fn allocate_token(&self) -> LockWaitToken {
             LockWaitToken(Some(1))

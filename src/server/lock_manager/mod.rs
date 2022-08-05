@@ -14,6 +14,7 @@ use std::{
         Arc,
     },
     thread::JoinHandle,
+    time::Instant,
 };
 
 use collections::HashSet;
@@ -260,7 +261,10 @@ impl LockManager {
 }
 
 impl LockManagerTrait for LockManager {
-    fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&txn_types::Key) + Send>) {
+    fn set_key_wake_up_delay_callback(
+        &self,
+        cb: Box<dyn Fn(&txn_types::Key, TimeStamp, TimeStamp, Instant) + Send>,
+    ) {
         self.waiter_mgr_scheduler.set_key_wake_up_delay_callback(cb);
     }
 

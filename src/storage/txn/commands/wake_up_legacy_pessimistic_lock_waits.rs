@@ -1,8 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, Arc};
+use std::{
+    sync::{atomic::Ordering, Arc},
+    time::Instant,
+};
 
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
@@ -20,6 +23,9 @@ command! {
         display => "kv::command::wake_up_legacy_pessimistic_lock_wait key({}) {:?}", (key, ctx),
         content => {
             key: Key,
+            conflicting_start_ts: TimeStamp,
+            conflicting_commit_ts: TimeStamp,
+            wake_up_before: Instant,
         }
 }
 
@@ -58,15 +64,25 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
                 continue;
             }
 
-            if !entry.0.allow_lock_with_conflict {
+            if !entry.0.allow_lock_with_conflict
+                && entry
+                    .0
+                    .wait_start_time
+                    .map_or(true, |t| t <= self.wake_up_before)
+            {
                 popped_entries.push(queue.pop().unwrap());
                 continue;
             }
 
-            // If we found an waiting request in new mode, wake it up and stop.
+            // If we found an waiting request in new mode, or in old mode but inserted later
+            // than registering the waking up, wake it up in normal way and stop.
             released_locks.push(Some(ReleasedLock::new(0.into(), None, self.key, false)));
             break;
         }
+
+        // Make borrow checker happy.
+        let conflicting_start_ts = self.conflicting_start_ts;
+        let conflicting_commit_ts = self.conflicting_commit_ts;
 
         if !popped_entries.is_empty() {
             *sync_cmd_ctx.on_finished = Some(Box::new(move || {
@@ -74,7 +90,13 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
                     let entry = entry.unwrap();
                     let cb = entry.key_cb.unwrap();
                     let e = StorageError::from(TxnError::from(MvccError::from(
-                        MvccErrorInner::KeyIsLocked(entry.last_found_lock),
+                        MvccErrorInner::WriteConflict {
+                            start_ts: entry.parameters.start_ts,
+                            conflict_start_ts: conflicting_start_ts,
+                            conflict_commit_ts: conflicting_commit_ts,
+                            key: entry.key.into_raw().unwrap(),
+                            primary: entry.parameters.primary,
+                        },
                     )));
                     cb(Err(Arc::new(e)));
                 }

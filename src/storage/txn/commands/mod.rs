@@ -30,6 +30,7 @@ use std::{
     num::NonZeroU64,
     ops::{Deref, DerefMut},
     sync::Arc,
+    time::Instant,
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
@@ -417,6 +418,7 @@ pub struct WriteResultLockInfo {
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
+    pub wait_start_time: Option<Instant>,
 }
 
 impl Debug for WriteResultLockInfo {
@@ -450,6 +452,7 @@ impl WriteResultLockInfo {
             term,
             parameters,
             req_states: None,
+            wait_start_time: None,
         }
     }
 

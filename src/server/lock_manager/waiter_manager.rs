@@ -112,7 +112,7 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 #[allow(clippy::large_enum_variant)]
 pub enum Task {
     SetKeyWakeUpDelayCallback {
-        cb: Box<dyn Fn(&Key) + Send>,
+        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
     },
     WaitFor {
         token: LockWaitToken,
@@ -433,6 +433,13 @@ enum CheckRegionStateResult {
     WaiterExpired,
 }
 
+struct LegacyWakeUpDelay {
+    delay: Delay,
+    conflicting_start_ts: TimeStamp,
+    conflicting_commit_ts: TimeStamp,
+    record_time: Instant,
+}
+
 struct WaitTable {
     // Map lock hash and ts to waiters.
     // For compatibility.
@@ -442,11 +449,11 @@ struct WaitTable {
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
 
-    legacy_wakeup_in_progress: HashMap<Key, Delay>,
+    legacy_wakeup_in_progress: HashMap<Key, LegacyWakeUpDelay>,
 
     on_waiter_cancel_by_region_error:
         Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
-    wake_up_key_delay_callback: Option<Box<dyn Fn(&Key) + Send>>,
+    wake_up_key_delay_callback: Option<Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>>,
 }
 
 impl WaitTable {
@@ -469,7 +476,10 @@ impl WaitTable {
         self.on_waiter_cancel_by_region_error = cb;
     }
 
-    fn set_wake_up_key_delay_callback(&mut self, cb: Option<Box<dyn Fn(&Key) + Send>>) {
+    fn set_wake_up_key_delay_callback(
+        &mut self,
+        cb: Option<Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>>,
+    ) {
         self.wake_up_key_delay_callback = cb;
     }
 
@@ -725,7 +735,10 @@ impl Scheduler {
         });
     }
 
-    pub fn set_key_wake_up_delay_callback(&self, cb: Box<dyn Fn(&Key) + Send>) {
+    pub fn set_key_wake_up_delay_callback(
+        &self,
+        cb: Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>,
+    ) {
         self.notify_scheduler(Task::SetKeyWakeUpDelayCallback { cb });
     }
 
@@ -832,12 +845,17 @@ impl WaiterManager {
     fn handle_record_legacy_waking_up_keys(&mut self, events: Vec<KeyWakeUpEvent>) {
         let deadline = Instant::now() + self.wake_up_delay_duration.0;
         for event in events {
+            // Make borrow checker happy.
+            let released_start_ts = event.released_start_ts;
+            let released_commit_ts = event.released_commit_ts;
             self.wait_table
                 .borrow_mut()
                 .legacy_wakeup_in_progress
                 .entry(event.key)
                 .and_modify(|delay| {
-                    delay.reset(deadline);
+                    delay.conflicting_start_ts = released_start_ts;
+                    delay.conflicting_commit_ts = released_commit_ts;
+                    delay.delay.reset(deadline);
                 })
                 .or_insert_with_key(|key| {
                     let delay = Delay::new(deadline);
@@ -847,13 +865,25 @@ impl WaiterManager {
                     spawn_local(async move {
                         delay1.await;
                         let mut wait_table = wait_table.borrow_mut();
-                        if wait_table.legacy_wakeup_in_progress.remove(&key).is_some() {
+                        if let Some(expired_entry) =
+                            wait_table.legacy_wakeup_in_progress.remove(&key)
+                        {
                             if let Some(cb) = &wait_table.wake_up_key_delay_callback {
-                                cb(&key)
+                                cb(
+                                    &key,
+                                    expired_entry.conflicting_start_ts,
+                                    expired_entry.conflicting_commit_ts,
+                                    expired_entry.record_time,
+                                );
                             }
                         }
                     });
-                    delay
+                    LegacyWakeUpDelay {
+                        delay,
+                        conflicting_start_ts: released_start_ts,
+                        conflicting_commit_ts: released_commit_ts,
+                        record_time: Instant::now(),
+                    }
                 });
         }
     }
