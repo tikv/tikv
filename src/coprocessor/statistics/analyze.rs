@@ -37,7 +37,7 @@ use yatp::task::future::reschedule;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{dag::TiKvStorage, MEMTRACE_ANALYZE, *},
+    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
@@ -47,7 +47,7 @@ const ANALYZE_VERSION_V2: i32 = 2;
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    storage: Option<TiKvStorage<SnapshotStore<S>>>,
+    storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
@@ -76,7 +76,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
 
         Ok(Self {
             req,
-            storage: Some(TiKvStorage::new(store, false)),
+            storage: Some(TikvStorage::new(store, false)),
             ranges,
             storage_stats: Statistics::default(),
             quota_limiter,
@@ -126,7 +126,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TiKvStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TikvStorage<SnapshotStore<S>>>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -138,9 +138,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
         let mut topn_heap = BinaryHeap::new();
-        // cur_val recording the current value's data and its counts when iterating index's rows.
-        // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
-        // top-n information.
+        // cur_val recording the current value's data and its counts when iterating
+        // index's rows. Once we met a new value, the old value will be pushed
+        // into the topn_heap to maintain the top-n information.
         let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
         let top_n_size = req.get_top_n_size() as usize;
         let stats_version = if req.has_version() {
@@ -317,7 +317,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct RowSampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -325,16 +325,16 @@ struct RowSampleBuilder<S: Snapshot> {
     columns_info: Vec<tipb::ColumnInfo>,
     column_groups: Vec<tipb::AnalyzeColumnGroup>,
     quota_limiter: Arc<QuotaLimiter>,
-    is_quota_auto_tune: bool,
+    is_auto_analyze: bool,
 }
 
 impl<S: Snapshot> RowSampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        storage: TiKvStorage<SnapshotStore<S>>,
+        storage: TikvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
         quota_limiter: Arc<QuotaLimiter>,
-        is_quota_auto_tune: bool,
+        is_auto_analyze: bool,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
         if columns_info.is_empty() {
@@ -359,7 +359,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             columns_info,
             column_groups: req.take_column_groups().into(),
             quota_limiter,
-            is_quota_auto_tune,
+            is_auto_analyze,
         })
     }
 
@@ -391,7 +391,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 time_slice_start = Instant::now();
             }
 
-            let mut sample = self.quota_limiter.new_sample();
+            let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
                 let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
@@ -444,9 +444,10 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 }
             }
 
-            // Don't let analyze bandwidth limit the quota limiter, this is already limited in rate limiter.
+            // Don't let analyze bandwidth limit the quota limiter, this is already limited
+            // in rate limiter.
             let quota_delay = {
-                if !self.is_quota_auto_tune {
+                if !self.is_auto_analyze {
                     self.quota_limiter.consume_sample(sample, true).await
                 } else {
                     self.quota_limiter.consume_sample(sample, false).await
@@ -796,7 +797,7 @@ impl Drop for BaseRowSampleCollector {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TiKvStorage<SnapshotStore<S>>>,
+    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -817,7 +818,7 @@ impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,
-        storage: TiKvStorage<SnapshotStore<S>>,
+        storage: TikvStorage<SnapshotStore<S>>,
         ranges: Vec<KeyRange>,
     ) -> Result<Self> {
         let columns_info: Vec<_> = req.take_columns_info().into();
@@ -858,10 +859,10 @@ impl<S: Snapshot> SampleBuilder<S> {
         })
     }
 
-    // `collect_columns_stats` returns the sample collectors which contain total count,
-    // null count, distinct values count and count-min sketch. And it also returns the statistic
-    // builder for PK which contains the histogram. When PK is common handle, it returns index stats
-    // for PK.
+    // `collect_columns_stats` returns the sample collectors which contain total
+    // count, null count, distinct values count and count-min sketch. And it
+    // also returns the statistic builder for PK which contains the histogram.
+    // When PK is common handle, it returns index stats for PK.
     // See https://en.wikipedia.org/wiki/Reservoir_sampling
     async fn collect_columns_stats(
         &mut self,
@@ -871,8 +872,8 @@ impl<S: Snapshot> SampleBuilder<S> {
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 
         // The number of columns need to be sampled is `columns_without_handle_len`.
-        // It equals to `columns_info.len()` if the first column doesn't contain a handle.
-        // Otherwise, it equals to `columns_info.len() - 1`.
+        // It equals to `columns_info.len()` if the first column doesn't contain a
+        // handle. Otherwise, it equals to `columns_info.len() - 1`.
         let mut pk_builder = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
@@ -915,9 +916,9 @@ impl<S: Snapshot> SampleBuilder<S> {
             }
 
             if self.analyze_common_handle {
-                // cur_val recording the current value's data and its counts when iterating index's rows.
-                // Once we met a new value, the old value will be pushed into the topn_heap to maintain the
-                // top-n information.
+                // cur_val recording the current value's data and its counts when iterating
+                // index's rows. Once we met a new value, the old value will be pushed into the
+                // topn_heap to maintain the top-n information.
                 let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
                 let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
@@ -979,16 +980,21 @@ impl<S: Snapshot> SampleBuilder<S> {
                         &mut val,
                     )?;
 
-                    // This is a workaround for different encoding methods used by TiDB and TiKV for CM Sketch.
-                    // We need this because we must ensure we are using the same encoding method when we are querying values from
-                    //   CM Sketch (in TiDB) and inserting values into CM Sketch (here).
-                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and query CM Sketch using bytes
-                    //   encoded by tablecodec.EncodeValue() in TiDB. Their results are different after row format becomes ver 2.
+                    // This is a workaround for different encoding methods used by TiDB and TiKV for
+                    // CM Sketch. We need this because we must ensure we are using the same encoding
+                    // method when we are querying values from CM Sketch (in TiDB) and inserting
+                    // values into CM Sketch (here).
+                    // We are inserting raw bytes from TableScanExecutor into CM Sketch here and
+                    // query CM Sketch using bytes encoded by tablecodec.EncodeValue() in TiDB.
+                    // Their results are different after row format becomes ver 2.
                     //
-                    // Here we (1) convert INT bytes to VAR_INT bytes, (2) convert UINT bytes to VAR_UINT bytes,
-                    //   and (3) "flatten" the duration value from DURATION bytes into i64 value, then convert it to VAR_INT bytes.
-                    // These are the only 3 cases we need to care about according to TiDB's tablecodec.EncodeValue() and
-                    //   TiKV's V1CompatibleEncoder::write_v2_as_datum().
+                    // Here we:
+                    // - convert INT bytes to VAR_INT bytes
+                    // - convert UINT bytes to VAR_UINT bytes
+                    // - "flatten" the duration value from DURATION bytes into i64 value, then
+                    //   convert it to VAR_INT bytes.
+                    // These are the only 3 cases we need to care about according to TiDB's
+                    // tablecodec.EncodeValue() and TiKV's V1CompatibleEncoder::write_v2_as_datum().
                     val = match val[0] {
                         INT_FLAG | UINT_FLAG | DURATION_FLAG => {
                             let mut mut_val = &val[..];
@@ -1037,7 +1043,8 @@ impl<S: Snapshot> SampleBuilder<S> {
     }
 }
 
-/// `SampleCollector` will collect Samples and calculate the count, ndv and total size of an attribute.
+/// `SampleCollector` will collect Samples and calculate the count, ndv and
+/// total size of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Provides wrappers for types that comes from 3rd-party and does not implement slog::Value.
+//! Provides wrappers for types that comes from 3rd-party and does not implement
+//! slog::Value.
 
 #[macro_use]
 extern crate slog;
@@ -21,10 +22,11 @@ pub mod test_util;
 
 /// Wraps any `Display` type, use `Display` as `slog::Value`.
 ///
-/// Usually this wrapper is useful in containers, e.g. `Option<DisplayValue<T>>`.
+/// Usually this wrapper is useful in containers, e.g.
+/// `Option<DisplayValue<T>>`.
 ///
-/// If your type `val: T` is directly used as a field value, you may use `"key" => %value` syntax
-/// instead.
+/// If your type `val: T` is directly used as a field value, you may use `"key"
+/// => %value` syntax instead.
 pub struct DisplayValue<T: std::fmt::Display>(pub T);
 
 impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
@@ -43,8 +45,8 @@ impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
 ///
 /// Usually this wrapper is useful in containers, e.g. `Option<DebugValue<T>>`.
 ///
-/// If your type `val: T` is directly used as a field value, you may use `"key" => ?value` syntax
-/// instead.
+/// If your type `val: T` is directly used as a field value, you may use `"key"
+/// => ?value` syntax instead.
 pub struct DebugValue<T: std::fmt::Debug>(pub T);
 
 impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {

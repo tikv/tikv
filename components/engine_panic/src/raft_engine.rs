@@ -118,10 +118,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        panic!()
-    }
-
     fn flush_metrics(&self, instance: &str) {
         panic!()
     }
@@ -139,6 +135,14 @@ impl RaftEngine for PanicEngine {
     }
 
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
+        panic!()
+    }
+
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
+    where
+        F: FnMut(u64) -> std::result::Result<(), E>,
+        E: From<Error>,
+    {
         panic!()
     }
 }

@@ -32,7 +32,10 @@ pub use self::{
     query_stats::QueryStats,
     raftlog_fetch::{Runner as RaftlogFetchRunner, Task as RaftlogFetchTask},
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
-    read::{LocalReader, Progress as ReadProgress, ReadDelegate, ReadExecutor, TrackVer},
+    read::{
+        CachedReadDelegate, LocalReadContext, LocalReader, Progress as ReadProgress, ReadDelegate,
+        ReadExecutor, ReadExecutorProvider, ReadMetrics, StoreMetaDelegate, TrackVer,
+    },
     refresh_config::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
@@ -42,5 +45,5 @@ pub use self::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
     split_config::{SplitConfig, SplitConfigManager},
-    split_controller::{AutoSplitController, ReadStats, WriteStats},
+    split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
 };

@@ -20,8 +20,8 @@ pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     exprs: Vec<RpnExpression>,
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchProjectionExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -209,8 +209,9 @@ mod tests {
             ],
         );
 
-        // When source executor returns empty rows, projection executor should process correctly.
-        // No errors should be generated and the expression functions should not be called.
+        // When source executor returns empty rows, projection executor should process
+        // correctly. No errors should be generated and the expression functions
+        // should not be called.
 
         let r = exec.next_batch(1);
         // The scan rows parameter has no effect for mock executor. We don't care.
@@ -507,8 +508,8 @@ mod tests {
             ],
         );
 
-        // When evaluating expr[0], there will be no error. However we will meet errors for
-        // expr[1].
+        // When evaluating expr[0], there will be no error. However we will meet errors
+        // for expr[1].
 
         let exprs = (0..=1)
             .map(|offset| {
@@ -522,6 +523,6 @@ mod tests {
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());
-        assert!(r.is_drained.is_err());
+        r.is_drained.unwrap_err();
     }
 }

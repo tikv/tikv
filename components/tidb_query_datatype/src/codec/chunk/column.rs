@@ -316,7 +316,7 @@ impl Column {
             }
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
-            FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
+            FieldTypeTp::Json => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
             FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Set => {
@@ -402,7 +402,8 @@ impl Column {
         self.null_cnt = 0;
         self.null_bitmap.clear();
         if !self.var_offsets.is_empty() {
-            // The first offset is always 0, it makes slicing the data easier, we need to keep it.
+            // The first offset is always 0, it makes slicing the data easier, we need to
+            // keep it.
             self.var_offsets.truncate(1);
         }
         self.data.clear();
@@ -1006,7 +1007,7 @@ pub trait ChunkColumnEncoder: NumberEncoder {
         }
         // offsets
         if !col.is_fixed() {
-            //let length = (col.length+1)*4;
+            // let length = (col.length+1)*4;
             for v in &col.var_offsets {
                 self.write_i64_le(*v as i64)?;
             }
@@ -1141,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_column_json() {
-        let fields: Vec<FieldType> = vec![FieldTypeTp::JSON.into()];
+        let fields: Vec<FieldType> = vec![FieldTypeTp::Json.into()];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
 
         let data = vec![Datum::Null, Datum::Json(json)];

@@ -39,14 +39,14 @@ impl Default for EncryptionConfig {
     }
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct FileConfig {
     pub path: String,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, OnlineConfig)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
@@ -68,7 +68,7 @@ impl KmsConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
@@ -111,6 +111,7 @@ mod encryption_method_serde {
     const AES128_CTR: &str = "aes128-ctr";
     const AES192_CTR: &str = "aes192-ctr";
     const AES256_CTR: &str = "aes256-ctr";
+    const SM4_CTR: &str = "sm4-ctr";
 
     #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(method: &EncryptionMethod, serializer: S) -> Result<S::Ok, S::Error>
@@ -123,6 +124,7 @@ mod encryption_method_serde {
             EncryptionMethod::Aes128Ctr => serializer.serialize_str(AES128_CTR),
             EncryptionMethod::Aes192Ctr => serializer.serialize_str(AES192_CTR),
             EncryptionMethod::Aes256Ctr => serializer.serialize_str(AES256_CTR),
+            EncryptionMethod::Sm4Ctr => serializer.serialize_str(SM4_CTR),
         }
     }
 
@@ -149,6 +151,7 @@ mod encryption_method_serde {
                     AES128_CTR => Ok(EncryptionMethod::Aes128Ctr),
                     AES192_CTR => Ok(EncryptionMethod::Aes192Ctr),
                     AES256_CTR => Ok(EncryptionMethod::Aes256Ctr),
+                    SM4_CTR => Ok(EncryptionMethod::Sm4Ctr),
                     _ => Err(E::invalid_value(Unexpected::Str(value), &self)),
                 }
             }

@@ -58,10 +58,10 @@ impl RangePropertiesExt for RocksEngine {
                     let keys = props.get_approximate_keys_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
-                        Path::new(&*k)
+                        Path::new(k)
                             .file_name()
                             .map(|f| f.to_str().unwrap())
-                            .unwrap_or(&*k),
+                            .unwrap_or(k),
                         keys
                     )
                 })
@@ -118,10 +118,10 @@ impl RangePropertiesExt for RocksEngine {
                     let size = props.get_approximate_size_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
-                        Path::new(&*k)
+                        Path::new(k)
                             .file_name()
                             .map(|f| f.to_str().unwrap())
-                            .unwrap_or(&*k),
+                            .unwrap_or(k),
                         size
                     )
                 })
@@ -191,8 +191,8 @@ impl RangePropertiesExt for RocksEngine {
 
         const SAMPLING_THRESHOLD: usize = 20000;
         const SAMPLE_RATIO: usize = 1000;
-        // If there are too many keys, reduce its amount before sorting, or it may take too much
-        // time to sort the keys.
+        // If there are too many keys, reduce its amount before sorting, or it may take
+        // too much time to sort the keys.
         if keys.len() > SAMPLING_THRESHOLD {
             let len = keys.len();
             keys = keys.into_iter().step_by(len / SAMPLE_RATIO).collect();
@@ -204,7 +204,8 @@ impl RangePropertiesExt for RocksEngine {
             return Ok(keys);
         }
 
-        // Find `key_count` keys which divides the whole range into `parts` parts evenly.
+        // Find `key_count` keys which divides the whole range into `parts` parts
+        // evenly.
         let mut res = Vec::with_capacity(key_count);
         let section_len = (keys.len() as f64) / ((key_count + 1) as f64);
         for i in 1..=key_count {

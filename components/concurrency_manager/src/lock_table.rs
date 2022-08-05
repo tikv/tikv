@@ -33,12 +33,13 @@ impl LockTable {
             let entry = self.0.get_or_insert(key.clone(), weak);
             if entry.value().ptr_eq(&weak2) {
                 // If the weak ptr returned by `get_or_insert` equals to the one we inserted,
-                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the handle
-                // to the table.
+                // `guard` refers to the KeyHandle in the lock table. Now, we can bind the
+                // handle to the table.
 
-                // SAFETY: The `table` field in `KeyHandle` is only accessed through the `set_table`
-                // or the `drop` method. It's impossible to have a concurrent `drop` here and `set_table`
-                // is only called here. So there is no concurrent access to the `table` field in `KeyHandle`.
+                // SAFETY: The `table` field in `KeyHandle` is only accessed through the
+                // `set_table` or the `drop` method. It's impossible to have a concurrent `drop`
+                // here and `set_table` is only called here. So there is no concurrent access to
+                // the `table` field in `KeyHandle`.
                 unsafe {
                     guard.handle().set_table(self.clone());
                 }
@@ -56,7 +57,7 @@ impl LockTable {
     ) -> Result<(), E> {
         if let Some(lock_ref) = self.get(key) {
             return lock_ref.with_lock(|lock| {
-                if let Some(lock) = &*lock {
+                if let Some(lock) = lock {
                     return check_fn(lock);
                 }
                 Ok(())
@@ -171,7 +172,7 @@ mod test {
         let key_k = Key::from_raw(b"k");
 
         // no lock found
-        assert!(lock_table.check_key(&key_k, |_| Err(())).is_ok());
+        lock_table.check_key(&key_k, |_| Err(())).unwrap();
 
         let lock = Lock::new(
             LockType::Lock,
@@ -189,7 +190,7 @@ mod test {
         });
 
         // lock passes check_fn
-        assert!(lock_table.check_key(&key_k, |l| ts_check(l, 5)).is_ok());
+        lock_table.check_key(&key_k, |l| ts_check(l, 5)).unwrap();
 
         // lock does not pass check_fn
         assert_eq!(lock_table.check_key(&key_k, |l| ts_check(l, 20)), Err(lock));
@@ -230,22 +231,18 @@ mod test {
         });
 
         // no lock found
-        assert!(
-            lock_table
-                .check_range(
-                    Some(&Key::from_raw(b"m")),
-                    Some(&Key::from_raw(b"n")),
-                    |_, _| Err(())
-                )
-                .is_ok()
-        );
+        lock_table
+            .check_range(
+                Some(&Key::from_raw(b"m")),
+                Some(&Key::from_raw(b"n")),
+                |_, _| Err(()),
+            )
+            .unwrap();
 
         // lock passes check_fn
-        assert!(
-            lock_table
-                .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
-                .is_ok()
-        );
+        lock_table
+            .check_range(None, Some(&Key::from_raw(b"z")), |_, l| ts_check(l, 5))
+            .unwrap();
 
         // first lock does not pass check_fn
         assert_eq!(

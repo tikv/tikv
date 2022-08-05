@@ -29,7 +29,7 @@ use crate::{
     yatp_pool::{DefaultTicker, YatpPoolBuilder},
 };
 
-#[derive(Eq, PartialEq)]
+#[derive(PartialEq)]
 pub enum ScheduleError<T> {
     Stopped(T),
     Full(T),
@@ -117,7 +117,8 @@ impl<T: Display + Send> Scheduler<T> {
 
     /// Schedules a task to run.
     ///
-    /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
+    /// If the worker is stopped or number pending tasks exceeds capacity, an
+    /// error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
         if self.counter.load(Ordering::Acquire) >= self.pending_capacity {

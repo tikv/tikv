@@ -87,14 +87,14 @@ fn test_ttl_checker_impl<F: KvFormat>() {
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key1", b"zr\0key25", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key4).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key5).unwrap().is_some());
 
-    let _ = check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
+    check_ttl_and_compact_files(&kvdb, b"zr\0key2", b"zr\0key6", false);
     assert!(kvdb.get_value_cf(CF_DEFAULT, key1).unwrap().is_none());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key2).unwrap().is_some());
     assert!(kvdb.get_value_cf(CF_DEFAULT, key3).unwrap().is_none());
@@ -349,7 +349,7 @@ fn test_ttl_iterator_impl<F: KvFormat>() {
     let snapshot = engine.snapshot(SnapContext::default()).unwrap();
     let ttl_snapshot = RawEncodeSnapshot::<_, F>::from_snapshot(snapshot);
     let mut iter = ttl_snapshot
-        .iter(IterOptions::new(None, None, false))
+        .iter(CF_DEFAULT, IterOptions::new(None, None, false))
         .unwrap();
     iter.seek_to_first().unwrap();
     assert_eq!(iter.key(), b"r\0key1");

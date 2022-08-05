@@ -6,7 +6,7 @@ use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
 use raftstore::{
-    coprocessor::{ObserveHandle, ObserveID},
+    coprocessor::{ObserveHandle, ObserveId},
     router::RaftStoreRouter,
     store::{
         fsm::ChangeObserver,
@@ -33,7 +33,7 @@ const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
-pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
+pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
 pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
 pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 
@@ -212,7 +212,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
             let mut resp = box_try!(fut.await);
             if resp.response.get_header().has_error() {
                 let err = resp.response.take_header().take_error();
-                // These two errors can't handled by retrying since the epoch and observe id is unchanged
+                // These two errors can't handled by retrying since the epoch and observe id is
+                // unchanged
                 if err.has_epoch_not_match() || err.get_message().contains("stale observe id") {
                     return Err(Error::request(err));
                 }

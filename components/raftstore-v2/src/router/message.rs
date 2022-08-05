@@ -60,9 +60,9 @@ where
 
 /// Variants of channels for `Msg`.
 ///  - `Read`: a channel for read only requests including `StatusRequest`,
-///         `GetRequest` and `SnapRequest`
+///    `GetRequest` and `SnapRequest`
 ///  - `Write`: a channel for write only requests including `AdminRequest`
-///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///    `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
 /// Prefer channel rather than callback because:
 /// 1. channel can be reused, hence reduce allocations.
 /// 2. channel may not need dynamic dispatch.
@@ -132,7 +132,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
 pub enum PeerTick {
     Raft = 0,
@@ -145,10 +145,11 @@ pub enum PeerTick {
     CheckLeaderLease = 7,
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
+    CheckLongUncommitted = 10,
 }
 
 impl PeerTick {
-    pub const VARIANT_COUNT: usize = Self::get_all_ticks().len();
+    pub const VARIANT_COUNT: usize = Self::all_ticks().len();
 
     #[inline]
     pub fn tag(self) -> &'static str {
@@ -163,10 +164,11 @@ impl PeerTick {
             PeerTick::CheckLeaderLease => "check_leader_lease",
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
+            PeerTick::CheckLongUncommitted => "check_long_uncommitted",
         }
     }
 
-    pub const fn get_all_ticks() -> &'static [PeerTick] {
+    pub const fn all_ticks() -> &'static [PeerTick] {
         const TICKS: &[PeerTick] = &[
             PeerTick::Raft,
             PeerTick::RaftLogGc,
@@ -178,6 +180,7 @@ impl PeerTick {
             PeerTick::CheckLeaderLease,
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
+            PeerTick::CheckLongUncommitted,
         ];
         TICKS
     }
@@ -234,8 +237,8 @@ pub enum PeerMsg<EK: KvEngine> {
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
     RaftCommand(RaftCommand<EK::Snapshot>),
-    /// Tick is periodical task. If target peer doesn't exist there is a potential
-    /// that the raft node will not work anymore.
+    /// Tick is periodical task. If target peer doesn't exist there is a
+    /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {

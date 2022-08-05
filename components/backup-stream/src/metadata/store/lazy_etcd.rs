@@ -105,9 +105,10 @@ impl LazyEtcdClientInner {
     async fn connect(&self) -> Result<EtcdStore> {
         let store = retry(|| {
             // For now, the interface of the `etcd_client` doesn't us to control
-            // how to create channels when connecting, hence we cannot update the tls config at runtime.
-            // TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt the `SecurityManager` API,
-            //       instead of doing everything by own.
+            // how to create channels when connecting, hence we cannot update the tls config
+            // at runtime.
+            // TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt
+            // the `SecurityManager` API, instead of doing everything by own.
             etcd_client::Client::connect(self.endpoints.clone(), Some(self.opt.clone()))
         })
         .await
@@ -139,5 +140,9 @@ impl MetaStore for LazyEtcdClient {
 
     async fn txn(&self, txn: super::Transaction) -> Result<()> {
         self.0.get_cli().await?.txn(txn).await
+    }
+
+    async fn txn_cond(&self, txn: super::CondTransaction) -> Result<()> {
+        self.0.get_cli().await?.txn_cond(txn).await
     }
 }

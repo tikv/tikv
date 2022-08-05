@@ -8,23 +8,23 @@ set -euo pipefail
 # Run from the Makefile environment
 MAKEFILE_RUN=${MAKEFILE_RUN:-""}
 if [[ -z $MAKEFILE_RUN ]] ; then
-	COMMAND="$0 $*" exec make run
+    COMMAND="$0 $*" exec make run
 fi
 SHELL_DEBUG=${SHELL_DEBUG:-""}
 if [[ -n "$SHELL_DEBUG" ]] ; then
-  set -x
+    set -x
 fi
 
 ./scripts/clippy --all-targets
 
 # for pkg in "components/cdc" "components/backup" "cmd" "tests"; do
-# 	cd $pkg
-# 	cargo clippy --all-targets --no-default-features \
-# 		--features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
-# 	cd - >/dev/null
+#     cd $pkg
+#     cargo clippy --all-targets --no-default-features \
+#         --features "${TIKV_ENABLE_FEATURES}" -- "${ALLOWED_CLIPPY_LINTS[@]}"
+#     cd - >/dev/null
 # done
 # for pkg in "fuzz"; do
-# 	cd $pkg
-# 	cargo clippy --all-targets -- "${ALLOWED_CLIPPY_LINTS[@]}"
-# 	cd - >/dev/null
+#     cd $pkg
+#     cargo clippy --all-targets -- "${ALLOWED_CLIPPY_LINTS[@]}"
+#     cd - >/dev/null
 # done

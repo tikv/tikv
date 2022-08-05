@@ -7,7 +7,7 @@ use std::{
 };
 
 use collections::HashMap;
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use kvproto::pdpb::QueryKind;
 use prometheus::local::*;
 use raftstore::store::WriteStats;
@@ -61,7 +61,8 @@ impl SchedPool {
         name_prefix: &str,
     ) -> Self {
         let engine = Arc::new(Mutex::new(engine));
-        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases that we need more thread than cpu num.
+        // for low cpu quota env, set the max-thread-count as 4 to allow potential cases
+        // that we need more thread than cpu num.
         let max_pool_size = std::cmp::max(
             pool_size,
             std::cmp::max(4, SysQuota::cpu_cores_quota() as usize),
@@ -73,7 +74,7 @@ impl SchedPool {
             // the tls_engine invariants.
             .after_start(move || {
                 set_tls_engine(engine.lock().unwrap().clone());
-                set_io_type(IOType::ForegroundWrite);
+                set_io_type(IoType::ForegroundWrite);
             })
             .before_stop(move || unsafe {
                 // Safety: we ensure the `set_` and `destroy_` calls use the same engine type.
