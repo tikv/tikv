@@ -109,12 +109,8 @@ where
         }
     }
 
-    pub fn iter(&self, iter_opt: IterOptions) -> RegionIterator<S> {
-        RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
-    }
-
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
-        Ok(RegionIterator::new_cf(
+    pub fn iter(&self, cf: &str, iter_opt: IterOptions) -> Result<RegionIterator<S>> {
+        Ok(RegionIterator::new(
             &self.snap,
             Arc::clone(&self.region),
             iter_opt,
@@ -122,26 +118,15 @@ where
         ))
     }
 
-    // scan scans database using an iterator in range [start_key, end_key), calls function f for
-    // each iteration, if f returns false, terminates this scan.
-    pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter(iter_opt), start_key, f)
-    }
-
-    // like `scan`, only on a specific column family.
-    pub fn scan_cf<F>(
+    // scan scans database using an iterator in range [start_key, end_key), calls
+    // function f for each iteration, if f returns false, terminates this scan.
+    pub fn scan<F>(
         &self,
         cf: &str,
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-        f: F,
+        mut f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
@@ -149,13 +134,8 @@ where
         let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
         let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
-    }
 
-    fn scan_impl<F>(&self, mut it: RegionIterator<S>, start_key: &[u8], mut f: F) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
+        let mut it = self.iter(cf, iter_opt)?;
         let mut it_valid = it.seek(start_key)?;
         while it_valid {
             it_valid = f(it.key(), it.value())? && it.next()?;
@@ -195,13 +175,13 @@ impl<S> Peekable for RegionSnapshot<S>
 where
     S: Snapshot,
 {
-    type DBVector = <S as Peekable>::DBVector;
+    type DbVector = <S as Peekable>::DbVector;
 
     fn get_value_opt(
         &self,
         opts: &ReadOptions,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -220,7 +200,7 @@ where
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> EngineResult<Option<Self::DBVector>> {
+    ) -> EngineResult<Option<Self::DbVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -300,16 +280,7 @@ impl<S> RegionIterator<S>
 where
     S: Snapshot,
 {
-    pub fn new(snap: &S, region: Arc<Region>, mut iter_opt: IterOptions) -> RegionIterator<S> {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
-        let iter = snap
-            .iterator_opt(iter_opt)
-            .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator { iter, region }
-    }
-
-    pub fn new_cf(
+    pub fn new(
         snap: &S,
         region: Arc<Region>,
         mut iter_opt: IterOptions,
@@ -318,7 +289,7 @@ where
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let iter = snap
-            .iterator_cf_opt(cf, iter_opt)
+            .iterator_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator { iter, region }
     }
@@ -337,15 +308,13 @@ where
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.iter.seek(key.as_slice().into()).map_err(Error::from)
+        self.iter.seek(&key).map_err(Error::from)
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.iter
-            .seek_for_prev(key.as_slice().into())
-            .map_err(Error::from)
+        self.iter.seek_for_prev(&key).map_err(Error::from)
     }
 
     pub fn prev(&mut self) -> Result<bool> {
@@ -397,7 +366,7 @@ fn handle_check_key_in_region_error(e: crate::Error) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use engine_test::{kv::KvTestSnapshot, new_temp_engine};
-    use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable};
+    use engine_traits::{Engines, KvEngine, Peekable, RaftEngine, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
@@ -523,7 +492,7 @@ mod tests {
         assert!(v0.is_none());
 
         let v4 = snap.get_value(b"key5");
-        assert!(v4.is_err());
+        v4.unwrap_err();
     }
 
     #[allow(clippy::type_complexity)]
@@ -548,7 +517,7 @@ mod tests {
                 upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
             );
-            let mut iter = snap.iter(iter_opt);
+            let mut iter = snap.iter(CF_DEFAULT, iter_opt).unwrap();
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
                 let check_res = |iter: &RegionIterator<KvTestSnapshot>,
                                  res: Result<bool>,
@@ -650,7 +619,7 @@ mod tests {
 
         let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let mut data = vec![];
-        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
+        snap.scan(CF_DEFAULT, b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         })
@@ -660,7 +629,7 @@ mod tests {
         assert_eq!(data, &base_data[1..3]);
 
         data.clear();
-        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
+        snap.scan(CF_DEFAULT, b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(false)
         })
@@ -668,7 +637,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let mut iter = snap.iter(IterOptions::default());
+        let mut iter = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
@@ -685,7 +654,7 @@ mod tests {
         let store = new_peer_storage(engines.clone(), &region);
         let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         data.clear();
-        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
+        snap.scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         })
@@ -694,7 +663,7 @@ mod tests {
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
-        let mut iter = snap.iter(IterOptions::default());
+        let mut iter = snap.iter(CF_DEFAULT, IterOptions::default()).unwrap();
         assert!(iter.seek(b"a1").unwrap());
 
         assert!(iter.seek_to_first().unwrap());
@@ -710,11 +679,16 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
-        let mut iter = snap.iter(IterOptions::new(
-            None,
-            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
-            true,
-        ));
+        let mut iter = snap
+            .iter(
+                CF_DEFAULT,
+                IterOptions::new(
+                    None,
+                    Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+                    true,
+                ),
+            )
+            .unwrap();
         assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
@@ -735,7 +709,7 @@ mod tests {
         let snap = RegionSnapshot::<KvTestSnapshot>::new(&store);
         let mut iter_opt = IterOptions::default();
         iter_opt.set_lower_bound(b"a3", 1);
-        let mut iter = snap.iter(iter_opt);
+        let mut iter = snap.iter(CF_DEFAULT, iter_opt).unwrap();
         assert!(iter.seek_to_last().unwrap());
         let mut res = vec![];
         loop {

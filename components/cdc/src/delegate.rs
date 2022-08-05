@@ -24,7 +24,7 @@ use kvproto::{
     },
 };
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
@@ -38,23 +38,23 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::ConnID,
+    service::ConnId,
     Error, Result,
 };
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
 /// A unique identifier of a Downstream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct DownstreamID(usize);
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+pub struct DownstreamId(usize);
 
-impl DownstreamID {
-    pub fn new() -> DownstreamID {
-        DownstreamID(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
+impl DownstreamId {
+    pub fn new() -> DownstreamId {
+        DownstreamId(DOWNSTREAM_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }
 }
 
-impl Default for DownstreamID {
+impl Default for DownstreamId {
     fn default() -> Self {
         Self::new()
     }
@@ -64,10 +64,11 @@ impl Default for DownstreamID {
 pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
-    /// It has got a snapshot for incremental scan, and change events will be accepted.
-    /// However it still rejects resolved timestamps.
+    /// It has got a snapshot for incremental scan, and change events will be
+    /// accepted. However it still rejects resolved timestamps.
     Initializing,
-    /// Incremental scan is finished so that resolved timestamps are acceptable now.
+    /// Incremental scan is finished so that resolved timestamps are acceptable
+    /// now.
     Normal,
     Stopped,
 }
@@ -78,7 +79,8 @@ impl Default for DownstreamState {
     }
 }
 
-/// Shold only be called when it's uninitialized or stopped. Return false if it's stopped.
+/// Should only be called when it's uninitialized or stopped. Return false if
+/// it's stopped.
 pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
         DownstreamState::Uninitialized,
@@ -87,7 +89,8 @@ pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     .is_ok()
 }
 
-/// Shold only be called when it's initializing or stopped. Return false if it's stopped.
+/// Should only be called when it's initializing or stopped. Return false if
+/// it's stopped.
 pub(crate) fn post_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(DownstreamState::Initializing, DownstreamState::Normal)
         .is_ok()
@@ -116,10 +119,10 @@ impl DownstreamState {
 pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
-    id: DownstreamID,
+    id: DownstreamId,
     // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
-    conn_id: ConnID,
+    conn_id: ConnId,
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
@@ -137,11 +140,11 @@ impl Downstream {
         peer: String,
         region_epoch: RegionEpoch,
         req_id: u64,
-        conn_id: ConnID,
+        conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
     ) -> Downstream {
         Downstream {
-            id: DownstreamID::new(),
+            id: DownstreamId::new(),
             req_id,
             conn_id,
             peer,
@@ -196,7 +199,7 @@ impl Downstream {
         self.sink = Some(sink);
     }
 
-    pub fn get_id(&self) -> DownstreamID {
+    pub fn get_id(&self) -> DownstreamId {
         self.id
     }
 
@@ -204,7 +207,7 @@ impl Downstream {
         self.state.clone()
     }
 
-    pub fn get_conn_id(&self) -> ConnID {
+    pub fn get_conn_id(&self) -> ConnId {
         self.conn_id
     }
 }
@@ -274,7 +277,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn downstream(&self, downstream_id: DownstreamID) -> Option<&Downstream> {
+    pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
         self.downstreams().iter().find(|d| d.id == downstream_id)
     }
 
@@ -294,7 +297,7 @@ impl Delegate {
 
     /// Let downstream unsubscribe the delegate.
     /// Return whether the delegate is empty or not.
-    pub fn unsubscribe(&mut self, id: DownstreamID, err: Option<Error>) -> bool {
+    pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
         if let Some(d) = self.remove_downstream(id) {
@@ -348,9 +351,10 @@ impl Delegate {
         let _ = self.broadcast(send);
     }
 
-    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's transaction layer to
-    /// determine whether to capture modifications' old value or not. Unsubsribing all downstreams
-    /// or calling `Delegate::stop` will store it with `TxnExtraOp::Noop`.
+    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
+    /// transaction layer to determine whether to capture modifications' old
+    /// value or not. Unsubscribing all downstreams or calling
+    /// `Delegate::stop` will store it with `TxnExtraOp::Noop`.
     ///
     /// NOTE: Dropping a `Delegate` won't update this flag.
     pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
@@ -373,7 +377,8 @@ impl Delegate {
         Ok(())
     }
 
-    /// Install a resolver. Return downstreams which fail because of the region's internal changes.
+    /// Install a resolver. Return downstreams which fail because of the
+    /// region's internal changes.
     pub fn on_region_ready(
         &mut self,
         mut resolver: Resolver,
@@ -441,6 +446,7 @@ impl Delegate {
         for cmd in batch.into_iter(self.region_id) {
             let Cmd {
                 index,
+                term: _,
                 mut request,
                 mut response,
             } = cmd;
@@ -608,19 +614,20 @@ impl Delegate {
             rows.push(v);
         }
         self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_raw_downstream(raw_rows, index)
+        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
     }
 
-    fn sink_raw_downstream(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
+    pub fn raw_untrack_ts(&mut self, cdc_id: ObserveId, max_ts: TimeStamp) {
+        // Stale CmdBatch, drop it silently.
+        if cdc_id != self.handle.id {
+            return;
         }
         // the entry's timestamp is non-decreasing, the last has the max ts.
-        let max_raw_ts = TimeStamp::from(entries.last().unwrap().commit_ts);
+        // use prev ts, see reason at CausalObserver::pre_propose_query
+        let max_raw_ts = max_ts.prev();
         match self.resolver {
             Some(ref mut resolver) => {
-                // use prev ts, see reason at CausalObserver::pre_propose_query
-                resolver.raw_untrack_lock(max_raw_ts.prev());
+                resolver.raw_untrack_lock(max_raw_ts);
             }
             None => {
                 assert!(self.pending.is_some(), "region resolver not ready");
@@ -630,7 +637,6 @@ impl Delegate {
                     .push(PendingLock::RawUntrack { ts: max_raw_ts });
             }
         }
-        self.sink_downstream(entries, index, ChangeDataRequestKvApi::RawKv)
     }
 
     pub fn raw_track_ts(&mut self, ts: TimeStamp) {
@@ -666,8 +672,8 @@ impl Delegate {
             ..Default::default()
         };
         let send = move |downstream: &Downstream| {
-            // No ready downstream or a downstream that does not match the kv_api type, will be ignored.
-            // There will be one region that contains both Txn & Raw entries.
+            // No ready downstream or a downstream that does not match the kv_api type, will
+            // be ignored. There will be one region that contains both Txn & Raw entries.
             // The judgement here is for sending entries to downstreams with correct kv_api.
             if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
                 return Ok(());
@@ -857,7 +863,7 @@ impl Delegate {
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
-    fn remove_downstream(&mut self, id: DownstreamID) -> Option<Downstream> {
+    fn remove_downstream(&mut self, id: DownstreamId) -> Option<Downstream> {
         let downstreams = self.downstreams_mut();
         if let Some(index) = downstreams.iter().position(|x| x.id == id) {
             let downstream = downstreams.swap_remove(index);
@@ -876,9 +882,9 @@ impl Delegate {
         if let Err(e) = compare_region_epoch(
             &downstream.region_epoch,
             region,
-            false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            false, // check_conf_ver
+            true,  // check_ver
+            true,  // include_region
         ) {
             info!(
                 "cdc fail to subscribe downstream";
@@ -902,6 +908,16 @@ impl Delegate {
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
     }
+
+    // if raw data and tidb data both exist in this region, it will return false.
+    pub fn is_raw_region(&self) -> bool {
+        if let Some(region) = &self.region {
+            ApiV2::parse_range_mode((Some(&region.start_key), Some(&region.end_key)))
+                == KeyMode::Raw
+        } else {
+            false
+        }
+    }
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
@@ -917,9 +933,10 @@ fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
     set_event_row_type(row, EventLogType::Rollback);
 }
 
-/// Decodes the write record and store its information in `row`. This may be called both when
-/// doing incremental scan of observing apply events. There's different behavior for the two
-/// case, distinguished by the `is_apply` parameter.
+/// Decodes the write record and store its information in `row`. This may be
+/// called both when doing incremental scan of observing apply events. There's
+/// different behavior for the two case, distinguished by the `is_apply`
+/// parameter.
 fn decode_write(
     key: Vec<u8>,
     value: &[u8],
@@ -931,8 +948,8 @@ fn decode_write(
     let write = WriteRef::parse(value).unwrap().to_owned();
 
     // For scanning, ignore the GC fence and read the old data;
-    // For observed apply, drop the record it self but keep only the overlapped rollback information
-    // if gc_fence exists.
+    // For observed apply, drop the record it self but keep only the overlapped
+    // rollback information if gc_fence exists.
     if is_apply && write.gc_fence.is_some() {
         // `gc_fence` is set means the write record has been rewritten.
         // Currently the only case is writing overlapped_rollback. And in this case
@@ -1053,7 +1070,7 @@ mod tests {
             String::new(),
             region_epoch,
             request_id,
-            ConnID::new(),
+            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
         );
         downstream.set_sink(sink);
@@ -1172,7 +1189,7 @@ mod tests {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
-            Downstream::new(peer, epoch, id, ConnID::new(), ChangeDataRequestKvApi::TiDb)
+            Downstream::new(peer, epoch, id, ConnId::new(), ChangeDataRequestKvApi::TiDb)
         };
 
         // Create a new delegate.
@@ -1212,7 +1229,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        assert!(delegate.subscribe(new_downstream(1, 2)).is_err());
+        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
@@ -1256,6 +1273,35 @@ mod tests {
             } else {
                 assert_eq!(row.expire_ts_unix_secs, 0);
             }
+        }
+    }
+
+    #[test]
+    fn test_is_raw_region() {
+        let region_id = 10;
+        let mut region = Region::default();
+        region.set_id(region_id);
+
+        // start-key, end-key, is_raw
+        let test_cases = vec![
+            (vec![b'r', 0, 0, 0, b'a'], vec![b'r', 0, 0, 0, b'z'], true),
+            (vec![b'a', 0, 0, 0, b'a'], vec![b'r', 0, 0, 0, b'z'], false),
+            (vec![b'r', 0, 0, 0, b'a'], vec![b'z', 0, 0, 0, b'z'], false),
+            (vec![b'r', 0, 0, 0, b'a'], vec![b's'], true),
+            (vec![b'r', 0, 0, 0, b'a'], vec![], false),
+            (vec![], vec![], false),
+        ];
+        for (start_key, end_key, is_raw) in &test_cases {
+            region.set_start_key(start_key.clone());
+            region.set_end_key(end_key.clone());
+            let resolver = Resolver::new(region_id);
+            let mut delegate = Delegate::new(region_id, Default::default());
+            assert!(
+                delegate
+                    .on_region_ready(resolver, region.clone())
+                    .is_empty()
+            );
+            assert_eq!(delegate.is_raw_region(), *is_raw);
         }
     }
 }

@@ -61,7 +61,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
 
     fn check_api_version<K: KvFormat>(&self, key: &[u8]) -> Result<()> {
         let mode = K::parse_key_mode(key);
-        if self.api_version == ApiVersion::V2 && mode != KeyMode::Txn && mode != KeyMode::TiDB {
+        if self.api_version == ApiVersion::V2 && mode != KeyMode::Txn && mode != KeyMode::Tidb {
             return Err(Error::invalid_key_mode(
                 SstWriterType::Txn,
                 self.api_version,
@@ -434,7 +434,7 @@ mod tests {
         let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
-        assert!(w.write(batch).is_err());
+        w.write(batch).unwrap_err();
     }
 
     #[test]
@@ -462,7 +462,7 @@ mod tests {
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());
 
-        assert!(w.write(batch).is_err());
+        w.write(batch).unwrap_err();
     }
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());
 
-        assert!(w.write(batch.clone()).is_err());
+        w.write(batch.clone()).unwrap_err();
 
         // put a valid key
         let mut pair = Pair::default();

@@ -122,7 +122,8 @@ where
 }
 
 /// Activate heap profile and call `callback` if successfully.
-/// `deactivate_heap_profile` can only be called after it's notified from `callback`.
+/// `deactivate_heap_profile` can only be called after it's notified from
+/// `callback`.
 pub async fn activate_heap_profile<S, F>(
     dump_period: S,
     store_path: PathBuf,
@@ -277,7 +278,7 @@ where
 {
     let mut id = 0;
     while let Some(res) = period.next().await {
-        let _ = res?;
+        res?;
         id += 1;
         let path = format!("{}/{:0>6}{}", dir, id, HEAP_PROFILE_SUFFIX);
         dump_prof(&path).map_err(|e| format!("dump_prof: {}", e))?;
@@ -299,7 +300,8 @@ fn extract_thread_name(thread_name: &str) -> String {
         .unwrap_or_else(|| thread_name.to_owned())
 }
 
-// Re-define some heap profiling functions because heap-profiling is not enabled for tests.
+// Re-define some heap profiling functions because heap-profiling is not enabled
+// for tests.
 #[cfg(test)]
 mod test_utils {
     use std::sync::Mutex;
@@ -392,7 +394,7 @@ mod tests {
         assert_eq!(block_on(res2).unwrap().unwrap_err(), expected);
 
         drop(tx1);
-        assert!(block_on(res1).unwrap().is_err());
+        block_on(res1).unwrap().unwrap_err();
     }
 
     #[test]
@@ -407,7 +409,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         drop(tx);
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
 
         // Test activated profiling can be stopped by the handle.
         let (tx, rx) = sync_channel::<i32>(1);
@@ -422,7 +424,7 @@ mod tests {
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
     }
 
     #[test]
@@ -437,7 +439,7 @@ mod tests {
         let (mut tx, rx) = mpsc::channel(1);
         let res = rt.spawn(activate_heap_profile(rx, std::env::temp_dir(), || {}));
         block_on(tx.send(Err("test".to_string()))).unwrap();
-        assert!(block_on(res).unwrap().is_err());
+        block_on(res).unwrap().unwrap_err();
 
         // Test heap profiling can be activated again.
         let (tx, rx) = sync_channel::<i32>(1);
@@ -452,6 +454,6 @@ mod tests {
         ));
         assert!(check_activated());
         assert!(deactivate_heap_profile());
-        assert!(block_on(res).unwrap().is_ok());
+        block_on(res).unwrap().unwrap();
     }
 }

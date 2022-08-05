@@ -214,7 +214,8 @@ impl Collector for ThreadsCollector {
     }
 }
 
-/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with `_`, and drops the others.
+/// Sanitizes the thread name. Keeps `a-zA-Z0-9_:`, replaces `-` and ` ` with
+/// `_`, and drops the others.
 ///
 /// Examples:
 ///
@@ -368,7 +369,8 @@ impl ThreadInfoStatistics {
                 self.tid_names.entry(tid).or_insert(name);
 
                 // To get a percentage result,
-                // we pre-multiply `cpu_time` by 100 here rather than inside the `update_metric`.
+                // we pre-multiply `cpu_time` by 100 here rather than inside the
+                // `update_metric`.
                 let cpu_time = thread::linux::cpu_total(&stat) * 100.0;
                 update_metric(
                     &mut self.metrics_total.cpu_times,
@@ -704,7 +706,7 @@ mod tests {
 
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
-        assert!(get_thread_name("invalid_stat").is_err());
+        get_thread_name("invalid_stat").unwrap_err();
     }
 
     #[test]

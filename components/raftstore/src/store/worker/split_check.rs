@@ -8,7 +8,7 @@ use std::{
 };
 
 use engine_traits::{CfName, IterOptions, Iterable, Iterator, KvEngine, CF_WRITE, LARGE_CFS};
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use itertools::Itertools;
 use kvproto::{
     metapb::{Region, RegionEpoch},
@@ -98,14 +98,14 @@ where
                 Some(KeyBuilder::from_slice(end_key, 0, 0)),
                 fill_cache,
             );
-            let mut iter = db.iterator_cf_opt(cf, iter_opt)?;
-            let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
+            let mut iter = db.iterator_opt(cf, iter_opt)?;
+            let found: Result<bool> = iter.seek(start_key).map_err(|e| box_err!(e));
             if found? {
                 heap.push(KeyEntry::new(
                     iter.key().to_vec(),
                     pos,
                     iter.value().len(),
-                    *cf,
+                    cf,
                 ));
             }
             iters.push((*cf, iter));
@@ -339,7 +339,8 @@ where
         );
     }
 
-    /// Checks a Region with split and bucket checkers to produce split keys and buckets keys and generates split admin command.
+    /// Checks a Region with split and bucket checkers to produce split keys and
+    /// buckets keys and generates split admin command.
     fn check_split_and_bucket(
         &mut self,
         region: &Region,
@@ -553,7 +554,8 @@ where
                         if bucket_range_idx == bucket_range_list.len() {
                             skip_check_bucket = true;
                         } else if origin_key >= bucket_range_list[bucket_range_idx].0.as_slice() {
-                            // e.key() is between bucket_range_list[bucket_range_idx].0, bucket_range_list[bucket_range_idx].1
+                            // e.key() is between bucket_range_list[bucket_range_idx].0,
+                            // bucket_range_list[bucket_range_idx].1
                             bucket_size += e.entry_size() as u64;
                             if bucket_size >= host.region_bucket_size() {
                                 bucket.keys.push(origin_key.to_vec());
@@ -580,7 +582,8 @@ where
                 }
             }
 
-            // if we scan the whole range, we can update approximate size and keys with accurate value.
+            // if we scan the whole range, we can update approximate size and keys with
+            // accurate value.
             if is_key_range {
                 return;
             }
@@ -636,7 +639,7 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
-        let _io_type_guard = WithIOType::new(IOType::LoadBalance);
+        let _io_type_guard = WithIoType::new(IoType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,

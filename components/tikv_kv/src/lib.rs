@@ -1,7 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! There are multiple [`Engine`](kv::Engine) implementations, [`RaftKv`](crate::server::raftkv::RaftKv)
-//! is used by the [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
+//! There are multiple [`Engine`](kv::Engine) implementations,
+//! [`RaftKv`](crate::server::raftkv::RaftKv) is used by the
+//! [`Server`](crate::server::Server). The [`BTreeEngine`](kv::BTreeEngine) and
 //! [`RocksEngine`](RocksEngine) are used for testing only.
 
 #![feature(min_specialization)]
@@ -66,7 +67,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
@@ -150,18 +151,13 @@ impl From<Modify> for raft_cmdpb::Request {
 }
 
 // For test purpose only.
-// It's used to simulate observer actions in `rocksdb_engine`. See `RocksEngine::async_write_ext()`.
+// It's used to simulate observer actions in `rocksdb_engine`. See
+// `RocksEngine::async_write_ext()`.
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
-            engine_traits::name_to_cf(name).or_else(|| {
-                for c in TEST_ENGINE_CFS {
-                    if name == *c {
-                        return Some(c);
-                    }
-                }
-                None
-            })
+            engine_traits::name_to_cf(name)
+                .or_else(|| TEST_ENGINE_CFS.iter().copied().find(|c| name == *c))
         };
 
         match req.get_cmd_type() {
@@ -280,8 +276,8 @@ pub trait Engine: Send + Clone + 'static {
 
     /// Writes data to the engine asynchronously with some extensions.
     ///
-    /// When the write request is proposed successfully, the `proposed_cb` is invoked.
-    /// When the write request is finished, the `write_cb` is invoked.
+    /// When the write request is proposed successfully, the `proposed_cb` is
+    /// invoked. When the write request is finished, the `write_cb` is invoked.
     fn async_write_ext(
         &self,
         ctx: &Context,
@@ -341,10 +337,12 @@ pub trait Engine: Send + Clone + 'static {
     fn schedule_txn_extra(&self, _txn_extra: TxnExtra) {}
 }
 
-/// A Snapshot is a consistent view of the underlying engine at a given point in time.
+/// A Snapshot is a consistent view of the underlying engine at a given point in
+/// time.
 ///
-/// Note that this is not an MVCC snapshot, that is a higher level abstraction of a view of TiKV
-/// at a specific timestamp. This snapshot is lower-level, a view of the underlying storage.
+/// Note that this is not an MVCC snapshot, that is a higher level abstraction
+/// of a view of TiKV at a specific timestamp. This snapshot is lower-level, a
+/// view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
     type Iter: Iterator;
     type Ext<'a>: SnapshotExt
@@ -357,16 +355,17 @@ pub trait Snapshot: Sync + Send + Clone {
     /// Get the value associated with `key` in `cf` column family
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
 
-    /// Get the value associated with `key` in `cf` column family, with Options in `opts`
+    /// Get the value associated with `key` in `cf` column family, with Options
+    /// in `opts`
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn iter(&self, iter_opt: IterOptions) -> Result<Self::Iter>;
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
         None
     }
-    // The maximum key can be fetched from the snapshot should less than the upper bound.
+    // The maximum key can be fetched from the snapshot should less than the upper
+    // bound.
     #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
         None
@@ -376,8 +375,9 @@ pub trait Snapshot: Sync + Send + Clone {
 }
 
 pub trait SnapshotExt {
-    /// Retrieves a version that represents the modification status of the underlying data.
-    /// Version should be changed when underlying data is changed.
+    /// Retrieves a version that represents the modification status of the
+    /// underlying data. Version should be changed when underlying data is
+    /// changed.
     ///
     /// If the engine does not support data version, then `None` is returned.
     fn get_data_version(&self) -> Option<u64> {
@@ -534,8 +534,8 @@ where
 ///
 /// Postcondition: `TLS_ENGINE_ANY` is non-null.
 pub fn set_tls_engine<E: Engine>(engine: E) {
-    // Safety: we check that `TLS_ENGINE_ANY` is null to ensure we don't leak an existing
-    // engine; we ensure there are no other references to `engine`.
+    // Safety: we check that `TLS_ENGINE_ANY` is null to ensure we don't leak an
+    // existing engine; we ensure there are no other references to `engine`.
     TLS_ENGINE_ANY.with(move |e| unsafe {
         if (*e.get()).is_null() {
             let engine = Box::into_raw(Box::new(engine)) as *mut ();
@@ -553,8 +553,9 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 /// The current tls engine must have the same type as `E` (or at least
 /// there destructors must be compatible).
 pub unsafe fn destroy_tls_engine<E: Engine>() {
-    // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
-    // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.
+    // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that
+    // references to `TLS_ENGINE_ANY` can never be stored outside of
+    // `TLS_ENGINE_ANY`.
     TLS_ENGINE_ANY.with(|e| {
         let ptr = *e.get();
         if !ptr.is_null() {
@@ -649,7 +650,7 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
-pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
+pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];
 
 pub mod tests {
     use tikv_util::codec::bytes;
@@ -706,7 +707,7 @@ pub mod tests {
     fn assert_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -719,7 +720,7 @@ pub mod tests {
     fn assert_reverse_seek<E: Engine>(engine: &E, key: &[u8], pair: (&[u8], &[u8])) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -817,7 +818,7 @@ pub mod tests {
         assert_reverse_seek(engine, b"z", (b"x", b"1"));
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -841,7 +842,7 @@ pub mod tests {
         must_put(engine, b"z", b"2");
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -857,14 +858,15 @@ pub mod tests {
                 .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
                 .unwrap()
         );
-        // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
+        // Insert many key-values between 'x' and 'z' then near_seek will fallback to
+        // seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
             must_put(engine, key.as_bytes(), b"3");
         }
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -882,7 +884,7 @@ pub mod tests {
     fn test_empty_seek<E: Engine>(engine: &E) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut cursor = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Mixed,
             false,
         );
@@ -939,14 +941,15 @@ pub mod tests {
         }};
     }
 
-    #[derive(PartialEq, Eq, Clone, Copy)]
+    #[derive(PartialEq, Clone, Copy)]
     enum SeekMode {
         Normal,
         Reverse,
         ForPrev,
     }
 
-    // use step to control the distance between target key and current key in cursor.
+    // use step to control the distance between target key and current key in
+    // cursor.
     fn test_linear_seek<S: Snapshot>(
         snapshot: &S,
         mode: ScanMode,
@@ -954,9 +957,16 @@ pub mod tests {
         start_idx: usize,
         step: usize,
     ) {
-        let mut cursor = Cursor::new(snapshot.iter(IterOptions::default()).unwrap(), mode, false);
-        let mut near_cursor =
-            Cursor::new(snapshot.iter(IterOptions::default()).unwrap(), mode, false);
+        let mut cursor = Cursor::new(
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
+            mode,
+            false,
+        );
+        let mut near_cursor = Cursor::new(
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
+            mode,
+            false,
+        );
         let limit = (SEEK_BOUND as usize * 10 + 50 - 1) * 2;
 
         for (_, mut i) in (start_idx..(SEEK_BOUND as usize * 30))
@@ -1092,7 +1102,7 @@ pub mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
             false,
         );

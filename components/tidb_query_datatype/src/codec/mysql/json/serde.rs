@@ -15,9 +15,9 @@ use crate::codec::Error;
 /// https://github.com/pingcap/tidb/blob/master/types/json/binary.go
 /// We add a space after `,` and `:`.
 #[derive(Clone, Debug)]
-pub struct MySQLFormatter {}
+pub struct MySqlFormatter {}
 
-impl serde_json::ser::Formatter for MySQLFormatter {
+impl serde_json::ser::Formatter for MySqlFormatter {
     #[inline]
     fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
     where
@@ -51,17 +51,18 @@ impl serde_json::ser::Formatter for MySQLFormatter {
     }
 }
 
-impl MySQLFormatter {
+impl MySqlFormatter {
     pub fn new() -> Self {
-        MySQLFormatter {}
+        MySqlFormatter {}
     }
 }
 
 impl<'a> ToString for JsonRef<'a> {
-    /// This function is a simple combination and rewrite of serde_json's `to_writer_pretty`
+    /// This function is a simple combination and rewrite of serde_json's
+    /// `to_writer_pretty`
     fn to_string(&self) -> String {
         let mut writer = Vec::with_capacity(128);
-        let mut ser = JsonSerializer::with_formatter(&mut writer, MySQLFormatter::new());
+        let mut ser = JsonSerializer::with_formatter(&mut writer, MySqlFormatter::new());
         self.serialize(&mut ser).unwrap();
         unsafe {
             // serde_json will not emit invalid UTF-8
@@ -239,8 +240,7 @@ mod tests {
         ];
 
         for json_str in legal_cases {
-            let resp = Json::from_str(json_str);
-            assert!(resp.is_ok());
+            Json::from_str(json_str).unwrap();
         }
 
         let cases = vec![
@@ -255,15 +255,14 @@ mod tests {
         ];
 
         for (json_str, json) in cases {
-            let resp = Json::from_str(json_str);
-            assert!(resp.is_ok());
-            assert_eq!(resp.unwrap(), json.unwrap());
+            let resp = Json::from_str(json_str).unwrap();
+            assert_eq!(resp, json.unwrap());
         }
 
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];
         for json_str in illegal_cases {
             let resp = Json::from_str(json_str);
-            assert!(resp.is_err());
+            resp.unwrap_err();
         }
     }
 }

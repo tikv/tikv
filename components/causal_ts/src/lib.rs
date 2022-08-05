@@ -22,7 +22,8 @@ pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp>;
 
-    /// Flush (cached) timestamps to keep causality on some events, such as "leader transfer".
+    /// Flush (cached) timestamps to keep causality on some events, such as
+    /// "leader transfer".
     fn flush(&self) -> Result<()> {
         Ok(())
     }
@@ -57,6 +58,13 @@ pub mod tests {
     impl CausalTsProvider for TestProvider {
         fn get_ts(&self) -> Result<TimeStamp> {
             Ok(self.ts.fetch_add(1, Ordering::Relaxed).into())
+        }
+
+        // This is used for unit test. Add 100 from current.
+        // Do not modify this value as several test cases depend on it.
+        fn flush(&self) -> Result<()> {
+            self.ts.fetch_add(100, Ordering::Relaxed);
+            Ok(())
         }
     }
 

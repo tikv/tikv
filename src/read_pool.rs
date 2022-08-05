@@ -5,7 +5,7 @@ use std::{
     sync::{mpsc::SyncSender, Arc, Mutex},
 };
 
-use file_system::{set_io_type, IOType};
+use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
@@ -261,7 +261,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
             set_tls_engine(engine);
-            set_io_type(IOType::ForegroundRead);
+            set_io_type(IoType::ForegroundRead);
         })
         .before_stop(|| unsafe {
             destroy_tls_engine::<E>();
@@ -380,8 +380,8 @@ mod tests {
         let (task3, _tx3) = gen_task();
         let (task4, _tx4) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -391,7 +391,7 @@ mod tests {
         tx1.send(()).unwrap();
 
         thread::sleep(Duration::from_millis(300));
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
     }
 
     #[test]
@@ -422,8 +422,8 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -434,7 +434,7 @@ mod tests {
         handle.scale_pool_size(3);
         assert_eq!(handle.get_normal_pool_size(), 3);
 
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5) {
@@ -471,8 +471,8 @@ mod tests {
         let (task4, _tx4) = gen_task();
         let (task5, _tx5) = gen_task();
 
-        assert!(handle.spawn(task1, CommandPri::Normal, 1).is_ok());
-        assert!(handle.spawn(task2, CommandPri::Normal, 2).is_ok());
+        handle.spawn(task1, CommandPri::Normal, 1).unwrap();
+        handle.spawn(task2, CommandPri::Normal, 2).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task3, CommandPri::Normal, 3) {
@@ -487,7 +487,7 @@ mod tests {
         handle.scale_pool_size(1);
         assert_eq!(handle.get_normal_pool_size(), 1);
 
-        assert!(handle.spawn(task4, CommandPri::Normal, 4).is_ok());
+        handle.spawn(task4, CommandPri::Normal, 4).unwrap();
 
         thread::sleep(Duration::from_millis(300));
         match handle.spawn(task5, CommandPri::Normal, 5) {
