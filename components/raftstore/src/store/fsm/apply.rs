@@ -5682,7 +5682,7 @@ mod tests {
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
         host.registry
-            .register_region_change_observer(1, BoxRegionChangeObserver::new(obs));
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
