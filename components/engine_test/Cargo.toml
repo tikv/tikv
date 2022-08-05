@@ -24,6 +24,7 @@ test-engines-panic = [
 ]
 
 [dependencies]
+collections = { path = "../collections", default-features = false }
 encryption = { path = "../encryption", default-features = false }
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }

@@ -28,6 +28,7 @@ test-engines-panic = [
 backtrace = "0.3"
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
+engine_test = { path = "../engine_test", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"

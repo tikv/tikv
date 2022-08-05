@@ -56,10 +56,14 @@ fn test_raft_storage() {
     // Test wrong region id.
     let region_id = ctx.get_region_id();
     ctx.set_region_id(region_id + 1);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    storage.get(ctx.clone(), &key, 20).unwrap_err();
+    storage
+        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .unwrap_err();
+    storage
+        .scan(ctx.clone(), key, None, 1, false, 20)
+        .unwrap_err();
+    storage.scan_locks(ctx, 20, None, None, 100).unwrap_err();
 }
 
 #[test]
@@ -98,8 +102,9 @@ fn test_raft_storage_get_after_lease() {
 #[test]
 fn test_raft_storage_rollback_before_prewrite() {
     let (_cluster, storage, ctx) = new_raft_storage();
-    let ret = storage.rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10);
-    assert!(ret.is_ok());
+    storage
+        .rollback(ctx.clone(), vec![Key::from_raw(b"key")], 10)
+        .unwrap();
     let ret = storage.prewrite(
         ctx,
         vec![Mutation::make_put(Key::from_raw(b"key"), b"value".to_vec())],
@@ -146,7 +151,7 @@ fn test_raft_storage_store_not_match() {
 
     peer.set_store_id(store_id + 1);
     ctx.set_peer(peer);
-    assert!(storage.get(ctx.clone(), &key, 20).is_err());
+    storage.get(ctx.clone(), &key, 20).unwrap_err();
     let res = storage.get(ctx.clone(), &key, 20);
     if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
@@ -156,9 +161,13 @@ fn test_raft_storage_store_not_match() {
     } else {
         panic!("expect store_not_match, but got {:?}", res);
     }
-    assert!(storage.batch_get(ctx.clone(), &[key.clone()], 20).is_err());
-    assert!(storage.scan(ctx.clone(), key, None, 1, false, 20).is_err());
-    assert!(storage.scan_locks(ctx, 20, None, None, 100).is_err());
+    storage
+        .batch_get(ctx.clone(), &[key.clone()], 20)
+        .unwrap_err();
+    storage
+        .scan(ctx.clone(), key, None, 1, false, 20)
+        .unwrap_err();
+    storage.scan_locks(ctx, 20, None, None, 100).unwrap_err();
 }
 
 #[test]
@@ -349,8 +358,8 @@ fn test_auto_gc() {
     let split_keys: &[&[u8]] = &[b"k2", b"k4", b"k6", b"k8"];
 
     for k in split_keys {
-        let region = cluster.get_region(*k);
-        cluster.must_split(&region, *k);
+        let region = cluster.get_region(k);
+        cluster.must_split(&region, k);
     }
 
     check_data(&mut cluster, &storages, &test_data, 50, true);

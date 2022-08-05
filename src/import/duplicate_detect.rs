@@ -40,9 +40,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
         });
         let mut iter_opt = IterOptions::new(Some(l_bound), u_bound, false);
         iter_opt.set_key_only(key_only);
-        let mut iter = snapshot
-            .iter_cf(CF_WRITE, iter_opt)
-            .map_err(from_kv_error)?;
+        let mut iter = snapshot.iter(CF_WRITE, iter_opt).map_err(from_kv_error)?;
         iter.seek(&start_key).map_err(from_kv_error)?;
         Ok(DuplicateDetector {
             snapshot,
@@ -183,7 +181,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
                         .map_err(from_kv_error)?;
                     match value {
                         Some(val) => pair.set_value(val.to_vec()),
-                        None => return Err(Error::RocksDB("Not found defaultcf value".to_owned())),
+                        None => return Err(Error::RocksDb("Not found defaultcf value".to_owned())),
                     }
                 }
             }
@@ -219,7 +217,7 @@ impl<S: Snapshot> Iterator for DuplicateDetector<S> {
 fn from_kv_error(e: tikv_kv::Error) -> Error {
     match e {
         tikv_kv::Error(box tikv_kv::ErrorInner::Other(err)) => Error::Engine(err),
-        _ => Error::RocksDB("unkown error when request rocksdb".to_owned()),
+        _ => Error::RocksDb("unkown error when request rocksdb".to_owned()),
     }
 }
 
@@ -399,13 +397,15 @@ mod tests {
     }
 
     // There are 40 key-value pairs in db, there are
-    //  [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] with commit timestamp 10
-    //  [104, 105, 106, 107, 108, 109, 110, 111, 112, 113] with commit timestamp 14, these 20 keys
-    //   have existed in db before importing. So we do not think (105,10) is repeated with (105,14).
-    //  [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
-    //  [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp 22, these 20 keys
-    // are imported by lightning. So (108,18) is repeated with (108,14), but (108,18) is not repeated
-    // with (108,10).
+    // - [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] with commit timestamp 10
+    // - [104, 105, 106, 107, 108, 109, 110, 111, 112, 113] with commit timestamp
+    //   14, these 20 keys have existed in db before importing. So we do not think
+    //   (105,10) is repeated with (105,14).
+    // - [108, 109, 110, 111, 112, 113, 114, 115, 116, 117] with commit timestamp 18
+    // - [112, 113, 114, 115, 116, 117, 118, 119, 120, 121] with commit timestamp
+    //   22, these 20 keys
+    // are imported by lightning. So (108,18) is repeated with (108,14), but
+    // (108,18) is not repeated with (108,10).
     #[test]
     fn test_duplicate_detect_incremental() {
         let storage = TestStorageBuilderApiV1::new(DummyLockManager)

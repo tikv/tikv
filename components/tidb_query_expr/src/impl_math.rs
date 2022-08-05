@@ -345,7 +345,7 @@ fn rand() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn(nullable)]
 fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
-    let mut rng = MySQLRng::new_with_seed(seed.cloned().unwrap_or(0));
+    let mut rng = MySqlRng::new_with_seed(seed.cloned().unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
@@ -548,7 +548,7 @@ pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
 }
 
 thread_local! {
-   static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
+   static MYSQL_RNG: RefCell<MySqlRng> = RefCell::new(MySqlRng::new())
 }
 
 #[derive(Copy, Clone)]
@@ -639,15 +639,22 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-// Returns (isize, is_positive): convert an i64 to usize, and whether the input is positive
+// Returns (isize, is_positive): convert an i64 to usize, and whether the input
+// is positive
 //
 // # Examples
 // ```
 // assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
 // assert_eq!(i64_to_usize(1_i64, false), (1_usize, true));
 // assert_eq!(i64_to_usize(-1_i64, false), (1_usize, false));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
-// assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
+// assert_eq!(
+//     i64_to_usize(u64::max_value() as i64, true),
+//     (u64::max_value() as usize, true)
+// );
+// assert_eq!(
+//     i64_to_usize(u64::max_value() as i64, false),
+//     (1_usize, false)
+// );
 // ```
 #[inline]
 pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
@@ -665,12 +672,12 @@ pub fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
     }
 }
 
-pub struct MySQLRng {
+pub struct MySqlRng {
     seed1: u32,
     seed2: u32,
 }
 
-impl MySQLRng {
+impl MySqlRng {
     fn new() -> Self {
         let current_time = time::get_time();
         let nsec = i64::from(current_time.nsec);
@@ -680,7 +687,7 @@ impl MySQLRng {
     fn new_with_seed(seed: i64) -> Self {
         let seed1 = (seed.wrapping_mul(0x10001).wrapping_add(55555555)) as u32 % MAX_RAND_VALUE;
         let seed2 = (seed.wrapping_mul(0x10000001)) as u32 % MAX_RAND_VALUE;
-        MySQLRng { seed1, seed2 }
+        MySqlRng { seed1, seed2 }
     }
 
     fn gen(&mut self) -> f64 {
@@ -690,7 +697,7 @@ impl MySQLRng {
     }
 }
 
-impl Default for MySQLRng {
+impl Default for MySqlRng {
     fn default() -> Self {
         Self::new()
     }
@@ -1197,7 +1204,7 @@ mod tests {
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::new(x).unwrap()))
                 .evaluate(ScalarFuncSig::Exp);
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 
@@ -1272,7 +1279,8 @@ mod tests {
             (std::f64::consts::PI, 0.0_f64),
             (
                 (std::f64::consts::PI * 3.0) / 4.0,
-                f64::tan((std::f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+                f64::tan((std::f64::consts::PI * 3.0) / 4.0), /* in mysql and rust, it equals
+                                                               * -1.0000000000000002, not -1 */
             ),
         ];
         for (input, expect) in test_cases {
@@ -1309,12 +1317,10 @@ mod tests {
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < f64::EPSILON);
         }
-        assert!(
-            RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::new(0.0_f64).unwrap()))
-                .evaluate::<Real>(ScalarFuncSig::Cot)
-                .is_err()
-        );
+        RpnFnScalarEvaluator::new()
+            .push_param(Some(Real::new(0.0_f64).unwrap()))
+            .evaluate::<Real>(ScalarFuncSig::Cot)
+            .unwrap_err();
     }
 
     #[test]
@@ -1366,13 +1372,11 @@ mod tests {
         ];
 
         for (lhs, rhs) in invalid_cases {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::Pow)
-                    .is_err()
-            );
+            RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .unwrap_err();
         }
     }
 
@@ -2026,9 +2030,9 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_rand_new() {
-        let mut rng1 = MySQLRng::new();
+        let mut rng1 = MySqlRng::new();
         std::thread::sleep(std::time::Duration::from_millis(100));
-        let mut rng2 = MySQLRng::new();
+        let mut rng2 = MySqlRng::new();
         let got1 = rng1.gen();
         let got2 = rng2.gen();
         assert!(got1 < 1.0);
@@ -2050,7 +2054,7 @@ mod tests {
             (9223372036854775807, 0.9050373219931845, 0.37014932126752037),
         ];
         for (seed, exp1, exp2) in tests {
-            let mut rand = MySQLRng::new_with_seed(seed);
+            let mut rand = MySqlRng::new_with_seed(seed);
             let res1 = rand.gen();
             assert_eq!(res1, exp1);
             let res2 = rand.gen();

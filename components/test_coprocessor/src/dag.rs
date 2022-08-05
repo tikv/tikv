@@ -15,7 +15,7 @@ use tipb::{
 
 use super::*;
 
-pub struct DAGSelect {
+pub struct DagSelect {
     pub execs: Vec<Executor>,
     pub cols: Vec<ColumnInfo>,
     pub order_by: Vec<ByItem>,
@@ -27,8 +27,8 @@ pub struct DAGSelect {
     pub paging_size: Option<u64>,
 }
 
-impl DAGSelect {
-    pub fn from(table: &Table) -> DAGSelect {
+impl DagSelect {
+    pub fn from(table: &Table) -> DagSelect {
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeTableScan);
         let mut tbl_scan = TableScan::default();
@@ -38,7 +38,7 @@ impl DAGSelect {
         tbl_scan.set_columns(columns_info);
         exec.set_tbl_scan(tbl_scan);
 
-        DAGSelect {
+        DagSelect {
             execs: vec![exec],
             cols: table.columns_info(),
             order_by: vec![],
@@ -51,7 +51,7 @@ impl DAGSelect {
         }
     }
 
-    pub fn from_index(table: &Table, index: &Column) -> DAGSelect {
+    pub fn from_index(table: &Table, index: &Column) -> DagSelect {
         let idx = index.index;
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeIndexScan);
@@ -65,7 +65,7 @@ impl DAGSelect {
         exec.set_idx_scan(scan);
 
         let range = table.get_index_range_all(idx);
-        DAGSelect {
+        DagSelect {
             execs: vec![exec],
             cols: columns_info.to_vec(),
             order_by: vec![],
@@ -79,13 +79,13 @@ impl DAGSelect {
     }
 
     #[must_use]
-    pub fn limit(mut self, n: u64) -> DAGSelect {
+    pub fn limit(mut self, n: u64) -> DagSelect {
         self.limit = Some(n);
         self
     }
 
     #[must_use]
-    pub fn order_by(mut self, col: &Column, desc: bool) -> DAGSelect {
+    pub fn order_by(mut self, col: &Column, desc: bool) -> DagSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut item = ByItem::default();
         let mut expr = Expr::default();
@@ -99,12 +99,12 @@ impl DAGSelect {
     }
 
     #[must_use]
-    pub fn count(self, col: &Column) -> DAGSelect {
+    pub fn count(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Count)
     }
 
     #[must_use]
-    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DAGSelect {
+    pub fn aggr_col(mut self, col: &Column, aggr_t: ExprType) -> DagSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::default();
         col_expr.set_field_type(col.as_field_type());
@@ -112,7 +112,8 @@ impl DAGSelect {
         col_expr.mut_val().encode_i64(col_offset).unwrap();
         let mut expr = Expr::default();
         let mut expr_ft = col.as_field_type();
-        // Avg will contains two auxiliary columns (sum, count) and the sum should be a `Decimal`
+        // Avg will contains two auxiliary columns (sum, count) and the sum should be a
+        // `Decimal`
         if aggr_t == ExprType::Avg || aggr_t == ExprType::Sum {
             expr_ft.set_tp(0xf6); // FieldTypeTp::NewDecimal
         }
@@ -124,47 +125,47 @@ impl DAGSelect {
     }
 
     #[must_use]
-    pub fn first(self, col: &Column) -> DAGSelect {
+    pub fn first(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::First)
     }
 
     #[must_use]
-    pub fn sum(self, col: &Column) -> DAGSelect {
+    pub fn sum(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Sum)
     }
 
     #[must_use]
-    pub fn avg(self, col: &Column) -> DAGSelect {
+    pub fn avg(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Avg)
     }
 
     #[must_use]
-    pub fn max(self, col: &Column) -> DAGSelect {
+    pub fn max(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Max)
     }
 
     #[must_use]
-    pub fn min(self, col: &Column) -> DAGSelect {
+    pub fn min(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::Min)
     }
 
     #[must_use]
-    pub fn bit_and(self, col: &Column) -> DAGSelect {
+    pub fn bit_and(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitAnd)
     }
 
     #[must_use]
-    pub fn bit_or(self, col: &Column) -> DAGSelect {
+    pub fn bit_or(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitOr)
     }
 
     #[must_use]
-    pub fn bit_xor(self, col: &Column) -> DAGSelect {
+    pub fn bit_xor(self, col: &Column) -> DagSelect {
         self.aggr_col(col, ExprType::AggBitXor)
     }
 
     #[must_use]
-    pub fn group_by(mut self, cols: &[&Column]) -> DAGSelect {
+    pub fn group_by(mut self, cols: &[&Column]) -> DagSelect {
         for col in cols {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::default();
@@ -177,13 +178,13 @@ impl DAGSelect {
     }
 
     #[must_use]
-    pub fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DAGSelect {
+    pub fn output_offsets(mut self, output_offsets: Option<Vec<u32>>) -> DagSelect {
         self.output_offsets = output_offsets;
         self
     }
 
     #[must_use]
-    pub fn where_expr(mut self, expr: Expr) -> DAGSelect {
+    pub fn where_expr(mut self, expr: Expr) -> DagSelect {
         let mut exec = Executor::default();
         exec.set_tp(ExecType::TypeSelection);
         let mut selection = Selection::default();
@@ -194,20 +195,20 @@ impl DAGSelect {
     }
 
     #[must_use]
-    pub fn desc(mut self, desc: bool) -> DAGSelect {
+    pub fn desc(mut self, desc: bool) -> DagSelect {
         self.execs[0].mut_tbl_scan().set_desc(desc);
         self
     }
 
     #[must_use]
-    pub fn paging_size(mut self, paging_size: u64) -> DAGSelect {
+    pub fn paging_size(mut self, paging_size: u64) -> DagSelect {
         assert_ne!(paging_size, 0);
         self.paging_size = Some(paging_size);
         self
     }
 
     #[must_use]
-    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DAGSelect {
+    pub fn key_ranges(mut self, key_ranges: Vec<KeyRange>) -> DagSelect {
         self.key_ranges = key_ranges;
         self
     }
@@ -276,15 +277,15 @@ impl DAGSelect {
     }
 }
 
-pub struct DAGChunkSpliter {
+pub struct DagChunkSpliter {
     chunks: Vec<Chunk>,
     datums: Vec<Datum>,
     col_cnt: usize,
 }
 
-impl DAGChunkSpliter {
-    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DAGChunkSpliter {
-        DAGChunkSpliter {
+impl DagChunkSpliter {
+    pub fn new(chunks: Vec<Chunk>, col_cnt: usize) -> DagChunkSpliter {
+        DagChunkSpliter {
             chunks,
             col_cnt,
             datums: Vec::with_capacity(0),
@@ -292,7 +293,7 @@ impl DAGChunkSpliter {
     }
 }
 
-impl Iterator for DAGChunkSpliter {
+impl Iterator for DagChunkSpliter {
     type Item = Vec<Datum>;
 
     fn next(&mut self) -> Option<Vec<Datum>> {

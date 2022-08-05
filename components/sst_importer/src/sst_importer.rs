@@ -11,11 +11,11 @@ use std::{
 };
 
 use dashmap::DashMap;
-use encryption::{encryption_method_to_db_encryption_method, DataKeyManager};
+use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    Iterator, KvEngine, SeekKey, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
+    Iterator, KvEngine, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
     SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
@@ -33,7 +33,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     import_file::{ImportDir, ImportFile},
-    import_mode::{ImportModeSwitcher, RocksDBMetricsFn},
+    import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     metrics::*,
     sst_writer::{RawSstWriter, TxnSstWriter},
     Config, Error, Result,
@@ -211,11 +211,11 @@ impl SstImporter {
         }
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_normal_mode(&db, mf)
     }
 
-    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: E, mf: RocksDbMetricsFn) -> Result<bool> {
         self.switcher.enter_import_mode(&db, mf)
     }
 
@@ -326,8 +326,9 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             expected_sha256,
-            // kv-files needn't are decrypted with KMS when download currently because these files are not encrypted when log-backup.
-            // It is different from sst-files because sst-files is encrypted when saved with rocksdb env with KMS.
+            // kv-files needn't are decrypted with KMS when download currently because these files
+            // are not encrypted when log-backup. It is different from sst-files
+            // because sst-files is encrypted when saved with rocksdb env with KMS.
             // to do: support KMS when log-backup and restore point.
             false,
             // don't support encrypt for now.
@@ -431,7 +432,8 @@ impl SstImporter {
             }
             if check_key_in_range(&key, 0, start_key, end_key).is_err() {
                 // key not in range, we can simply skip this key here.
-                // the client make sure the correct region will download and apply the same file.
+                // the client make sure the correct region will download and apply the same
+                // file.
                 INPORTER_APPLY_COUNT
                     .with_label_values(&["key_not_in_region"])
                     .inc();
@@ -486,7 +488,7 @@ impl SstImporter {
         let path = self.dir.join(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: encryption_method_to_db_encryption_method(c.cipher_type),
+            method: to_engine_encryption_method(c.cipher_type),
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });
@@ -554,7 +556,7 @@ impl SstImporter {
                 // must iterate if we perform key rewrite
                 return Ok(None);
             }
-            if !iter.seek(SeekKey::Start)? {
+            if !iter.seek_to_first()? {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
@@ -566,14 +568,15 @@ impl SstImporter {
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End)?;
+            iter.seek_to_last()?;
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
                 return Ok(None);
             }
 
-            // range contained the entire SST, no need to iterate, just moving the file is ok
+            // range contained the entire SST, no need to iterate, just moving the file is
+            // ok
             let mut range = Range::default();
             range.set_start(start_key);
             range.set_end(last_key.to_vec());
@@ -606,8 +609,8 @@ impl SstImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start)?,
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
+            Bound::Unbounded => iter.seek_to_first()?,
+            Bound::Included(s) => iter.seek(&keys::data_key(&s))?,
             Bound::Excluded(_) => unreachable!(),
         };
         // SST writer must not be opened in gRPC threads, because it may be
@@ -789,7 +792,7 @@ mod tests {
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        SeekKey, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
     use openssl::hash::{Hasher, MessageDigest};
@@ -820,7 +823,7 @@ mod tests {
             check_file_not_exists(&path.clone, key_manager.as_deref());
 
             // Cannot create the same file again.
-            assert!(dir.create(&meta, key_manager.clone()).is_err());
+            dir.create(&meta, key_manager.clone()).unwrap_err();
         }
 
         // Test ImportDir::delete()
@@ -844,7 +847,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let env = get_env(key_manager.clone(), None /*io_rate_limiter*/).unwrap();
+        let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
@@ -909,12 +912,10 @@ mod tests {
             let mut f =
                 ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
             // Cannot create the same file again.
-            assert!(
-                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).is_err()
-            );
+            ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap_err();
             f.append(data).unwrap();
             // Invalid crc32 and length.
-            assert!(f.finish().is_err());
+            f.finish().unwrap_err();
             check_file_exists(&path.temp, data_key_manager.as_deref());
             check_file_not_exists(&path.save, data_key_manager.as_deref());
         }
@@ -963,7 +964,6 @@ mod tests {
         // test with tde
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
-        assert!(key_manager.is_ok());
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }
 
@@ -1333,7 +1333,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1363,7 +1363,7 @@ mod tests {
         .unwrap();
 
         let db_path = temp_dir.path().join("db");
-        let env = get_env(Some(key_manager), None /*io_rate_limiter*/).unwrap();
+        let env = get_env(Some(key_manager), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
 
         let range = importer
@@ -1392,7 +1392,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1440,7 +1440,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1485,7 +1485,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1529,7 +1529,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1593,20 +1593,20 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
+            importer.ingest(&[meta_info.clone()], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15
             // key4 = "zt9102_r13", value4 = "www", len = 13
             // total_bytes = (13 + 13 + 15 + 13) + 4 * 8 = 86
-            // don't no why each key has extra 8 byte length in raw_key_size(), but it seems tolerable.
-            // https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
+            // don't no why each key has extra 8 byte length in raw_key_size(), but it seems
+            // tolerable. https://docs.rs/rocks/0.1.0/rocks/table_properties/struct.TableProperties.html#method.raw_key_size
             assert_eq!(meta_info.total_bytes, 86);
             assert_eq!(meta_info.total_kvs, 4);
 
             // verifies the DB content is correct.
-            let mut iter = db.iterator_cf(cf).unwrap();
-            iter.seek(SeekKey::Start).unwrap();
+            let mut iter = db.iterator(cf).unwrap();
+            iter.seek_to_first().unwrap();
             assert_eq!(
                 collect(iter),
                 vec![
@@ -1670,7 +1670,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1714,7 +1714,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1746,8 +1746,8 @@ mod tests {
             db,
         );
         match &result {
-            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
-            }
+            Err(Error::EngineTraits(TraitError::Engine(s)))
+                if s.state().starts_with("Corruption:") => {}
             _ => panic!("unexpected download result: {:?}", result),
         }
     }
@@ -1849,7 +1849,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1907,7 +1907,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![
@@ -1962,7 +1962,7 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start).unwrap();
+        iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
             vec![

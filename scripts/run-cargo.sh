@@ -16,7 +16,7 @@
 set -e
 
 if [[ -e .cargo/config ]]; then
-   rm .cargo/config
+    rm .cargo/config
 fi
 
 args=""

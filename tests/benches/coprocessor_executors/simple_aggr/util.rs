@@ -31,8 +31,8 @@ where
     }
 }
 
-/// A bencher that will use batch simple aggregation executor to bench the giving aggregate
-/// expression.
+/// A bencher that will use batch simple aggregation executor to bench the
+/// giving aggregate expression.
 pub struct BatchBencher;
 
 impl<M> SimpleAggrBencher<M> for BatchBencher

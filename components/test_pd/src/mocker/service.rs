@@ -96,7 +96,7 @@ impl PdMocker for Service {
 
         if self.is_bootstrapped.load(Ordering::SeqCst) {
             let mut err = Error::default();
-            err.set_type(ErrorType::Unknown);
+            err.set_type(ErrorType::AlreadyBootstrapped);
             err.set_message("cluster is already bootstrapped".to_owned());
             header.set_error(err);
             resp.set_header(header);
@@ -238,6 +238,7 @@ impl PdMocker for Service {
             .insert(region_id, req.get_leader().clone());
 
         let mut resp = RegionHeartbeatResponse::default();
+        resp.set_region_id(req.get_region().get_id());
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))

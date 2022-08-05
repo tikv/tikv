@@ -13,7 +13,7 @@ use std::{
 };
 
 use engine_traits::KvEngine;
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use futures::{
     future::{Future, TryFutureExt},
     sink::SinkExt,
@@ -120,7 +120,8 @@ pub struct SendStat {
 
 /// Send the snapshot to specified address.
 ///
-/// It will first send the normal raft snapshot message and then send the snapshot file.
+/// It will first send the normal raft snapshot message and then send the
+/// snapshot file.
 pub fn send_snap(
     env: Arc<Environment>,
     mgr: SnapManager,
@@ -166,7 +167,9 @@ pub fn send_snap(
         .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
         .keepalive_time(cfg.grpc_keepalive_time.0)
         .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm());
+        .default_compression_algorithm(cfg.grpc_compression_algorithm())
+        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
+        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
 
     let channel = security_mgr.connect(cb, addr);
     let client = TikvClient::new(channel);
@@ -183,7 +186,7 @@ pub fn send_snap(
         match recv_result {
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
-                mgr.delete_snapshot(&key, &*chunks.snap, true);
+                mgr.delete_snapshot(&key, &chunks.snap, true);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
@@ -203,7 +206,7 @@ struct RecvSnapContext {
     key: SnapKey,
     file: Option<Box<Snapshot>>,
     raft_msg: RaftMessage,
-    io_type: IOType,
+    io_type: IoType,
 }
 
 impl RecvSnapContext {
@@ -224,11 +227,11 @@ impl RecvSnapContext {
         let mut snapshot = RaftSnapshotData::default();
         snapshot.merge_from_bytes(data)?;
         let io_type = if snapshot.get_meta().get_for_balance() {
-            IOType::LoadBalance
+            IoType::LoadBalance
         } else {
-            IOType::Replication
+            IoType::Replication
         };
-        let _with_io_type = WithIOType::new(io_type);
+        let _with_io_type = WithIoType::new(io_type);
 
         let snap = {
             let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
@@ -254,7 +257,7 @@ impl RecvSnapContext {
     }
 
     fn finish<R: RaftStoreRouter<impl KvEngine>>(self, raft_router: R) -> Result<()> {
-        let _with_io_type = WithIOType::new(self.io_type);
+        let _with_io_type = WithIoType::new(self.io_type);
         let key = self.key;
         if let Some(mut file) = self.file {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
@@ -289,7 +292,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
             fail_point!("receiving_snapshot_net_error", |_| {
-                return Err(box_err!("{} failed to receive snapshot", context_key));
+                Err(box_err!("{} failed to receive snapshot", context_key))
             });
             let mut chunk = item?;
             let data = chunk.take_data();
@@ -297,7 +300,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
             let f = context.file.as_mut().unwrap();
-            let _with_io_type = WithIOType::new(context.io_type);
+            let _with_io_type = WithIoType::new(context.io_type);
             if let Err(e) = Write::write_all(&mut *f, &data) {
                 let key = &context.key;
                 let path = context.file.as_mut().unwrap().path();

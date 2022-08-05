@@ -20,8 +20,8 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
 
     let (client_clone, mut ctx_clone, key1_clone) = (client.clone(), ctx.clone(), key1.clone());
     let handle = thread::spawn(move || {
-        // `resource_group_tag` is set to check if the wait chain reported by the deadlock error
-        // carries the correct information.
+        // `resource_group_tag` is set to check if the wait chain reported by the
+        // deadlock error carries the correct information.
         ctx_clone.set_resource_group_tag(b"tag1".to_vec());
         let resp = kv_pessimistic_lock(
             &client_clone,
@@ -80,8 +80,8 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
 
 /// Creates a deadlock on the store containing key.
 fn must_detect_deadlock(cluster: &mut Cluster<ServerCluster>, key: &[u8], ts: u64) {
-    // Sometimes, deadlocks can't be detected at once due to leader change, but it will be
-    // detected.
+    // Sometimes, deadlocks can't be detected at once due to leader change, but it
+    // will be detected.
     for _ in 0..5 {
         let (client, ctx) = build_leader_client(cluster, key);
         if deadlock(&client, ctx, key, ts) {
@@ -118,8 +118,8 @@ fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8],
 
 /// Transfers the region containing region_key from source store to target peer.
 ///
-/// REQUIRE: The source store must be the leader the region and the target store must not have
-/// this region.
+/// REQUIRE: The source store must be the leader the region and the target store
+/// must not have this region.
 fn must_transfer_region(
     cluster: &mut Cluster<ServerCluster>,
     region_key: &[u8],
@@ -168,7 +168,8 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
         .clone()
 }
 
-/// Creates a cluster with only one region and store(1) is the leader of the region.
+/// Creates a cluster with only one region and store(1) is the leader of the
+/// region.
 fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
@@ -229,8 +230,8 @@ fn test_detect_deadlock_when_split_region() {
 #[test]
 fn test_detect_deadlock_when_transfer_region() {
     let mut cluster = new_cluster_for_deadlock_test(4);
-    // Transfer the leader region to store(4) and the leader of deadlock detector should be
-    // also transfered.
+    // Transfer the leader region to store(4) and the leader of deadlock detector
+    // should be also transferred.
     must_transfer_region(&mut cluster, b"k", 1, 4, 4);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);
@@ -242,8 +243,8 @@ fn test_detect_deadlock_when_transfer_region() {
     must_detect_deadlock(&mut cluster, b"k", 10);
     must_detect_deadlock(&mut cluster, b"k1", 10);
 
-    // Transfer the new region back to store(4) which will send a role change message with empty
-    // key range. It shouldn't affect deadlock detector.
+    // Transfer the new region back to store(4) which will send a role change
+    // message with empty key range. It shouldn't affect deadlock detector.
     must_transfer_region(&mut cluster, b"k1", 1, 4, 6);
     deadlock_detector_leader_must_be(&mut cluster, 4);
     must_detect_deadlock(&mut cluster, b"k", 10);

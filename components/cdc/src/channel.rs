@@ -44,8 +44,9 @@ const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
 
 /// Assume the average size of batched `CdcEvent::Event`s is 32KB and
 /// the average count of batched `CdcEvent::Event`s is 64.
-///
+/// ```text
 /// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+/// ```
 const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
 pub enum CdcEvent {
@@ -265,7 +266,7 @@ pub fn channel(buffer: usize, memory_quota: MemoryQuota) -> (Sink, Drain) {
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SendError {
     Full,
     Disconnected,
