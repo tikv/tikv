@@ -38,7 +38,7 @@ futures = "0.3"
 
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
 lazy_static = "1.4"
 log_wrappers = { path = "../log_wrappers" }
 online_config = { path = "../online_config" }
@@ -59,11 +59,12 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["compat"] } 
+tokio-util = { version = "0.7", features = ["compat", "io"] } 
 tonic = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 uuid = "0.8"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+async-compression = { version = "0.3.14", features = ["tokio", "zstd"]}
 
 [dev-dependencies]
 async-trait = "0.1"

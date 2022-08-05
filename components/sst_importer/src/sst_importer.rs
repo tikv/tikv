@@ -225,6 +225,7 @@ impl SstImporter {
 
     fn download_file_from_external_storage(
         &self,
+        expect_file_offset: Option<(u64, u64)>,
         file_length: u64,
         src_file_name: &str,
         dst_file: std::path::PathBuf,
@@ -265,6 +266,7 @@ impl SstImporter {
         let result = ext_storage.restore(
             src_file_name,
             dst_file.clone(),
+            expect_file_offset,
             file_length,
             expect_sha256,
             speed_limiter,
@@ -300,8 +302,10 @@ impl SstImporter {
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<PathBuf> {
-        let name = meta.get_name();
-        let path = self.dir.get_import_path(name)?;
+        let offset = meta.get_offset();
+        let src_name = meta.get_name();
+        let dst_name = format!("{}_{}", src_name, offset);
+        let path = self.dir.get_import_path(&dst_name)?;
         let start = Instant::now();
         let sha256 = meta.get_sha256().to_vec();
         let expected_sha256 = if !sha256.is_empty() {
@@ -313,16 +317,22 @@ impl SstImporter {
             return Ok(path.save);
         }
 
-        let lock = self.file_locks.entry(name.to_string()).or_default();
+        let lock = self.file_locks.entry(dst_name.to_string()).or_default();
 
         if path.save.exists() {
             return Ok(path.save);
         }
-
+        
+        let length = meta.get_compress_length();
+        let mut op_offset = Some((offset, length));
+        if length == 0 {
+            op_offset = None;
+        }
         self.download_file_from_external_storage(
+            op_offset,
             // don't check file length after download file for now.
             meta.get_length(),
-            name,
+            src_name,
             path.temp.clone(),
             backend,
             expected_sha256,
@@ -334,7 +344,7 @@ impl SstImporter {
             None,
             speed_limiter,
         )?;
-        info!("download file finished {}", name);
+        info!("download file finished {}, offset {}", src_name, offset);
 
         if let Some(p) = path.save.parent() {
             // we have v1 prefix in file name.
@@ -346,10 +356,11 @@ impl SstImporter {
                 }
             })?;
         }
+        
         file_system::rename(path.temp, path.save.clone())?;
 
         drop(lock);
-        self.file_locks.remove(name);
+        self.file_locks.remove(&dst_name);
 
         IMPORTER_APPLY_DURATION
             .with_label_values(&["download"])
@@ -492,6 +503,7 @@ impl SstImporter {
         });
 
         self.download_file_from_external_storage(
+            None,
             meta.length,
             name,
             path.temp.clone(),
@@ -1245,6 +1257,7 @@ mod tests {
         let path = importer.dir.get_import_path(file_name).unwrap();
         importer
             .download_file_from_external_storage(
+                None,
                 meta.get_length(),
                 file_name,
                 path.temp.clone(),
@@ -1279,6 +1292,7 @@ mod tests {
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
         importer
             .download_file_from_external_storage(
+                None,
                 kv_meta.get_length(),
                 kv_meta.get_name(),
                 path.temp.clone(),

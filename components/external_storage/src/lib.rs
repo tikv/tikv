@@ -15,10 +15,12 @@ use std::{
     time::Duration,
 };
 
+use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
 use encryption::{encryption_method_from_db_encryption_method, DecrypterReader, Iv};
 use engine_traits::FileEncryptionInfo;
 use file_system::File;
+use futures::io::BufReader;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use openssl::hash::{Hasher, MessageDigest};
@@ -75,17 +77,26 @@ pub trait ExternalStorage: 'static + Send + Sync {
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_>;
 
+    /// Read part of contents of the given path.
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_>;
+
     /// Read from external storage and restore to the given path
     fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
+        expected_offset: Option<(u64, u64)>,
         expected_length: u64,
         expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let reader = self.read(storage_name);
+        let reader: Box<dyn AsyncRead + Unpin> = if let Some((off, len)) = expected_offset {
+            let r = self.read_part(storage_name, off, len);
+            Box::new(ZstdDecoder::new(BufReader::new(r)))
+        } else {
+            self.read(storage_name)
+        };
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
         // if reading speed is slower than this rate, we will stop with
@@ -122,6 +133,10 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).read(name)
     }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).read_part(name, off, len)
+    }
 }
 
 #[async_trait]
@@ -140,6 +155,10 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.as_ref().read(name)
+    }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.as_ref().read_part(name, off, len)
     }
 }
 

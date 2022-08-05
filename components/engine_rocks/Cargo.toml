@@ -32,7 +32,7 @@ engine_traits = { path = "../engine_traits", default-features = false }
 fail = "0.5"
 file_system = { path = "../file_system", default-features = false }
 keys = { path = "../keys", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
 lazy_static = "1.4.0"
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"

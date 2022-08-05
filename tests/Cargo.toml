@@ -87,7 +87,7 @@ file_system = { path = "../components/file_system" }
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 grpcio-health = { version = "0.10", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
 libc = "0.2"
 log_wrappers = { path = "../components/log_wrappers" }
 more-asserts = "0.2"

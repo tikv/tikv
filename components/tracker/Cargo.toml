@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 collections = { path = "../../components/collections" }
 crossbeam-utils = "0.8"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
 lazy_static = "1"
 parking_lot = "0.12"
 pin-project = "1"

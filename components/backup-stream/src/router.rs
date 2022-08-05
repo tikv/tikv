@@ -14,12 +14,16 @@ use std::{
     time::Duration,
 };
 
+use async_compression::tokio::write::ZstdEncoder;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{DataFileInfo, FileType, Metadata, StreamBackupTaskInfo},
+    brpb::{
+        DataFileInfo, DataFileGroup, FileType, MetadataV2,
+        StreamBackupTaskInfo,
+    },
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -53,15 +57,13 @@ use crate::{
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
     try_send,
-    utils::{self, SegmentMap, Slot, SlotMap, StopWatch},
+    utils::{self, FilesReader, SegmentMap, Slot, SlotMap, StopWatch},
 };
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-/// FLUSH_LOG_CONCURRENT_BATCH_COUNT specifies the concurrent count to write to storage.
-/// 'Log backup' will produce a large mount of small files during flush interval,
-/// and storage could take mistaken if writing all of these files to storage concurrently.
-const FLUSH_LOG_CONCURRENT_BATCH_COUNT: usize = 128;
+/// For V2, the length of the file merged from temp files shouldn't be large too much.
+const MERGED_FILE_SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum TaskSelector {
@@ -699,26 +701,25 @@ impl TempFileKey {
         }
     }
 
-    /// path_to_log_file specifies the path of record log.
-    /// eg. "v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
-    fn path_to_log_file(&self, store_id: u64, min_ts: u64, max_ts: u64) -> String {
+    /// path_to_log_file specifies the path of record and schema log for v2.
+    /// eg. "v2/${date}/${hour}/${store_id}/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log"
+    fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/t{:08}/{:012}-{}.log",
+            "v2/{}/{}/{}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
-            self.table_id,
             min_ts,
             uuid::Uuid::new_v4()
         )
     }
 
-    /// path_to_schema_file specifies the path of schema log.
-    /// eg. "v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
+    /// path_to_schema_file specifies the path of schema log for v2.
+    /// eg. "v2/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log"
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
+            "v2/{}/{}/{}/schema-meta/{:012}-{}.log",
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
@@ -727,13 +728,14 @@ impl TempFileKey {
         )
     }
 
-    fn file_name(&self, store_id: u64, min_ts: TimeStamp, max_ts: TimeStamp) -> String {
-        if self.is_meta {
-            Self::path_to_schema_file(store_id, min_ts.into_inner(), max_ts.into_inner())
+    fn file_name(store_id: u64, min_ts: u64, max_ts: u64, is_meta: bool) -> String {
+        if is_meta {
+            Self::path_to_schema_file(store_id, min_ts, max_ts)
         } else {
-            self.path_to_log_file(store_id, min_ts.into_inner(), max_ts.into_inner())
+            Self::path_to_log_file(store_id, min_ts, max_ts)
         }
     }
+
 }
 
 pub struct StreamTaskInfo {
@@ -748,6 +750,8 @@ pub struct StreamTaskInfo {
     files: SlotMap<TempFileKey, DataFile>,
     /// flushing_files contains files pending flush.
     flushing_files: RwLock<Vec<(TempFileKey, Slot<DataFile>, DataFileInfo)>>,
+    /// flushing_meta_files contains meta files pending flush. used for V2.
+    flushing_meta_files: RwLock<Vec<(TempFileKey, Slot<DataFile>, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
     /// flush_interval represents the tick interval of flush, setting by users.
@@ -779,7 +783,15 @@ impl Drop for StreamTaskInfo {
             .map(|(_, f)| f.into_inner().local_path)
             .map(std::fs::remove_file)
             .partition(|r| r.is_ok());
-        info!("stream task info dropped, removing temp files"; "success" => %success.len(), "failure" => %failed.len())
+        info!("stream task info dropped[1/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
+        let (success, failed): (Vec<_>, Vec<_>) = self
+            .flushing_meta_files
+            .get_mut()
+            .drain(..)
+            .map(|(_, f, _)| f.into_inner().local_path)
+            .map(std::fs::remove_file)
+            .partition(|r| r.is_ok());
+        info!("stream task info dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
     }
 }
 
@@ -817,6 +829,7 @@ impl StreamTaskInfo {
             min_resolved_ts: TimeStamp::max(),
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
+            flushing_meta_files: RwLock::default(),
             last_flush_time: AtomicPtr::new(Box::into_raw(Box::new(Instant::now()))),
             flush_interval,
             total_size: AtomicUsize::new(0),
@@ -878,11 +891,15 @@ impl StreamTaskInfo {
     }
 
     /// Flush all template files and generate corresponding metadata.
-    pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
+    pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfoV2> {
         let w = self.flushing_files.read().await;
+        let wm = self.flushing_meta_files.read().await;
         // Let's flush all files first...
-        futures::future::join_all(w.iter().map(|(_, f, _)| async move {
-            let file = &mut f.lock().await.inner;
+        futures::future::join_all(w.iter().chain(wm.iter()).map(|(_, f, _)| async move {
+            let mut flock = f.lock().await;
+            let encoder = &mut flock.inner;
+            encoder.shutdown().await?;
+            let file = encoder.get_mut();
             file.flush().await?;
             file.get_ref().sync_all().await?;
             Result::Ok(())
@@ -892,11 +909,9 @@ impl StreamTaskInfo {
         .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
-        let mut metadata = MetadataInfo::with_capacity(w.len());
+        let mut metadata = MetadataInfoV2::with_capacity(w.len() + wm.len());
         metadata.set_store_id(store_id);
-        for (_, _, file_meta) in w.iter() {
-            metadata.push(file_meta.to_owned())
-        }
+        // delay push files until log files are flushed
         Ok(metadata)
     }
 
@@ -928,8 +943,8 @@ impl StreamTaskInfo {
         self.flushing.load(Ordering::SeqCst)
     }
 
-    /// move need-flushing files to flushing_files.
-    pub async fn move_to_flushing_files(&self, store_id: u64) -> Result<&Self> {
+    // move need-flushing files to flushing_files.
+    pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry operation.
         if !self.flushing_files.read().await.is_empty() {
             return Ok(self);
@@ -937,13 +952,18 @@ impl StreamTaskInfo {
 
         let mut w = self.files.write().await;
         let mut fw = self.flushing_files.write().await;
+        let mut fw_meta = self.flushing_meta_files.write().await;
         for (k, v) in w.drain() {
             // we should generate file metadata(calculate sha256) when moving file.
             // because sha256 calculation is a unsafe move operation.
             // we cannot re-calculate it in retry.
             // TODO refactor move_to_flushing_files and generate_metadata
-            let file_meta = v.lock().await.generate_metadata(&k, store_id)?;
-            fw.push((k, v, file_meta));
+            let file_meta = v.lock().await.generate_metadata(&k)?;
+            if file_meta.is_meta {
+                fw_meta.push((k, v, file_meta));
+            } else {
+                fw.push((k, v, file_meta));
+            }
         }
         Ok(self)
     }
@@ -959,59 +979,149 @@ impl StreamTaskInfo {
                 info!("remove template file"; "err" => ?e);
             }
         }
+        for (_, v, _) in self.flushing_meta_files.write().await.drain(..) {
+            let data_file = v.lock().await;
+            debug!("removing meta data file"; "size" => %data_file.file_size, "name" => %data_file.local_path.display());
+            self.total_size
+                .fetch_sub(data_file.file_size, Ordering::SeqCst);
+            if let Err(e) = data_file.remove_temp_file().await {
+                // if remove template failed, just skip it.
+                info!("remove template file"; "err" => ?e);
+            }
+        }
     }
 
-    async fn flush_log_file_to(
+    async fn merge_and_flush_log_files_to(
         storage: Arc<dyn ExternalStorage>,
-        file: &Mutex<DataFile>,
+        files: &[(TempFileKey, Mutex<DataFile>, DataFileInfo)],
+        metadata: &mut MetadataInfoV2,
+        is_meta: bool,
     ) -> Result<()> {
-        let data_file = file.lock().await;
+        // save locks for longer lifetime
+        let mut data_files = Vec::new();
+        let mut data_files_open = Vec::new();
+        let mut data_file_infos = Vec::new();
+        let mut merged_file_info = DataFileGroup::new();
+        let mut stat_length = 0;
+        let mut max_ts: Option<u64> = None;
+        let mut min_ts: Option<u64> = None;
+        let mut min_resolved_ts: Option<u64> = None;
+        for (_, file, file_info) in files {
+            let data_file = file.lock().await;
+            let mut file_info_clone = file_info.to_owned();
+            // Update offset of file_info(DataFileInfo)
+            //  and push it into merged_file_info(DataFileGroup).
+            file_info_clone.set_offset(stat_length);
+            //data_files_open.push(Box::pin(File::open(data_file.local_path.clone())));
+            data_files_open.push(Box::pin({
+                let file = File::open(data_file.local_path.clone()).await?;
+                let compress_length = file.metadata().await?.len();
+                stat_length += compress_length;
+                file_info_clone.set_compress_length(compress_length);
+                file
+            }));
+            data_files.push(data_file);
+            data_file_infos.push(file_info_clone);
+
+            let rts = file_info.resolved_ts;
+            min_resolved_ts = min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
+            min_ts = min_ts.map_or(Some(file_info.min_ts), |ts| Some(ts.min(file_info.min_ts)));
+            max_ts = max_ts.map_or(Some(file_info.max_ts), |ts| Some(ts.max(file_info.max_ts)));
+        }
+        let min_ts = min_ts.unwrap_or_default();
+        let max_ts = max_ts.unwrap_or_default();
+        merged_file_info.set_path(TempFileKey::file_name(
+            metadata.store_id,
+            min_ts,
+            max_ts,
+            is_meta,
+        ));
+        merged_file_info.set_data_files_info(data_file_infos.into());
+        merged_file_info.set_length(stat_length);
+        merged_file_info.set_max_ts(max_ts);
+        merged_file_info.set_min_ts(min_ts);
+        merged_file_info.set_min_resolved_ts(min_resolved_ts.unwrap_or_default());
+
         // to do: limiter to storage
         let limiter = Limiter::builder(std::f64::INFINITY).build();
-        let reader = File::open(data_file.local_path.clone()).await?;
-        let stat = reader.metadata().await?;
-        let reader = UnpinReader(Box::new(limiter.limit(reader.compat())));
-        let filepath = &data_file.storage_path;
-        // Once we cannot get the stat of the file, use 4K I/O.
-        let est_len = stat.len().max(4096);
 
-        let ret = storage.write(filepath, reader, est_len).await;
+        let files_reader = FilesReader::new(data_files_open);
+
+        let reader = UnpinReader(Box::new(limiter.limit(files_reader.compat())));
+        let filepath = &merged_file_info.path;
+
+        let ret = storage.write(filepath, reader, stat_length).await;
         match ret {
             Ok(_) => {
                 debug!(
                     "backup stream flush success";
-                    "tmp file" => ?data_file.local_path,
                     "storage file" => ?filepath,
+                    "est_len" => ?stat_length,
                 );
             }
             Err(e) => {
                 warn!("backup stream flush failed";
-                    "file" => ?data_file.local_path,
-                    "est_len" => ?est_len,
+                    "est_len" => ?stat_length,
                     "err" => ?e,
                 );
                 return Err(Error::Io(e));
             }
         }
+
+        // push merged file into metadata
+        metadata.push(merged_file_info);
         Ok(())
     }
 
-    pub async fn flush_log(&self) -> Result<()> {
-        // if failed to write storage, we should retry write flushing_files.
+    pub async fn flush_log(&self, metadata: &mut MetadataInfoV2) -> Result<()> {
         let storage = self.storage.clone();
-        let files = self.flushing_files.write().await;
+        self.merge_log(metadata, storage.clone(), &self.flushing_files, false).await?;
+        self.merge_log(metadata, storage.clone(), &self.flushing_meta_files, true).await?;
 
-        for batch_files in files.chunks(FLUSH_LOG_CONCURRENT_BATCH_COUNT) {
-            let futs = batch_files
-                .iter()
-                .map(|(_, v, _)| Self::flush_log_file_to(storage.clone(), v));
-            futures::future::try_join_all(futs).await?;
+        Ok(())
+    }
+
+    async fn merge_log(
+        &self,
+        metadata: &mut MetadataInfoV2,
+        storage: Arc<dyn ExternalStorage>,
+        files_lock: &RwLock<Vec<(TempFileKey,Mutex<DataFile>, DataFileInfo)>>,
+        is_meta: bool,
+    ) -> Result<()> {
+        let files = files_lock.write().await;
+        let mut batch_size = 0;
+        // file[batch_begin_index, i) is a batch
+        let mut batch_begin_index = 0;
+        for (i, (_, _, info)) in files.iter().enumerate() {
+            if batch_size >= MERGED_FILE_SIZE_LIMIT {
+                Self::merge_and_flush_log_files_to(
+                    storage.clone(),
+                    &files[batch_begin_index..i],
+                    metadata,
+                    is_meta,
+                )
+                .await?;
+
+                batch_begin_index = i;
+                batch_size = 0;
+            }
+
+            batch_size += info.length;
+        }
+        if batch_begin_index < files.len() {
+            Self::merge_and_flush_log_files_to(
+                storage.clone(),
+                &files[batch_begin_index..],
+                metadata,
+                is_meta,
+            )
+            .await?;
         }
 
         Ok(())
     }
 
-    pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
+    pub async fn flush_meta(&self, metadata_info: MetadataInfoV2) -> Result<()> {
         let meta_path = metadata_info.path_to_meta();
         let meta_buff = metadata_info.marshal_to()?;
         let buflen = meta_buff.len();
@@ -1050,7 +1160,7 @@ impl StreamTaskInfo {
 
             // generate meta data and prepare to flush to storage
             let mut metadata_info = self
-                .move_to_flushing_files(store_id)
+                .move_to_flushing_files()
                 .await?
                 .generate_metadata(store_id)
                 .await?;
@@ -1063,10 +1173,11 @@ impl StreamTaskInfo {
                 .observe(sw.lap().as_secs_f64());
 
             // flush log file to storage.
-            self.flush_log().await?;
+            self.flush_log(&mut metadata_info).await?;
 
+            // compress length
             let file_size_vec = metadata_info
-                .files
+                .file_groups
                 .iter()
                 .map(|d| d.length)
                 .collect::<Vec<_>>();
@@ -1085,8 +1196,8 @@ impl StreamTaskInfo {
                 .iter()
                 .for_each(|size| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
             info!("log backup flush done";
-                "files" => %file_size_vec.len(),
-                "total_size" => %file_size_vec.iter().sum::<u64>(),
+                "files" => %file_size_vec.len(),    // the number of the merged files
+                "total_size" => %file_size_vec.iter().sum::<u64>(), // the size of the merged files after compressed
                 "take" => ?begin.saturating_elapsed(),
             );
             Ok(rts)
@@ -1147,28 +1258,27 @@ struct DataFile {
     resolved_ts: TimeStamp,
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
-    inner: BufWriter<File>,
+    inner: ZstdEncoder<BufWriter<File>>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     number_of_entries: usize,
     file_size: usize,
     local_path: PathBuf,
-    storage_path: String,
 }
 
 #[derive(Debug)]
-pub struct MetadataInfo {
-    pub files: Vec<DataFileInfo>,
+pub struct MetadataInfoV2 {
+    pub file_groups: Vec<DataFileGroup>,
     pub min_resolved_ts: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
 }
 
-impl MetadataInfo {
+impl MetadataInfoV2 {
     fn with_capacity(cap: usize) -> Self {
         Self {
-            files: Vec::with_capacity(cap),
+            file_groups: Vec::with_capacity(cap),
             min_resolved_ts: None,
             min_ts: None,
             max_ts: None,
@@ -1180,8 +1290,8 @@ impl MetadataInfo {
         self.store_id = store_id;
     }
 
-    fn push(&mut self, file: DataFileInfo) {
-        let rts = file.resolved_ts;
+    fn push(&mut self, file: DataFileGroup) {
+        let rts = file.min_resolved_ts;
         self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
         self.min_ts = self
             .min_ts
@@ -1189,12 +1299,12 @@ impl MetadataInfo {
         self.max_ts = self
             .max_ts
             .map_or(Some(file.max_ts), |ts| Some(ts.max(file.max_ts)));
-        self.files.push(file);
+        self.file_groups.push(file);
     }
 
     fn marshal_to(self) -> Result<Vec<u8>> {
-        let mut metadata = Metadata::new();
-        metadata.set_files(self.files.into());
+        let mut metadata = MetadataV2::new();
+        metadata.set_file_groups(self.file_groups.into());
         metadata.set_store_id(self.store_id as _);
         metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default());
         metadata.set_min_ts(self.min_ts.unwrap_or(0));
@@ -1207,7 +1317,7 @@ impl MetadataInfo {
 
     fn path_to_meta(&self) -> String {
         format!(
-            "v1/backupmeta/{:012}-{}.meta",
+            "v2/backupmeta/{:012}-{}.meta",
             self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
@@ -1220,19 +1330,19 @@ impl DataFile {
     async fn new(local_path: impl AsRef<Path>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
+        let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
-            inner: BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?),
+            inner: ZstdEncoder::new(inner),
             sha256,
             number_of_entries: 0,
             file_size: 0,
             start_key: vec![],
             end_key: vec![],
             local_path: local_path.as_ref().to_owned(),
-            storage_path: String::default(),
         })
     }
 
@@ -1308,15 +1418,9 @@ impl DataFile {
         }
     }
 
-    /// generage path for log file before flushing to Storage
-    fn set_storage_path(&mut self, path: String) {
-        self.storage_path = path;
-    }
-
-    /// generate the metadata in protocol buffer of the file.
-    fn generate_metadata(&mut self, file_key: &TempFileKey, store_id: u64) -> Result<DataFileInfo> {
-        self.set_storage_path(file_key.file_name(store_id, self.min_ts, self.max_ts));
-
+    /// generate the metadata v2 where each file becomes a part of the merged file.
+    fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
+        // Note: the field `storage_path` is empty!!! It will be stored in the upper layer `DataFileGroup`.
         let mut meta = DataFileInfo::new();
         meta.set_sha256(
             self.sha256
@@ -1324,7 +1428,6 @@ impl DataFile {
                 .map(|bytes| bytes.to_vec())
                 .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
         );
-        meta.set_path(self.storage_path.clone());
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
@@ -1584,43 +1687,50 @@ mod tests {
 
         let end_ts = TimeStamp::physical_now();
         let files = router.tasks.lock().await.get("dummy").unwrap().clone();
-        let meta = files
-            .move_to_flushing_files(1)
+        let mut meta = files
+            .move_to_flushing_files()
             .await?
             .generate_metadata(1)
             .await?;
-        assert_eq!(meta.files.len(), 3, "test file len = {}", meta.files.len());
+
         assert!(
-            meta.files.iter().all(|item| {
+            meta.file_groups.iter().all(|group| group.data_files_info.iter().all(|item| {
                 TimeStamp::new(item.min_ts as _).physical() >= start_ts
                     && TimeStamp::new(item.max_ts as _).physical() <= end_ts
                     && item.min_ts <= item.max_ts
-            }),
+            })),
             "meta = {:#?}; start ts = {}, end ts = {}",
-            meta.files,
+            meta.file_groups,
             start_ts,
             end_ts
         );
 
         // in some case when flush failed to write files to storage.
         // we may run `generate_metadata` again with same files.
-        let another_meta = files
-            .move_to_flushing_files(1)
+        let mut another_meta = files
+            .move_to_flushing_files()
             .await?
             .generate_metadata(1)
             .await?;
 
-        assert_eq!(meta.files.len(), another_meta.files.len());
-        for i in 0..meta.files.len() {
-            let file1 = meta.files.get(i).unwrap();
-            let file2 = another_meta.files.get(i).unwrap();
+        files.flush_log(&mut meta).await?;
+        files.flush_log(&mut another_meta).await?;
+        // meta updated
+        let files_num = meta.file_groups.iter().map(|v| v.data_files_info.len()).sum::<usize>();
+        assert_eq!(files_num, 3, "test file len = {}", files_num);
+        for i in 0..meta.file_groups.len() {
+            let file_groups1 = meta.file_groups.get(i).unwrap();
+            let file_groups2 = another_meta.file_groups.get(i).unwrap();
             // we have to make sure two times sha256 of file must be the same.
-            assert_eq!(file1.sha256, file2.sha256);
-            assert_eq!(file1.start_key, file2.start_key);
-            assert_eq!(file1.end_key, file2.end_key);
+            for j in 0..file_groups1.data_files_info.len() {
+                let file1 = file_groups1.data_files_info.get(j).unwrap();
+                let file2 = file_groups2.data_files_info.get(j).unwrap();
+                assert_eq!(file1.sha256, file2.sha256);
+                assert_eq!(file1.start_key, file2.start_key);
+                assert_eq!(file1.end_key, file2.end_key);
+            }
         }
 
-        files.flush_log().await?;
         files.flush_meta(meta).await?;
         files.clear_flushing_files().await;
 
@@ -1653,13 +1763,13 @@ mod tests {
         }
 
         assert_eq!(meta_count, 1);
-        assert_eq!(log_count, 3);
+        assert_eq!(log_count, 2);   // flush twice
         Ok(())
     }
 
-    fn mock_build_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
+    fn mock_build_large_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
         let mut events_builder = KvEventsBuilder::new(region_id, resolved_ts);
-        events_builder.put_table("default", table_id, b"hello", b"world");
+        events_builder.put_table("default", table_id, b"hello", "world".repeat(1024*1024).as_bytes());
         events_builder.finish()
     }
 
@@ -1683,9 +1793,9 @@ mod tests {
         .unwrap();
 
         // on_event
-        let region_count = FLUSH_LOG_CONCURRENT_BATCH_COUNT + 5;
+        let region_count = (MERGED_FILE_SIZE_LIMIT) / (4*1024*1024); // 2 merged log files
         for i in 1..=region_count {
-            let kv_events = mock_build_kv_events(i as _, i as _, i as _);
+            let kv_events = mock_build_large_kv_events(i as _, i as _, i as _);
             task.on_events(kv_events).await.unwrap();
         }
         // do_flush
@@ -1707,7 +1817,7 @@ mod tests {
             }
         }
         assert_eq!(meta_count, 1);
-        assert_eq!(log_count, region_count);
+        assert_eq!(log_count, 2);
     }
 
     struct ErrorStorage<Inner> {
@@ -1771,6 +1881,10 @@ mod tests {
 
         fn read(&self, name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
             self.inner.read(name)
+        }
+
+        fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+            self.inner.read_part(name, off, len)
         }
     }
 
@@ -1864,7 +1978,7 @@ mod tests {
         router
             .get_task_info("cleanup_test")
             .await?
-            .move_to_flushing_files(1)
+            .move_to_flushing_files()
             .await?;
         write_simple_data(&router).await;
         let mut w = walkdir::WalkDir::new(&tmp).into_iter();

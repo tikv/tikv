@@ -221,6 +221,37 @@ impl S3Storage {
         }
         key.to_owned()
     }
+
+    fn get_range(&self, name: &str, range: Option<String>) -> Box<dyn AsyncRead + Unpin + '_> {
+        let key = self.maybe_prefix_key(name);
+        let bucket = self.config.bucket.bucket.clone();
+        debug!("read file from s3 storage"; "key" => %key);
+        let req = GetObjectRequest {
+            key,
+            bucket: (*bucket).clone(),
+            range,
+            ..Default::default()
+        };
+        Box::new(
+            self.client
+                .get_object(req)
+                .map(move |future| match future {
+                    Ok(out) => out.body.unwrap(),
+                    Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
+                        ByteStream::new(error_stream(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("no key {} at bucket {}", key, *bucket),
+                        )))
+                    }
+                    Err(e) => ByteStream::new(error_stream(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("failed to get object {}", e),
+                    ))),
+                })
+                .flatten_stream()
+                .into_async_read(),
+        )
+    }
 }
 
 /// A helper for uploading a large files to S3 storage.
@@ -548,34 +579,14 @@ impl BlobStorage for S3Storage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let key = self.maybe_prefix_key(name);
-        let bucket = self.config.bucket.bucket.clone();
-        debug!("read file from s3 storage"; "key" => %key);
-        let req = GetObjectRequest {
-            key,
-            bucket: (*bucket).clone(),
-            ..Default::default()
-        };
-        Box::new(
-            self.client
-                .get_object(req)
-                .map(move |future| match future {
-                    Ok(out) => out.body.unwrap(),
-                    Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
-                        ByteStream::new(error_stream(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("no key {} at bucket {}", key, *bucket),
-                        )))
-                    }
-                    Err(e) => ByteStream::new(error_stream(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("failed to get object {}", e),
-                    ))),
-                })
-                .flatten_stream()
-                .into_async_read(),
-        )
+        return self.get_range(name, None)
     }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        // inclusive, bytes=0-499 -> [0, 499]
+        self.get_range(name, Some(format!("bytes={}-{}", off, off+len-1)))
+    }
+
 }
 
 #[cfg(test)]

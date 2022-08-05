@@ -594,6 +594,10 @@ impl BlobStorage for AzureStorage {
         let t = k.boxed().into_async_read();
         Box::new(t)
     }
+
+    fn get_part(&self, _name: &str, _off: u64, _len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        unimplemented!("Azblob currently doesn't support get_part")
+    }
 }
 
 #[cfg(test)]

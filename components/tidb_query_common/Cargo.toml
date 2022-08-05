@@ -9,7 +9,7 @@ description = "Common utility of a query engine to run TiDB pushed down executor
 anyhow = "1.0"
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
 lazy_static = "1.3"
 log_wrappers = { path = "../log_wrappers" }
 prometheus = { version = "0.13", features = ["nightly"] }
