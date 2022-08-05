@@ -9,6 +9,6 @@ mod apply;
 mod peer;
 mod store;
 
-pub use apply::{ApplyFsm, ApplyFsmWithContext};
-pub use peer::{PeerFsm, PeerFsmWithContext, SenderFsmPair};
-pub use store::{StoreFsm, StoreFsmWithContext, StoreMeta};
+pub use apply::{ApplyFsm, ApplyFsmDelegate};
+pub use peer::{PeerFsm, PeerFsmDelegate, SenderFsmPair};
+pub use store::{StoreFsm, StoreFsmDelegate, StoreMeta};

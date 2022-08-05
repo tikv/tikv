@@ -285,7 +285,7 @@ impl HandleResult {
     }
 }
 
-/// A handler of all Fsm ready events. A ready event happens when [...].
+/// A handler that polls all Fsms in ready.
 ///
 /// A general process works like the following:
 ///
@@ -395,8 +395,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         // Fetch batch after every round is finished. It's helpful to protect regions
         // from becoming hungry if some regions are hot points. Since we fetch new Fsm
-        // every time calling `poll`, we do not need to configure a large value
-        // for `self.max_batch_size`.
+        // every time calling `poll`, we do not need to configure a large value for
+        // `self.max_batch_size`.
         let mut run = true;
         while run && self.fetch_fsm(&mut batch) {
             // If there is some region wait to be deal, we must deal with it even if it has

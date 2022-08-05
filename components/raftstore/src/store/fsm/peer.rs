@@ -644,10 +644,10 @@ where
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
                             && !self.fsm.peer.disk_full_peers.majority())
                             || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
-                        && let size = cmd.request.compute_size()
-                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, size)
+                        && let req_size = cmd.request.compute_size()
+                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
                     {
-                        self.fsm.batch_req_builder.add(cmd, size);
+                        self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
                             self.propose_pending_batch_raft_command();
                         }
@@ -701,11 +701,9 @@ where
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
         #[cfg(feature = "failpoints")]
         (|| {
-            fail_point!(
-                "force_delay_propose_pending_batch_raft_command",
-                self.ctx.sync_write_worker.is_none(),
-                |_| should_propose = false
-            )
+            fail_point!("force_delay_propose_pending_batch_raft_command", |_| {
+                should_propose = false
+            })
         })();
         // Propose batch request which may be still waiting for more raft-command
         if should_propose {

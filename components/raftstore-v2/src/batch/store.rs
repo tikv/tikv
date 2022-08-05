@@ -21,12 +21,12 @@ use tikv_util::{
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
-    fsm::{PeerFsm, PeerFsmWithContext, SenderFsmPair, StoreFsm, StoreFsmWithContext},
+    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
     Error, PeerMsg, PeerTick, Result, StoreMsg,
 };
 
-/// A per-thread context shared by multiple [`StoreFsm`]s.
+/// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<T> {
     /// A logger without any KV. It's clean for creating new PeerFsm.
     pub logger: Logger,
@@ -133,7 +133,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         } else {
             Some(0)
         };
-        let mut fsm = StoreFsmWithContext::new(fsm, &mut self.poll_ctx);
+        let mut fsm = StoreFsmDelegate::new(fsm, &mut self.poll_ctx);
         fsm.handle_msgs(&mut self.store_msg_buf);
         expected_msg_count
     }
@@ -146,7 +146,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         } else {
             HandleResult::stop_at(0, false)
         };
-        let mut fsm = PeerFsmWithContext::new(fsm, &mut self.poll_ctx);
+        let mut fsm = PeerFsmDelegate::new(fsm, &mut self.poll_ctx);
         fsm.handle_msgs(&mut self.peer_msg_buf);
         handle_result
     }

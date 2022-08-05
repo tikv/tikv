@@ -56,12 +56,12 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
     }
 }
 
-pub struct ApplyFsmWithContext<'a, EK: KvEngine> {
+pub struct ApplyFsmDelegate<'a, EK: KvEngine> {
     fsm: &'a mut ApplyFsm<EK>,
     apply_ctx: &'a mut ApplyContext,
 }
 
-impl<'a, EK: KvEngine> ApplyFsmWithContext<'a, EK> {
+impl<'a, EK: KvEngine> ApplyFsmDelegate<'a, EK> {
     pub fn new(fsm: &'a mut ApplyFsm<EK>, apply_ctx: &'a mut ApplyContext) -> Self {
         Self { fsm, apply_ctx }
     }

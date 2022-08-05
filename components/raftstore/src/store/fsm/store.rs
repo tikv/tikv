@@ -671,13 +671,13 @@ where
     }
 }
 
-struct StoreFsmWithContext<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static> {
+struct StoreFsmDelegate<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'static> {
     fsm: &'a mut StoreFsm<EK>,
     ctx: &'a mut PollContext<EK, ER, T>,
 }
 
 impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
-    StoreFsmWithContext<'a, EK, ER, T>
+    StoreFsmDelegate<'a, EK, ER, T>
 {
     fn on_tick(&mut self, tick: StoreTick) {
         let t = TiInstant::now_coarse();
@@ -851,7 +851,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                 }
             }
         }
-        let mut delegate = StoreFsmWithContext {
+        let mut delegate = StoreFsmDelegate {
             fsm: store,
             ctx: &mut self.poll_ctx,
         };
@@ -1742,7 +1742,7 @@ enum CheckMsgStatus {
     NewPeerFirst,
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmWithContext<'a, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     /// Checks if the message is targeting a stale peer.
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
@@ -2493,7 +2493,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmWithContext<'a, EK,
     }
 }
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmWithContext<'a, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
         if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
             return;

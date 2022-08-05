@@ -1305,7 +1305,7 @@ where
             self.mut_store()
                 .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
 
-            // StoreFsmWithContext::check_msg use both epoch and region peer list to check
+            // StoreFsmDelegate::check_msg use both epoch and region peer list to check
             // whether a message is targeting a staled peer. But for an uninitialized peer,
             // both epoch and peer list are empty, so a removed peer will be created again.
             // Saving current peer into the peer list of region will fix this problem.

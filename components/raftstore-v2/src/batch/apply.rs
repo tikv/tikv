@@ -27,7 +27,7 @@ use slog::Logger;
 use tikv_util::config::{Tracker, VersionTrack};
 
 use crate::{
-    fsm::{ApplyFsm, ApplyFsmWithContext},
+    fsm::{ApplyFsm, ApplyFsmDelegate},
     raft::{Apply, Peer},
     router::ApplyTask,
 };
@@ -109,7 +109,7 @@ where
         } else {
             HandleResult::stop_at(0, false)
         };
-        let mut delegate = ApplyFsmWithContext::new(normal, &mut self.apply_ctx);
+        let mut delegate = ApplyFsmDelegate::new(normal, &mut self.apply_ctx);
         delegate.handle_msgs(&mut self.apply_task_buf);
         handle_result
     }
