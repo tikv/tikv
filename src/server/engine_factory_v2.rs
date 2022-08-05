@@ -411,9 +411,10 @@ mod tests {
             .unwrap_err();
 
         let _ = factory
-            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
             .unwrap();
 
+        // Now, it should be in the cache.
         factory
             .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
             .unwrap();
