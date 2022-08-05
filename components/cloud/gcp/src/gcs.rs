@@ -128,7 +128,7 @@ impl BlobConfig for Config {
 
 // GCS compatible storage
 #[derive(Clone)]
-pub struct GCSStorage {
+pub struct GcsStorage {
     config: Config,
     svc_access: Option<Arc<ServiceAccountAccess>>,
     client: Client<HttpsConnector<HttpConnector>, Body>,
@@ -229,7 +229,7 @@ impl RetryError for RequestError {
     }
 }
 
-impl GCSStorage {
+impl GcsStorage {
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
     }
@@ -239,7 +239,7 @@ impl GCSStorage {
     }
 
     /// Create a new GCS storage for the given config.
-    pub fn new(config: Config) -> io::Result<GCSStorage> {
+    pub fn new(config: Config) -> io::Result<GcsStorage> {
         let svc_access = if let Some(si) = &config.svc_info {
             Some(
                 ServiceAccountAccess::new(si.clone())
@@ -250,7 +250,7 @@ impl GCSStorage {
         };
 
         let client = Client::builder().build(HttpsConnector::new());
-        Ok(GCSStorage {
+        Ok(GcsStorage {
             config,
             svc_access: svc_access.map(Arc::new),
             client,
@@ -353,11 +353,11 @@ impl GCSStorage {
         debug!("read file from GCS storage"; "key" => %name);
         let oid = match ObjectId::new(bucket, name) {
             Ok(oid) => oid,
-            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
+            Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
         };
         let mut request = match Object::download(&oid, None /*optional*/) {
             Ok(request) => request.map(|_: io::Empty| Body::empty()),
-            Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
+            Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::Other, e),
         };
         if let Some(r) = range {
             let header_value = match HeaderValue::from_str(&r) {
@@ -436,7 +436,7 @@ fn parse_predefined_acl(acl: &str) -> Result<Option<PredefinedAcl>, &str> {
 const STORAGE_NAME: &str = "gcs";
 
 #[async_trait]
-impl BlobStorage for GCSStorage {
+impl BlobStorage for GcsStorage {
     fn config(&self) -> Box<dyn BlobConfig> {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
@@ -468,8 +468,8 @@ impl BlobStorage for GCSStorage {
             ..Default::default()
         };
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into memory
-        // in order to retry.
+        // FIXME: Switch to upload() API so we don't need to read the entire data into
+        // memory in order to retry.
         let mut data = Vec::with_capacity(content_length as usize);
         reader.read_to_end(&mut data).await?;
         retry(|| async {

@@ -158,7 +158,8 @@ fn run_dump_raftdb_worker(
                                     let mut state = RaftLocalState::default();
                                     state.merge_from_bytes(value)?;
                                     batch.put_raft_state(region_id, &state).unwrap();
-                                    // Assume that we always scan entry first and raft state at the end.
+                                    // Assume that we always scan entry first and raft state at the
+                                    // end.
                                     batch
                                         .append(region_id, std::mem::take(&mut entries))
                                         .unwrap();
@@ -214,8 +215,7 @@ fn run_dump_raft_engine_worker(
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::raw::DBOptions;
-    use tikv::config::TiKvConfig;
+    use tikv::config::TikvConfig;
 
     use super::*;
 
@@ -230,7 +230,7 @@ mod tests {
             raftdb_wal_path.push("test-wal");
         }
 
-        let mut cfg = TiKvConfig::default();
+        let mut cfg = TikvConfig::default();
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
@@ -238,20 +238,19 @@ mod tests {
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(
             cfg.raft_engine.config(),
-            None, /*key_manager*/
-            None, /*io_rate_limiter*/
+            None, // key_manager
+            None, // io_rate_limiter
         )
         .expect("open raft engine");
 
         {
             // Prepare some data for the RocksEngine.
-            let raftdb = engine_rocks::raw_util::new_engine_opt(
+            let raftdb = engine_rocks::util::new_engine_opt(
                 &cfg.raft_store.raftdb_path,
                 cfg.raftdb.build_opt(),
                 cfg.raftdb.build_cf_opts(&None),
             )
             .unwrap();
-            let raftdb = RocksEngine::from_db(Arc::new(raftdb));
             let mut batch = raftdb.log_batch(0);
             set_write_batch(1, &mut batch);
             raftdb.consume(&mut batch, false).unwrap();
@@ -271,15 +270,8 @@ mod tests {
         std::fs::remove_dir_all(&cfg.raft_store.raftdb_path).unwrap();
 
         // Dump logs from RaftLogEngine to RocksEngine.
-        let raftdb = {
-            let db = engine_rocks::raw_util::new_engine_opt(
-                &cfg.raft_store.raftdb_path,
-                DBOptions::new(),
-                vec![],
-            )
-            .unwrap();
-            RocksEngine::from_db(Arc::new(db))
-        };
+        let raftdb =
+            engine_rocks::util::new_engine(&cfg.raft_store.raftdb_path, &[CF_DEFAULT]).unwrap();
         dump_raft_engine_to_raftdb(&raft_engine, &raftdb, 4);
         assert(1, &raftdb);
         assert(5, &raftdb);

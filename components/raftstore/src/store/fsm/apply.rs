@@ -77,13 +77,14 @@ use crate::{
     },
     store::{
         cmd_resp,
+        entry_storage::{self, CachedEntries},
         fsm::RaftPollerBuilder,
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
         msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
-        peer_storage::{self, write_initial_apply_state, write_peer_state, CachedEntries},
+        peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
@@ -394,14 +395,17 @@ where
     store_id: u64,
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
-    /// An uninitialized peer can be replaced to the one from splitting iff they are exactly the same peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they
+    /// are exactly the same peer.
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 
-    /// We must delete the ingested file before calling `callback` so that any ingest-request reaching this
-    /// peer could see this update if leader had changed. We must also delete them after the applied-index
-    /// has been persisted to kvdb because this entry may replay because of panic or power-off, which
-    /// happened before `WriteBatch::write` and after `SstImporter::delete`. We shall make sure that
-    /// this entry will never apply again at first, then we can delete the ssts files.
+    /// We must delete the ingested file before calling `callback` so that any
+    /// ingest-request reaching this peer could see this update if leader
+    /// had changed. We must also delete them after the applied-index
+    /// has been persisted to kvdb because this entry may replay because of
+    /// panic or power-off, which happened before `WriteBatch::write` and
+    /// after `SstImporter::delete`. We shall make sure that this entry will
+    /// never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
@@ -483,10 +487,11 @@ where
             .push_batch(&delegate.observe_info, delegate.region.get_id());
     }
 
-    /// Commits all changes have done for delegate. `persistent` indicates whether
-    /// write the changes into rocksdb.
+    /// Commits all changes have done for delegate. `persistent` indicates
+    /// whether write the changes into rocksdb.
     ///
-    /// This call is valid only when it's between a `prepare_for` and `finish_for`.
+    /// This call is valid only when it's between a `prepare_for` and
+    /// `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
             delegate.write_apply_state(self.kv_wb_mut());
@@ -546,7 +551,8 @@ where
                 // Control the memory usage for the WriteBatch.
                 self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
             } else {
-                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and
+                // deallocations.
                 self.kv_wb_mut().clear();
             }
             self.kv_wb_last_bytes = 0;
@@ -566,7 +572,8 @@ where
             batch_max_level,
             mut cb_batch,
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
-        // Call it before invoking callback for preventing Commit is executed before Prewrite is observed.
+        // Call it before invoking callback for preventing Commit is executed before
+        // Prewrite is observed.
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -597,7 +604,7 @@ where
             apply_state: delegate.apply_state.clone(),
             exec_res: results,
             metrics: delegate.metrics.clone(),
-            applied_index_term: delegate.applied_index_term,
+            applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
     }
@@ -637,6 +644,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+            fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
@@ -749,9 +757,9 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
-            // We do not need to sync WAL before compact log, because this request will send a msg to
-            // raft_gc_log thread to delete the entries before this index instead of deleting them in
-            // apply thread directly.
+            // We do not need to sync WAL before compact log, because this request will send
+            // a msg to raft_gc_log thread to delete the entries before this
+            // index instead of deleting them in apply thread directly.
             return false;
         }
         return true;
@@ -779,9 +787,9 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
 /// this struct.
 /// TODO: check whether generator/coroutine is a good choice in this case.
 struct WaitSourceMergeState {
-    /// A flag that indicates whether the source peer has applied to the required
-    /// index. If the source peer is ready, this flag should be set to the region id
-    /// of source peer.
+    /// A flag that indicates whether the source peer has applied to the
+    /// required index. If the source peer is ready, this flag should be set
+    /// to the region id of source peer.
     logs_up_to_date: Arc<AtomicU64>,
 }
 
@@ -858,12 +866,14 @@ where
     tag: String,
 
     /// If the delegate should be stopped from polling.
-    /// A delegate can be stopped in conf change, merge or requested by destroy message.
+    /// A delegate can be stopped in conf change, merge or requested by destroy
+    /// message.
     stopped: bool,
     /// The start time of the current round to execute commands.
     handle_start: Option<Instant>,
-    /// Set to true when removing itself because of `ConfChangeType::RemoveNode`, and then
-    /// any following committed logs in same Ready should be applied failed.
+    /// Set to true when removing itself because of
+    /// `ConfChangeType::RemoveNode`, and then any following committed logs
+    /// in same Ready should be applied failed.
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
@@ -871,25 +881,28 @@ where
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
-    /// Indicates the peer is in merging, if that compact log won't be performed.
+    /// Indicates the peer is in merging, if that compact log won't be
+    /// performed.
     is_merging: bool,
     /// Records the epoch version after the last merge.
     last_merge_version: u64,
     yield_state: Option<YieldState<EK>>,
-    /// A temporary state that keeps track of the progress of the source peer state when
-    /// CommitMerge is unable to be executed.
+    /// A temporary state that keeps track of the progress of the source peer
+    /// state when CommitMerge is unable to be executed.
     wait_merge_state: Option<WaitSourceMergeState>,
     // ID of last region that reports ready.
     ready_source_region_id: u64,
 
-    /// TiKV writes apply_state to KV RocksDB, in one write batch together with kv data.
+    /// TiKV writes apply_state to KV RocksDB, in one write batch together with
+    /// kv data.
     ///
-    /// If we write it to Raft RocksDB, apply_state and kv data (Put, Delete) are in
-    /// separate WAL file. When power failure, for current raft log, apply_index may synced
-    /// to file, but KV data may not synced to file, so we will lose data.
+    /// If we write it to Raft RocksDB, apply_state and kv data (Put, Delete)
+    /// are in separate WAL file. When power failure, for current raft log,
+    /// apply_index may synced to file, but KV data may not synced to file,
+    /// so we will lose data.
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
-    applied_index_term: u64,
+    applied_term: u64,
     /// The latest flushed applied index.
     last_flush_applied_index: u64,
 
@@ -899,8 +912,9 @@ where
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
 
-    /// Priority in batch system. When applying some commands which have high latency,
-    /// we decrease the priority of current fsm to reduce the impact on other normal commands.
+    /// Priority in batch system. When applying some commands which have high
+    /// latency, we decrease the priority of current fsm to reduce the
+    /// impact on other normal commands.
     priority: Priority,
 
     /// To fetch Raft entries for applying if necessary.
@@ -924,7 +938,7 @@ where
             pending_remove: false,
             last_flush_applied_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
-            applied_index_term: reg.applied_index_term,
+            applied_term: reg.applied_term,
             term: reg.term,
             stopped: false,
             handle_start: None,
@@ -953,7 +967,8 @@ where
         self.id
     }
 
-    /// Handles all the committed_entries, namely, applies the committed entries.
+    /// Handles all the committed_entries, namely, applies the committed
+    /// entries.
     fn handle_raft_committed_entries(
         &mut self,
         apply_ctx: &mut ApplyContext<EK>,
@@ -963,9 +978,9 @@ where
             return;
         }
         apply_ctx.prepare_for(self);
-        // If we send multiple ConfChange commands, only first one will be proposed correctly,
-        // others will be saved as a normal entry with no data, so we must re-propose these
-        // commands again.
+        // If we send multiple ConfChange commands, only first one will be proposed
+        // correctly, others will be saved as a normal entry with no data, so we
+        // must re-propose these commands again.
         apply_ctx.committed_count += committed_entries_drainer.len();
         let mut results = VecDeque::new();
         while let Some(entry) = committed_entries_drainer.next() {
@@ -985,9 +1000,10 @@ where
                 );
             }
 
-            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by `unimplemented!()`,
-            // which can break compatibility (i.e. old version tikv running on data written by new version tikv),
-            // but PD will reject old version tikv join the cluster, so this should not happen.
+            // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
+            // `unimplemented!()`, which can break compatibility (i.e. old version tikv
+            // running on data written by new version tikv), but PD will reject old version
+            // tikv join the cluster, so this should not happen.
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
@@ -1094,7 +1110,7 @@ where
         apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
         self.apply_state.set_applied_index(index);
-        self.applied_index_term = term;
+        self.applied_term = term;
         assert!(term > 0);
 
         // 1. When a peer become leader, it will send an empty entry.
@@ -1237,11 +1253,13 @@ where
     /// Applies raft command.
     ///
     /// An apply operation can fail in the following situations:
-    ///   1. it encounters an error that will occur on all stores, it can continue
-    /// applying next entry safely, like epoch not match for example;
-    ///   2. it encounters an error that may not occur on all stores, in this case
-    /// we should try to apply the entry again or panic. Considering that this
-    /// usually due to disk operation fail, which is rare, so just panic is ok.
+    ///   - it encounters an error that will occur on all stores, it can
+    /// continue applying next entry safely, like epoch not match for
+    /// example;
+    ///   - it encounters an error that may not occur on all stores, in this
+    ///     case we should try to apply the entry again or panic. Considering
+    ///     that this usually due to disk operation fail, which is rare, so just
+    ///     panic is ok.
     fn apply_raft_cmd(
         &mut self,
         ctx: &mut ApplyContext<EK>,
@@ -1256,7 +1274,7 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req) {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
@@ -1302,7 +1320,7 @@ where
         }
 
         self.apply_state.set_applied_index(index);
-        self.applied_index_term = term;
+        self.applied_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
         let should_write = ctx.host.post_exec(
@@ -1358,7 +1376,8 @@ where
         if let Some(epoch) = origin_epoch {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            // The change-epoch behavior **MUST BE** equal to the settings in `admin_cmd_epoch_lookup`
+            // The change-epoch behavior **MUST BE** equal to the settings in
+            // `admin_cmd_epoch_lookup`
             if (epoch_state.change_ver
                 && epoch.get_version() == self.region.get_region_epoch().get_version())
                 || (epoch_state.change_conf_ver
@@ -1618,7 +1637,8 @@ where
         keys::data_key_with_buffer(key, &mut ctx.key_buffer);
         let key = ctx.key_buffer.as_slice();
 
-        // since size_diff_hint is not accurate, so we just skip calculate the value size.
+        // since size_diff_hint is not accurate, so we just skip calculate the value
+        // size.
         self.metrics.size_diff_hint -= key.len() as i64;
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
@@ -2235,9 +2255,9 @@ where
             .mut_splits()
             .set_right_derive(split.get_right_derive());
         admin_req.mut_splits().mut_requests().push(split);
-        // This method is executed only when there are unapplied entries after being restarted.
-        // So there will be no callback, it's OK to return a response that does not matched
-        // with its request.
+        // This method is executed only when there are unapplied entries after being
+        // restarted. So there will be no callback, it's OK to return a response
+        // that does not matched with its request.
         self.exec_batch_split(ctx, &admin_req)
     }
 
@@ -2300,10 +2320,12 @@ where
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
         if right_derive {
-            // So the range of new regions is [old_start_key, split_key1, ..., last_split_key].
+            // So the range of new regions is [old_start_key, split_key1, ...,
+            // last_split_key].
             keys.push_front(derived.get_start_key().to_vec());
         } else {
-            // So the range of new regions is [split_key1, ..., last_split_key, old_end_key].
+            // So the range of new regions is [split_key1, ..., last_split_key,
+            // old_end_key].
             keys.push_back(derived.get_end_key().to_vec());
             derived.set_end_key(keys.front().unwrap().to_vec());
             regions.push(derived.clone());
@@ -2469,7 +2491,7 @@ where
 
         let prepare_merge = req.get_prepare_merge();
         let index = prepare_merge.get_min_index();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
@@ -2519,15 +2541,20 @@ where
     // The target peer should send missing log entries to the source peer.
     //
     // So, the merge process order would be:
-    // 1.   `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source peer fsm
-    // 2.   `on_catch_up_logs_for_merge` in source peer fsm
-    // 3.   if the source peer has already executed the corresponding `on_ready_prepare_merge`, set pending_remove and jump to step 6
-    // 4.   ... (raft append and apply logs)
-    // 5.   `on_ready_prepare_merge` in source peer fsm and set pending_remove (means source region has finished applying all logs)
-    // 6.   `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and send Noop to trigger the target apply fsm)
-    // 7.   resume `exec_commit_merge` in target apply fsm
-    // 8.   `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source peer fsm
-    // 9.   `on_merge_result` in source peer fsm (destroy itself)
+    // - `exec_commit_merge` in target apply fsm and send `CatchUpLogs` to source
+    //   peer fsm
+    // - `on_catch_up_logs_for_merge` in source peer fsm
+    // - if the source peer has already executed the corresponding
+    //   `on_ready_prepare_merge`, set pending_remove and jump to step 6
+    // - ... (raft append and apply logs)
+    // - `on_ready_prepare_merge` in source peer fsm and set pending_remove (means
+    //   source region has finished applying all logs)
+    // - `logs_up_to_date_for_merge` in source apply fsm (destroy its apply fsm and
+    //   send Noop to trigger the target apply fsm)
+    // - resume `exec_commit_merge` in target apply fsm
+    // - `on_ready_commit_merge` in target peer fsm and send `MergeResult` to source
+    //   peer fsm
+    // - `on_merge_result` in source peer fsm (destroy itself)
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext<EK>,
@@ -2713,7 +2740,7 @@ where
 
         let compact_index = req.get_compact_log().get_compact_index();
         let resp = AdminResponse::default();
-        let first_index = peer_storage::first_index(&self.apply_state);
+        let first_index = entry_storage::first_index(&self.apply_state);
         if compact_index <= first_index {
             debug!(
                 "compact index <= first index, no need to compact";
@@ -3011,7 +3038,7 @@ pub struct Registration {
     pub id: u64,
     pub term: u64,
     pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
+    pub applied_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
     pub is_merging: bool,
@@ -3024,7 +3051,7 @@ impl Registration {
             id: peer.peer_id(),
             term: peer.term(),
             apply_state: peer.get_store().apply_state().clone(),
-            applied_index_term: peer.get_store().applied_index_term(),
+            applied_term: peer.get_store().applied_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
             is_merging: peer.pending_merge_state.is_some(),
@@ -3042,7 +3069,8 @@ where
     pub index: u64,
     pub term: u64,
     pub cb: Callback<S>,
-    /// `propose_time` is set to the last time when a peer starts to renew lease.
+    /// `propose_time` is set to the last time when a peer starts to renew
+    /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
 }
@@ -3054,8 +3082,8 @@ pub struct Destroy {
     merge_from_snapshot: bool,
 }
 
-/// A message that asks the delegate to apply to the given logs and then reply to
-/// target mailbox.
+/// A message that asks the delegate to apply to the given logs and then reply
+/// to target mailbox.
 #[derive(Default, Debug)]
 pub struct CatchUpLogs {
     /// The target region to be notified when given logs are applied.
@@ -3110,7 +3138,7 @@ impl GenSnapTask {
     pub fn generate_and_schedule_snapshot<EK>(
         self,
         kv_snap: EK::Snapshot,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         region_sched: &Scheduler<RegionTask<EK::Snapshot>>,
     ) -> Result<()>
@@ -3123,7 +3151,7 @@ impl GenSnapTask {
             region_id: self.region_id,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             canceled: self.canceled,
             // This snapshot may be held for a long time, which may cause too many
@@ -3281,7 +3309,7 @@ where
 {
     pub region_id: u64,
     pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
+    pub applied_term: u64,
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
@@ -3336,7 +3364,8 @@ where
         )
     }
 
-    /// Handles peer registration. When a peer is created, it will register an apply delegate.
+    /// Handles peer registration. When a peer is created, it will register an
+    /// apply delegate.
     fn handle_registration(&mut self, reg: Registration) {
         info!(
             "re-register to apply delegates";
@@ -3350,7 +3379,8 @@ where
         self.delegate = ApplyDelegate::from_registration(reg);
     }
 
-    /// Handles apply tasks, and uses the apply delegate to handle the committed entries.
+    /// Handles apply tasks, and uses the apply delegate to handle the committed
+    /// entries.
     fn handle_apply(&mut self, apply_ctx: &mut ApplyContext<EK>, mut apply: Apply<EK::Snapshot>) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
@@ -3473,7 +3503,8 @@ where
         self.delegate.destroy(ctx);
     }
 
-    /// Handles peer destroy. When a peer is destroyed, the corresponding apply delegate should be removed too.
+    /// Handles peer destroy. When a peer is destroyed, the corresponding apply
+    /// delegate should be removed too.
     fn handle_destroy(&mut self, ctx: &mut ApplyContext<EK>, d: Destroy) {
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
@@ -3544,8 +3575,9 @@ where
             "region_id" => region_id,
             "peer_id" => self.delegate.id(),
         );
-        // The source peer fsm will be destroyed when the target peer executes `on_ready_commit_merge`
-        // and sends `merge result` to the source peer fsm.
+        // The source peer fsm will be destroyed when the target peer executes
+        // `on_ready_commit_merge` and sends `merge result` to the source peer
+        // fsm.
         self.destroy(ctx);
         catch_up_logs
             .logs_up_to_date
@@ -3591,7 +3623,7 @@ where
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
             apply_ctx.engine.snapshot(),
-            self.delegate.applied_index_term,
+            self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
         ) {
@@ -3649,12 +3681,13 @@ where
         let resp = match compare_region_epoch(
             &region_epoch,
             &self.delegate.region,
-            false, /* check_conf_ver */
-            true,  /* check_ver */
-            true,  /* include_region */
+            false, // check_conf_ver
+            true,  // check_ver
+            true,  // include_region
         ) {
             Ok(()) => {
-                // Commit the writebatch for ensuring the following snapshot can get all previous writes.
+                // Commit the writebatch for ensuring the following snapshot can get all
+                // previous writes.
                 if apply_ctx.kv_wb().count() > 0 {
                     apply_ctx.commit(&mut self.delegate);
                 }
@@ -3761,7 +3794,7 @@ where
                 } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(_, f) => {
-                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
+                    let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
                 }
             }
@@ -4265,8 +4298,8 @@ mod memtrace {
         S: Snapshot,
     {
         fn heap_size(&self) -> usize {
-            // Some fields of `PendingCmd` are on stack, but ignore them because they are just
-            // some small boxed closures.
+            // Some fields of `PendingCmd` are on stack, but ignore them because they are
+            // just some small boxed closures.
             self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
         }
     }
@@ -4369,13 +4402,7 @@ mod tests {
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, KvTestEngine) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let engine = new_engine(
-            path.path().join("db").to_str().unwrap(),
-            None,
-            ALL_CFS,
-            None,
-        )
-        .unwrap();
+        let engine = new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS).unwrap();
         (path, engine)
     }
 
@@ -4429,7 +4456,7 @@ mod tests {
                 id: Default::default(),
                 term: Default::default(),
                 apply_state: Default::default(),
-                applied_index_term: Default::default(),
+                applied_term: Default::default(),
                 region: Default::default(),
                 pending_request_snapshot_count: Default::default(),
                 is_merging: Default::default(),
@@ -4444,7 +4471,7 @@ mod tests {
                 id: self.id,
                 term: self.term,
                 apply_state: self.apply_state.clone(),
-                applied_index_term: self.applied_index_term,
+                applied_term: self.applied_term,
                 region: self.region.clone(),
                 pending_request_snapshot_count: self.pending_request_snapshot_count.clone(),
                 is_merging: self.is_merging,
@@ -4646,7 +4673,7 @@ mod tests {
         let mut reg = Registration {
             id: 1,
             term: 4,
-            applied_index_term: 5,
+            applied_term: 5,
             ..Default::default()
         };
         reg.region.set_id(2);
@@ -4659,7 +4686,7 @@ mod tests {
             assert!(!delegate.pending_remove);
             assert_eq!(delegate.apply_state, reg.apply_state);
             assert_eq!(delegate.term, reg.term);
-            assert_eq!(delegate.applied_index_term, reg.applied_index_term);
+            assert_eq!(delegate.applied_term, reg.applied_term);
         });
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4678,7 +4705,7 @@ mod tests {
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
@@ -4702,7 +4729,7 @@ mod tests {
         });
         let cc_resp = cc_rx.try_recv().unwrap();
         assert!(cc_resp.get_header().get_error().has_stale_command());
-        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         // Make sure Apply and Snapshot are in the same batch.
         let (snap_tx, _) = mpsc::sync_channel(0);
@@ -4733,12 +4760,13 @@ mod tests {
         assert_eq!(apply_res.apply_state, apply_state);
         assert_eq!(apply_res.apply_state.get_applied_index(), 5);
         assert!(apply_res.exec_res.is_empty());
-        // empty entry will make applied_index step forward and should write apply state to engine.
+        // empty entry will make applied_index step forward and should write apply state
+        // to engine.
         assert_eq!(apply_res.metrics.written_keys, 1);
-        assert_eq!(apply_res.applied_index_term, 5);
+        assert_eq!(apply_res.applied_term, 5);
         validate(&router, 2, |delegate| {
             assert_eq!(delegate.term, 11);
-            assert_eq!(delegate.applied_index_term, 5);
+            assert_eq!(delegate.applied_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 5);
             assert_eq!(
                 delegate.apply_state.get_applied_index(),
@@ -4780,7 +4808,7 @@ mod tests {
             "{:?}",
             resp
         );
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         system.shutdown();
     }
@@ -4973,7 +5001,13 @@ mod tests {
             }
         }
 
-        fn pre_exec_admin(&self, _: &mut ObserverContext<'_>, req: &AdminRequest) -> bool {
+        fn pre_exec_admin(
+            &self,
+            _: &mut ObserverContext<'_>,
+            req: &AdminRequest,
+            _: u64,
+            _: u64,
+        ) -> bool {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog
                 && self.filter_compact_log.deref().load(Ordering::SeqCst)
@@ -5079,7 +5113,7 @@ mod tests {
         assert_eq!(engine.get_value(&dk_k2).unwrap().unwrap(), b"v1");
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
         validate(&router, 1, |delegate| {
-            assert_eq!(delegate.applied_index_term, 1);
+            assert_eq!(delegate.applied_term, 1);
             assert_eq!(delegate.apply_state.get_applied_index(), 1);
         });
         fetch_apply_res(&rx);
@@ -5092,7 +5126,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.region_id, 1);
         assert_eq!(apply_res.apply_state.get_applied_index(), 2);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert!(apply_res.exec_res.is_empty());
         assert!(apply_res.metrics.written_bytes >= 5);
         assert_eq!(apply_res.metrics.written_keys, 2);
@@ -5120,7 +5154,7 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_epoch_not_match());
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 3);
 
         let put_entry = EntryBuilder::new(4, 2)
@@ -5141,7 +5175,7 @@ mod tests {
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_key_not_in_region());
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 2);
+        assert_eq!(apply_res.applied_term, 2);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         // a writebatch should be atomic.
         assert_eq!(engine.get_value(&dk_k3).unwrap().unwrap(), b"v1");
@@ -5235,7 +5269,7 @@ mod tests {
         assert!(apply_res.exec_res.is_empty());
         // The entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 8);
 
         // UploadSST
@@ -5312,15 +5346,15 @@ mod tests {
         // The region was rescheduled low-priority becasuee of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 9);
         // The region will yield after timeout.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 10);
         // The third entry should be applied now.
         let apply_res = fetch_apply_res(&rx);
-        assert_eq!(apply_res.applied_index_term, 3);
+        assert_eq!(apply_res.applied_term, 3);
         assert_eq!(apply_res.apply_state.get_applied_index(), 11);
 
         let write_batch_max_keys = <KvTestEngine as WriteBatchExt>::WRITE_BATCH_MAX_KEYS;
@@ -5340,7 +5374,8 @@ mod tests {
             capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         let index = write_batch_max_keys + 11;
-        // The region was rescheduled to normal-priority handler. Discard the first apply_res.
+        // The region was rescheduled to normal-priority handler. Discard the first
+        // apply_res.
         fetch_apply_res(&rx);
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index as u64);
@@ -5396,9 +5431,10 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
-        // Test whether put commands and ingest commands are applied to engine in a correct order.
-        // We will generate 5 entries which are put, ingest, put, ingest, put respectively. For a same key,
-        // it can exist in multiple entries or in a single entries. We will test all all the possible
+        // Test whether put commands and ingest commands are applied to engine in a
+        // correct order. We will generate 5 entries which are put, ingest, put,
+        // ingest, put respectively. For a same key, it can exist in multiple
+        // entries or in a single entries. We will test all all the possible
         // keys exsiting combinations.
         let mut keys = Vec::new();
         let keys_count = 1 << 5;
@@ -5515,8 +5551,8 @@ mod tests {
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
         let mut res = fetch_apply_res(&rx);
-        // There may be one or two ApplyRes which depends on whether these two apply msgs
-        // are batched together.
+        // There may be one or two ApplyRes which depends on whether these two apply
+        // msgs are batched together.
         if res.apply_state.get_applied_index() == 3 {
             res = fetch_apply_res(&rx);
         }
@@ -5689,7 +5725,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
@@ -5708,7 +5744,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // We can get exec result of CompactLog.
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(
@@ -5726,7 +5762,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         // applied_index can still be advanced.
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // We can't get exec result of ComputeHash.
         assert_eq!(apply_res.exec_res.len(), 0);
         obs.filter_consistency_check.store(false, Ordering::SeqCst);
@@ -5744,7 +5780,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![split], vec![])));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         let (_, r8) = if let ExecResult::SplitRegion {
             regions,
             derived: _,
@@ -5768,7 +5804,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![merge], vec![])));
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
-        assert_eq!(apply_res.applied_index_term, 1);
+        assert_eq!(apply_res.applied_term, 1);
         // PrepareMerge will trigger commit.
         let state: RaftApplyState = engine
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
@@ -5946,29 +5982,29 @@ mod tests {
         let mut region = Region::default();
 
         // Check uuid and cf name
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         sst.set_cf_name(CF_DEFAULT.to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap();
         sst.set_cf_name("test".to_owned());
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_cf_name(CF_WRITE.to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region id
         region.set_id(1);
         sst.set_region_id(2);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_region_id(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region epoch
         region.mut_region_epoch().set_conf_ver(1);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_conf_ver(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
         region.mut_region_epoch().set_version(1);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_version(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
@@ -5977,9 +6013,9 @@ mod tests {
         region.set_end_key(vec![8]);
         sst.mut_range().set_start(vec![1]);
         sst.mut_range().set_end(vec![8]);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_range().set_start(vec![2]);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_range().set_end(vec![7]);
         check_sst_for_ingestion(&sst, &region).unwrap();
     }
@@ -6281,7 +6317,8 @@ mod tests {
         let res = panic_hook::recover_safe(|| {
             let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
             panic!("Don't abort");
-            // It would abort and fail if there was a double-panic in PendingCmd dtor.
+            // It would abort and fail if there was a double-panic in PendingCmd
+            // dtor.
         });
         res.unwrap_err();
     }

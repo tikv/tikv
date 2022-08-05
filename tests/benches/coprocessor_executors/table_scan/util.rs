@@ -8,7 +8,7 @@ use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
 use tidb_query_executors::{interface::*, BatchTableScanExecutor};
 use tikv::{
-    coprocessor::{dag::TiKvStorage, RequestHandler},
+    coprocessor::{dag::TikvStorage, RequestHandler},
     storage::{RocksEngine, Statistics, Store as TxnStore},
 };
 use tipb::ColumnInfo;
@@ -33,7 +33,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         _: (),
     ) -> Self::E {
         let mut executor = BatchTableScanExecutor::new(
-            black_box(TiKvStorage::new(
+            black_box(TikvStorage::new(
                 ToTxnStore::<Self::T>::to_store(store),
                 false,
             )),
@@ -53,12 +53,12 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
     }
 }
 
-pub struct TableScanExecutorDAGBuilder<T: TxnStore + 'static> {
+pub struct TableScanExecutorDagBuilder<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
-    for TableScanExecutorDAGBuilder<T>
+impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDagHandlerBuilder
+    for TableScanExecutorDagBuilder<T>
 {
     type T = T;
     type P = TableScanParam;
@@ -77,4 +77,4 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorDAGHandlerBuilder
 
 pub type BatchTableScanNext1024Bencher<T> =
     scan_bencher::BatchScanNext1024Bencher<BatchTableScanExecutorBuilder<T>>;
-pub type TableScanDAGBencher<T> = scan_bencher::ScanDAGBencher<TableScanExecutorDAGBuilder<T>>;
+pub type TableScanDagBencher<T> = scan_bencher::ScanDagBencher<TableScanExecutorDagBuilder<T>>;

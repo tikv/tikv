@@ -19,7 +19,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 
 #[test]
 fn test_update_config() {
-    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
@@ -33,23 +33,23 @@ fn test_update_config() {
 
     // update not support config
     let res = cfg_controller.update(change("server.addr", "localhost:3000"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update to invalid config
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // bad update request
     let res = cfg_controller.update(change("xxx.yyy", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raftstore.xxx", "0"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raftstore.raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    res.unwrap_err();
     let res = cfg_controller.update(change("raft-log-gc-threshold", "10MB"));
-    assert!(res.is_err());
+    res.unwrap_err();
     assert_eq!(cfg_controller.get_current(), cfg);
 }
 
@@ -68,7 +68,7 @@ fn test_dispatch_change() {
         }
     }
 
-    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
@@ -89,7 +89,7 @@ fn test_dispatch_change() {
 
 #[test]
 fn test_write_update_to_file() {
-    let (mut cfg, tmp_dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, tmp_dir) = TikvConfig::with_tmp().unwrap();
     cfg.cfg_path = tmp_dir.path().join("cfg_file").to_str().unwrap().to_owned();
     {
         let c = r#"
@@ -201,7 +201,7 @@ fn test_update_from_toml_file() {
         }
     }
 
-    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
@@ -223,8 +223,9 @@ raft-log-gc-threshold = 2000
         50
     );
     // config update from config file
-    assert!(cfg_controller.update_from_toml_file().is_ok());
-    // after update this configration item should be constant with the modified configuration file
+    cfg_controller.update_from_toml_file().unwrap();
+    // after update this configration item should be constant with the modified
+    // configuration file
     assert_eq!(
         cfg_controller
             .get_current()

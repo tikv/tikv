@@ -5,14 +5,16 @@ use std::sync::{
     Arc, Mutex,
 };
 
+#[derive(Debug)]
 struct LatestTablet<EK> {
     data: Mutex<Option<EK>>,
     version: AtomicU64,
 }
 
-/// Tablet may change during split, merge and applying snapshot. So we need a shared value to
-/// reflect the latest tablet. `CachedTablet` provide cache that can speed up common access.
-#[derive(Clone)]
+/// Tablet may change during split, merge and applying snapshot. So we need a
+/// shared value to reflect the latest tablet. `CachedTablet` provide cache that
+/// can speed up common access.
+#[derive(Clone, Debug)]
 pub struct CachedTablet<EK> {
     latest: Arc<LatestTablet<EK>>,
     cache: Option<EK>,
@@ -33,12 +35,12 @@ impl<EK: Clone> CachedTablet<EK> {
     }
 
     pub fn set(&mut self, data: EK) {
-        let mut guard = self.latest.data.lock().unwrap();
-        *guard = Some(data.clone());
-        let v = self.latest.version.fetch_add(1, Ordering::Relaxed);
-        drop(guard);
+        self.version = {
+            let mut latest_data = self.latest.data.lock().unwrap();
+            *latest_data = Some(data.clone());
+            self.latest.version.fetch_add(1, Ordering::Relaxed) + 1
+        };
         self.cache = Some(data);
-        self.version = v;
     }
 
     /// Get the tablet from cache without checking if it's up to date.
@@ -51,9 +53,9 @@ impl<EK: Clone> CachedTablet<EK> {
     #[inline]
     pub fn latest(&mut self) -> Option<&EK> {
         if self.latest.version.load(Ordering::Relaxed) > self.version {
-            let guard = self.latest.data.lock().unwrap();
+            let latest_data = self.latest.data.lock().unwrap();
             self.version = self.latest.version.load(Ordering::Relaxed);
-            self.cache = guard.clone();
+            self.cache = latest_data.clone();
         }
         self.cache()
     }
@@ -76,7 +78,14 @@ mod tests {
         // Setting tablet will refresh cache immediately.
         cached_tablet.set(2);
         assert_eq!(cached_tablet.cache().cloned(), Some(2));
-        assert_eq!(cached_tablet.latest().cloned(), Some(2));
+
+        // Test `latest()` will use cache.
+        // Unsafe modify the data.
+        let old_data = *cached_tablet.latest.data.lock().unwrap();
+        *cached_tablet.latest.data.lock().unwrap() = Some(0);
+        assert_eq!(cached_tablet.latest().cloned(), old_data);
+        // Restore the data.
+        *cached_tablet.latest.data.lock().unwrap() = old_data;
 
         let mut cloned = cached_tablet.clone();
         // Clone should reuse cache.

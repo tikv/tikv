@@ -19,7 +19,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::Io(..) => "io",
         Error::Grpc(..) => "grpc",
         Error::Uuid(..) => "uuid",
-        Error::RocksDB(..) => "rocksdb",
+        Error::RocksDb(..) => "rocksdb",
         Error::EngineTraits(..) => "engine_traits",
         Error::ParseIntError(..) => "parse_int",
         Error::FileExists(..) => "file_exists",
@@ -52,7 +52,7 @@ pub enum Error {
 
     // FIXME: Remove concrete 'rocks' type
     #[error("RocksDB {0}")]
-    RocksDB(String),
+    RocksDb(String),
 
     #[error("Engine {0:?}")]
     EngineTraits(#[from] engine_traits::Error),
@@ -140,7 +140,7 @@ impl Error {
 
 impl From<String> for Error {
     fn from(msg: String) -> Self {
-        Self::RocksDB(msg)
+        Self::RocksDb(msg)
     }
 }
 
@@ -161,7 +161,7 @@ impl ErrorCodeExt for Error {
             Error::Grpc(_) => error_code::sst_importer::GRPC,
             Error::Uuid(_) => error_code::sst_importer::UUID,
             Error::Future(_) => error_code::sst_importer::FUTURE,
-            Error::RocksDB(_) => error_code::sst_importer::ROCKSDB,
+            Error::RocksDb(_) => error_code::sst_importer::ROCKSDB,
             Error::EngineTraits(e) => e.error_code(),
             Error::ParseIntError(_) => error_code::sst_importer::PARSE_INT_ERROR,
             Error::FileExists(..) => error_code::sst_importer::FILE_EXISTS,

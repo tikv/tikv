@@ -18,8 +18,9 @@ impl<E: KvEngine> Observer<E> {
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a low priority
-        // to let it be the last observer and avoid affecting other observers
+        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a
+        // low priority to let it be the last observer and avoid affecting other
+        // observers
         coprocessor_host
             .registry
             .register_cmd_observer(1000, BoxCmdObserver::new(self.clone()));
@@ -84,7 +85,8 @@ impl<E: KvEngine> CmdObserver<E> for Observer<E> {
 impl<E: KvEngine> RoleObserver for Observer<E> {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         // Stop to advance resolved ts after peer steps down to follower or candidate.
-        // Do not need to check observe id because we expect all role change events are scheduled in order.
+        // Do not need to check observe id because we expect all role change events are
+        // scheduled in order.
         if role_change.state != StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::DeRegisterRegion {
                 region_id: ctx.region().id,
@@ -102,9 +104,9 @@ impl<E: KvEngine> RegionChangeObserver for Observer<E> {
         event: RegionChangeEvent,
         role: StateRole,
     ) {
-        // If the peer is not leader, it must has not registered the observe region or it is deregistering
-        // the observe region, so don't need to send `RegionUpdated`/`RegionDestroyed` to update the observe
-        // region
+        // If the peer is not leader, it must has not registered the observe region or
+        // it is deregistering the observe region, so don't need to send
+        // `RegionUpdated`/`RegionDestroyed` to update the observe region
         if role != StateRole::Leader {
             return;
         }

@@ -15,7 +15,8 @@ pub trait BlobConfig: 'static + Send + Sync {
 /// It is identity to [external_storage::UnpinReader],
 /// only for decoupling external_storage and cloud package.
 ///
-/// See the documentation of [external_storage::UnpinReader] for why those wrappers exists.
+/// See the documentation of [external_storage::UnpinReader] for why those
+/// wrappers exists.
 pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
 
 impl AsyncRead for PutResource {

@@ -81,7 +81,7 @@ fn check_nanos_part(nanos: u32) -> Result<u32> {
 
 #[inline]
 fn check_nanos(nanos: i64) -> Result<i64> {
-    if nanos < -MAX_NANOS || nanos > MAX_NANOS {
+    if !(-MAX_NANOS..=MAX_NANOS).contains(&nanos) {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)
@@ -150,9 +150,9 @@ mod parser {
         Ok((rest, hhmmss))
     }
 
-    /// A string can match datetime format only if it starts with a series of digits
-    /// whose length matches the full format of DateTime literal (12, 14)
-    /// or the string starts with a date literal.
+    /// A string can match datetime format only if it starts with a series of
+    /// digits whose length matches the full format of DateTime literal (12,
+    /// 14) or the string starts with a date literal.
     fn format_can_match_datetime(input: &str) -> IResult<(), (), ()> {
         let (rest, digits) = digit1(input)?;
 
@@ -253,8 +253,9 @@ mod parser {
                 ))
             });
 
-        // In order to keep compatible with TiDB, when input string can only be partially parsed by `hhmmss_compact`
-        // and it can match the datetime format, we fallback to parse it using datetime format.
+        // In order to keep compatible with TiDB, when input string can only be
+        // partially parsed by `hhmmss_compact` and it can match the datetime
+        // format, we fallback to parse it using datetime format.
         if truncated_parse && fallback_to_datetime {
             return hhmmss_datetime(ctx, rest, fsp).map_or(None, |(_, duration)| Some(duration));
         }
@@ -363,7 +364,8 @@ impl Duration {
     }
 
     /// Returns the number of seconds contained by this Duration as f64.
-    /// The returned value does include the fractional (nanosecond) part of the duration.
+    /// The returned value does include the fractional (nanosecond) part of the
+    /// duration.
     #[inline]
     pub fn to_secs_f64(self) -> f64 {
         self.nanos as f64 / NANOS_PER_SEC as f64
@@ -507,7 +509,8 @@ impl Duration {
         Ok(Duration { nanos, fsp })
     }
 
-    /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
+    /// Checked duration addition. Computes self + rhs, returning None if
+    /// overflow occurred.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
         let nanos = self.nanos.checked_add(rhs.nanos)?;
         check_nanos(nanos).ok()?;
@@ -517,7 +520,8 @@ impl Duration {
         })
     }
 
-    /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
+    /// Checked duration subtraction. Computes self - rhs, returning None if
+    /// overflow occurred.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
         let nanos = self.nanos.checked_sub(rhs.nanos)?;
         check_nanos(nanos).ok()?;
@@ -699,7 +703,7 @@ pub trait DurationDecoder: NumberDecoder {
 
 impl<T: BufferReader> DurationDecoder for T {}
 
-impl crate::codec::data_type::AsMySQLBool for Duration {
+impl crate::codec::data_type::AsMySqlBool for Duration {
     #[inline]
     fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())

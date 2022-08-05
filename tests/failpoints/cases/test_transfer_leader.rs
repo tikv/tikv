@@ -118,22 +118,20 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
 
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(
-                Key::from_raw(b"key"),
-                PessimisticLock {
-                    primary: b"key".to_vec().into_boxed_slice(),
-                    start_ts: 10.into(),
-                    ttl: 1000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 20.into(),
-                },
-            )])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(
+            Key::from_raw(b"key"),
+            PessimisticLock {
+                primary: b"key".to_vec().into_boxed_slice(),
+                start_ts: 10.into(),
+                ttl: 1000,
+                for_update_ts: 10.into(),
+                min_commit_ts: 20.into(),
+            },
+        )])
+        .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
     let env = Arc::new(Environment::new(1));
@@ -156,7 +154,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
     thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     for _ in 0..transfer_msg_count {
         cluster.transfer_leader(1, new_peer(2, 2));
@@ -197,22 +195,20 @@ fn test_delete_lock_proposed_before_proposing_locks() {
 
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(
-                Key::from_raw(b"key"),
-                PessimisticLock {
-                    primary: b"key".to_vec().into_boxed_slice(),
-                    start_ts: 10.into(),
-                    ttl: 1000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 20.into(),
-                },
-            )])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(
+            Key::from_raw(b"key"),
+            PessimisticLock {
+                primary: b"key".to_vec().into_boxed_slice(),
+                start_ts: 10.into(),
+                ttl: 1000,
+                for_update_ts: 10.into(),
+                min_commit_ts: 20.into(),
+            },
+        )])
+        .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
     let env = Arc::new(Environment::new(1));
@@ -235,7 +231,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
     thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     cluster.transfer_leader(1, new_peer(2, 2));
     thread::sleep(Duration::from_millis(200));
@@ -273,30 +269,28 @@ fn test_read_lock_after_become_follower() {
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
 
-    // put kv after get start ts, then this commit will cause a PessimisticLockNotFound
-    // if the pessimistic lock get missing.
+    // put kv after get start ts, then this commit will cause a
+    // PessimisticLockNotFound if the pessimistic lock get missing.
     cluster.must_put(b"key", b"value");
 
     let leader = cluster.leader_of_region(region_id).unwrap();
     let snapshot = cluster.must_get_snapshot_of_region(region_id);
     let txn_ext = snapshot.txn_ext.unwrap();
     let for_update_ts = block_on(cluster.pd_client.get_tso()).unwrap();
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(
-                Key::from_raw(b"key"),
-                PessimisticLock {
-                    primary: b"key".to_vec().into_boxed_slice(),
-                    start_ts,
-                    ttl: 1000,
-                    for_update_ts,
-                    min_commit_ts: for_update_ts,
-                },
-            )])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(
+            Key::from_raw(b"key"),
+            PessimisticLock {
+                primary: b"key".to_vec().into_boxed_slice(),
+                start_ts,
+                ttl: 1000,
+                for_update_ts,
+                min_commit_ts: for_update_ts,
+            },
+        )])
+        .unwrap();
 
     let addr = cluster.sim.rl().get_addr(3);
     let env = Arc::new(Environment::new(1));
@@ -324,7 +318,7 @@ fn test_read_lock_after_become_follower() {
     thread::spawn(move || tx.send(client.kv_prewrite(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     // And pause applying the write on the leader.
     fail::cfg("on_apply_write_cmd", "pause").unwrap();
@@ -334,6 +328,7 @@ fn test_read_lock_after_become_follower() {
     // Transfer leader will not make the command fail.
     fail::remove("txn_before_process_write");
     let resp = resp_rx.recv().unwrap();
-    // The term has changed, so we should get a stale command error instead a PessimisticLockNotFound.
+    // The term has changed, so we should get a stale command error instead a
+    // PessimisticLockNotFound.
     assert!(resp.get_region_error().has_stale_command());
 }

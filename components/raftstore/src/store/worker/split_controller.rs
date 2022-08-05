@@ -60,7 +60,8 @@ where
 }
 
 // This function uses the distributed/parallel reservoir sampling algorithm.
-// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple `key_ranges_provider` with the same possibility.
+// It will sample min(sample_num, all_key_ranges_num) key ranges from multiple
+// `key_ranges_provider` with the same possibility.
 fn sample<F, T>(
     sample_num: usize,
     mut key_ranges_providers: Vec<T>,
@@ -72,7 +73,8 @@ where
     let mut sampled_key_ranges = vec![];
     // Retain the non-empty key ranges.
     // `key_ranges_provider` may return an empty key ranges vector, which will cause
-    // the later sampling to fall into a dead loop. So we need to filter it out here.
+    // the later sampling to fall into a dead loop. So we need to filter it out
+    // here.
     key_ranges_providers
         .retain_mut(|key_ranges_provider| !key_ranges_getter(key_ranges_provider).is_empty());
     if key_ranges_providers.is_empty() {
@@ -109,8 +111,9 @@ where
         // Generate a random number in [1, all_key_ranges_num].
         // Starting from 1 is to achieve equal probability.
         // For example, for a `prefix_sum` like [1, 2, 3, 4],
-        // if we generate a random number in [0, 4], the probability of choosing the first index is 0.4
-        // rather than 0.25 due to that 0 and 1 will both make `binary_search` get the same result.
+        // if we generate a random number in [0, 4], the probability of choosing the
+        // first index is 0.4 rather than 0.25 due to that 0 and 1 will both
+        // make `binary_search` get the same result.
         let i = prefix_sum
             .binary_search(&rng.gen_range(1..=all_key_ranges_num))
             .unwrap_or_else(|i| i);
@@ -170,7 +173,8 @@ impl From<Vec<KeyRange>> for Samples {
 }
 
 impl Samples {
-    // evaluate the samples according to the given key range, it will update the sample's left, right and contained counter.
+    // evaluate the samples according to the given key range, it will update the
+    // sample's left, right and contained counter.
     fn evaluate(&mut self, key_range: &KeyRange) {
         for mut sample in self.0.iter_mut() {
             let order_start = if key_range.start_key.is_empty() {
@@ -210,8 +214,9 @@ impl Samples {
             }
             let evaluated_key_num = (sample.contained + evaluated_key_num_lr) as f64;
 
-            // The balance score is the difference in the number of requested keys between the left and right of a sample key.
-            // The smaller the balance score, the more balanced the load will be after this splitting.
+            // The balance score is the difference in the number of requested keys between
+            // the left and right of a sample key. The smaller the balance
+            // score, the more balanced the load will be after this splitting.
             let balance_score =
                 (sample.left as f64 - sample.right as f64).abs() / evaluated_key_num_lr as f64;
             LOAD_BASE_SPLIT_SAMPLE_VEC
@@ -222,8 +227,9 @@ impl Samples {
                 continue;
             }
 
-            // The contained score is the ratio of a sample key that are contained in the requested key.
-            // The larger the contained score, the more RPCs the cluster will receive after this splitting.
+            // The contained score is the ratio of a sample key that are contained in the
+            // requested key. The larger the contained score, the more RPCs the
+            // cluster will receive after this splitting.
             let contained_score = sample.contained as f64 / evaluated_key_num;
             LOAD_BASE_SPLIT_SAMPLE_VEC
                 .with_label_values(&["contained_score"])
@@ -233,8 +239,9 @@ impl Samples {
                 continue;
             }
 
-            // We try to find a split key that has the smallest balance score and the smallest contained score
-            // to make the splitting keep the load balanced while not increasing too many RPCs.
+            // We try to find a split key that has the smallest balance score and the
+            // smallest contained score to make the splitting keep the load
+            // balanced while not increasing too many RPCs.
             let final_score = balance_score + contained_score;
             if final_score < best_score {
                 best_index = index as i32;
@@ -244,7 +251,7 @@ impl Samples {
         if best_index >= 0 {
             return self.0[best_index as usize].key.clone();
         }
-        return vec![];
+        vec![]
     }
 }
 
@@ -295,13 +302,14 @@ impl Recorder {
 
     // collect the split keys from the recorded key_ranges.
     // This will start a second-level sampling on the previous sampled key ranges,
-    // evaluate the samples according to the given key range, and compute the split keys finally.
+    // evaluate the samples according to the given key range, and compute the split
+    // keys finally.
     fn collect(&self, config: &SplitConfig) -> Vec<u8> {
         let sampled_key_ranges = sample(config.sample_num, self.key_ranges.clone(), |x| x);
         let mut samples = Samples::from(sampled_key_ranges);
         let recorded_key_ranges: Vec<&KeyRange> = self.key_ranges.iter().flatten().collect();
-        // Because we need to observe the number of `no_enough_key` of all the actual keys,
-        // so we do this check after the samples are calculated.
+        // Because we need to observe the number of `no_enough_key` of all the actual
+        // keys, so we do this check after the samples are calculated.
         if (recorded_key_ranges.len() as u64) < config.sample_threshold {
             LOAD_BASE_SPLIT_EVENT
                 .no_enough_sampled_key
@@ -315,8 +323,8 @@ impl Recorder {
     }
 }
 
-// RegionInfo will maintain key_ranges with sample_num length by reservoir sampling.
-// And it will save qps num and peer.
+// RegionInfo will maintain key_ranges with sample_num length by reservoir
+// sampling. And it will save qps num and peer.
 #[derive(Debug, Clone)]
 pub struct RegionInfo {
     pub sample_num: usize,
@@ -378,7 +386,8 @@ pub struct ReadStats {
     //   2. add_query_num_batch
     //   3. add_flow
     // Among these three methods, `add_flow` will not update `key_ranges` of `RegionInfo`,
-    // and due to this, an `RegionInfo` without `key_ranges` may occur. The caller should be aware of this.
+    // and due to this, an `RegionInfo` without `key_ranges` may occur. The caller should be aware
+    // of this.
     pub region_infos: HashMap<u64, RegionInfo>,
     pub sample_num: usize,
     pub region_buckets: HashMap<u64, BucketStat>,
@@ -525,7 +534,8 @@ impl SplitInfo {
     }
 
     // Create a SplitInfo with the given region_id, peer, start_key and end_key.
-    // This is used to split the region on half within the specified start and end keys later.
+    // This is used to split the region on half within the specified start and end
+    // keys later.
     fn with_start_end_key(
         region_id: u64,
         peer: Peer,
@@ -545,7 +555,7 @@ impl SplitInfo {
 #[derive(PartialEq, Debug)]
 pub enum SplitConfigChange {
     Noop,
-    UpdateRegionCPUCollector(bool),
+    UpdateRegionCpuCollector(bool),
 }
 
 pub struct AutoSplitController {
@@ -643,7 +653,8 @@ impl AutoSplitController {
             >= self.cfg.region_cpu_overload_threshold_ratio
     }
 
-    // collect the read stats from read_stats_vec and dispatch them to a Region HashMap.
+    // collect the read stats from read_stats_vec and dispatch them to a Region
+    // HashMap.
     fn collect_read_stats(read_stats_vec: Vec<ReadStats>) -> HashMap<u64, Vec<RegionInfo>> {
         // RegionID -> Vec<RegionInfo>, collect the RegionInfo from different threads.
         let mut region_infos_map = HashMap::default();
@@ -659,12 +670,14 @@ impl AutoSplitController {
         region_infos_map
     }
 
-    // collect the CPU stats from cpu_stats_vec and dispatch them to a Region HashMap.
+    // collect the CPU stats from cpu_stats_vec and dispatch them to a Region
+    // HashMap.
     fn collect_cpu_stats(
         &self,
         cpu_stats_vec: Vec<Arc<RawRecords>>,
     ) -> HashMap<u64, (f64, Option<KeyRange>)> {
-        // RegionID -> (CPU usage, Hottest Key Range), calculate the CPU usage and its hottest key range.
+        // RegionID -> (CPU usage, Hottest Key Range), calculate the CPU usage and its
+        // hottest key range.
         let mut region_cpu_map = HashMap::default();
         if !self.should_check_region_cpu() {
             return region_cpu_map;
@@ -730,8 +743,8 @@ impl AutoSplitController {
             / 100.0
     }
 
-    // flush the read stats info into the recorder and check if the region needs to be split
-    // according to all the stats info the recorder has collected before.
+    // flush the read stats info into the recorder and check if the region needs to
+    // be split according to all the stats info the recorder has collected before.
     pub fn flush(
         &mut self,
         read_stats_vec: Vec<ReadStats>,
@@ -914,12 +927,12 @@ impl AutoSplitController {
             if self.cfg.region_cpu_overload_threshold_ratio <= 0.0
                 && incoming.region_cpu_overload_threshold_ratio > 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(true);
+                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(true);
             }
             if self.cfg.region_cpu_overload_threshold_ratio > 0.0
                 && incoming.region_cpu_overload_threshold_ratio <= 0.0
             {
-                cfg_change = SplitConfigChange::UpdateRegionCPUCollector(false);
+                cfg_change = SplitConfigChange::UpdateRegionCpuCollector(false);
             }
             self.cfg = incoming.clone();
         }
@@ -1625,7 +1638,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCPUCollector(false),
+            SplitConfigChange::UpdateRegionCpuCollector(false),
         );
         assert_eq!(
             auto_split_controller
@@ -1645,7 +1658,7 @@ mod tests {
         );
         assert_eq!(
             auto_split_controller.refresh_and_check_cfg(),
-            SplitConfigChange::UpdateRegionCPUCollector(true),
+            SplitConfigChange::UpdateRegionCpuCollector(true),
         );
         assert_eq!(
             auto_split_controller

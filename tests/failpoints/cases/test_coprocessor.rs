@@ -25,7 +25,7 @@ use txn_types::{Key, Lock, LockType};
 fn test_deadline() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -35,10 +35,11 @@ fn test_deadline() {
 
 #[test]
 fn test_deadline_2() {
-    // It should not even take any snapshots when request is outdated from the beginning.
+    // It should not even take any snapshots when request is outdated from the
+    // beginning.
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("deadline_check_fail", "return()").unwrap();
@@ -67,7 +68,7 @@ fn test_deadline_3() {
         };
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
     };
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("kv_cursor_seek", "sleep(2000)").unwrap();
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
@@ -88,7 +89,7 @@ fn test_deadline_3() {
 fn test_parse_request_failed() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -101,7 +102,7 @@ fn test_parse_request_failed_2() {
     // It should not even take any snapshots when parse failed.
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
@@ -114,7 +115,7 @@ fn test_parse_request_failed_2() {
 fn test_readpool_full() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("future_pool_spawn_full", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -126,7 +127,7 @@ fn test_readpool_full() {
 fn test_snapshot_failed() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -138,7 +139,7 @@ fn test_snapshot_failed() {
 fn test_snapshot_failed_2() {
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("rockskv_async_snapshot_not_leader", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -152,7 +153,7 @@ fn test_storage_error() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    let req = DAGSelect::from(&product).build();
+    let req = DagSelect::from(&product).build();
 
     fail::cfg("kv_cursor_seek", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -177,7 +178,7 @@ fn test_region_error_in_scan() {
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     fail::cfg("region_snapshot_seek", "return()").unwrap();
-    let req = DAGSelect::from(&product).build_with(ctx, &[0]);
+    let req = DagSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req);
 
     assert!(
@@ -198,7 +199,8 @@ fn test_paging_scan() {
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
     for desc in [false, true] {
@@ -208,7 +210,7 @@ fn test_paging_scan() {
                 exp.reverse();
             }
 
-            let req = DAGSelect::from(&product)
+            let req = DagSelect::from(&product)
                 .paging_size(paging_size as u64)
                 .desc(desc)
                 .build();
@@ -217,7 +219,7 @@ fn test_paging_scan() {
             select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
             let mut row_count = 0;
-            let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+            let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
             for (row, (id, name, cnt)) in spliter.zip(exp) {
                 let name_datum = name.unwrap().as_bytes().into();
                 let expected_encoded = datum::encode_value(
@@ -263,7 +265,8 @@ fn test_paging_scan_multi_ranges() {
     ];
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &data);
-    // set batch size and grow size to 1, so that only 1 row will be scanned in each batch.
+    // set batch size and grow size to 1, so that only 1 row will be scanned in each
+    // batch.
     fail::cfg("copr_batch_initial_size", "return(1)").unwrap();
     fail::cfg("copr_batch_grow_size", "return(1)").unwrap();
 
@@ -275,7 +278,7 @@ fn test_paging_scan_multi_ranges() {
             exp.reverse();
         }
 
-        let builder = DAGSelect::from(&product)
+        let builder = DagSelect::from(&product)
             .paging_size(paging_size)
             .desc(desc);
         let mut range1 = builder.key_ranges[0].clone();
@@ -290,7 +293,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
@@ -331,7 +334,7 @@ fn test_paging_scan_multi_ranges() {
             exp.reverse();
         }
 
-        let builder = DAGSelect::from(&product)
+        let builder = DagSelect::from(&product)
             .paging_size(paging_size)
             .desc(desc);
         let mut range1 = builder.key_ranges[0].clone();
@@ -346,7 +349,7 @@ fn test_paging_scan_multi_ranges() {
         select_resp.merge_from_bytes(resp.get_data()).unwrap();
 
         let mut row_count = 0;
-        let spliter = DAGChunkSpliter::new(select_resp.take_chunks().into(), 3);
+        let spliter = DagChunkSpliter::new(select_resp.take_chunks().into(), 3);
         for (row, (id, name, cnt)) in spliter.zip(exp) {
             let name_datum = name.unwrap().as_bytes().into();
             let expected_encoded = datum::encode_value(
@@ -406,7 +409,7 @@ fn test_read_index_lock_checking_on_follower() {
     ctx.set_replica_read(true);
 
     let product = ProductTable::new();
-    let mut req = DAGSelect::from(&product).build();
+    let mut req = DagSelect::from(&product).build();
     req.set_context(ctx);
     req.set_start_ts(100);
 

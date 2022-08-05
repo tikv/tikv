@@ -3,12 +3,9 @@
 use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
 use engine_rocks::{
-    raw::{
-        ColumnFamilyOptions, DBEntryType, DBOptions, Env, TablePropertiesCollector,
-        TablePropertiesCollectorFactory,
-    },
-    raw_util::{new_engine, CFOptions},
-    RocksEngine, RocksSstReader, RocksSstWriterBuilder,
+    raw::{DBEntryType, Env, TablePropertiesCollector, TablePropertiesCollectorFactory},
+    util::new_engine_opt,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
 };
 pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
 use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
@@ -32,36 +29,35 @@ pub fn new_test_engine_with_options_and_env<F>(
     env: Option<Arc<Env>>,
 ) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     let cf_opts = cfs
         .iter()
         .map(|cf| {
-            let mut opt = ColumnFamilyOptions::new();
+            let mut opt = RocksCfOptions::default();
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
-            apply(*cf, &mut opt);
+            apply(cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 TestPropertiesCollectorFactory::new(*cf),
             );
-            CFOptions::new(*cf, opt)
+            (*cf, opt)
         })
         .collect();
 
-    let db_opts = env.map(|e| {
-        let mut opts = DBOptions::default();
+    let db_opts = env.map_or_else(RocksDbOptions::default, |e| {
+        let mut opts = RocksDbOptions::default();
         opts.set_env(e);
         opts
     });
-    let db = new_engine(path, db_opts, cfs, Some(cf_opts)).expect("rocks test engine");
-    RocksEngine::from_db(Arc::new(db))
+    new_engine_opt(path, db_opts, cf_opts).expect("rocks test engine")
 }
 
 pub fn new_test_engine_with_options<F>(path: &str, cfs: &[&str], apply: F) -> RocksEngine
 where
-    F: FnMut(&str, &mut ColumnFamilyOptions),
+    F: FnMut(&str, &mut RocksCfOptions),
 {
     new_test_engine_with_options_and_env(path, cfs, apply, None)
 }

@@ -32,11 +32,11 @@ fn test_retry_rpc_client() {
     server.stop();
     let child = thread::spawn(move || {
         let cfg = new_config(m_eps);
-        assert_eq!(RpcClient::new(&cfg, None, m_mgr).is_ok(), true);
+        RpcClient::new(&cfg, None, m_mgr).unwrap();
     });
     thread::sleep(Duration::from_millis(500));
     server.start(&mgr, eps);
-    assert_eq!(child.join().is_ok(), true);
+    child.join().unwrap();
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn test_rpc_client() {
 
     block_on(client.store_heartbeat(
         pdpb::StoreStats::default(),
-        /*store_report=*/ None,
+        None, // store_report
         None,
     ))
     .unwrap();
@@ -353,7 +353,8 @@ fn test_retry_sync() {
 
 fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
     let eps_count = 1;
-    // NotRetry mocker returns Ok() with error header first, and next returns Ok() without any error header.
+    // NotRetry mocker returns Ok() with error header first, and next returns Ok()
+    // without any error header.
     let not_retry = Arc::new(NotRetry::new());
     let server = MockServer::with_case(eps_count, not_retry);
     let eps = server.bind_addrs();
@@ -476,6 +477,59 @@ fn test_change_leader_async() {
 }
 
 #[test]
+fn test_pd_client_heartbeat_send_failed() {
+    let pd_client_send_fail_fp = "region_heartbeat_send_failed";
+    fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
+    let server = MockServer::with_case(1, Arc::new(AlreadyBootstrapped));
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let poller = Builder::new_multi_thread()
+        .thread_name(thd_name!("poller"))
+        .worker_threads(1)
+        .build()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let f =
+        client.handle_region_heartbeat_response(1, move |resp| tx.send(resp).unwrap_or_default());
+    poller.spawn(f);
+
+    let heartbeat_send_fail = |ok| {
+        let mut region = metapb::Region::default();
+        region.set_id(1);
+        poller.spawn(client.region_heartbeat(
+            store::RAFT_INIT_LOG_TERM,
+            region,
+            metapb::Peer::default(),
+            RegionStat::default(),
+            None,
+        ));
+        let rsp = rx.recv_timeout(Duration::from_millis(100));
+        if ok {
+            assert!(rsp.is_ok());
+            assert_eq!(rsp.unwrap().get_region_id(), 1);
+        } else {
+            rsp.unwrap_err();
+        }
+
+        let region = block_on(client.get_region_by_id(1));
+        if ok {
+            assert!(region.is_ok());
+            let r = region.unwrap();
+            assert!(r.is_some());
+            assert_eq!(1, r.unwrap().get_id());
+        } else {
+            region.unwrap_err();
+        }
+    };
+    // send fail if network is block.
+    heartbeat_send_fail(false);
+    fail::remove(pd_client_send_fail_fp);
+    // send success after network recovered.
+    heartbeat_send_fail(true);
+}
+
+#[test]
 fn test_region_heartbeat_on_leader_change() {
     let eps_count = 3;
     let server = MockServer::with_case(eps_count, Arc::new(LeaderChange::new()));
@@ -533,7 +587,8 @@ fn test_region_heartbeat_on_leader_change() {
     // Change PD leader once then heartbeat PD.
     heartbeat_on_leader_change(1);
 
-    // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
+    // Change PD leader twice without update the heartbeat sender, then heartbeat
+    // PD.
     heartbeat_on_leader_change(2);
 }
 
@@ -578,7 +633,7 @@ fn test_cluster_version() {
 
     let emit_heartbeat = || {
         let req = pdpb::StoreStats::default();
-        block_on(client.store_heartbeat(req, /*store_report=*/ None, None)).unwrap();
+        block_on(client.store_heartbeat(req, /* store_report= */ None, None)).unwrap();
     };
 
     let set_cluster_version = |version: &str| {

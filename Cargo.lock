@@ -475,6 +475,7 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
+ "futures-io",
  "grpcio",
  "hex 0.4.2",
  "kvproto",
@@ -1519,6 +1520,7 @@ version = "0.1.0"
 dependencies = [
  "engine_rocks",
  "engine_test",
+ "engine_traits",
  "fail",
  "futures 0.3.15",
  "keys",
@@ -3692,18 +3694,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58ad3879ad3baf4e44784bc6a718a8698867bb991f8ce24d1bcbe2cfb4c3a75e"
+checksum = "78203e83c48cffbe01e4a2d35d566ca4de445d79a85372fc64e378bfc812a260"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "744b6f092ba29c3650faf274db506afd39944f48420f6c86b17cfe0ee1cb36bb"
+checksum = "710faf75e1b33345361201d36d04e98ac1ed8909151a017ed384700836104c74"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4199,12 +4201,15 @@ dependencies = [
  "batch-system",
  "collections",
  "crossbeam",
+ "engine_rocks",
  "engine_test",
  "engine_traits",
  "error_code",
  "fail",
  "futures-util",
+ "keys",
  "kvproto",
+ "log_wrappers",
  "pd_client",
  "raft",
  "raft-proto",
@@ -4215,7 +4220,10 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
+ "tikv_kv",
  "tikv_util",
+ "time",
+ "txn_types",
 ]
 
 [[package]]
@@ -6233,6 +6241,7 @@ dependencies = [
  "backtrace",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail",

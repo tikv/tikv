@@ -52,8 +52,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
         );
 
         let rows = self.resolve_keys.len();
-        // ti-client guarantees the size of resolve_keys will not too large, so no necessary
-        // to control the write_size as ResolveLock.
+        // ti-client guarantees the size of resolve_keys will not too large, so no
+        // necessary to control the write_size as ResolveLock.
         let mut released_locks = ReleasedLocks::new(self.start_ts, self.commit_ts);
         for key in self.resolve_keys {
             released_locks.push(if !self.commit_ts.is_zero() {

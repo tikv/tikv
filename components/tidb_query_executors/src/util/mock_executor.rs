@@ -9,8 +9,8 @@ use tipb::FieldType;
 
 use crate::interface::*;
 
-/// A simple mock executor that will return batch data according to a fixture without any
-/// modification.
+/// A simple mock executor that will return batch data according to a fixture
+/// without any modification.
 ///
 /// Normally this should be only used in tests.
 pub struct MockExecutor {

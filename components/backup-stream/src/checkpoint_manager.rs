@@ -20,8 +20,8 @@ use crate::{
 
 /// A manager for maintaining the last flush ts.
 /// This information is provided for the `advancer` in checkpoint V3,
-/// which involved a central node (typically TiDB) for collecting all regions' checkpoint
-/// then advancing the global checkpoint.
+/// which involved a central node (typically TiDB) for collecting all regions'
+/// checkpoint then advancing the global checkpoint.
 #[derive(Debug, Default)]
 pub struct CheckpointManager {
     items: HashMap<u64, LastFlushTsOfRegion>,
@@ -138,7 +138,7 @@ fn epoch_not_match(id: u64, sent: u64, real: u64) -> PbError {
     err
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Hash, Clone, Copy)]
 /// A simple region id, but versioned.
 pub struct RegionIdWithVersion {
     pub region_id: u64,
@@ -165,11 +165,13 @@ pub struct LastFlushTsOfRegion {
 pub trait FlushObserver: Send + 'static {
     /// The callback when the flush has advanced the resolver.
     async fn before(&mut self, checkpoints: Vec<(Region, TimeStamp)>);
-    /// The callback when the flush is done. (Files are fully written to external storage.)
+    /// The callback when the flush is done. (Files are fully written to
+    /// external storage.)
     async fn after(&mut self, task: &str, rts: u64) -> Result<()>;
     /// The optional callback to rewrite the resolved ts of this flush.
-    /// Because the default method (collect all leader resolved ts in the store, and use the minimal TS.)
-    /// may lead to resolved ts rolling back, if we desire a stronger consistency, we can rewrite a safer resolved ts here.
+    /// Because the default method (collect all leader resolved ts in the store,
+    /// and use the minimal TS.) may lead to resolved ts rolling back, if we
+    /// desire a stronger consistency, we can rewrite a safer resolved ts here.
     /// Note the new resolved ts cannot be greater than the old resolved ts.
     async fn rewrite_resolved_ts(
         &mut self,
@@ -282,7 +284,8 @@ where
             }
         }
         // Optionally upload the region checkpoint.
-        // Unless in some extreme condition, skipping upload the region checkpoint won't lead to data loss.
+        // Unless in some extreme condition, skipping upload the region checkpoint won't
+        // lead to data loss.
         if let Err(err) = self
             .meta_cli
             .upload_region_checkpoint(task, &self.checkpoints)

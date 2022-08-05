@@ -11,14 +11,15 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CFOptionsExt, ColumnFamilyOptions, CompactionJobInfo, Result, TabletAccessor, TabletFactory,
-    CF_DEFAULT, CF_WRITE,
+    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
+    CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
-use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use super::engine_factory_v2::KvEngineFactoryV2;
+use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -38,7 +39,7 @@ pub struct KvEngineFactoryBuilder {
 }
 
 impl KvEngineFactoryBuilder {
-    pub fn new(env: Arc<Env>, config: &TiKvConfig, store_path: impl Into<PathBuf>) -> Self {
+    pub fn new(env: Arc<Env>, config: &TikvConfig, store_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: FactoryInner {
                 env,
@@ -88,6 +89,14 @@ impl KvEngineFactoryBuilder {
             inner: Arc::new(self.inner),
             compact_event_sender: self.compact_event_sender.clone(),
         }
+    }
+
+    pub fn build_v2(self) -> KvEngineFactoryV2 {
+        let factory = KvEngineFactory {
+            inner: Arc::new(self.inner),
+            compact_event_sender: self.compact_event_sender.clone(),
+        };
+        KvEngineFactoryV2::new(factory)
     }
 }
 
@@ -144,19 +153,18 @@ impl KvEngineFactory {
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
         );
-        let kv_engine = engine_rocks::raw_util::new_engine_opt(
+        let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
             kv_cfs_opts,
         );
-        let kv_engine = match kv_engine {
+        let mut kv_engine = match kv_engine {
             Ok(e) => e,
             Err(e) => {
                 error!("failed to create kv engine"; "path" => %tablet_path.display(), "err" => ?e);
                 return Err(e);
             }
         };
-        let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
         Ok(kv_engine)
@@ -183,12 +191,11 @@ impl KvEngineFactory {
             self.inner.api_version,
         );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
-        /*
-        engine_rocks::raw_util::destroy_engine(
-            tablet_path.to_str().unwrap(),
-            kv_db_opts,
-            kv_cfs_opts,
-        )?;*/
+        // engine_rocks::util::destroy_engine(
+        //   tablet_path.to_str().unwrap(),
+        //   kv_db_opts,
+        //   kv_cfs_opts,
+        // )?;
         let _ = std::fs::remove_dir_all(tablet_path);
         Ok(())
     }
@@ -221,11 +228,20 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let cp = db.as_ref().unwrap().clone();
-            return Ok(cp);
+        let db = self.inner.root_db.lock().unwrap();
+        if let Some(cp) = db.as_ref() {
+            return Ok(cp.clone());
         }
+
         self.create_shared_db()
+    }
+
+    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
+        self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
+    }
+
+    fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
+        self.open_tablet_cache(0, 0)
     }
 
     fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
@@ -235,9 +251,11 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     fn exists_raw(&self, _path: &Path) -> bool {
         false
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         self.kv_engine_path()
     }
+
     fn tablets_path(&self) -> PathBuf {
         self.kv_engine_path()
     }
@@ -248,20 +266,18 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     }
 
     fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
-            opt.set_block_cache_capacity(capacity)?;
-        }
+        let db = self.inner.root_db.lock().unwrap();
+        let opt = db.as_ref().unwrap().get_options_cf(CF_DEFAULT).unwrap(); // FIXME unwrap
+        opt.set_block_cache_capacity(capacity)?;
         Ok(())
     }
 }
 
 impl TabletAccessor<RocksEngine> for KvEngineFactory {
     fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &RocksEngine)) {
-        if let Ok(db) = self.inner.root_db.lock() {
-            let db = db.as_ref().unwrap();
-            f(0, 0, db);
-        }
+        let db = self.inner.root_db.lock().unwrap();
+        let db = db.as_ref().unwrap();
+        f(0, 0, db);
     }
 
     fn is_single_engine(&self) -> bool {
