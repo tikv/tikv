@@ -119,15 +119,19 @@ where
             Some(s) => s,
         };
         store.set_id(INVALID_ID);
-        if cfg.advertise_addr.is_empty() {
-            store.set_address(cfg.addr.clone());
-        } else {
-            store.set_address(cfg.advertise_addr.clone())
+        if store.get_address() == "" {
+            if cfg.advertise_addr.is_empty() {
+                store.set_address(cfg.addr.clone());
+            } else {
+                store.set_address(cfg.advertise_addr.clone())
+            }
         }
-        if cfg.advertise_status_addr.is_empty() {
-            store.set_status_address(cfg.status_addr.clone());
-        } else {
-            store.set_status_address(cfg.advertise_status_addr.clone())
+        if store.get_status_address() == "" {
+            if cfg.advertise_status_addr.is_empty() {
+                store.set_status_address(cfg.status_addr.clone());
+            } else {
+                store.set_status_address(cfg.advertise_status_addr.clone())
+            }
         }
         if store.get_version() == "" {
             store.set_version(env!("CARGO_PKG_VERSION").to_string());
@@ -247,6 +251,11 @@ where
     /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
+    }
+
+    /// Gets a copy of Store which is registered to Pd.
+    pub fn store(&self) -> metapb::Store {
+        self.store.clone()
     }
 
     /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
