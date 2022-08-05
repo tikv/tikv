@@ -102,19 +102,25 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
         suffix: u64,
         options: OpenOptions,
     ) -> Result<RocksEngine> {
+        let engine_exist = RocksEngine::exists(path.to_str().unwrap_or_default());
         // Even though neither options.create nor options.create_new are true, if the
         // tablet files already exists, we will open it by calling
         // inner.create_tablet. In this case, the tablet exists but not in the cache
         // (registry).
-        if !options.create()
-            && !options.create_new()
-            && !RocksEngine::exists(path.to_str().unwrap_or_default())
-        {
+        if !options.create() && !options.create_new() && !engine_exist {
             return Err(box_err!(
                 "path {} does not have db",
                 path.to_str().unwrap_or_default()
             ));
         };
+
+        if options.create_new() && engine_exist {
+            return Err(box_err!(
+                "region {} {} already exists",
+                id,
+                tablet.as_inner().path()
+            ));
+        }
 
         let tablet = self.inner.create_tablet(path, id, suffix)?;
         debug!("open tablet"; "key" => ?(id, suffix));
