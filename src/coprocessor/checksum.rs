@@ -15,14 +15,14 @@ use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 use yatp::task::future::reschedule;
 
 use crate::{
-    coprocessor::{dag::TiKvStorage, *},
+    coprocessor::{dag::TikvStorage, *},
     storage::{Snapshot, SnapshotStore, Statistics},
 };
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
     req: ChecksumRequest,
-    scanner: RangesScanner<TiKvStorage<SnapshotStore<S>>>,
+    scanner: RangesScanner<TikvStorage<SnapshotStore<S>>>,
 }
 
 impl<S: Snapshot> ChecksumContext<S> {
@@ -43,7 +43,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             false,
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKvStorage::new(store, false),
+            storage: TikvStorage::new(store, false),
             ranges: ranges
                 .into_iter()
                 .map(|r| Range::from_pb_range(r, false))

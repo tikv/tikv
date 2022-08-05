@@ -115,7 +115,6 @@ pub struct StoreInfo<EK, ER> {
 }
 
 pub struct StoreMeta {
-    /// store id
     pub store_id: Option<u64>,
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
