@@ -3,13 +3,14 @@
 use std::{
     cell::RefCell,
     fmt::{self, Debug, Display, Formatter},
+    ops::DerefMut,
     pin::Pin,
     rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use collections::{HashMap, HashSet};
@@ -77,8 +78,14 @@ impl Delay {
     }
 
     /// Resets the instance to an earlier deadline.
-    fn reset(&self, deadline: Instant) {
+    fn reset_shrinking(&self, deadline: Instant) {
         if deadline < self.deadline {
+            self.inner.borrow_mut().timer.get_mut().reset(deadline);
+        }
+    }
+
+    fn reset_extending(&self, deadline: Instant) {
+        if deadline > self.deadline {
             self.inner.borrow_mut().timer.get_mut().reset(deadline);
         }
     }
@@ -283,7 +290,7 @@ impl Waiter {
     }
 
     fn reset_timeout(&self, deadline: Instant) {
-        self.delay.reset(deadline);
+        self.delay.reset_shrinking(deadline);
     }
 
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
@@ -301,8 +308,9 @@ impl Waiter {
         self.cancel(None)
     }
 
-    fn cancel_for_timeout(self) -> Vec<KeyLockWaitInfo> {
-        let lock_info = self.wait_info[0].lock_info.clone();
+    fn cancel_for_timeout(self, skip_resolving_lock: bool) -> Vec<KeyLockWaitInfo> {
+        let mut lock_info = self.wait_info[0].lock_info.clone();
+        lock_info.set_skip_resolving_lock(skip_resolving_lock);
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
         self.cancel(Some(StorageError::from(TxnError::from(error))))
     }
@@ -433,11 +441,32 @@ enum CheckRegionStateResult {
     WaiterExpired,
 }
 
-struct LegacyWakeUpDelay {
+const SKIP_RESOLVING_LOCK_LIMIT: Duration = Duration::from_millis(300);
+
+struct DelayedLegacyWakeUp {
     delay: Delay,
     conflicting_start_ts: TimeStamp,
     conflicting_commit_ts: TimeStamp,
     record_time: Instant,
+    is_expiring: bool,
+    clean_up_entry_delay: Option<Delay>,
+}
+
+impl DelayedLegacyWakeUp {
+    fn new(
+        delay: Delay,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+    ) -> Self {
+        Self {
+            delay,
+            conflicting_start_ts,
+            conflicting_commit_ts,
+            record_time: Instant::now(),
+            is_expiring: false,
+            clean_up_entry_delay: None,
+        }
+    }
 }
 
 struct WaitTable {
@@ -449,7 +478,7 @@ struct WaitTable {
     waiter_pool: HashMap<LockWaitToken, Waiter>,
     waiter_count: Arc<AtomicUsize>,
 
-    legacy_wakeup_in_progress: HashMap<Key, LegacyWakeUpDelay>,
+    legacy_wakeup_in_progress: HashMap<Key, DelayedLegacyWakeUp>,
 
     on_waiter_cancel_by_region_error:
         Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
@@ -519,7 +548,7 @@ impl WaitTable {
             }
             CheckRegionStateResult::WaiterExpired => {
                 self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-                waiter.cancel_for_timeout();
+                waiter.cancel_for_timeout(false);
                 return false;
             }
             CheckRegionStateResult::Ok => {}
@@ -571,7 +600,7 @@ impl WaitTable {
                     .remove(&(waiting_item.lock_digest.hash, waiter.start_ts));
             }
             // TODO: Cancel with a region error.
-            let wait_info = waiter.cancel_for_timeout();
+            let wait_info = waiter.cancel_for_timeout(false);
             if let Some(cb) = &self.on_waiter_cancel_by_region_error {
                 cb(token, wait_info)
             }
@@ -832,8 +861,12 @@ impl WaiterManager {
         let detector_scheduler = self.detector_scheduler.clone();
         // Remove the waiter from wait table when it times out.
         let f = waiter.on_timeout(move || {
-            if let Some(waiter) = wait_table.borrow_mut().take_waiter(token) {
-                let wait_info = waiter.cancel_for_timeout();
+            let mut wait_table = wait_table.borrow_mut();
+            if let Some(waiter) = wait_table.take_waiter(token) {
+                let skip_resolving_lock = wait_table
+                    .legacy_wakeup_in_progress
+                    .contains_key(&waiter.wait_info[0].key);
+                let wait_info = waiter.cancel_for_timeout(skip_resolving_lock);
                 detector_scheduler.clean_up_wait_for(token, wait_info);
             }
         });
@@ -843,48 +876,82 @@ impl WaiterManager {
     }
 
     fn handle_record_legacy_waking_up_keys(&mut self, events: Vec<KeyWakeUpEvent>) {
-        let deadline = Instant::now() + self.wake_up_delay_duration.0;
+        use std::collections::hash_map::Entry;
+
+        let wake_up_delay_duration = self.wake_up_delay_duration.0;
+        let spawn_background_timing =
+            |key: Key, delay: Delay, wait_table: Rc<RefCell<WaitTable>>| {
+                spawn_local(async move {
+                    delay.await;
+                    let mut ref_mut_wait_table = wait_table.borrow_mut();
+                    // To make the borrow checker happy.
+                    let wait_table_inner_ref = ref_mut_wait_table.deref_mut();
+                    if let Some(expired_entry) =
+                        wait_table_inner_ref.legacy_wakeup_in_progress.get_mut(&key)
+                    {
+                        if let Some(cb) = &wait_table_inner_ref.wake_up_key_delay_callback {
+                            cb(
+                                &key,
+                                expired_entry.conflicting_start_ts,
+                                expired_entry.conflicting_commit_ts,
+                                expired_entry.record_time,
+                            );
+                        }
+
+                        expired_entry.is_expiring = true;
+
+                        if expired_entry.clean_up_entry_delay.is_some() {
+                            return;
+                        }
+                        let new_deadline = if wake_up_delay_duration < SKIP_RESOLVING_LOCK_LIMIT {
+                            Instant::now() + SKIP_RESOLVING_LOCK_LIMIT - wake_up_delay_duration
+                        } else {
+                            Instant::now()
+                        };
+
+                        let delay = Delay::new(new_deadline);
+                        expired_entry.clean_up_entry_delay = Some(delay.clone());
+                        drop(ref_mut_wait_table);
+
+                        if delay.await {
+                            let mut wait_table_ref = wait_table.borrow_mut();
+                            wait_table_ref.legacy_wakeup_in_progress.remove(&key);
+                        }
+                    }
+                });
+            };
+
+        let now = Instant::now();
+        let deadline = now + wake_up_delay_duration;
         for event in events {
             // Make borrow checker happy.
             let released_start_ts = event.released_start_ts;
             let released_commit_ts = event.released_commit_ts;
-            self.wait_table
-                .borrow_mut()
-                .legacy_wakeup_in_progress
-                .entry(event.key)
-                .and_modify(|delay| {
-                    delay.conflicting_start_ts = released_start_ts;
-                    delay.conflicting_commit_ts = released_commit_ts;
-                    delay.delay.reset(deadline);
-                })
-                .or_insert_with_key(|key| {
+            let mut wait_table = self.wait_table.borrow_mut();
+            let mut entry = wait_table.legacy_wakeup_in_progress.entry(event.key);
+
+            if let Entry::Occupied(entry) = &mut entry {
+                let inner = entry.get_mut();
+                inner.conflicting_start_ts = released_start_ts;
+                inner.conflicting_commit_ts = released_commit_ts;
+                if !inner.is_expiring {
+                    inner.delay.reset_shrinking(deadline);
+                } else {
                     let delay = Delay::new(deadline);
-                    let delay1 = delay.clone();
-                    let key = key.clone();
-                    let wait_table = self.wait_table.clone();
-                    spawn_local(async move {
-                        delay1.await;
-                        let mut wait_table = wait_table.borrow_mut();
-                        if let Some(expired_entry) =
-                            wait_table.legacy_wakeup_in_progress.remove(&key)
-                        {
-                            if let Some(cb) = &wait_table.wake_up_key_delay_callback {
-                                cb(
-                                    &key,
-                                    expired_entry.conflicting_start_ts,
-                                    expired_entry.conflicting_commit_ts,
-                                    expired_entry.record_time,
-                                );
-                            }
-                        }
-                    });
-                    LegacyWakeUpDelay {
-                        delay,
-                        conflicting_start_ts: released_start_ts,
-                        conflicting_commit_ts: released_commit_ts,
-                        record_time: Instant::now(),
-                    }
+                    inner.delay = delay.clone();
+                    spawn_background_timing(entry.key().clone(), delay, self.wait_table.clone());
+                    inner.is_expiring = false;
+                }
+                if let Some(clean_up_delay) = entry.get().clean_up_entry_delay.as_ref() {
+                    clean_up_delay.reset_extending(now + SKIP_RESOLVING_LOCK_LIMIT);
+                }
+            } else {
+                entry.or_insert_with_key(|key| {
+                    let delay = Delay::new(deadline);
+                    spawn_background_timing(key.clone(), delay.clone(), self.wait_table.clone());
+                    DelayedLegacyWakeUp::new(delay, released_start_ts, released_commit_ts)
                 });
+            }
         }
     }
 
@@ -1194,7 +1261,7 @@ pub mod tests {
         // Should reset timeout successfully with cloned delay.
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         let delay_clone = delay.clone();
-        delay_clone.reset(Instant::now() + Duration::from_millis(50));
+        delay_clone.reset_shrinking(Instant::now() + Duration::from_millis(50));
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
@@ -1206,7 +1273,7 @@ pub mod tests {
         // New deadline can't exceed the initial deadline.
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         let delay_clone = delay.clone();
-        delay_clone.reset(Instant::now() + Duration::from_millis(300));
+        delay_clone.reset_shrinking(Instant::now() + Duration::from_millis(300));
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
@@ -1385,7 +1452,7 @@ pub mod tests {
     #[test]
     fn test_waiter_notify() {
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.cancel_for_timeout();
+        waiter.cancel_for_timeout(false);
         expect_key_is_locked(block_on(f).unwrap(), lock_info);
 
         // // A waiter can conflict with other transactions more than once.
@@ -1447,7 +1514,7 @@ pub mod tests {
         waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
-        waiter.cancel_for_timeout();
+        waiter.cancel_for_timeout(false);
         assert_elapsed(|| block_on(f), 0, 200);
         rx.try_recv().unwrap_err();
     }
