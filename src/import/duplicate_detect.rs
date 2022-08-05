@@ -181,7 +181,7 @@ impl<S: Snapshot> DuplicateDetector<S> {
                         .map_err(from_kv_error)?;
                     match value {
                         Some(val) => pair.set_value(val.to_vec()),
-                        None => return Err(Error::RocksDB("Not found defaultcf value".to_owned())),
+                        None => return Err(Error::RocksDb("Not found defaultcf value".to_owned())),
                     }
                 }
             }
@@ -217,7 +217,7 @@ impl<S: Snapshot> Iterator for DuplicateDetector<S> {
 fn from_kv_error(e: tikv_kv::Error) -> Error {
     match e {
         tikv_kv::Error(box tikv_kv::ErrorInner::Other(err)) => Error::Engine(err),
-        _ => Error::RocksDB("unkown error when request rocksdb".to_owned()),
+        _ => Error::RocksDb("unkown error when request rocksdb".to_owned()),
     }
 }
 
