@@ -118,7 +118,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             return Err(box_err!(
                 "region {} {} already exists",
                 id,
-                tablet.as_inner().path()
+                path.to_str().unwrap()
             ));
         }
 

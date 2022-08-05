@@ -303,11 +303,11 @@ pub mod kv {
         fn open_tablet_raw(
             &self,
             path: &Path,
-            _id: u64,
+            id: u64,
             _suffix: u64,
             options: OpenOptions,
         ) -> Result<KvTestEngine> {
-            let engine_exist = RocksEngine::exists(path.to_str().unwrap_or_default());
+            let engine_exist = KvTestEngine::exists(path.to_str().unwrap_or_default());
             // Even though neither options.create nor options.create_new are true, if the
             // tablet files already exists, we will open it by calling
             // inner.create_tablet. In this case, the tablet exists but not in the cache
@@ -323,7 +323,7 @@ pub mod kv {
                 return Err(box_err!(
                     "region {} {} already exists",
                     id,
-                    tablet.as_inner().path()
+                    path.to_str().unwrap()
                 ));
             }
 
