@@ -15,7 +15,7 @@ use raftstore::{
     },
     store::{SplitCheckRunner as Runner, SplitCheckTask as Task},
 };
-use tikv::config::{ConfigController, Module, TiKvConfig};
+use tikv::config::{ConfigController, Module, TikvConfig};
 use tikv_util::worker::{LazyWorker, Scheduler, Worker};
 
 fn tmp_engine<P: AsRef<Path>>(path: P) -> RocksEngine {
@@ -26,7 +26,7 @@ fn tmp_engine<P: AsRef<Path>>(path: P) -> RocksEngine {
     .unwrap()
 }
 
-fn setup(cfg: TiKvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<Task>) {
+fn setup(cfg: TikvConfig, engine: RocksEngine) -> (ConfigController, LazyWorker<Task>) {
     let (router, _) = sync_channel(1);
     let runner = Runner::new(
         engine,
@@ -62,7 +62,7 @@ where
 
 #[test]
 fn test_update_split_check_config() {
-    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let engine = tmp_engine(&cfg.storage.data_dir);
     let (cfg_controller, mut worker) = setup(cfg.clone(), engine);

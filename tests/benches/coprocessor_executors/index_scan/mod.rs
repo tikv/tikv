@@ -76,14 +76,14 @@ where
 {
     let mut inputs = vec![
         Input::new(util::BatchIndexScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::IndexScanDAGBencher::<RocksStore>::new(false, ROWS)),
-        Input::new(util::IndexScanDAGBencher::<RocksStore>::new(true, ROWS)),
+        Input::new(util::IndexScanDagBencher::<RocksStore>::new(false, ROWS)),
+        Input::new(util::IndexScanDagBencher::<RocksStore>::new(true, ROWS)),
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_inputs = vec![
             Input::new(util::BatchIndexScanNext1024Bencher::<RocksStore>::new()),
-            Input::new(util::IndexScanDAGBencher::<MemStore>::new(false, ROWS)),
-            Input::new(util::IndexScanDAGBencher::<MemStore>::new(true, ROWS)),
+            Input::new(util::IndexScanDagBencher::<MemStore>::new(false, ROWS)),
+            Input::new(util::IndexScanDagBencher::<MemStore>::new(true, ROWS)),
         ];
         inputs.append(&mut additional_inputs);
     }

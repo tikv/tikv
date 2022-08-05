@@ -11,14 +11,14 @@ use crate::{
 };
 
 /// A `Storage` implementation over TiKV's storage.
-pub struct TiKvStorage<S: Store> {
+pub struct TikvStorage<S: Store> {
     store: S,
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
     met_newer_ts_data_backlog: NewerTsCheckState,
 }
 
-impl<S: Store> TiKvStorage<S> {
+impl<S: Store> TikvStorage<S> {
     pub fn new(store: S, check_can_be_cached: bool) -> Self {
         Self {
             store,
@@ -33,7 +33,7 @@ impl<S: Store> TiKvStorage<S> {
     }
 }
 
-impl<S: Store> Storage for TiKvStorage<S> {
+impl<S: Store> Storage for TikvStorage<S> {
     type Statistics = Statistics;
 
     fn begin_scan(

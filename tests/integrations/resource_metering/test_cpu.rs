@@ -12,7 +12,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, StreamExt};
 use kvproto::kvrpcpb::Context;
-use test_coprocessor::{DAGSelect, Insert, ProductTable, Store};
+use test_coprocessor::{DagSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
 use tikv::{
     config::CoprReadPoolConfig,
@@ -92,7 +92,7 @@ pub fn test_reschedule_coprocessor() {
     insert.execute();
     store.commit();
 
-    let mut req = DAGSelect::from(&table).build();
+    let mut req = DagSelect::from(&table).build();
     let mut ctx = Context::default();
     ctx.set_resource_group_tag(tag.as_bytes().to_vec());
     req.set_context(ctx);
