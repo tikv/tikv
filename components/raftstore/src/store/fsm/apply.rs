@@ -5048,7 +5048,7 @@ mod tests {
             cmd: &Cmd,
             _: &RaftApplyState,
             region_state: &RegionState,
-            _: &mut ApplyCtxInfo,
+            _: &mut ApplyCtxInfo<'_>,
         ) -> bool {
             let request = cmd.request.get_admin_request();
             match request.get_cmd_type() {
