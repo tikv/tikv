@@ -11,7 +11,7 @@ codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 error_code = { path = "../error_code", default-features = false }
 farmhash = "1.1.5"
-kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_merged_file_info" }
 log_wrappers = { path = "../log_wrappers" }
 slog = "2.3"
 thiserror = "1.0"

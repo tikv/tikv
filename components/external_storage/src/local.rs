@@ -2,10 +2,10 @@
 
 use std::{
     fs::File as StdFile,
-    io::{self, Seek, Read, BufReader},
+    io::{self, BufReader, Read, Seek},
     marker::Unpin,
     path::{Path, PathBuf},
-    sync::Arc
+    sync::Arc,
 };
 
 use async_trait::async_trait;

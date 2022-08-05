@@ -582,14 +582,13 @@ impl BlobStorage for S3Storage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        return self.get_range(name, None)
+        return self.get_range(name, None);
     }
 
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
         // inclusive, bytes=0-499 -> [0, 499]
-        self.get_range(name, Some(format!("bytes={}-{}", off, off+len-1)))
+        self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }
-
 }
 
 #[cfg(test)]

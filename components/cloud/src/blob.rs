@@ -49,7 +49,6 @@ pub trait BlobStorage: 'static + Send + Sync {
 
     /// Read part of contents of the given path.
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_>;
-
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -80,7 +79,6 @@ impl BlobStorage for Box<dyn BlobStorage> {
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).get_part(name, off, len)
     }
-
 }
 
 #[derive(Clone, Debug, PartialEq)]

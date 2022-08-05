@@ -30,8 +30,8 @@ use tikv_util::{
     Either,
 };
 use tokio::{
-    io::AsyncRead,
     fs::File,
+    io::AsyncRead,
     sync::{oneshot, Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};

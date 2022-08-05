@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 engine_traits = { path = "../engine_traits", default-features = false }
-kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_data_file_info_v2" }
+kvproto = { git = "https://github.com/leavrth/kvproto.git", branch = "br_merged_file_info" }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 tikv_alloc = { path = "../tikv_alloc" }
 # FIXME: Remove this dep from the engine_traits interface

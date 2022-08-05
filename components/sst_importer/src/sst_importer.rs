@@ -322,7 +322,7 @@ impl SstImporter {
         if path.save.exists() {
             return Ok(path.save);
         }
-        
+
         let length = meta.get_compress_length();
         let mut op_offset = Some((offset, length));
         if length == 0 {
@@ -357,7 +357,7 @@ impl SstImporter {
                 }
             })?;
         }
-        
+
         file_system::rename(path.temp, path.save.clone())?;
 
         drop(lock);

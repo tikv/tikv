@@ -20,10 +20,7 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{
-        DataFileInfo, DataFileGroup, FileType, MetadataV2,
-        StreamBackupTaskInfo,
-    },
+    brpb::{DataFileGroup, DataFileInfo, FileType, MetadataV2, StreamBackupTaskInfo},
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -62,7 +59,8 @@ use crate::{
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-/// For V2, the length of the file merged from temp files shouldn't be large too much.
+/// For V2, the length of the file merged from temp files shouldn't be large too
+/// much.
 const MERGED_FILE_SIZE_LIMIT: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -716,7 +714,8 @@ impl TempFileKey {
     fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v2/{}/{}/{}/{:012}-{}.log",
-            // We may delete a range of files, so using the max_ts for preventing remove some records wrong.
+            // We may delete a range of files, so using the max_ts for preventing remove some
+            // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
@@ -747,7 +746,6 @@ impl TempFileKey {
             Self::path_to_log_file(store_id, min_ts, max_ts)
         }
     }
-
 }
 
 pub struct StreamTaskInfo {
@@ -1029,7 +1027,7 @@ impl StreamTaskInfo {
             // Update offset of file_info(DataFileInfo)
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_offset(stat_length);
-            //data_files_open.push(Box::pin(File::open(data_file.local_path.clone())));
+            // data_files_open.push(Box::pin(File::open(data_file.local_path.clone())));
             data_files_open.push(Box::pin({
                 let file = File::open(data_file.local_path.clone()).await?;
                 let compress_length = file.metadata().await?.len();
@@ -1093,8 +1091,10 @@ impl StreamTaskInfo {
 
     pub async fn flush_log(&self, metadata: &mut MetadataInfoV2) -> Result<()> {
         let storage = self.storage.clone();
-        self.merge_log(metadata, storage.clone(), &self.flushing_files, false).await?;
-        self.merge_log(metadata, storage.clone(), &self.flushing_meta_files, true).await?;
+        self.merge_log(metadata, storage.clone(), &self.flushing_files, false)
+            .await?;
+        self.merge_log(metadata, storage.clone(), &self.flushing_meta_files, true)
+            .await?;
 
         Ok(())
     }
@@ -1103,7 +1103,7 @@ impl StreamTaskInfo {
         &self,
         metadata: &mut MetadataInfoV2,
         storage: Arc<dyn ExternalStorage>,
-        files_lock: &RwLock<Vec<(TempFileKey,Mutex<DataFile>, DataFileInfo)>>,
+        files_lock: &RwLock<Vec<(TempFileKey, Mutex<DataFile>, DataFileInfo)>>,
         is_meta: bool,
     ) -> Result<()> {
         let files = files_lock.write().await;
@@ -1437,9 +1437,11 @@ impl DataFile {
         }
     }
 
-    /// generate the metadata v2 where each file becomes a part of the merged file.
+    /// generate the metadata v2 where each file becomes a part of the merged
+    /// file.
     fn generate_metadata(&mut self, file_key: &TempFileKey) -> Result<DataFileInfo> {
-        // Note: the field `storage_path` is empty!!! It will be stored in the upper layer `DataFileGroup`.
+        // Note: the field `storage_path` is empty!!! It will be stored in the upper
+        // layer `DataFileGroup`.
         let mut meta = DataFileInfo::new();
         meta.set_sha256(
             self.sha256
@@ -1717,11 +1719,13 @@ mod tests {
             .await?;
 
         assert!(
-            meta.file_groups.iter().all(|group| group.data_files_info.iter().all(|item| {
-                TimeStamp::new(item.min_ts as _).physical() >= start_ts
-                    && TimeStamp::new(item.max_ts as _).physical() <= end_ts
-                    && item.min_ts <= item.max_ts
-            })),
+            meta.file_groups
+                .iter()
+                .all(|group| group.data_files_info.iter().all(|item| {
+                    TimeStamp::new(item.min_ts as _).physical() >= start_ts
+                        && TimeStamp::new(item.max_ts as _).physical() <= end_ts
+                        && item.min_ts <= item.max_ts
+                })),
             "meta = {:#?}; start ts = {}, end ts = {}",
             meta.file_groups,
             start_ts,
@@ -1739,7 +1743,11 @@ mod tests {
         files.flush_log(&mut meta).await?;
         files.flush_log(&mut another_meta).await?;
         // meta updated
-        let files_num = meta.file_groups.iter().map(|v| v.data_files_info.len()).sum::<usize>();
+        let files_num = meta
+            .file_groups
+            .iter()
+            .map(|v| v.data_files_info.len())
+            .sum::<usize>();
         assert_eq!(files_num, 3, "test file len = {}", files_num);
         for i in 0..meta.file_groups.len() {
             let file_groups1 = meta.file_groups.get(i).unwrap();
@@ -1786,13 +1794,18 @@ mod tests {
         }
 
         assert_eq!(meta_count, 1);
-        assert_eq!(log_count, 2);   // flush twice
+        assert_eq!(log_count, 2); // flush twice
         Ok(())
     }
 
     fn mock_build_large_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
         let mut events_builder = KvEventsBuilder::new(region_id, resolved_ts);
-        events_builder.put_table("default", table_id, b"hello", "world".repeat(1024*1024).as_bytes());
+        events_builder.put_table(
+            "default",
+            table_id,
+            b"hello",
+            "world".repeat(1024 * 1024).as_bytes(),
+        );
         events_builder.finish()
     }
 
@@ -1816,7 +1829,7 @@ mod tests {
         .unwrap();
 
         // on_event
-        let region_count = (MERGED_FILE_SIZE_LIMIT) / (4*1024*1024); // 2 merged log files
+        let region_count = (MERGED_FILE_SIZE_LIMIT) / (4 * 1024 * 1024); // 2 merged log files
         for i in 1..=region_count {
             let kv_events = mock_build_large_kv_events(i as _, i as _, i as _);
             task.on_events(kv_events).await.unwrap();
@@ -1904,7 +1917,12 @@ mod tests {
             self.inner.read(name)
         }
 
-        fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+        fn read_part(
+            &self,
+            name: &str,
+            off: u64,
+            len: u64,
+        ) -> Box<dyn futures::AsyncRead + Unpin + '_> {
             self.inner.read_part(name, off, len)
         }
     }
@@ -2243,6 +2261,10 @@ mod tests {
         fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
             self.s.read(name)
         }
+
+        fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+            self.s.read_part(name, off, len)
+        }
     }
 
     #[tokio::test]
@@ -2254,7 +2276,15 @@ mod tests {
         f.write_all("test-data".as_bytes()).await?;
 
         let data_file = DataFile::new(file_path).await.unwrap();
-        let result = StreamTaskInfo::flush_log_file_to(Arc::new(ms), &Mutex::new(data_file)).await;
+        let info = DataFileInfo::new();
+
+        let mut meta = MetadataInfoV2::with_capacity(1);
+        let kv_event = build_kv_event(1, 1);
+        let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
+        let files = vec![
+            (tmp_key, Mutex::new(data_file), info),
+        ];
+        let result = StreamTaskInfo::merge_and_flush_log_files_to(Arc::new(ms), &files[0..], &mut meta, false).await;
         assert_eq!(result.is_ok(), true);
         Ok(())
     }

@@ -355,14 +355,14 @@ impl GcsStorage {
             Ok(oid) => oid,
             Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::InvalidInput, e),
         };
-        let mut request = match Object::download(&oid, None /*optional*/) {
+        let mut request = match Object::download(&oid, None /* optional */) {
             Ok(request) => request.map(|_: io::Empty| Body::empty()),
             Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::Other, e),
         };
         if let Some(r) = range {
             let header_value = match HeaderValue::from_str(&r) {
                 Ok(v) => v,
-                Err(e) => return GCSStorage::error_to_async_read(io::ErrorKind::Other, e),
+                Err(e) => return GcsStorage::error_to_async_read(io::ErrorKind::Other, e),
             };
             request.headers_mut().insert("Range", header_value);
         }
@@ -493,12 +493,12 @@ impl BlobStorage for GcsStorage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        return self.get_range(name, None)
+        return self.get_range(name, None);
     }
 
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
         // inclusive, bytes=0-499 -> [0, 499]
-        self.get_range(name, Some(format!("bytes={}-{}", off, off+len-1)))
+        self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }
 }
 
