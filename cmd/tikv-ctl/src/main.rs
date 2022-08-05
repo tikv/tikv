@@ -62,9 +62,7 @@ fn main() {
     let cfg = cfg_path.map_or_else(
         || {
             let mut cfg = TiKvConfig::default();
-            cfg.log.level = tikv_util::logger::get_level_by_string("warn")
-                .unwrap()
-                .into();
+            cfg.log.level = tikv_util::logger::get_level_by_string("warn").unwrap();
             cfg
         },
         |path| {

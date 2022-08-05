@@ -8,7 +8,6 @@
 use std::{
     cmp,
     collections::{HashMap, HashSet},
-    convert::TryFrom,
     error::Error,
     fs, i32,
     io::{Error as IoError, ErrorKind, Write},
@@ -22,7 +21,7 @@ use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
 use encryption_export::DataKeyManager;
 use engine_rocks::{
-    config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
+    config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel},
     get_env,
     properties::MvccPropertiesCollectorFactory,
     raw::{
@@ -54,16 +53,11 @@ use raftstore::{
 };
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
-use serde::{
-    de::{Error as DError, Unexpected},
-    Deserialize, Deserializer, Serialize, Serializer,
-};
 use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
         self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, GIB, MIB,
     },
-    logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
     time::duration_to_sec,
     yatp_pool,
@@ -982,7 +976,7 @@ impl TitanDBConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[online_config(skip)]
-    pub info_log_level: RocksLogLevel,
+    pub info_log_level: LogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[online_config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -1078,7 +1072,7 @@ impl Default for DbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            info_log_level: RocksLogLevel::Info,
+            info_log_level: LogLevel::Info,
             rate_bytes_per_sec: ReadableSize::gb(10),
             rate_limiter_refill_period: ReadableDuration::millis(100),
             rate_limiter_mode: DBRateLimiterMode::WriteOnly,
@@ -1347,7 +1341,7 @@ pub struct RaftDbConfig {
     #[online_config(skip)]
     pub info_log_dir: String,
     #[online_config(skip)]
-    pub info_log_level: RocksLogLevel,
+    pub info_log_level: LogLevel,
     #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -1392,7 +1386,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            info_log_level: RocksLogLevel::Info,
+            info_log_level: LogLevel::Info,
             max_sub_compactions: bg_job_limits.max_sub_compactions as u32,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
@@ -1800,6 +1794,33 @@ impl Default for MetricConfig {
         }
     }
 }
+
+pub mod log_level_serde {
+    use serde::{
+        de::{Error, Unexpected},
+        Deserialize, Deserializer, Serialize, Serializer,
+    };
+    use slog::Level;
+    use tikv_util::logger::{get_level_by_string, get_string_by_level};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        get_level_by_string(&string)
+            .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
+    }
+
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        get_string_by_level(*value).serialize(serializer)
+    }
+}
+
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -2657,86 +2678,21 @@ impl Default for File {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct LogConfig {
-    pub level: LogLevel,
-    #[online_config(skip)]
+    #[serde(with = "log_level_serde")]
+    pub level: slog::Level,
     pub format: LogFormat,
-    #[online_config(skip)]
     pub enable_timestamp: bool,
-    #[online_config(skip)]
     pub file: File,
-}
-
-/// LogLevel is a wrapper type of `slog::Level`
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct LogLevel(slog::Level);
-
-impl From<LogLevel> for slog::Level {
-    fn from(l: LogLevel) -> Self {
-        l.0
-    }
-}
-
-impl From<slog::Level> for LogLevel {
-    fn from(l: slog::Level) -> Self {
-        Self(l)
-    }
-}
-
-impl Serialize for LogLevel {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        get_string_by_level(self.0).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for LogLevel {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let string = String::deserialize(deserializer)?;
-        get_level_by_string(&string)
-            .map(LogLevel)
-            .ok_or_else(|| D::Error::invalid_value(Unexpected::Str(&string), &"a valid log level"))
-    }
-}
-
-impl From<LogLevel> for ConfigValue {
-    fn from(l: LogLevel) -> Self {
-        Self::String(get_string_by_level(l.0).into())
-    }
-}
-
-impl TryFrom<ConfigValue> for LogLevel {
-    type Error = String;
-    fn try_from(value: ConfigValue) -> Result<Self, Self::Error> {
-        if let ConfigValue::String(s) = value {
-            get_level_by_string(&s)
-                .map(LogLevel)
-                .ok_or_else(|| format!("invalid log level: '{}'", s))
-        } else {
-            panic!("expect ConfigValue::String, found: {:?}", value)
-        }
-    }
-}
-
-impl TryFrom<&ConfigValue> for LogLevel {
-    type Error = String;
-    fn try_from(value: &ConfigValue) -> Result<Self, Self::Error> {
-        Self::try_from(value.clone())
-    }
 }
 
 impl Default for LogConfig {
     fn default() -> Self {
         Self {
-            level: LogLevel(slog::Level::Info),
+            level: slog::Level::Info,
             format: LogFormat::Text,
             enable_timestamp: true,
             file: File::default(),
@@ -2749,19 +2705,6 @@ impl LogConfig {
         if self.file.max_size > 4096 {
             return Err("Max log file size upper limit to 4096MB".to_string().into());
         }
-        Ok(())
-    }
-}
-
-pub struct LogConfigManager;
-
-impl ConfigManager for LogConfigManager {
-    fn dispatch(&mut self, changes: ConfigChange) -> CfgResult<()> {
-        if let Some(v) = changes.get("level") {
-            let log_level = LogLevel::try_from(v)?;
-            set_log_level(log_level.0);
-        }
-        info!("update log config"; "config" => ?changes);
         Ok(())
     }
 }
@@ -2820,7 +2763,8 @@ pub struct TiKvConfig {
     // They are preserved for compatibility check.
     #[doc(hidden)]
     #[online_config(skip)]
-    pub log_level: LogLevel,
+    #[serde(with = "log_level_serde")]
+    pub log_level: slog::Level,
     #[doc(hidden)]
     #[online_config(skip)]
     pub log_file: String,
@@ -2858,7 +2802,7 @@ pub struct TiKvConfig {
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
-    #[online_config(submodule)]
+    #[online_config(skip)]
     pub log: LogConfig,
 
     #[online_config(submodule)]
@@ -2939,7 +2883,7 @@ impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
             cfg_path: "".to_owned(),
-            log_level: slog::Level::Info.into(),
+            log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_format: LogFormat::Text,
             log_rotation_timespan: ReadableDuration::hours(0),
@@ -3873,7 +3817,6 @@ pub enum Module {
     ResourceMetering,
     BackupStream,
     Quota,
-    Log,
     Unknown(String),
 }
 
@@ -3901,7 +3844,6 @@ impl From<&str> for Module {
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
             "quota" => Module::Quota,
-            "log" => Module::Log,
             n => Module::Unknown(n.to_owned()),
         }
     }
@@ -4040,7 +3982,6 @@ mod tests {
     use tikv_kv::RocksEngine as RocksDBEngine;
     use tikv_util::{
         config::VersionTrack,
-        logger::get_log_level,
         quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
         sys::SysQuota,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -4177,7 +4118,7 @@ mod tests {
         assert_eq!(last_cfg_metadata.modified().unwrap(), first_modified);
 
         // write to file when config is the inequivalent of last one.
-        cfg.log_level = slog::Level::Warning.into();
+        cfg.log_level = slog::Level::Warning;
         assert!(persist_config(&cfg).is_ok());
         last_cfg_metadata = last_cfg_path.metadata().unwrap();
         assert_ne!(last_cfg_metadata.modified().unwrap(), first_modified);
@@ -4293,7 +4234,8 @@ mod tests {
     fn test_parse_log_level() {
         #[derive(Serialize, Deserialize, Debug)]
         struct LevelHolder {
-            v: LogLevel,
+            #[serde(with = "log_level_serde")]
+            v: Level,
         }
 
         let legal_cases = vec![
@@ -4305,21 +4247,19 @@ mod tests {
             ("info", Level::Info),
         ];
         for (serialized, deserialized) in legal_cases {
-            let holder = LevelHolder {
-                v: deserialized.into(),
-            };
+            let holder = LevelHolder { v: deserialized };
             let res_string = toml::to_string(&holder).unwrap();
             let exp_string = format!("v = \"{}\"\n", serialized);
             assert_eq!(res_string, exp_string);
             let res_value: LevelHolder = toml::from_str(&exp_string).unwrap();
-            assert_eq!(res_value.v, deserialized.into());
+            assert_eq!(res_value.v, deserialized);
         }
 
         let compatibility_cases = vec![("warning", Level::Warning), ("critical", Level::Critical)];
         for (serialized, deserialized) in compatibility_cases {
             let variant_string = format!("v = \"{}\"\n", serialized);
             let res_value: LevelHolder = toml::from_str(&variant_string).unwrap();
-            assert_eq!(res_value.v, deserialized.into());
+            assert_eq!(res_value.v, deserialized);
         }
 
         let illegal_cases = vec!["foobar", ""];
@@ -4745,31 +4685,6 @@ mod tests {
         assert_eq!(
             defaultcf_opts.get_block_cache_capacity(),
             ReadableSize::mb(256).0
-        );
-    }
-
-    #[test]
-    fn test_change_logconfig() {
-        let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
-        let cfg_controller = ConfigController::new(cfg);
-
-        cfg_controller.register(Module::Log, Box::new(LogConfigManager));
-
-        cfg_controller.update_config("log.level", "warn").unwrap();
-        assert_eq!(get_log_level().unwrap(), Level::Warning);
-        assert_eq!(
-            cfg_controller.get_current().log.level,
-            LogLevel(Level::Warning)
-        );
-
-        assert!(
-            cfg_controller
-                .update_config("log.level", "invalid")
-                .is_err()
-        );
-        assert_eq!(
-            cfg_controller.get_current().log.level,
-            LogLevel(Level::Warning)
         );
     }
 
