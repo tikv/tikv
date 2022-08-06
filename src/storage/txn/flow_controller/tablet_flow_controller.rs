@@ -13,7 +13,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletFactory};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt, OpenOptions, TabletFactory};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
@@ -117,7 +117,13 @@ impl FlowInfoDispatcher {
                     }
 
                     let insert_limiter_and_checker = |region_id, suffix| -> FlowChecker<E> {
-                        let engine = tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
+                        let engine = tablet_factory
+                            .open_tablet(
+                                region_id,
+                                Some(suffix),
+                                OpenOptions::default().set_cache_only(true),
+                            )
+                            .unwrap();
                         let mut v = limiters.as_ref().write().unwrap();
                         let discard_ratio = Arc::new(AtomicU32::new(0));
                         let limiter = v.entry(region_id).or_insert((
@@ -166,8 +172,13 @@ impl FlowInfoDispatcher {
                             // if checker.suffix < suffix, it means its tablet is old and needs the
                             // refresh
                             if checker.tablet_suffix() < suffix {
-                                let engine =
-                                    tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
+                                let engine = tablet_factory
+                                    .open_tablet(
+                                        region_id,
+                                        Some(suffix),
+                                        OpenOptions::default().set_cache_only(true),
+                                    )
+                                    .unwrap();
                                 checker.set_engine(engine);
                                 checker.set_tablet_suffix(suffix);
                             }
