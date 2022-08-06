@@ -82,6 +82,7 @@ macro_rules! flush_send_status {
 pub struct RaftSendMessageMetrics {
     pub append: SendStatus,
     pub append_resp: SendStatus,
+    pub group_broadcast: SendStatus,
     pub prevote: SendStatus,
     pub prevote_resp: SendStatus,
     pub vote: SendStatus,
@@ -101,6 +102,7 @@ impl RaftSendMessageMetrics {
         match msg_type {
             MessageType::MsgAppend => self.append[i] += 1,
             MessageType::MsgAppendResponse => self.append_resp[i] += 1,
+            MessageType::MsgGroupBroadcast => self.group_broadcast[i] += 1,
             MessageType::MsgRequestPreVote => self.prevote[i] += 1,
             MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
             MessageType::MsgRequestVote => self.vote[i] += 1,

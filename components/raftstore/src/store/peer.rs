@@ -730,6 +730,9 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
+    /// Record the zones this Region's Peers belong to.
+    pub peer_zone: HashMap<u64, String>,
+
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
     #[getset(get = "pub")]
@@ -950,6 +953,7 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
+            peer_zone: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -1380,6 +1384,10 @@ where
         self.get_store().region()
     }
 
+    pub fn get_peer_zone(&self, id: &u64) -> Option<&String> {
+        self.peer_zone.get(id)
+    }
+
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
@@ -1570,6 +1578,11 @@ where
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.snap()
+    }
+
+    #[inline]
+    pub fn follower_repl(&self) -> bool {
+        self.raft_group.raft.follower_repl
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -5001,6 +5014,18 @@ where
         }
 
         None
+    }
+
+    pub fn update_peers_zone(&mut self, update: &HashMap<u64, String>) {
+        let peer_cache_snap: HashMap<u64, metapb::Peer> = (*self.peer_cache.borrow()).clone();
+        for (store_id, zone_label) in update {
+            for (peer_id, peer) in &peer_cache_snap {
+                if store_id == &peer.store_id {
+                    self.peer_zone.insert(peer_id.clone(), zone_label.clone());
+                    break;
+                }
+            }
+        }
     }
 
     fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {

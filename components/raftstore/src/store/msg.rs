@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::{
     import_sstpb::SstMeta,
@@ -611,6 +611,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    UpdateZoneInfo(HashMap<u64, String>),
     Destroy(u64),
 }
 
@@ -639,6 +640,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::UpdateZoneInfo(_) => write!(fmt, "UpdateZoneInfo"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
