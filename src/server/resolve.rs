@@ -113,10 +113,13 @@ where
         } else {
             state.group.backup_store_labels(&mut s);
         }
+        let zone_info = state.group.build_update_zone_info();
         drop(state);
         if let Some(group_id) = group_id {
             self.router.report_resolved(store_id, group_id);
         }
+        self.router.report_zone_info_update(zone_info);
+
         let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
         // so we should ignore here.

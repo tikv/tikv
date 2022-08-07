@@ -348,6 +348,10 @@ where
         store_id: u64,
         group_id: u64,
     },
+    /// Update Zone Information for follower replication.
+    UpdateZoneInfo {
+        zone_info: HashMap<u64, String>,
+    },
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeObserver,
@@ -611,7 +615,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
-    UpdateZoneInfo(HashMap<u64, String>),
+    //UpdateZoneInfo(HashMap<u64, String>),
     Destroy(u64),
 }
 
@@ -640,7 +644,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
-            PeerMsg::UpdateZoneInfo(_) => write!(fmt, "UpdateZoneInfo"),
+            // PeerMsg::UpdateZoneInfo(_) => write!(fmt, "UpdateZoneInfo"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }

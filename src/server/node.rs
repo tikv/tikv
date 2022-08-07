@@ -94,6 +94,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     health_service: Option<HealthService>,
+    zone_label_key: String,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -112,6 +113,7 @@ where
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         health_service: Option<HealthService>,
+        zone_label_key: String,
     ) -> Node<C, EK, ER> {
         let mut store = metapb::Store::default();
         store.set_id(INVALID_ID);
@@ -160,6 +162,7 @@ where
             state,
             bg_worker,
             health_service,
+            zone_label_key,
         }
     }
 
@@ -359,7 +362,11 @@ where
                 .group
                 .register_store(store.id, store.take_labels().into());
         }
+        state.set_zone_label_key(self.zone_label_key.clone());
+        self.get_router().report_zone_info_update(state.group.build_update_zone_info());
     }
+
+    
 
     // Exported for tests.
     #[doc(hidden)]

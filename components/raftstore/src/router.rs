@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::cell::RefCell;
-
+use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
@@ -89,6 +89,13 @@ where
     fn report_resolved(&self, store_id: u64, group_id: u64) {
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+        })
+    }
+
+    /// Update Zone Information to all peers.
+    fn report_zone_info_update(&self, zone_info: HashMap<u64, String>) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::UpdateZoneInfo { zone_info: zone_info.clone() })
         })
     }
 }

@@ -18,6 +18,7 @@ pub struct StoreGroup {
     label_ids: HashMap<String, u64>,
     stores: HashMap<u64, u64>,
     label_key: String,
+    zone_label_key: String,
     version: u64,
     dirty: bool,
 }
@@ -91,6 +92,20 @@ impl StoreGroup {
         }
     }
 
+    pub fn set_zone_label_key(&mut self, zone_label_key: String) {
+        self.zone_label_key = zone_label_key;
+    }
+
+    pub fn build_update_zone_info(&self) -> HashMap<u64, String> {
+        let mut update: HashMap<u64, String> = HashMap::default();
+        for (store_id, label_vec) in &self.labels {
+            if let Some(zone_label) = label_vec.iter().find(|l| l.key == self.zone_label_key) {
+                update.insert(store_id.clone(), zone_label.value.clone());
+            }
+        }
+        update
+    }
+
     /// Gets the group ID of store.
     ///
     /// Different version may indicates different label key. If version is less
@@ -161,6 +176,10 @@ impl GlobalReplicationState {
     pub fn set_status(&mut self, status: ReplicationStatus) {
         self.status = status;
         self.group.recalculate(&self.status);
+    }
+
+    pub fn set_zone_label_key(&mut self, zone_label_key: String) {
+        self.group.set_zone_label_key(zone_label_key);
     }
 
     pub fn calculate_commit_group(
