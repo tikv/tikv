@@ -939,8 +939,8 @@ impl WaiterManager {
                 } else {
                     let delay = Delay::new(deadline);
                     inner.delay = delay.clone();
-                    spawn_background_timing(entry.key().clone(), delay, self.wait_table.clone());
                     inner.is_expiring = false;
+                    spawn_background_timing(entry.key().clone(), delay, self.wait_table.clone());
                 }
                 if let Some(clean_up_delay) = entry.get().clean_up_entry_delay.as_ref() {
                     clean_up_delay.reset_extending(now + SKIP_RESOLVING_LOCK_LIMIT);
