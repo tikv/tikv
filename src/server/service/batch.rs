@@ -152,13 +152,7 @@ pub struct GetCommandResponseConsumer {
 }
 
 impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponseConsumer {
-    fn consume(
-        &self,
-        id: u64,
-        res: Result<(Option<Vec<u8>>, Statistics)>,
-        begin: Instant,
-        request_source: String,
-    ) {
+    fn consume(&self, id: u64, res: Result<(Option<Vec<u8>>, Statistics)>, begin: Instant) {
         let mut resp = GetResponse::default();
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
@@ -181,8 +175,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
             cmd: Some(batch_commands_response::response::Cmd::Get(resp)),
             ..Default::default()
         };
-        let mesure =
-            GrpcRequestDuration::new(begin, GrpcTypeKind::kv_batch_get_command, request_source);
+        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::kv_batch_get_command);
         let task = MeasuredSingleResponse::new(id, res, mesure);
         if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
@@ -191,13 +184,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
 }
 
 impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
-    fn consume(
-        &self,
-        id: u64,
-        res: Result<Option<Vec<u8>>>,
-        begin: Instant,
-        request_source: String,
-    ) {
+    fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, begin: Instant) {
         let mut resp = RawGetResponse::default();
         if let Some(err) = extract_region_error(&res) {
             resp.set_region_error(err);
@@ -212,8 +199,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
             cmd: Some(batch_commands_response::response::Cmd::RawGet(resp)),
             ..Default::default()
         };
-        let mesure =
-            GrpcRequestDuration::new(begin, GrpcTypeKind::raw_batch_get_command, request_source);
+        let mesure = GrpcRequestDuration::new(begin, GrpcTypeKind::raw_batch_get_command);
         let task = MeasuredSingleResponse::new(id, res, mesure);
         if self.tx.send_and_notify(task).is_err() {
             error!("KvService response batch commands fail");
@@ -232,11 +218,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .kv_get
         .observe(gets.len() as f64);
-    let id_sources: Vec<_> = requests
-        .iter()
-        .zip(gets.iter())
-        .map(|(id, req)| (*id, req.get_context().get_request_source().to_string()))
-        .collect();
+    let ids = requests.clone();
     let res = storage.batch_get_command(
         gets,
         requests,
@@ -253,16 +235,13 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
         if let Some(e) = extract_region_error(&res) {
             let mut resp = GetResponse::default();
             resp.set_region_error(e);
-            for (id, source) in id_sources {
+            for id in ids {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::Get(resp.clone())),
                     ..Default::default()
                 };
-                let measure = GrpcRequestDuration::new(
-                    begin_instant,
-                    GrpcTypeKind::kv_batch_get_command,
-                    source,
-                );
+                let measure =
+                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::kv_batch_get_command);
                 let task = MeasuredSingleResponse::new(id, res, measure);
                 if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");
@@ -283,11 +262,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
     REQUEST_BATCH_SIZE_HISTOGRAM_VEC
         .raw_get
         .observe(gets.len() as f64);
-    let id_sources: Vec<_> = requests
-        .iter()
-        .zip(gets.iter())
-        .map(|(id, req)| (*id, req.get_context().get_request_source().to_string()))
-        .collect();
+    let ids = requests.clone();
     let res = storage.raw_batch_get_command(
         gets,
         requests,
@@ -299,16 +274,13 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
         if let Some(e) = extract_region_error(&res) {
             let mut resp = RawGetResponse::default();
             resp.set_region_error(e);
-            for (id, source) in id_sources {
+            for id in ids {
                 let res = batch_commands_response::Response {
                     cmd: Some(batch_commands_response::response::Cmd::RawGet(resp.clone())),
                     ..Default::default()
                 };
-                let measure = GrpcRequestDuration::new(
-                    begin_instant,
-                    GrpcTypeKind::raw_batch_get_command,
-                    source,
-                );
+                let measure =
+                    GrpcRequestDuration::new(begin_instant, GrpcTypeKind::raw_batch_get_command);
                 let task = MeasuredSingleResponse::new(id, res, measure);
                 if tx.send_and_notify(task).is_err() {
                     error!("KvService response batch commands fail");

@@ -1,14 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cell::{Cell, RefCell},
-    time::Duration,
-};
-
-use collections::HashMap;
-use prometheus::{exponential_buckets, local::LocalIntCounter, *};
+use prometheus::{exponential_buckets, *};
 use prometheus_static_metric::*;
-use tikv_util::time::Instant;
 
 pub use crate::storage::kv::metrics::{
     GcKeysCF, GcKeysCounterVec, GcKeysCounterVecInner, GcKeysDetail,
@@ -245,18 +238,6 @@ lazy_static! {
             "tikv_server_address_resolve_duration_secs",
             "Duration of resolving store address",
             exponential_buckets(0.0001, 2.0, 20).unwrap()
-        )
-        .unwrap();
-    pub static ref GRPC_REQUEST_SOURCE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-            "tikv_grpc_request_source_counter_vec",
-            "Counter of different sources of RPC requests",
-            &["source"]
-        )
-        .unwrap();
-    pub static ref GRPC_REQUEST_SOURCE_DURATION_VEC: IntCounterVec = register_int_counter_vec!(
-            "tikv_grpc_request_source_duration_vec",
-            "Total duration of different sources of RPC requests (in microseconds)",
-            &["source"]
         )
         .unwrap();
 }
@@ -502,52 +483,4 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_COUNTER, AsyncRequestsCounterVec);
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec =
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
-}
-
-struct LocalRequestSourceMetrics {
-    pub count: LocalIntCounter,
-    pub duration_us: LocalIntCounter,
-}
-
-impl LocalRequestSourceMetrics {
-    fn new(source: &str) -> Self {
-        LocalRequestSourceMetrics {
-            count: GRPC_REQUEST_SOURCE_COUNTER_VEC
-                .with_label_values(&[source])
-                .local(),
-            duration_us: GRPC_REQUEST_SOURCE_DURATION_VEC
-                .with_label_values(&[source])
-                .local(),
-        }
-    }
-}
-
-thread_local! {
-    static REQUEST_SOURCE_METRICS_MAP: RefCell<HashMap<String, LocalRequestSourceMetrics>> = RefCell::new(HashMap::default());
-
-    static LAST_LOCAL_FLUSH_TIME: Cell<Instant> = Cell::new(Instant::now_coarse());
-}
-
-pub fn record_request_source_metrics(source: String, duration: Duration) {
-    let need_flush = LAST_LOCAL_FLUSH_TIME.with(|last_local_flush_time| {
-        let now = Instant::now_coarse();
-        if now - last_local_flush_time.get() > Duration::from_secs(1) {
-            last_local_flush_time.set(now);
-            true
-        } else {
-            false
-        }
-    });
-    REQUEST_SOURCE_METRICS_MAP.with(|map| {
-        let mut map = map.borrow_mut();
-        let metrics = map
-            .entry(source)
-            .or_insert_with_key(|k| LocalRequestSourceMetrics::new(k));
-        metrics.count.inc();
-        metrics.duration_us.inc_by(duration.as_micros() as u64);
-        if need_flush {
-            metrics.count.flush();
-            metrics.duration_us.flush();
-        }
-    });
 }
