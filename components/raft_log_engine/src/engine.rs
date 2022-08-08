@@ -9,9 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGCTask, Result,
+    CacheStats, EncryptionKeyManager, EncryptionMethod, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, RaftLogGCTask, Result,
 };
 use file_system::{IOOp, IORateLimiter, IOType};
 use kvproto::{
