@@ -405,7 +405,7 @@ pub(crate) struct Peer {
     pub(crate) peer_heartbeats: HashMap<u64, Instant>,
 
     pub(crate) proposals: ProposalQueue,
-    pending_reads: ReadIndexQueue,
+    pub(crate) pending_reads: ReadIndexQueue,
 
     pub(crate) pending_apply_results: Vec<MsgApplyResult>,
 

@@ -141,6 +141,10 @@ impl RaftWorker {
         if self.sync_io_worker.is_none() {
             let _ = self.io_sender.send(None);
         }
+        for peer in self.ctx.peers.values() {
+            let mut peer_fsm = peer.peer_fsm.lock().unwrap();
+            peer_fsm.peer.pending_reads.clear_all(None);
+        }
     }
 
     fn handle_store_msg(&mut self) {
