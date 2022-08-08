@@ -250,7 +250,6 @@ impl<T: futures::Stream> StreamExt for T {}
 /// see [FutureExt] for more information.
 ///
 /// [Future]: futures::Future
-#[pin_project::pin_project]
 pub struct InTags<T> {
     #[pin]
     inner: T,
