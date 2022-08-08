@@ -2807,6 +2807,7 @@ dependencies = [
  "dyn-clone",
  "engine_rocks",
  "engine_traits",
+ "fail 0.5.0",
  "farmhash",
  "file_system",
  "fslock",

@@ -455,7 +455,4 @@ x-build-dist-debug:
 
 test-cloud-engine:
 	cargo test -p kvengine -p rfstore -p rfengine --tests
-	cargo test -p tests --test cloud_engine
-
-kvenginepb:
-	GEN_KVENGINEPB=1 cargo build -p kvenginepb
+	cargo test -p tests --test cloud_engine --test cloud_engine_failpoints

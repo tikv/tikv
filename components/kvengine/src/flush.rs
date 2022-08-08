@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use bytes::BytesMut;
+use fail::fail_point;
 use kvenginepb as pb;
 use slog_global::info;
 use tikv_util::{
@@ -86,6 +87,11 @@ impl Engine {
     }
 
     pub(crate) fn flush_normal(&self, task: FlushTask) -> Result<pb::ChangeSet> {
+        fail_point!("kvengine_flush_normal", |_| Err(dfs::Error::Io(
+            "injected error".to_string()
+        )
+        .into()));
+
         let mut cs = new_change_set(task.id_ver.id, task.id_ver.ver);
         let m = task.normal.as_ref().unwrap();
         let flush_version = m.get_version();

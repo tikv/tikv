@@ -21,6 +21,7 @@ dashmap = "4.0"
 dyn-clone = "1.0"
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits", default-features = false }
+fail = "0.5"
 farmhash = "1.1.5"
 file_system = { path = "../file_system", default-features = false }
 fslock = "0.1.7"
