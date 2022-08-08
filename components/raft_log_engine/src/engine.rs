@@ -9,7 +9,7 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
+    CacheStats, EncryptionKeyManager, EncryptionMethod,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
     RaftLogGCTask, Result,
 };
@@ -25,8 +25,6 @@ use raft_engine::{
 };
 pub use raft_engine::{Config as RaftEngineConfig, ReadableSize, RecoveryMode};
 use tikv_util::Either;
-
-use crate::perf_context::RaftEnginePerfContext;
 
 // A special region ID representing global state.
 const STORE_REGION_ID: u64 = 0;
@@ -301,14 +299,6 @@ impl RaftLogEngine {
 
     pub fn last_index(&self, raft_id: u64) -> Option<u64> {
         self.0.last_index(raft_id)
-    }
-}
-
-impl PerfContextExt for RaftLogEngine {
-    type PerfContext = RaftEnginePerfContext;
-
-    fn get_perf_context(&self, _level: PerfLevel, _kind: PerfContextKind) -> Self::PerfContext {
-        RaftEnginePerfContext
     }
 }
 

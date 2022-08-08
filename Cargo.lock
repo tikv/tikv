@@ -4103,7 +4103,6 @@ dependencies = [
  "slog-global",
  "tikv_util",
  "time",
- "tracker",
 ]
 
 [[package]]

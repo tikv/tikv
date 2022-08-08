@@ -3306,7 +3306,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
+            &mut self.ctx.perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
