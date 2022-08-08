@@ -733,6 +733,7 @@ dependencies = [
  "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "raft",
  "raftstore",
  "serde",
