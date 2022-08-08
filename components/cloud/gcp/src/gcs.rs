@@ -493,7 +493,7 @@ impl BlobStorage for GcsStorage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        return self.get_range(name, None);
+        self.get_range(name, None)
     }
 
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {

@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use async_compression::tokio::write::ZstdEncoder;
+use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -709,8 +709,12 @@ impl TempFileKey {
 
     /// path_to_log_file specifies the path of record log for v2.
     /// ```text
+    /// v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
     /// v2/${date}/${hour}/${store_id}/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
     /// ```
+    /// For v2, we merged the small files (partition by table_id) into one file.
+    /// When do restore, add `--use-storage-v1` in commandline of BR to restore
+    /// v1 backup data.
     fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v2/{}/{}/{}/{:012}-{}.log",
@@ -726,8 +730,12 @@ impl TempFileKey {
 
     /// path_to_schema_file specifies the path of schema log for v2.
     /// ```text
+    /// v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
     /// v2/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
     /// ```
+    /// For v2, we merged the small files (partition by table_id) into one file.
+    /// When do restore, add `--use-storage-v1` in commandline of BR to restore
+    /// v1 backup data.
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
             "v2/{}/{}/{}/schema-meta/{:012}-{}.log",
@@ -1028,13 +1036,13 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_offset(stat_length);
             // data_files_open.push(Box::pin(File::open(data_file.local_path.clone())));
-            data_files_open.push(Box::pin({
+            data_files_open.push({
                 let file = File::open(data_file.local_path.clone()).await?;
                 let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
                 file_info_clone.set_compress_length(compress_length);
                 file
-            }));
+            });
             data_files.push(data_file);
             data_file_infos.push(file_info_clone);
 
@@ -1110,6 +1118,8 @@ impl StreamTaskInfo {
         let mut batch_size = 0;
         // file[batch_begin_index, i) is a batch
         let mut batch_begin_index = 0;
+        // TODO: upload the merged file concurrently,
+        // then collect merged_file_infos and push them into `metadata`.
         for (i, (_, _, info)) in files.iter().enumerate() {
             if batch_size >= MERGED_FILE_SIZE_LIMIT {
                 Self::merge_and_flush_log_files_to(
@@ -1277,6 +1287,7 @@ struct DataFile {
     resolved_ts: TimeStamp,
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
+    // TODO: use lz4 with async feature
     inner: ZstdEncoder<BufWriter<File>>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
@@ -1355,7 +1366,7 @@ impl DataFile {
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
-            inner: ZstdEncoder::new(inner),
+            inner: ZstdEncoder::with_quality(inner, Level::Fastest),
             sha256,
             number_of_entries: 0,
             file_size: 0,
@@ -2281,10 +2292,14 @@ mod tests {
         let mut meta = MetadataInfoV2::with_capacity(1);
         let kv_event = build_kv_event(1, 1);
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
-        let files = vec![
-            (tmp_key, Mutex::new(data_file), info),
-        ];
-        let result = StreamTaskInfo::merge_and_flush_log_files_to(Arc::new(ms), &files[0..], &mut meta, false).await;
+        let files = vec![(tmp_key, Mutex::new(data_file), info)];
+        let result = StreamTaskInfo::merge_and_flush_log_files_to(
+            Arc::new(ms),
+            &files[0..],
+            &mut meta,
+            false,
+        )
+        .await;
         assert_eq!(result.is_ok(), true);
         Ok(())
     }

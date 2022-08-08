@@ -14,7 +14,7 @@ use std::{
 
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, task::Poll, FutureExt, StreamExt};
+use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
@@ -595,12 +595,12 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
 }
 
 pub struct FilesReader {
-    files: Vec<Pin<Box<File>>>,
+    files: Vec<File>,
     index: usize,
 }
 
 impl FilesReader {
-    pub fn new(files: Vec<Pin<Box<File>>>) -> Self {
+    pub fn new(files: Vec<File>) -> Self {
         FilesReader { files, index: 0 }
     }
 }
@@ -615,10 +615,7 @@ impl AsyncRead for FilesReader {
 
         while me.index < me.files.len() {
             let rem = buf.remaining();
-            match me.files[me.index].as_mut().poll_read(cx, buf) {
-                Poll::Ready(t) => t,
-                Poll::Pending => return Poll::Pending,
-            }?;
+            ready!(Pin::new(&mut me.files[me.index]).poll_read(cx, buf))?;
             if buf.remaining() == rem {
                 me.index += 1;
             } else {
