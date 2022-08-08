@@ -8,6 +8,7 @@ use slog_global::info;
 use tikv_util::{
     mpsc,
     time::{monotonic_raw_now, timespec_to_ns},
+    Either,
 };
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
     *,
 };
 
+#[derive(Clone)]
 pub(crate) struct FlushTask {
     pub(crate) id_ver: IDVer,
     pub(crate) start: Vec<u8>,
@@ -51,14 +53,15 @@ impl FlushTask {
     }
 
     pub(crate) fn table_version(&self) -> u64 {
-        if self.normal.is_some() {
-            self.normal.as_ref().unwrap().get_version()
-        } else {
-            self.initial.as_ref().unwrap().table_version()
+        match (&self.normal, &self.initial) {
+            (Some(normal), None) => normal.get_version(),
+            (None, Some(initial)) => initial.table_version(),
+            _ => unreachable!(),
         }
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct InitialFlush {
     pub(crate) parent_snap: pb::Snapshot,
     pub(crate) mem_tbls: Vec<memtable::CFTable>,
@@ -266,8 +269,16 @@ impl FlushWorker {
                 FlushMsg::Result(res) => {
                     let tag = ShardTag::new(self.engine.get_engine_id(), res.id_ver);
                     let task_manager = self.get_shard_task_manager(res.id_ver.id);
-                    if let Some(finished) = task_manager.handle_flush_result(tag, res) {
-                        self.engine.meta_change_listener.on_change_set(finished);
+                    match task_manager.handle_flush_result(tag, res) {
+                        Either::Left(finished) => {
+                            if let Some(finished) = finished {
+                                self.engine.meta_change_listener.on_change_set(finished);
+                            }
+                        }
+                        Either::Right(task) => {
+                            let term = task_manager.term;
+                            self.spawn_flush_task(task, term);
+                        }
                     }
                 }
                 FlushMsg::Committed((id_ver, table_version)) => {
@@ -321,7 +332,7 @@ pub(crate) struct ShardTaskManager {
     term: u64,
     /// task_queue contains the running tasks.
     /// Incoming flush tasks are pushed back to the queue.
-    task_queue: VecDeque<u64>,
+    task_queue: VecDeque<FlushTask>,
     /// finished contains tasks that successfully flushed, but not yet notified to the meta listener.
     finished: HashMap<u64, kvenginepb::ChangeSet>,
     /// The flush notified the meta listener but not yet committed.
@@ -341,17 +352,16 @@ impl ShardTaskManager {
     }
 
     fn enqueue_task(&mut self, task: &FlushTask) -> bool {
-        let new_table_version = task.table_version();
-        if new_table_version <= self.last_enqueued_table_version() {
+        if task.table_version() <= self.last_enqueued_table_version() {
             return false;
         }
-        self.task_queue.push_back(new_table_version);
+        self.task_queue.push_back(task.clone());
         true
     }
 
     fn last_enqueued_table_version(&self) -> u64 {
-        if !self.task_queue.is_empty() {
-            *self.task_queue.back().unwrap()
+        if let Some(task) = self.task_queue.back() {
+            task.table_version()
         } else if let Some(notified) = self.notified.as_ref() {
             change_set_table_version(notified)
         } else {
@@ -363,24 +373,36 @@ impl ShardTaskManager {
         &mut self,
         tag: ShardTag,
         res: FlushResult,
-    ) -> Option<kvenginepb::ChangeSet> {
+    ) -> Either<Option<kvenginepb::ChangeSet>, FlushTask> {
         if self.term != res.term {
             info!("{} discard old term flush result {:?}", tag, res.res);
-            return None;
+            return Either::Left(None);
         }
+        let table_version = res.table_version;
         match res.res {
             Ok(cs) => {
-                self.finished.insert(res.table_version, cs);
-                if self.notified.is_none() {
-                    return self.take_finished_task_for_notify();
-                }
+                self.finished.insert(table_version, cs);
+                Either::Left(
+                    self.notified
+                        .is_none()
+                        .then(|| self.take_finished_task_for_notify())
+                        .flatten(),
+                )
             }
             Err(err) => {
-                // TODO(x): properly handle the error.
-                panic!("{} flush task failed {:?}", tag, err);
+                info!(
+                    "{} flush task failed, table version {}, error {:?}, retrying",
+                    tag, res.table_version, err
+                );
+                let task = self
+                    .task_queue
+                    .iter()
+                    .find(|task| task.table_version() == table_version)
+                    .expect("failed task should exist")
+                    .clone();
+                Either::Right(task)
             }
         }
-        None
     }
 
     fn handle_committed(&mut self, table_version: u64) -> Option<kvenginepb::ChangeSet> {
@@ -398,8 +420,8 @@ impl ShardTaskManager {
     }
 
     fn take_finished_task_for_notify(&mut self) -> Option<kvenginepb::ChangeSet> {
-        if let Some(table_version) = self.task_queue.front() {
-            if let Some(cs) = self.finished.remove(table_version) {
+        if let Some(task) = self.task_queue.front() {
+            if let Some(cs) = self.finished.remove(&task.table_version()) {
                 self.task_queue.pop_front();
                 self.notified = Some(cs.clone());
                 return Some(cs);

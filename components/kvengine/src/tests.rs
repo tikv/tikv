@@ -51,18 +51,13 @@ fn new_test_engine() -> (Engine, mpsc::Sender<ApplyTask>) {
         store_bool(&shard.active, true);
     }
     let (applier_tx, applier_rx) = mpsc::unbounded();
-    let (meta_tx, meta_rx) = mpsc::unbounded();
     let meta_listener = MetaListener::new(listener_rx, applier_tx.clone());
     thread::spawn(move || {
         meta_listener.run();
     });
-    let applier = Applier::new(engine.clone(), applier_rx, meta_tx);
+    let applier = Applier::new(engine.clone(), applier_rx);
     thread::spawn(move || {
         applier.run();
-    });
-    let meta_applier = MetaApplier::new(engine.clone(), meta_rx);
-    thread::spawn(move || {
-        meta_applier.run();
     });
     (engine, applier_tx)
 }
@@ -298,20 +293,11 @@ impl MetaListener {
 struct Applier {
     engine: Engine,
     task_rx: mpsc::Receiver<ApplyTask>,
-    meta_tx: mpsc::Sender<pb::ChangeSet>,
 }
 
 impl Applier {
-    fn new(
-        engine: Engine,
-        task_rx: mpsc::Receiver<ApplyTask>,
-        meta_tx: mpsc::Sender<pb::ChangeSet>,
-    ) -> Self {
-        Self {
-            engine,
-            task_rx,
-            meta_tx,
-        }
+    fn new(engine: Engine, task_rx: mpsc::Receiver<ApplyTask>) -> Self {
+        Self { engine, task_rx }
     }
 
     fn run(&self) {
@@ -337,8 +323,12 @@ impl Applier {
                     }
                     info!("applier executed split");
                 } else {
-                    unwrap_or_return!(self.meta_tx.send(cs), "apply else");
-                    info!("applier sent cs to meta applier");
+                    self.engine.meta_committed(&cs, false);
+                    unwrap_or_return!(
+                        self.engine
+                            .apply_change_set(self.engine.prepare_change_set(cs, false).unwrap()),
+                        "applier apply changeset"
+                    );
                 }
             }
             task.result_tx.send(Ok(())).unwrap();
@@ -366,29 +356,6 @@ impl ApplyTask {
             wb: Some(wb),
             cs: None,
             result_tx,
-        }
-    }
-}
-
-struct MetaApplier {
-    engine: Engine,
-    meta_rx: mpsc::Receiver<pb::ChangeSet>,
-}
-
-impl MetaApplier {
-    fn new(engine: Engine, meta_rx: mpsc::Receiver<pb::ChangeSet>) -> Self {
-        Self { engine, meta_rx }
-    }
-
-    fn run(&self) {
-        loop {
-            let cs = unwrap_or_return!(self.meta_rx.recv(), "meta_applier recv");
-            self.engine.meta_committed(&cs, false);
-            unwrap_or_return!(
-                self.engine
-                    .apply_change_set(self.engine.prepare_change_set(cs, false).unwrap()),
-                "meta_applier cs"
-            );
         }
     }
 }
