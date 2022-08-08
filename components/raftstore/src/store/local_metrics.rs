@@ -413,10 +413,10 @@ pub struct RaftMetrics {
     pub waterfall_metrics: bool,
     pub wf_batch_wait: LocalHistogram,
     pub wf_send_to_queue: LocalHistogram,
-    pub wf_send_proposal: LocalHistogram,
     pub wf_persist_log: LocalHistogram,
     pub wf_commit_log: LocalHistogram,
     pub wf_commit_not_persist_log: LocalHistogram,
+    pub proposal_send_wait: LocalHistogram,
     pub raft_log_gc_skipped: RaftLogGcSkippedMetrics,
 }
 
@@ -438,10 +438,10 @@ impl RaftMetrics {
             waterfall_metrics,
             wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
-            wf_send_proposal: STORE_WF_SEND_PROPOSAL_DURATION_HISTOGRAM.local(),
             wf_persist_log: STORE_WF_PERSIST_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_log: STORE_WF_COMMIT_LOG_DURATION_HISTOGRAM.local(),
             wf_commit_not_persist_log: STORE_WF_COMMIT_NOT_PERSIST_LOG_DURATION_HISTOGRAM.local(),
+            proposal_send_wait: PROPOSAL_SEND_WAIT_DURATION_HISTOGRAM.local(),
             raft_log_gc_skipped: RaftLogGcSkippedMetrics::default(),
         }
     }
@@ -461,10 +461,10 @@ impl RaftMetrics {
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();
             self.wf_send_to_queue.flush();
-            self.wf_send_proposal.flush();
             self.wf_persist_log.flush();
             self.wf_commit_log.flush();
             self.wf_commit_not_persist_log.flush();
+            self.proposal_send_wait.flush();
         }
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
