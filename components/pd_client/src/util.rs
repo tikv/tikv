@@ -611,19 +611,27 @@ impl PdConnector {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
-                        let new_cluster_id = r.get_header().get_cluster_id();
-                        if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to
-                            // loop the rest members
-                            if r.has_leader() {
-                                return Ok(r);
+                        let header=r.get_header();
+                        if let Err(e)=check_resp_header(header){
+                            error!("connect pd failed";"endpoints" => ep, "error" => ?e);
+                        }else{
+                            let new_cluster_id = header.get_cluster_id();
+                            if new_cluster_id == cluster_id {
+                                // check whether the response have leader info, otherwise continue to
+                                // loop the rest members
+                                if r.has_leader() {
+                                    return Ok(r);
+                                }
+                            } else if new_cluster_id == 0 {
+                                warn!("{} connect success, but cluster id is not ready", ep);
+                            } else {
+                                panic!(
+                                    "{} no longer belongs to cluster {}, it is in {}",
+                                    ep, cluster_id, new_cluster_id
+                                );
                             }
-                        } else {
-                            panic!(
-                                "{} no longer belongs to cluster {}, it is in {}",
-                                ep, cluster_id, new_cluster_id
-                            );
                         }
+                       
                     }
                     Err(e) => {
                         error!("connect failed"; "endpoints" => ep, "error" => ?e);
