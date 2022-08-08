@@ -584,7 +584,6 @@ impl SstImporter {
         })()?;
 
         if let Some(range) = direct_retval {
-            file_system::rename(&path.temp, &path.save)?;
             if let Some(key_manager) = &self.key_manager {
                 let temp_str = path
                     .temp
@@ -595,7 +594,14 @@ impl SstImporter {
                     .to_str()
                     .ok_or_else(|| Error::InvalidSstPath(path.save.clone()))?;
                 key_manager.link_file(temp_str, save_str)?;
-                key_manager.delete_file(temp_str)?;
+                let r = file_system::rename(&path.temp, &path.save);
+                let del_file = if r.is_ok() { temp_str } else { save_str };
+                if let Err(e) = key_manager.delete_file(del_file) {
+                    warn!("fail to remove encryption metadata during 'do_download'"; "err" => ?e);
+                }
+                r?;
+            } else {
+                file_system::rename(&path.temp, &path.save)?;
             }
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])

@@ -1771,8 +1771,6 @@ impl SnapManagerCore {
         let tmp_file_paths = cf_file.tmp_file_paths();
         let file_paths = cf_file.file_paths();
         for (i, tmp_file_path) in tmp_file_paths.iter().enumerate() {
-            file_system::rename(&tmp_file_path, &file_paths[i])?;
-
             let mgr = self.encryption_key_manager.as_ref();
             if let Some(mgr) = &mgr {
                 let src = &tmp_file_path;
@@ -1786,7 +1784,15 @@ impl SnapManagerCore {
                     }
                     return Err(e.into());
                 }
-                mgr.delete_file(src)?;
+                let r = file_system::rename(src, dst);
+                let del_file = if r.is_ok() { src } else { dst };
+                if let Err(e) = mgr.delete_file(del_file) {
+                    warn!("fail to remove encryption metadata during 'rename_tmp_cf_file_for_send'";
+                          "err" => ?e);
+                }
+                r?;
+            } else {
+                file_system::rename(&tmp_file_path, &file_paths[i])?;
             }
             let file = Path::new(&file_paths[i]);
             let (checksum, size) = calc_checksum_and_size(file, mgr)?;

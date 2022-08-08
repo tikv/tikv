@@ -1086,13 +1086,18 @@
 ## When it's not set, 15% of available system memory will be used.
 # memory-limit = "1GB"
 
-## Version of raft logs in Raft Engine.
-## Default: 1. Maximum: 2.
+## Version of the log file in Raft Engine.
+##
+## Default: 1. `2` and above versions are only available when
+## TiKV >= 6.3.x, which will introduce new file formats to
+## support new features, i.e. recycling logs, and DIO.
 # format-version = 1
 
-## Determines whether to recycle stale raft logs for future writing. `purge`
-## operations on Raft Engine will firstly put stale files into a list for
-## recycle. It's only available when `format-version` >= `2`.
+## Whether to recycle stale log files in Raft Engine.
+## If `true`, logically purged log files will be reserved for recycling.
+## Only available for `format-version` 2 and above. This option is only
+## available when TiKV >= 6.3.x.
+##
 ## Default: false.
 # enable-log-recycle = false
 

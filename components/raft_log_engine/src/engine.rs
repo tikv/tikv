@@ -195,30 +195,43 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
-        self.base_file_system
-            .rename(src_path.as_ref(), dst_path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             // Note: `rename` will reuse the old entryption info from `src_path`.
-            manager.link_file(
-                src_path.as_ref().to_str().unwrap(),
-                dst_path.as_ref().to_str().unwrap(),
-            )?;
-            manager.delete_file(src_path.as_ref().to_str().unwrap())?;
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.link_file(src_str, dst_str)?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
         }
-        Ok(())
     }
 
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
-        self.base_file_system
-            .rename(src_path.as_ref(), dst_path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
             // Note: `reuse` won't update the data block by the new encrypted
             // key. Users should be responsible for the data security by
             // themselves, if `encryption` was opened.
-            manager.delete_file(src_path.as_ref().to_str().unwrap())?;
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
             manager.new_file(dst_path.as_ref().to_str().unwrap())?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
         }
-        Ok(())
     }
 
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
