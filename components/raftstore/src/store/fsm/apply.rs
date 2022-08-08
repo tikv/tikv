@@ -613,6 +613,7 @@ where
         let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
+            fail_point!("before_nofity_apply_res");
             let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
