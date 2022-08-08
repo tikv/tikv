@@ -1069,7 +1069,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1556,7 +1556,7 @@ mod tests {
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        kv_engine.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
+        kv_engine.put(b"a1", b"val1").unwrap();
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
