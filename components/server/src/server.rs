@@ -322,7 +322,9 @@ where
             let tso = block_on(causal_ts::BatchTsoProvider::new_opt(
                 pd_client.clone(),
                 config.causal_ts.renew_interval.0,
+                config.causal_ts.available_interval.0,
                 config.causal_ts.renew_batch_min_size,
+                config.causal_ts.renew_batch_max_size,
             ));
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
