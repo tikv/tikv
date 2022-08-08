@@ -82,7 +82,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
+        msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util,
@@ -90,7 +90,7 @@ use crate::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
             ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
-        Config, RegionSnapshot, RegionTask,
+        Config, RegionSnapshot, RegionTask, WriteCallback,
     },
     Error, Result,
 };
@@ -100,20 +100,14 @@ const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
-pub struct PendingCmd<S>
-where
-    S: Snapshot,
-{
+pub struct PendingCmd<C> {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<S>>,
+    pub cb: Option<C>,
 }
 
-impl<S> PendingCmd<S>
-where
-    S: Snapshot,
-{
-    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
+impl<C> PendingCmd<C> {
+    fn new(index: u64, term: u64, cb: C) -> PendingCmd<C> {
         PendingCmd {
             index,
             term,
@@ -122,10 +116,7 @@ where
     }
 }
 
-impl<S> Drop for PendingCmd<S>
-where
-    S: Snapshot,
-{
+impl<C> Drop for PendingCmd<C> {
     fn drop(&mut self) {
         if self.cb.is_some() {
             safe_panic!(
@@ -137,10 +128,7 @@ where
     }
 }
 
-impl<S> Debug for PendingCmd<S>
-where
-    S: Snapshot,
-{
+impl<C> Debug for PendingCmd<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -152,30 +140,24 @@ where
     }
 }
 
-impl<S: Snapshot> HeapSize for PendingCmd<S> {}
+impl<C> HeapSize for PendingCmd<C> {}
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    normals: VecDeque<PendingCmd<S>>,
-    conf_change: Option<PendingCmd<S>>,
+pub struct PendingCmdQueue<C> {
+    normals: VecDeque<PendingCmd<C>>,
+    conf_change: Option<PendingCmd<C>>,
 }
 
-impl<S> PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    fn new() -> PendingCmdQueue<S> {
+impl<C> PendingCmdQueue<C> {
+    fn new() -> PendingCmdQueue<C> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<S>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<C>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -190,18 +172,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<S>) {
+    fn append_normal(&mut self, cmd: PendingCmd<C>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<S>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<C>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<C>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -540,7 +522,7 @@ where
                 .applied_batch
                 .cb_batch
                 .iter()
-                .flat_map(|(cb, _)| cb.get_trackers())
+                .flat_map(|(cb, _)| cb.trackers())
                 .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
                 .flatten()
                 .collect();
@@ -579,7 +561,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -668,7 +650,7 @@ where
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl Snapshot>) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl ErrorCallback>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -679,10 +661,10 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_req_region_removed(region_id: u64, cb: impl ErrorCallback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
 /// Calls the callback of `cmd` when it can not be processed further.
@@ -690,7 +672,7 @@ fn notify_stale_command(
     region_id: u64,
     peer_id: u64,
     term: u64,
-    mut cmd: PendingCmd<impl Snapshot>,
+    mut cmd: PendingCmd<impl ErrorCallback>,
 ) {
     info!(
         "command is stale, skip";
@@ -702,15 +684,15 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req(term: u64, cb: impl ErrorCallback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
-pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback) {
     let mut resp = cmd_resp::err_resp(Error::StaleCommand, term);
     resp.mut_header().mut_error().set_message(msg);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
 /// Checks if a write is needed to be issued before handling the command.
@@ -877,7 +859,7 @@ where
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<EK::Snapshot>,
+    pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -2946,10 +2928,7 @@ pub fn compact_raft_log(
     Ok(())
 }
 
-pub struct Apply<S>
-where
-    S: Snapshot,
-{
+pub struct Apply<C> {
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
@@ -2957,11 +2936,11 @@ where
     pub commit_term: u64,
     pub entries: SmallVec<[CachedEntries; 1]>,
     pub entries_size: usize,
-    pub cbs: Vec<Proposal<S>>,
+    pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
 }
 
-impl<S: Snapshot> Apply<S> {
+impl<C: WriteCallback> Apply<C> {
     pub(crate) fn new(
         peer_id: u64,
         region_id: u64,
@@ -2969,9 +2948,9 @@ impl<S: Snapshot> Apply<S> {
         commit_index: u64,
         commit_term: u64,
         entries: Vec<Entry>,
-        cbs: Vec<Proposal<S>>,
+        cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
-    ) -> Apply<S> {
+    ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
             entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
@@ -2993,7 +2972,7 @@ impl<S: Snapshot> Apply<S> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Callback::Write { trackers, .. } = &mut cb.cb {
+            if let Some(trackers) = cb.cb.trackers_mut() {
                 for tracker in trackers {
                     tracker.observe(now, &metrics.store_time, |t| {
                         t.metrics.write_instant = Some(now);
@@ -3007,7 +2986,7 @@ impl<S: Snapshot> Apply<S> {
         }
     }
 
-    fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
+    fn try_batch(&mut self, other: &mut Apply<C>) -> bool {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
@@ -3061,21 +3040,18 @@ impl Registration {
 }
 
 #[derive(Debug)]
-pub struct Proposal<S>
-where
-    S: Snapshot,
-{
+pub struct Proposal<C> {
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
-    pub cb: Callback<S>,
+    pub cb: C,
     /// `propose_time` is set to the last time when a peer starts to renew
     /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
 }
 
-impl<S: Snapshot> HeapSize for Proposal<S> {}
+impl<C> HeapSize for Proposal<C> {}
 
 pub struct Destroy {
     region_id: u64,
@@ -3224,7 +3200,7 @@ where
 {
     Apply {
         start: Instant,
-        apply: Apply<EK::Snapshot>,
+        apply: Apply<Callback<EK::Snapshot>>,
     },
     Registration(Registration),
     LogsUpToDate(CatchUpLogs),
@@ -3245,7 +3221,7 @@ impl<EK> Msg<EK>
 where
     EK: KvEngine,
 {
-    pub fn apply(apply: Apply<EK::Snapshot>) -> Msg<EK> {
+    pub fn apply(apply: Apply<Callback<EK::Snapshot>>) -> Msg<EK> {
         Msg::Apply {
             start: Instant::now(),
             apply,
@@ -3381,7 +3357,11 @@ where
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed
     /// entries.
-    fn handle_apply(&mut self, apply_ctx: &mut ApplyContext<EK>, mut apply: Apply<EK::Snapshot>) {
+    fn handle_apply(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK>,
+        mut apply: Apply<Callback<EK::Snapshot>>,
+    ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
         }
@@ -3455,12 +3435,12 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<Callback<EK::Snapshot>>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -3760,7 +3740,7 @@ where
                     for tracker in apply
                         .cbs
                         .iter()
-                        .flat_map(|p| p.cb.get_trackers())
+                        .flat_map(|p| p.cb.trackers())
                         .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
@@ -4161,7 +4141,7 @@ where
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
-                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
                     }
@@ -4293,14 +4273,11 @@ mod memtrace {
         pub merge_yield: usize,
     }
 
-    impl<S> HeapSize for PendingCmdQueue<S>
-    where
-        S: Snapshot,
-    {
+    impl<C> HeapSize for PendingCmdQueue<C> {
         fn heap_size(&self) -> usize {
             // Some fields of `PendingCmd` are on stack, but ignore them because they are
             // just some small boxed closures.
-            self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+            self.normals.capacity() * mem::size_of::<PendingCmd<C>>()
         }
     }
 
@@ -4612,7 +4589,7 @@ mod tests {
         index: u64,
         term: u64,
         cb: Callback<S>,
-    ) -> Proposal<S> {
+    ) -> Proposal<Callback<S>> {
         Proposal {
             is_conf_change,
             index,
@@ -4623,13 +4600,13 @@ mod tests {
         }
     }
 
-    fn apply<S: Snapshot>(
+    fn apply<C: WriteCallback>(
         peer_id: u64,
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
-        cbs: Vec<Proposal<S>>,
-    ) -> Apply<S> {
+        cbs: Vec<Proposal<C>>,
+    ) -> Apply<C> {
         let (commit_index, commit_term) = entries
             .last()
             .map(|e| (e.get_index(), e.get_term()))
@@ -4813,7 +4790,7 @@ mod tests {
         system.shutdown();
     }
 
-    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<S> {
+    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<Callback<S>> {
         proposal(
             false,
             idx,
@@ -6307,7 +6284,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
         });
         res.unwrap_err();
     }
@@ -6315,7 +6292,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd
             // dtor.

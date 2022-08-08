@@ -93,7 +93,7 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -101,7 +101,7 @@ use crate::{
             ReadProgress, RegionTask, SplitCheckTask,
         },
         Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-        RAFT_INIT_LOG_INDEX,
+        WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -121,16 +121,13 @@ pub enum StaleState {
 }
 
 #[derive(Debug)]
-struct ProposalQueue<S>
-where
-    S: Snapshot,
-{
+pub struct ProposalQueue<C> {
     tag: String,
-    queue: VecDeque<Proposal<S>>,
+    queue: VecDeque<Proposal<C>>,
 }
 
-impl<S: Snapshot> ProposalQueue<S> {
-    fn new(tag: String) -> ProposalQueue<S> {
+impl<C: WriteCallback> ProposalQueue<C> {
+    fn new(tag: String) -> ProposalQueue<C> {
         ProposalQueue {
             tag,
             queue: VecDeque::new(),
@@ -146,7 +143,7 @@ impl<S: Snapshot> ProposalQueue<S> {
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .get_trackers()
+                    .trackers()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -159,7 +156,7 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     // Find proposal in front or at the given term and index
-    fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<S>> {
+    fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<C>> {
         self.queue.pop_front().and_then(|p| {
             // Comparing the term first then the index, because the term is
             // increasing among all log entries and the index is increasing
@@ -174,7 +171,7 @@ impl<S: Snapshot> ProposalQueue<S> {
 
     /// Find proposal at the given term and index and notify stale proposals
     /// in front that term and index
-    fn find_proposal(&mut self, term: u64, index: u64, current_term: u64) -> Option<Proposal<S>> {
+    fn find_proposal(&mut self, term: u64, index: u64, current_term: u64) -> Option<Proposal<C>> {
         while let Some(p) = self.pop(term, index) {
             if p.term == term {
                 if p.index == index {
@@ -193,11 +190,11 @@ impl<S: Snapshot> ProposalQueue<S> {
     }
 
     #[inline]
-    fn oldest(&self) -> Option<&Proposal<S>> {
+    fn oldest(&self) -> Option<&Proposal<C>> {
         self.queue.front()
     }
 
-    fn push(&mut self, p: Proposal<S>) {
+    fn push(&mut self, p: Proposal<C>) {
         if let Some(f) = self.queue.back() {
             // The term must be increasing among all log entries and the index
             // must be increasing inside a given term
@@ -217,7 +214,7 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    fn back(&self) -> Option<&Proposal<S>> {
+    fn back(&self) -> Option<&Proposal<C>> {
         self.queue.back()
     }
 }
@@ -730,11 +727,11 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    proposals: ProposalQueue<EK::Snapshot>,
+    proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
     #[getset(get = "pub")]
     leader_lease: Lease,
-    pending_reads: ReadIndexQueue<EK::Snapshot>,
+    pending_reads: ReadIndexQueue<Callback<EK::Snapshot>>,
     /// Threshold of long uncommitted proposals.
     ///
     /// Note that this is a dynamically changing value. Check the
@@ -1646,7 +1643,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.get_trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.trackers().iter().flat_map(|v| v.iter()) {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -3054,7 +3051,7 @@ where
 
     fn response_read<T>(
         &self,
-        read: &mut ReadIndexRequest<EK::Snapshot>,
+        read: &mut ReadIndexRequest<Callback<EK::Snapshot>>,
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
@@ -3547,7 +3544,7 @@ where
     fn post_propose<T>(
         &mut self,
         poll_ctx: &mut PollContext<EK, ER, T>,
-        mut p: Proposal<EK::Snapshot>,
+        mut p: Proposal<Callback<EK::Snapshot>>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -3839,7 +3836,11 @@ where
         );
     }
 
-    pub fn push_pending_read(&mut self, read: ReadIndexRequest<EK::Snapshot>, is_leader: bool) {
+    pub fn push_pending_read(
+        &mut self,
+        read: ReadIndexRequest<Callback<EK::Snapshot>>,
+        is_leader: bool,
+    ) {
         self.pending_reads.push_back(read, is_leader);
     }
 
@@ -3864,7 +3865,7 @@ where
             );
             poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
-            cb.invoke_with_response(err_resp);
+            cb.report_error(err_resp);
             self.should_wake_up = true;
             return false;
         }
@@ -3941,7 +3942,7 @@ where
             }
             self.should_wake_up = true;
             cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id, None));
-            cb.invoke_with_response(err_resp);
+            cb.report_error(err_resp);
             return false;
         }
 
@@ -5818,7 +5819,7 @@ mod tests {
 
     #[test]
     fn test_propose_queue_find_proposal() {
-        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> =
             ProposalQueue::new("tag".to_owned());
         let gen_term = |index: u64| (index / 10) + 1;
         let push_proposal = |pq: &mut ProposalQueue<_>, index: u64| {
@@ -5881,7 +5882,7 @@ mod tests {
         fn must_not_call() -> ExtCallback {
             Box::new(move || unreachable!())
         }
-        let mut pq: ProposalQueue<engine_panic::PanicSnapshot> =
+        let mut pq: ProposalQueue<Callback<engine_panic::PanicSnapshot>> =
             ProposalQueue::new("tag".to_owned());
 
         // (1, 4) and (1, 5) is not committed

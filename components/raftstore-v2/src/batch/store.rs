@@ -7,7 +7,7 @@ use batch_system::{
 };
 use collections::HashMap;
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
-use futures_util::{compat::Future01CompatExt, FutureExt};
+use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raftstore::store::{fsm::store::PeerTickBatch, Config, Transport};
 use slog::Logger;
