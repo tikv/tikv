@@ -107,14 +107,14 @@ impl RaftCommand {
     }
 }
 
-pub struct ReadCommand<S: Snapshot> {
+pub struct ReadCommand {
     pub cmd: RaftCommand,
-    pub ch: ReadChannel<S>,
+    pub ch: ReadChannel,
 }
 
-impl<S: Snapshot> ReadCommand<S> {
+impl ReadCommand {
     #[inline]
-    pub fn new(request: RaftCmdRequest, ch: ReadChannel<S>) -> Self {
+    pub fn new(request: RaftCmdRequest, ch: ReadChannel) -> Self {
         Self {
             cmd: RaftCommand::new(request),
             ch,
@@ -138,14 +138,14 @@ impl WriteCommand {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg<EK: KvEngine> {
+pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
     RaftMessage(InspectedRaftMessage),
     /// Read command only involves read operations, they are usually processed
     /// using lease or read index.
-    ReadCommand(ReadCommand<EK::Snapshot>),
+    ReadCommand(ReadCommand),
     /// Write command needs to be processed by all peers in a raft group. They
     /// will be transformed into logs and be proposed by the leader peer.
     WriteCommand(WriteCommand),
@@ -162,7 +162,7 @@ pub enum PeerMsg<EK: KvEngine> {
     Persisted { peer_id: u64, ready_number: u64 },
 }
 
-impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
+impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),

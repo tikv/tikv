@@ -12,13 +12,13 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver, Sender};
 
 use crate::{batch::StoreContext, raft::Peer, PeerMsg, Result};
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);
 
 pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     peer: Peer<EK, ER>,
     logger: Logger,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    receiver: Receiver<PeerMsg<EK>>,
+    receiver: Receiver<PeerMsg>,
     is_stopped: bool,
 }
 
@@ -51,7 +51,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg<EK>>) -> usize {
+    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>) -> usize {
         let l = peer_msg_buf.len();
         for i in l..peer_msg_buf.capacity() {
             match self.receiver.try_recv() {
@@ -69,7 +69,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
-    type Message = PeerMsg<EK>;
+    type Message = PeerMsg;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -104,7 +104,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
         Self { fsm, store_ctx }
     }
 
-    pub fn handle_msgs(&self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
+    pub fn handle_msgs(&self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             // TODO: handle the messages.
         }

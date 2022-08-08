@@ -54,16 +54,16 @@ impl<T> StoreContext<T> {
 }
 
 /// Poller for polling raft state machines.
-struct StorePoller<EK: KvEngine, T> {
+struct StorePoller<T> {
     store_msg_buf: Vec<StoreMsg>,
-    peer_msg_buf: Vec<PeerMsg<EK>>,
+    peer_msg_buf: Vec<PeerMsg>,
     poll_ctx: StoreContext<T>,
     cfg_tracker: Tracker<Config>,
     last_flush_time: TiInstant,
     need_flush_events: bool,
 }
 
-impl<EK: KvEngine, T> StorePoller<EK, T> {
+impl<T> StorePoller<T> {
     pub fn new(poll_ctx: StoreContext<T>, cfg_tracker: Tracker<Config>) -> Self {
         Self {
             store_msg_buf: Vec::new(),
@@ -100,7 +100,7 @@ impl<EK: KvEngine, T> StorePoller<EK, T> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<EK, ER>, StoreFsm>
-    for StorePoller<EK, T>
+    for StorePoller<T>
 {
     fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
     where
@@ -249,7 +249,7 @@ where
     EK: KvEngine,
     T: Transport + 'static,
 {
-    type Handler = StorePoller<EK, T>;
+    type Handler = StorePoller<T>;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let poll_ctx = StoreContext::new(

@@ -311,32 +311,23 @@ impl Drop for WriteChannel {
 unsafe impl Send for WriteChannel {}
 unsafe impl Sync for WriteChannel {}
 
-pub struct ReadResponse<S: Snapshot> {
-    pub snapshot: RegionSnapshot<S>,
-    // What is this?
+/// Response for Read.
+///
+/// Unlike v1, snapshot are always taken in LocalReader, hence snapshot doesn't
+/// need to be a field of the struct.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ReadResponse {
     pub txn_extra_op: TxnExtraOp,
 }
 
-// This is only necessary because of seeming limitations in derive(Clone) w/r/t
-// generics. If it can be deleted in the future in favor of derive, it should
-// be.
-impl<S: Snapshot> Clone for ReadResponse<S> {
-    fn clone(&self) -> ReadResponse<S> {
-        ReadResponse {
-            snapshot: self.snapshot.clone(),
-            txn_extra_op: self.txn_extra_op,
-        }
-    }
+pub type ReadResult = Result<ReadResponse, RaftCmdResponse>;
+
+pub struct ReadChannel {
+    core: ManuallyDrop<Arc<EventCore<ReadResult>>>,
 }
 
-pub type ReadResult<S> = Result<ReadResponse<S>, RaftCmdResponse>;
-
-pub struct ReadChannel<S: Snapshot> {
-    core: ManuallyDrop<Arc<EventCore<ReadResult<S>>>>,
-}
-
-impl<S: Snapshot> ReadChannel<S> {
-    pub fn pair() -> (Self, ReadSubscriber<S>) {
+impl ReadChannel {
+    pub fn pair() -> (Self, ReadSubscriber) {
         let core = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
@@ -351,7 +342,7 @@ impl<S: Snapshot> ReadChannel<S> {
     }
 }
 
-impl<S: Snapshot> ErrorCallback for ReadChannel<S> {
+impl ErrorCallback for ReadChannel {
     #[inline]
     fn report_error(self, err: RaftCmdResponse) {
         self.set_result(Err(err));
@@ -363,11 +354,11 @@ impl<S: Snapshot> ErrorCallback for ReadChannel<S> {
     }
 }
 
-impl<S: Snapshot> ReadCallback for ReadChannel<S> {
-    type Response = ReadResult<S>;
+impl ReadCallback for ReadChannel {
+    type Response = ReadResult;
 
     #[inline]
-    fn set_result(mut self, res: ReadResult<S>) {
+    fn set_result(mut self, res: ReadResult) {
         self.core.set_result(res);
         unsafe {
             ManuallyDrop::drop(&mut self.core);
@@ -376,7 +367,7 @@ impl<S: Snapshot> ReadCallback for ReadChannel<S> {
     }
 }
 
-impl<S: Snapshot> Drop for ReadChannel<S> {
+impl Drop for ReadChannel {
     #[inline]
     fn drop(&mut self) {
         self.core.cancel();
@@ -386,21 +377,21 @@ impl<S: Snapshot> Drop for ReadChannel<S> {
     }
 }
 
-unsafe impl<S: Snapshot> Send for ReadChannel<S> {}
-unsafe impl<S: Snapshot> Sync for ReadChannel<S> {}
+unsafe impl Send for ReadChannel {}
+unsafe impl Sync for ReadChannel {}
 
-pub struct ReadSubscriber<S: Snapshot> {
-    core: Arc<EventCore<ReadResult<S>>>,
+pub struct ReadSubscriber {
+    core: Arc<EventCore<ReadResult>>,
 }
 
-impl<S: Snapshot> ReadSubscriber<S> {
-    pub async fn result(&mut self) -> Option<ReadResult<S>> {
+impl ReadSubscriber {
+    pub async fn result(&mut self) -> Option<ReadResult> {
         WaitResult { core: &self.core }.await
     }
 }
 
-unsafe impl<S: Snapshot> Send for ReadSubscriber<S> {}
-unsafe impl<S: Snapshot> Sync for ReadSubscriber<S> {}
+unsafe impl Send for ReadSubscriber {}
+unsafe impl Sync for ReadSubscriber {}
 
 #[cfg(test)]
 mod tests {
@@ -426,7 +417,7 @@ mod tests {
         assert!(!block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result));
 
-        let (mut chan, mut sub) = ReadChannel::<KvTestSnapshot>::pair();
+        let (mut chan, mut sub) = ReadChannel::pair();
         drop(chan);
         assert!(block_on(sub.result()).is_none());
     }
@@ -443,11 +434,15 @@ mod tests {
         assert!(block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result.clone()));
 
-        let (mut chan, mut sub) = ReadChannel::<KvTestSnapshot>::pair();
+        let (mut chan, mut sub) = ReadChannel::pair();
         chan.set_result(Err(result.clone()));
-        match block_on(sub.result()).unwrap() {
-            Err(e) => assert_eq!(e, result),
-            _ => panic!("expect Err(..), got Ok(..)"),
-        }
+        assert_eq!(block_on(sub.result()).unwrap(), Err(result));
+
+        let (mut chan, mut sub) = ReadChannel::pair();
+        let resp = ReadResponse {
+            txn_extra_op: TxnExtraOp::ReadOldValue,
+        };
+        chan.set_result(Ok(resp.clone()));
+        assert_eq!(block_on(sub.result()).unwrap(), Ok(resp));
     }
 }
