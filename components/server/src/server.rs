@@ -867,6 +867,7 @@ where
             self.state.clone(),
             self.background_worker.clone(),
             Some(health_service.clone()),
+            None,
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));

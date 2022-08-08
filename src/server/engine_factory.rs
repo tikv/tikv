@@ -11,8 +11,8 @@ use engine_rocks::{
     RocksEventListener,
 };
 use engine_traits::{
-    CfOptions, CfOptionsExt, CompactionJobInfo, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
-    CF_WRITE,
+    CfOptions, CfOptionsExt, CompactionJobInfo, OpenOptions, Result, TabletAccessor, TabletFactory,
+    CF_DEFAULT, CF_WRITE,
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
@@ -227,25 +227,42 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         Ok(tablet)
     }
 
-    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<RocksEngine> {
-        let db = self.inner.root_db.lock().unwrap();
-        if let Some(cp) = db.as_ref() {
-            return Ok(cp.clone());
+    /// Open the root tablet according to the OpenOptions.
+    ///
+    /// If options.create_new is true, create the root tablet. If the tablet
+    /// exists, it will fail.
+    ///
+    /// If options.create is true, open the the root tablet if it exists or
+    /// create it otherwise.
+    fn open_tablet(
+        &self,
+        _id: u64,
+        _suffix: Option<u64>,
+        options: OpenOptions,
+    ) -> Result<RocksEngine> {
+        if let Some(db) = self.inner.root_db.lock().unwrap().as_ref() {
+            if options.create_new() {
+                return Err(box_err!(
+                    "root tablet {} already exists",
+                    db.as_inner().path()
+                ));
+            }
+            return Ok(db.clone());
+        } else if options.create_new() || options.create() {
+            return self.create_shared_db();
         }
 
+        Err(box_err!("root tablet has not been initialized"))
+    }
+
+    fn open_tablet_raw(
+        &self,
+        _path: &Path,
+        _id: u64,
+        _suffix: u64,
+        _options: OpenOptions,
+    ) -> Result<RocksEngine> {
         self.create_shared_db()
-    }
-
-    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<RocksEngine> {
-        self.open_tablet_raw(&self.tablet_path(0, 0), false).ok()
-    }
-
-    fn open_tablet_cache_any(&self, _id: u64) -> Option<RocksEngine> {
-        self.open_tablet_cache(0, 0)
-    }
-
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<RocksEngine> {
-        TabletFactory::create_tablet(self, 0, 0)
     }
 
     fn exists_raw(&self, _path: &Path) -> bool {
