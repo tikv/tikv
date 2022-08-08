@@ -38,6 +38,7 @@ where
     });
 }
 
+#[pin_project]
 pub struct TrackedFuture<F> {
     #[pin]
     future: F,
