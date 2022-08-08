@@ -65,13 +65,12 @@ use tikv_util::{
     Either,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, RaftReadyMetrics, TimeTracker},
+    local_metrics::{RaftMetrics, RaftReadyMetrics},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -138,16 +137,16 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    /// Find the trackers of given index.
-    /// Caller should check if term is matched before using trackers.
-    fn find_trackers(&self, index: u64) -> Option<(u64, &SmallVec<[TimeTracker; 4]>)> {
+    /// Find the request times of given index.
+    /// Caller should check if term is matched before using request times.
+    fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .get_trackers()
+                    .get_request_times()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -726,6 +725,9 @@ where
     #[getset(get = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
+    /// Record the propose instants to calculate the wait duration before
+    /// the proposal is sent through the Raft client.
+    pending_propose_instants: VecDeque<(u64, Instant)>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -928,6 +930,7 @@ where
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
             pending_reads: Default::default(),
+            pending_propose_instants: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1575,7 +1578,7 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
-        let mut now = None;
+        let now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1591,7 +1594,7 @@ where
                 // network partition from the new leader.
                 // For lease safety during leader transfer, transit `leader_lease`
                 // to suspect.
-                self.leader_lease.suspect(*now.insert(monotonic_raw_now()));
+                self.leader_lease.suspect(monotonic_raw_now());
             }
 
             let to_peer_id = msg.get_to_peer().get_id();
@@ -1607,31 +1610,22 @@ where
                 "disk_usage" => ?msg.get_disk_usage(),
             );
 
-            for (term, index) in msg
+            for index in msg
                 .get_message()
                 .get_entries()
                 .iter()
-                .map(|e| (e.get_term(), e.get_index()))
+                .map(|e| e.get_index())
             {
-                if let Ok(idx) = self
-                    .proposals
-                    .queue
-                    .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
-                {
-                    let proposal = &self.proposals.queue[idx];
-                    if term == proposal.term
-                        && let Some(propose_time) = proposal.propose_time
-                        && let Ok(dur) = ((*now.get_or_insert(monotonic_raw_now())) - propose_time).to_std() {
+                while let Some((propose_idx, instant)) = self.pending_propose_instants.front() {
+                    if index == *propose_idx {
                         ctx.raft_metrics
                             .proposal_send_wait
-                            .observe(dur.as_secs_f64());
-                        for t in proposal.cb.get_trackers().iter().flat_map(|v| v.iter().flat_map(|t| t.as_tracker_token())) {
-                            GLOBAL_TRACKERS.with_tracker(t, |trakcer| {
-                                if trakcer.metrics.propose_send_wait_nanos == 0{
-                                    trakcer.metrics.propose_send_wait_nanos = dur.as_nanos() as u64;
-                                }
-                            });
-                        }
+                            .observe(now.saturating_duration_since(*instant).as_secs_f64());
+                    }
+                    if index >= *propose_idx {
+                        self.pending_propose_instants.pop_front();
+                    } else {
+                        break;
                     }
                 }
             }
@@ -1759,19 +1753,22 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let now = Instant::now();
+        let mut now = None;
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    for tracker in trackers {
-                        tracker.observe(now, &metrics.wf_persist_log, |t| {
-                            &mut t.metrics.wf_persist_log_nanos
-                        });
+                    if now.is_none() {
+                        now = Some(TiInstant::now());
+                    }
+                    for t in times {
+                        metrics
+                            .wf_persist_log
+                            .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
             }
@@ -1782,26 +1779,25 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let now = Instant::now();
+        let mut now = None;
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    let commit_persisted = index <= self.raft_group.raft.raft_log.persisted;
-                    let hist = if commit_persisted {
+                    if now.is_none() {
+                        now = Some(TiInstant::now());
+                    }
+                    let hist = if index <= self.raft_group.raft.raft_log.persisted {
                         &metrics.wf_commit_log
                     } else {
                         &metrics.wf_commit_not_persist_log
                     };
-                    for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
+                    for t in times {
+                        hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
             }
@@ -2087,6 +2083,7 @@ where
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
+                    self.pending_propose_instants.clear();
                 }
                 _ => {}
             }
@@ -2523,17 +2520,20 @@ where
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
-        let mut trackers = vec![];
+        let mut request_times = vec![];
         if ctx.raft_metrics.waterfall_metrics {
-            let now = Instant::now();
+            let mut now = None;
             for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
+                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        trackers.extend_from_slice(times);
-                        for tracker in times {
-                            tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
-                                &mut t.metrics.wf_send_to_queue_nanos
-                            });
+                        request_times.extend_from_slice(times);
+                        if now.is_none() {
+                            now = Some(TiInstant::now());
+                        }
+                        for t in times {
+                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
+                                now.unwrap().saturating_duration_since(*t),
+                            ));
                         }
                     }
                 }
@@ -2560,8 +2560,8 @@ where
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if !trackers.is_empty() {
-                    task.trackers = trackers;
+                if !request_times.is_empty() {
+                    task.request_times = request_times;
                 }
 
                 if let Some(write_worker) = &mut ctx.sync_write_worker {
@@ -4307,6 +4307,9 @@ where
                 _ => {}
             }
         }
+
+        self.pending_propose_instants
+            .push_back((propose_index, Instant::now()));
 
         Ok(Either::Left(propose_index))
     }
