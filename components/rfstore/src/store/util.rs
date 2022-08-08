@@ -301,3 +301,7 @@ pub(crate) fn raw_end_key(region: &metapb::Region) -> Vec<u8> {
     let mut slice = region.end_key.as_slice();
     decode_bytes(&mut slice, false).unwrap()
 }
+
+pub fn region_has_peer(region: &metapb::Region, peer_id: u64) -> bool {
+    region.get_peers().iter().any(|p| p.id == peer_id)
+}

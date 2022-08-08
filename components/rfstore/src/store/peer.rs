@@ -1457,9 +1457,12 @@ impl Peer {
             self.peer_id(),
             self.tag(),
         ) {
-            // To be consistent with preprocess_pending_splits, we also need to persist the state
-            // before apply.
-            write_peer_state(&mut ctx.raft_wb, &region);
+            if region_has_peer(&region, self.peer_id()) {
+                write_peer_state(&mut ctx.raft_wb, &region);
+            } else {
+                // It's a remove self conf change, it will be updated in destroy method with
+                // tombstone state.
+            }
             self.preprocessed_region = Some(region);
         }
     }
