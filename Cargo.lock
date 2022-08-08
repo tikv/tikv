@@ -3677,18 +3677,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.0.11"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78203e83c48cffbe01e4a2d35d566ca4de445d79a85372fc64e378bfc812a260"
+checksum = "58ad3879ad3baf4e44784bc6a718a8698867bb991f8ce24d1bcbe2cfb4c3a75e"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.0.11"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "710faf75e1b33345361201d36d04e98ac1ed8909151a017ed384700836104c74"
+checksum = "744b6f092ba29c3650faf274db506afd39944f48420f6c86b17cfe0ee1cb36bb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4184,7 +4184,6 @@ dependencies = [
  "batch-system",
  "collections",
  "crossbeam",
- "engine_rocks",
  "engine_test",
  "engine_traits",
  "error_code",
@@ -4203,7 +4202,6 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
- "tikv_kv",
  "tikv_util",
  "time",
  "txn_types",
