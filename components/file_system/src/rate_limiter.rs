@@ -184,7 +184,7 @@ impl IoRateLimiterInner {
     }
 }
 
-/// Use cacro to unfold into both async or sync code.
+/// Use macro to unfold into both async or sync code.
 macro_rules! do_sleep {
     ($duration:expr,sync) => {
         std::thread::sleep($duration);
@@ -207,7 +207,7 @@ macro_rules! do_sleep {
     };
 }
 
-/// Use cacro to unfold into both async or sync code.
+/// Use macro to unfold into both async or sync code.
 macro_rules! request_physical_imp {
     ($self:ident, $priority:ident, $bytes:expr, $mode:tt) => {{
         let priority_idx = $priority as usize;
@@ -727,8 +727,6 @@ mod tests {
         let total_bytes = write_bytes + compaction_bytes + import_bytes;
         approximate_eq!(write_bytes, total_bytes * write_work / 100);
         approximate_eq!(compaction_bytes + write_bytes, total_bytes);
-        // println!("{}, {}, {}, {}", write_bytes, compaction_bytes, import_bytes,
-        // bytes_per_sec * 2);
         approximate_eq!(total_bytes, bytes_per_sec as f64 * duration.as_secs_f64());
     }
 

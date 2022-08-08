@@ -117,7 +117,7 @@ l0-files-threshold = 10
 [storage.io-rate-limit]
 max-bytes-per-sec = "1000MB"
 max-buffered-read-bytes = "5MB"
-mode = "all-io"
+mode = "read-only"
 strict = true
 foreground-read-priority = "low"
 foreground-write-priority = "low"
