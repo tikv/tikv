@@ -35,7 +35,7 @@ pub struct ReqBatcher {
 
 impl ReqBatcher {
     pub fn new(batch_size: usize) -> ReqBatcher {
-        let begin_instant = Instant::now();
+        let begin_instant = Instant::now_coarse();
         ReqBatcher {
             gets: vec![],
             raw_gets: vec![],
