@@ -287,6 +287,7 @@ impl WriteCallback for WriteChannel {
         None
     }
 
+    // TODO: support executing hooks inside setting result.
     #[inline]
     fn set_result(mut self, res: RaftCmdResponse) {
         self.core.set_result(res);
