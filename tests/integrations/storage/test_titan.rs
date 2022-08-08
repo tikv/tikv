@@ -20,7 +20,7 @@ use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, Region
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
-    config::TiKvConfig,
+    config::TikvConfig,
     storage::{mvcc::ScannerBuilder, txn::Scanner},
 };
 use tikv_util::{
@@ -148,7 +148,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Set configs and create engines
-    let mut cfg = TiKvConfig::default();
+    let mut cfg = TikvConfig::default();
     let cache = cfg.storage.block_cache.build_shared_cache();
     cfg.rocksdb.titan.enabled = true;
     cfg.rocksdb.titan.disable_gc = true;

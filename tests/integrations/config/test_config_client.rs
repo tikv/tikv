@@ -19,7 +19,7 @@ fn change(name: &str, value: &str) -> HashMap<String, String> {
 
 #[test]
 fn test_update_config() {
-    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
@@ -68,7 +68,7 @@ fn test_dispatch_change() {
         }
     }
 
-    let (mut cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
@@ -89,7 +89,7 @@ fn test_dispatch_change() {
 
 #[test]
 fn test_write_update_to_file() {
-    let (mut cfg, tmp_dir) = TiKvConfig::with_tmp().unwrap();
+    let (mut cfg, tmp_dir) = TikvConfig::with_tmp().unwrap();
     cfg.cfg_path = tmp_dir.path().join("cfg_file").to_str().unwrap().to_owned();
     {
         let c = r#"
@@ -201,7 +201,7 @@ fn test_update_from_toml_file() {
         }
     }
 
-    let (cfg, _dir) = TiKvConfig::with_tmp().unwrap();
+    let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let cfg = cfg_controller.get_current();
     let mgr = CfgManager(Arc::new(Mutex::new(cfg.raft_store.clone())));
