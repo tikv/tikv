@@ -155,10 +155,10 @@ impl TaskContext {
             owned: AtomicBool::new(false),
             write_bytes,
             tag,
-            latch_timer: Instant::now(),
+            latch_timer: Instant::now_coarse(),
             _cmd_timer: CmdTimer {
                 tag,
-                begin: Instant::now(),
+                begin: Instant::now_coarse(),
             },
         }
     }
@@ -701,7 +701,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             fail_point!("scheduler_async_snapshot_finish");
             SCHED_STAGE_COUNTER_VEC.get(tag).process.inc();
 
-            let timer = Instant::now();
+            let timer = Instant::now_coarse();
 
             let region_id = task.cmd.ctx().get_region_id();
             let ts = task.cmd.ts();
