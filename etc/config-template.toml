@@ -1095,7 +1095,7 @@
 
 ## Whether to recycle stale log files in Raft Engine.
 ## If `true`, logically purged log files will be reserved for recycling.
-## Only available for `format-version` 2 and above. This option is only
+## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
 ## Default: false.
