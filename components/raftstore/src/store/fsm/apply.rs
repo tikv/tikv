@@ -28,7 +28,7 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    DeleteStrategy, KvEngine, Mutable, Peekable, PerfContext, PerfContextKind, RaftEngine,
     RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
@@ -54,6 +54,7 @@ use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, box_try,
+    codec::number::NumberEncoder,
     config::{Tracker, VersionTrack},
     debug, error, info,
     memory::HeapSize,
@@ -66,6 +67,7 @@ use tikv_util::{
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
+use txn_types::{Lock, Write, WriteType};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -380,6 +382,7 @@ where
     kv_wb: EK::WriteBatch,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
+    wb_locks: HashMap<Vec<u8>, Vec<u8>>,
 
     committed_count: usize,
 
@@ -453,6 +456,7 @@ where
             router,
             notifier,
             kv_wb,
+            wb_locks: HashMap::default(),
             applied_batch: ApplyCallbackBatch::new(),
             apply_res: vec![],
             exec_log_index: 0,
@@ -536,6 +540,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            self.wb_locks.clear();
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
@@ -1539,6 +1544,7 @@ where
                     );
                     continue;
                 }
+                CmdType::Commit => self.handle_commit(ctx, req),
                 CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     Err(box_err!("invalid cmd type, message maybe corrupted"))
                 }
@@ -1599,6 +1605,7 @@ where
             if cf == CF_LOCK {
                 self.metrics.lock_cf_written_bytes += key.len() as u64;
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
+                ctx.wb_locks.insert(key.to_vec(), value.to_vec());
             }
             // TODO: check whether cf exists or not.
             ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
@@ -1780,6 +1787,45 @@ where
             }
         };
 
+        Ok(())
+    }
+
+    fn handle_commit(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        let commit = req.get_commit();
+        let keys = commit.get_keys();
+        let snap = &ctx.engine.snapshot();
+        for key in keys {
+            util::check_key_in_region(key, &self.region)?;
+            keys::data_key_with_buffer(key, &mut ctx.key_buffer);
+            let db_vector;
+            let lock = if let Some(lock) = ctx.wb_locks.get(&ctx.key_buffer) {
+                lock.as_slice()
+            } else {
+                db_vector = snap.get_value_cf(CF_LOCK, &ctx.key_buffer)?.unwrap();
+                &*db_vector
+            };
+            let mut parsed_lock = Lock::parse(&lock).unwrap();
+            assert_eq!(commit.get_start_ts(), parsed_lock.ts.into_inner());
+            let mut write = Write::new(
+                WriteType::from_lock_type(parsed_lock.lock_type).unwrap(),
+                parsed_lock.ts,
+                parsed_lock.short_value.take(),
+            );
+            for ts in &parsed_lock.rollback_ts {
+                if ts.into_inner() == commit.get_commit_ts() {
+                    write = write.set_overlapped_rollback(true, None);
+                    break;
+                }
+            }
+            let write_bytes = write.as_ref().to_bytes();
+            ctx.kv_wb.delete_cf(CF_LOCK, &ctx.key_buffer).unwrap();
+            ctx.key_buffer
+                .encode_u64_desc(commit.get_commit_ts())
+                .unwrap();
+            ctx.kv_wb
+                .put_cf(CF_WRITE, &ctx.key_buffer, &write_bytes)
+                .unwrap();
+        }
         Ok(())
     }
 }

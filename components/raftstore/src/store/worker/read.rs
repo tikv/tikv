@@ -142,6 +142,7 @@ pub trait ReadExecutor<E: KvEngine> {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::IngestSst
+                | CmdType::Commit
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);

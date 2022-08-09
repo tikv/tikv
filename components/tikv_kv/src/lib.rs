@@ -72,6 +72,7 @@ pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
     PessimisticLock(Key, PessimisticLock),
+    Commit(TimeStamp, TimeStamp, Vec<Key>),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
 }
@@ -82,6 +83,9 @@ impl Modify {
             Modify::Delete(cf, _) => cf,
             Modify::Put(cf, ..) => cf,
             Modify::PessimisticLock(..) => &CF_LOCK,
+            Modify::Commit(..) => {
+                return 32;
+            }
             Modify::DeleteRange(..) => unreachable!(),
         };
         let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
@@ -90,7 +94,7 @@ impl Modify {
             Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
             Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
             Modify::PessimisticLock(k, _) => cf_size + k.as_encoded().len(), // FIXME: inaccurate
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Commit(..) => unreachable!(),
         }
     }
 
@@ -99,7 +103,7 @@ impl Modify {
             Modify::Delete(_, ref k) => k,
             Modify::Put(_, ref k, _) => k,
             Modify::PessimisticLock(ref k, _) => k,
-            Modify::DeleteRange(..) => unreachable!(),
+            Modify::DeleteRange(..) | Modify::Commit(..) => unreachable!(),
         }
     }
 }
@@ -135,6 +139,16 @@ impl From<Modify> for raft_cmdpb::Request {
                 put.set_cf(CF_LOCK.to_string());
                 req.set_cmd_type(raft_cmdpb::CmdType::Put);
                 req.set_put(put);
+            }
+            Modify::Commit(start_ts, commit_ts, keys) => {
+                let mut commit = raft_cmdpb::CommitRequest::default();
+                commit.set_start_ts(start_ts.into_inner());
+                commit.set_commit_ts(commit_ts.into_inner());
+                for k in keys {
+                    commit.mut_keys().push(k.into_encoded());
+                }
+                req.set_cmd_type(raft_cmdpb::CmdType::Commit);
+                req.set_commit(commit);
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 let mut delete_range = raft_cmdpb::DeleteRangeRequest::default();
@@ -625,6 +639,9 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 let v = lock.into_lock().to_bytes();
                 trace!("RocksEngine: put lock"; "key" => %k, "values" => escape(&v));
                 wb.put_cf(CF_LOCK, k.as_encoded(), &v)
+            }
+            Modify::Commit(..) => {
+                unimplemented!()
             }
             Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
                 trace!(

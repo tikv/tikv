@@ -874,6 +874,9 @@ pub mod tests {
                         let v = lock.into_lock().to_bytes();
                         wb.put_cf(CF_LOCK, &k, &v).unwrap();
                     }
+                    Modify::Commit(..) => {
+                        unimplemented!()
+                    }
                     Modify::DeleteRange(cf, k1, k2, notify_only) => {
                         if !notify_only {
                             let k1 = keys::data_key(k1.as_encoded());

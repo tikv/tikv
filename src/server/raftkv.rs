@@ -342,6 +342,9 @@ where
                     let bytes = keys::data_key(key.as_encoded());
                     *key = Key::from_encoded(bytes);
                 }
+                Modify::Commit(..) => {
+                    unimplemented!()
+                }
                 Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
                     let bytes = keys::data_key(key1.as_encoded());
                     *key1 = Key::from_encoded(bytes);

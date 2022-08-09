@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{Key, TimeStamp, WriteType};
 
 use crate::storage::{
     mvcc::{
@@ -21,7 +21,7 @@ pub fn commit<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
 
-    let mut lock = match reader.load_lock(&key)? {
+    let lock = match reader.load_lock(&key)? {
         Some(mut lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
@@ -87,21 +87,25 @@ pub fn commit<S: Snapshot>(
             };
         }
     };
-    let mut write = Write::new(
-        WriteType::from_lock_type(lock.lock_type).unwrap(),
-        reader.start_ts,
-        lock.short_value.take(),
-    );
 
-    for ts in &lock.rollback_ts {
-        if *ts == commit_ts {
-            write = write.set_overlapped_rollback(true, None);
-            break;
-        }
-    }
+    // let mut write = Write::new(
+    //     WriteType::from_lock_type(lock.lock_type).unwrap(),
+    //     reader.start_ts,
+    //     lock.short_value.take(),
+    // );
 
-    txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
-    Ok(txn.unlock_key(key, lock.is_pessimistic_txn()))
+    // for ts in &lock.rollback_ts {
+    //     if *ts == commit_ts {
+    //         write = write.set_overlapped_rollback(true, None);
+    //         break;
+    //     }
+    // }
+
+    // txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
+    // Ok(txn.unlock_key(key, lock.is_pessimistic_txn())
+    let released = ReleasedLock::new(&key, lock.is_pessimistic_txn());
+    txn.put_commit(key, commit_ts);
+    Ok(Some(released))
 }
 
 pub mod tests {

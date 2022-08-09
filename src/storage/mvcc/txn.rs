@@ -40,7 +40,7 @@ pub struct ReleasedLock {
 }
 
 impl ReleasedLock {
-    fn new(key: &Key, pessimistic: bool) -> Self {
+    pub(crate) fn new(key: &Key, pessimistic: bool) -> Self {
         Self {
             hash: key.gen_hash(),
             pessimistic,
@@ -134,6 +134,19 @@ impl MvccTxn {
         let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
         self.write_size += write.size();
         self.modifies.push(write);
+    }
+
+    pub(crate) fn put_commit(&mut self, key: Key, commit_ts: TimeStamp) {
+        match self.modifies.first_mut() {
+            Some(Modify::Commit(start_ts_, commit_ts_, keys)) if *start_ts_ == self.start_ts => {
+                assert_eq!(*commit_ts_, commit_ts);
+                keys.push(key);
+            }
+            _ => {
+                self.modifies
+                    .push(Modify::Commit(self.start_ts, commit_ts, vec![key]));
+            }
+        }
     }
 
     pub(crate) fn delete_write(&mut self, key: Key, ts: TimeStamp) {

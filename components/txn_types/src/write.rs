@@ -53,7 +53,7 @@ impl WriteType {
         }
     }
 
-    fn to_u8(self) -> u8 {
+    pub fn to_u8(self) -> u8 {
         match self {
             WriteType::Put => FLAG_PUT,
             WriteType::Delete => FLAG_DELETE,
