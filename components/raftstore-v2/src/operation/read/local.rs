@@ -237,7 +237,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
-            snapshot.get_value(b"a1").unwrap().unwrap().deref()
+            *snapshot.get_value(b"a1").unwrap().unwrap()
         );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
@@ -247,7 +247,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),
-            snapshot.get_value(b"a2").unwrap().unwrap().deref()
+            *snapshot.get_value(b"a2").unwrap().unwrap()
         );
     }
 }

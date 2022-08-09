@@ -1589,16 +1589,20 @@ mod tests {
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         assert!(snap_cache.as_ref().is_some());
         assert_eq!(read_metrics.local_executed_requests, 2);
