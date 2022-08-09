@@ -12,16 +12,25 @@ use tikv_util::{
     },
 };
 
+use crate::RocksEngine;
+
 #[derive(Clone)]
 pub struct FlushListener {
     notifier: Arc<Mutex<dyn Notifier>>,
+    engine: Arc<Mutex<Option<RocksEngine>>>,
 }
 
 impl FlushListener {
     pub fn new<N: Notifier + 'static>(notifier: N) -> Self {
         FlushListener {
             notifier: Arc::new(Mutex::new(notifier)),
+            engine: Arc::default(),
         }
+    }
+
+    pub fn set_engine(&self, engine: RocksEngine) {
+        let mut e = self.engine.lock().unwrap();
+        *e = Some(engine);
     }
 }
 
@@ -29,13 +38,13 @@ impl EventListener for FlushListener {
     fn on_flush_begin(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let mut spin_wait = SpinWait::new();
-        // loop {
-        //     let max_seqno = SYNCED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
-        //     if max_seqno >= flush_seqno {
-        //         break;
-        //     }
-        //     spin_wait.spin_no_yield();
-        // }
+        loop {
+            let max_seqno = SYNCED_MAX_SEQUENCE_NUMBER.load(Ordering::SeqCst);
+            if max_seqno >= flush_seqno {
+                break;
+            }
+            spin_wait.spin_no_yield();
+        }
         debug!("flush begin"; "seqno" => flush_seqno);
     }
 
@@ -68,8 +77,16 @@ impl EventListener for FlushListener {
             "earliest_seqno" => info.earliest_seqno(),
             "version" => version+1
         );
+        let seqno = {
+            let engine = self.engine.lock().unwrap();
+            engine
+                .as_ref()
+                .unwrap()
+                .as_inner()
+                .get_latest_sequence_number()
+        };
         let notifier = self.notifier.lock().unwrap();
-        notifier.notify_seqno_version_updated(version);
+        notifier.notify_memtable_sealed(seqno);
     }
 }
 
@@ -94,7 +111,7 @@ mod tests {
     struct TestNotifier;
 
     impl Notifier for TestNotifier {
-        fn notify_seqno_version_updated(&self, _version: u64) {}
+        fn notify_memtable_sealed(&self, _seqno: u64) {}
     }
 
     #[test]
@@ -105,7 +122,8 @@ mod tests {
             .unwrap();
         let path = dir.path().to_str().unwrap();
         let mut db_opts = RawDBOptions::new();
-        db_opts.add_event_listener(FlushListener::new(TestNotifier));
+        let listener = FlushListener::new(TestNotifier);
+        db_opts.add_event_listener(listener.clone());
         let cf_opts = RocksColumnFamilyOptions::new();
         let engine = new_engine_opt(
             path,
@@ -113,6 +131,7 @@ mod tests {
             vec![RocksCFOptions::new(CF_DEFAULT, cf_opts)],
         )
         .unwrap();
+        listener.set_engine(engine.clone());
         let mut batch = engine.write_batch();
         batch.put_cf(CF_DEFAULT, b"k", b"v").unwrap();
         let mut write_opts = WriteOptions::new();

@@ -14,6 +14,7 @@ mod raftlog_gc;
 mod read;
 mod refresh_config;
 mod region;
+mod seqno_relation;
 mod split_check;
 mod split_config;
 mod split_controller;
@@ -38,6 +39,7 @@ pub use self::{
         Task as RefreshConfigTask,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
+    seqno_relation::{Runner as SeqnoRelationRunner, Task as SeqnoRelationTask},
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },

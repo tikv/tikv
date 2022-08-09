@@ -51,8 +51,8 @@ use crate::{
 
 const KV_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
-const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
-const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
+pub const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
+pub const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 
 /// Notify the event to the specified region.
 pub trait Notifier: Clone + Send + 'static {

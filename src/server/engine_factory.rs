@@ -169,6 +169,9 @@ impl KvEngineFactory {
         let mut kv_engine = RocksEngine::from_db(Arc::new(kv_engine));
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
+        if let Some(listener) = &self.inner.flush_listener {
+            listener.set_engine(kv_engine.clone());
+        }
         Ok(kv_engine)
     }
 

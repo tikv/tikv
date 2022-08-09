@@ -4037,9 +4037,7 @@ where
     }
 
     fn exit(&mut self) {
-        if let Err(e) = self.apply_ctx.engine.flush(true) {
-            warn!("failed to flush kvdb on exit"; "err" => ?e);
-        }
+        self.apply_ctx.flush();
     }
 }
 

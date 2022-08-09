@@ -38,7 +38,7 @@ use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
     raw::{Cache, Env},
-    FlowInfo, FlushListener, RocksEngine,
+    FlowInfo, FlushListener, RocksEngine, RocksSnapshot,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
@@ -71,11 +71,13 @@ use raftstore::{
         config::RaftstoreConfigManager,
         fsm,
         fsm::store::{
-            RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
+            ApplyResNotifier, RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE,
+            PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
-        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader,
+        SeqnoRelationRunner, SeqnoRelationTask, SnapManager, SnapManagerBuilder, SplitCheckRunner,
+        SplitConfigManager,
     },
     RaftRouterCompactedEventSender,
 };
@@ -230,6 +232,7 @@ struct TiKvServer<ER: RaftEngine> {
     env: Arc<Environment>,
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
+    seqno_worker: Option<Box<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
@@ -354,6 +357,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             quota_limiter,
             causal_ts_provider,
             tablet_factory: None,
+            seqno_worker: None,
         }
     }
 
@@ -655,6 +659,14 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 DEFAULT_CHECK_INTERVAL,
             );
             sst_worker.start_with_timer(sst_runner);
+        }
+
+        if let Some(seqno_worker) = &mut self.seqno_worker {
+            let seqno_runner = SeqnoRelationRunner::new(
+                ApplyResNotifier::new(self.router.clone(), Some(seqno_worker.scheduler())),
+                self.engines.as_ref().unwrap().engines.raft.clone(),
+            );
+            seqno_worker.start(seqno_runner);
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {
@@ -1014,6 +1026,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
+            self.seqno_worker.as_ref().map(|w| w.scheduler()),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1458,6 +1471,19 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         }
     }
 
+    fn init_seqno_relation_sender(
+        &mut self,
+    ) -> Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>> {
+        if self.config.raft_store.disable_kv_wal {
+            let seqno_worker = Box::new(LazyWorker::new("seqno-relation"));
+            let scheduler = seqno_worker.scheduler();
+            self.seqno_worker = Some(seqno_worker);
+            Some(scheduler)
+        } else {
+            None
+        }
+    }
+
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {
         let server = self.servers.as_mut().unwrap();
         server
@@ -1511,6 +1537,10 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         if let Some(sst_worker) = self.sst_worker {
             sst_worker.stop_worker();
+        }
+
+        if let Some(seqno_worker) = self.seqno_worker {
+            seqno_worker.stop_worker();
         }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
@@ -1650,8 +1680,11 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
-        if self.config.raft_store.disable_kv_wal {
-            builder = builder.flush_listener(FlushListener::new(self.router.clone()));
+        if let Some(scheduler) = self.init_seqno_relation_sender() {
+            builder = builder.flush_listener(FlushListener::new(ApplyResNotifier::new(
+                self.router.clone(),
+                Some(scheduler),
+            )));
         }
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);

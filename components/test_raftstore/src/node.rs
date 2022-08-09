@@ -39,7 +39,7 @@ use tikv::{
 use tikv_util::{
     config::VersionTrack,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
 };
 
 use super::*;
@@ -224,6 +224,7 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -314,6 +315,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
+            seqno_scheduler,
         )?;
         assert!(
             engines

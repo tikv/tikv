@@ -50,7 +50,7 @@ use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
-    worker::LazyWorker,
+    worker::{LazyWorker, Scheduler},
     HandyRwLock,
 };
 
@@ -77,6 +77,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -169,6 +170,8 @@ pub struct Cluster<T: Simulator> {
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    seqno_workers: Vec<Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
+    seqno_scheduler_map: HashMap<u64, Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -201,6 +204,8 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
+            seqno_workers: vec![],
+            seqno_scheduler_map: HashMap::default(),
         }
     }
 
@@ -235,12 +240,13 @@ impl<T: Simulator> Cluster<T> {
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker) =
+        let (engines, key_manager, dir, sst_worker, seqno_worker) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
+        self.seqno_workers.push(seqno_worker);
     }
 
     pub fn create_engines(&mut self) {
@@ -270,6 +276,7 @@ impl<T: Simulator> Cluster<T> {
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
+            let seqno_worker = self.seqno_workers.last().unwrap().as_ref();
 
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
@@ -283,11 +290,14 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
+                seqno_worker.map(|w| w.scheduler()),
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
+            self.seqno_scheduler_map
+                .insert(node_id, seqno_worker.map(|w| w.scheduler()));
             self.sst_workers_map
                 .insert(node_id, self.sst_workers.len() - 1);
         }
@@ -333,6 +343,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
+        let seqno_scheduler = self.seqno_scheduler_map[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
@@ -353,9 +364,16 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim
-            .wl()
-            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
+        self.sim.wl().run_node(
+            node_id,
+            cfg,
+            engines,
+            store_meta,
+            key_mgr,
+            router,
+            system,
+            seqno_scheduler,
+        )?;
         debug!("node {} started", node_id);
         Ok(())
     }
@@ -778,6 +796,9 @@ impl<T: Simulator> Cluster<T> {
         self.store_metas.clear();
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
+        }
+        for seqno_worker in self.seqno_workers.drain(..).flatten() {
+            seqno_worker.stop_worker();
         }
         debug!("all nodes are shut down.");
     }

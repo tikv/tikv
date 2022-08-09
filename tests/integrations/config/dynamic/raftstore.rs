@@ -124,6 +124,7 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            None,
         )
         .unwrap();
 

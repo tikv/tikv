@@ -45,7 +45,10 @@ use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
-    store::{fsm::RaftRouter, *},
+    store::{
+        fsm::{store::ApplyResNotifier, RaftRouter},
+        *,
+    },
     RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
@@ -624,6 +627,7 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
+#[allow(clippy::type_complexity)]
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
@@ -634,6 +638,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
+    Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -659,19 +664,26 @@ pub fn create_test_engine(
     if let Some(cache) = cache {
         builder = builder.block_cache(cache);
     }
+    let mut seqno_worker = None;
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router.clone()),
         }));
         if cfg.raft_store.disable_kv_wal {
-            builder = builder.flush_listener(FlushListener::new(router));
+            let worker = LazyWorker::new("seqno_relation");
+            let scheduler = worker.scheduler();
+            builder = builder.flush_listener(FlushListener::new(ApplyResNotifier::new(
+                router,
+                Some(scheduler),
+            )));
+            seqno_worker = Some(worker);
         }
     }
 
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker)
+    (engines, key_manager, dir, sst_worker, seqno_worker)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

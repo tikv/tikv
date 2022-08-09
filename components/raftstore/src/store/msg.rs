@@ -24,7 +24,7 @@ use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{fsm::ApplyRes, local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
+use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -693,12 +693,6 @@ where
     },
 
     GcSnapshotFinish,
-
-    ApplyRes(Vec<Box<ApplyRes<EK::Snapshot>>>),
-
-    SeqnoVersionUpdated {
-        version: u64,
-    },
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -732,12 +726,6 @@ where
                 write!(fmt, "UnsafeRecoveryCreatePeer")
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
-            StoreMsg::ApplyRes(ref res) => write!(fmt, "ApplyRes {:?}", res),
-            StoreMsg::SeqnoVersionUpdated {
-                version: new_version,
-            } => {
-                write!(fmt, "SeqnoVersionUpdated {}", new_version)
-            }
         }
     }
 }

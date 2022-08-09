@@ -11,7 +11,7 @@ use std::{
     mem,
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -38,10 +38,7 @@ use kvproto::{
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
-    raft_serverpb::{
-        ExtraMessageType, PeerState, RaftApplyState, RaftMessage, RegionLocalState,
-        RegionSequenceNumberRelation,
-    },
+    raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
 use pd_client::{Feature, FeatureGate, PdClient};
@@ -57,9 +54,7 @@ use tikv_util::{
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    sequence_number::{
-        Notifier as SeqnoNotifier, SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER,
-    },
+    sequence_number::Notifier as SeqnoNotifier,
     slow_log, sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
     time::{duration_to_sec, Instant as TiInstant},
@@ -99,7 +94,7 @@ use crate::{
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogFetchRunner, RaftlogFetchTask,
             RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
-            RegionRunner, RegionTask, SplitCheckTask,
+            RegionRunner, RegionTask, SeqnoRelationTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
         PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
@@ -153,7 +148,6 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
-    pub threads_sequence_numbers: Vec<Arc<AtomicU64>>,
 }
 
 impl StoreMeta {
@@ -171,7 +165,6 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
-            threads_sequence_numbers: Vec::default(),
         }
     }
 
@@ -283,49 +276,6 @@ where
 
     fn deref(&self) -> &BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>> {
         &self.router
-    }
-}
-
-impl<EK, ER> ApplyNotifier<EK> for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn notify(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
-        for r in apply_res {
-            self.router.try_send(
-                r.region_id,
-                PeerMsg::ApplyRes {
-                    res: ApplyTaskRes::Apply(r),
-                },
-            );
-        }
-    }
-    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        self.router.try_send(region_id, msg);
-    }
-
-    fn notify_store(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
-        let _ = self.router.send_control(StoreMsg::ApplyRes(apply_res));
-    }
-
-    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
-        Box::new(self.clone())
-    }
-}
-
-impl<EK, ER> SeqnoNotifier for RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn notify_seqno_version_updated(&self, version: u64) {
-        if let Err(e) = self
-            .router
-            .send_control(StoreMsg::SeqnoVersionUpdated { version })
-        {
-            info!("notify new seqno verion failed"; "version" => version, "err" => ?e);
-        }
     }
 }
 
@@ -444,6 +394,98 @@ where
     }
 }
 
+pub struct ApplyResNotifier<EK: KvEngine, ER: RaftEngine> {
+    router: RaftRouter<EK, ER>,
+    seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+}
+
+impl<EK, ER> ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(
+        router: RaftRouter<EK, ER>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+    ) -> ApplyResNotifier<EK, ER> {
+        ApplyResNotifier {
+            router,
+            seqno_scheduler,
+        }
+    }
+}
+
+impl<EK, ER> Clone for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn clone(&self) -> Self {
+        Self {
+            router: self.router.clone(),
+            seqno_scheduler: self.seqno_scheduler.clone(),
+        }
+    }
+}
+
+impl<EK, ER> ApplyNotifier<EK> for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
+        for r in apply_res {
+            self.router.try_send(
+                r.region_id,
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Apply(r),
+                },
+            );
+        }
+    }
+    fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
+        self.router.try_send(region_id, msg);
+    }
+
+    fn notify_store(&self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::ApplyRes(apply_res))
+        {
+            warn!(
+                "failed to schedule apply res to seqno relation worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn ApplyNotifier<EK>> {
+        Box::new(self.clone())
+    }
+}
+
+impl<EK, ER> SeqnoNotifier for ApplyResNotifier<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn notify_memtable_sealed(&self, seqno: u64) {
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::MemtableSealed(seqno))
+        {
+            warn!(
+                "failed to schedule memtable seqno to seqno relation worker";
+                "err" => ?e,
+            );
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct PeerTickBatch {
     pub ticks: Vec<Box<dyn FnOnce() + Send>>,
@@ -538,8 +580,6 @@ where
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
     pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
-    pub pending_seqno_relations: Vec<SeqnoRelation>,
-    pub to_update_sequence: Option<SequenceNumber>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -644,16 +684,6 @@ struct Store {
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
     last_unreachable_report: HashMap<u64, Instant>,
-    seqno_window: SequenceNumberWindow,
-    inflight_seqno_relations: HashMap<u64, Vec<SeqnoRelation>>,
-    latest_seqno_version: u64,
-}
-
-pub struct SeqnoRelation {
-    region_id: u64,
-    seqno: SequenceNumber,
-    apply_state: RaftApplyState,
-    region_local_state: Option<RegionLocalState>,
 }
 
 pub struct StoreFsm<EK>
@@ -678,9 +708,6 @@ where
                 start_time: None,
                 consistency_check_time: HashMap::default(),
                 last_unreachable_report: HashMap::default(),
-                seqno_window: SequenceNumberWindow::default(),
-                inflight_seqno_relations: HashMap::default(),
-                latest_seqno_version: 0,
             },
             receiver: rx,
         });
@@ -769,8 +796,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     drop(syncer);
                 }
                 StoreMsg::GcSnapshotFinish => self.register_snap_mgr_gc_tick(),
-                StoreMsg::ApplyRes(res) => self.on_apply_res(res),
-                StoreMsg::SeqnoVersionUpdated { version } => self.on_seqno_version_updated(version),
             }
         }
     }
@@ -983,45 +1008,16 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         }
         let mut latency_inspect = std::mem::take(&mut self.poll_ctx.pending_latency_inspect);
-        let seqno_relations = std::mem::take(&mut self.poll_ctx.pending_seqno_relations);
         let mut dur = self.timer.saturating_elapsed();
 
         for inspector in &mut latency_inspect {
             inspector.record_store_process(dur);
         }
-        let mut raft_wb = None;
-        if !seqno_relations.is_empty() {
-            let mut wb = self.poll_ctx.engines.raft.log_batch(seqno_relations.len());
-            for mut r in seqno_relations {
-                if let Some(region_local_state) = r.region_local_state.take() {
-                    wb.put_region_state_with_index(
-                        r.region_id,
-                        r.apply_state.applied_index,
-                        &region_local_state,
-                    )
-                    .unwrap();
-                }
-                let mut relation = RegionSequenceNumberRelation::default();
-                relation.set_region_id(r.region_id);
-                relation.set_apply_state(r.apply_state);
-                relation.set_sequence_number(r.seqno.number);
-                wb.put_seqno_relation(relation.region_id, &relation)
-                    .unwrap();
-            }
-            raft_wb = Some(wb);
-        }
         let write_begin = TiInstant::now();
-        let mut need_write = self.poll_ctx.has_ready;
         if let Some(write_worker) = &mut self.poll_ctx.sync_write_worker {
-            if let Some(wb) = raft_wb {
-                write_worker.handle_raft_write(wb);
-                need_write = true;
-            }
-            if need_write {
-                write_worker.write_to_db(false);
-            }
-
             if self.poll_ctx.has_ready {
+                write_worker.write_to_db(false);
+
                 for mut inspector in latency_inspect {
                     inspector.record_store_write(write_begin.saturating_elapsed());
                     inspector.finish();
@@ -1035,21 +1031,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     inspector.finish();
                 }
             }
-            if let Some(sn) = self.poll_ctx.to_update_sequence.take() {
-                SYNCED_MAX_SEQUENCE_NUMBER.store(sn.number, Ordering::SeqCst);
-            }
         } else {
             let writer_id = rand::random::<usize>() % self.poll_ctx.cfg.store_io_pool_size;
-            if let Some(raft_wb) = raft_wb {
-                if let Err(err) = self.poll_ctx.write_senders[writer_id].try_send(
-                    WriteMsg::SequenceNumberRelation {
-                        to_update_sequence: self.poll_ctx.to_update_sequence.take(),
-                        raft_wb,
-                    },
-                ) {
-                    warn!("send sequence number relations to write workers failed"; "err" => ?err);
-                }
-            }
             if let Err(err) =
                 self.poll_ctx.write_senders[writer_id].try_send(WriteMsg::LatencyInspect {
                     send_time: write_begin,
@@ -1546,8 +1529,6 @@ where
             sync_write_worker,
             io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
-            pending_seqno_relations: vec![],
-            to_update_sequence: None,
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1669,6 +1650,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1800,6 +1782,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            seqno_scheduler,
         )?;
         Ok(())
     }
@@ -1816,13 +1799,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
-            Box::new(self.router.clone()),
+            Box::new(ApplyResNotifier::new(self.router.clone(), seqno_scheduler)),
             self.apply_router.clone(),
         );
         self.apply_system
@@ -2710,81 +2694,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             StoreTick::CompactLockCf,
             self.ctx.cfg.lock_cf_compact_interval.0,
         )
-    }
-
-    fn on_apply_res(&mut self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
-        use std::cmp::Ordering;
-
-        for res in &apply_res {
-            if let Some(seq) = res.last_seqno {
-                let relation = SeqnoRelation {
-                    region_id: res.region_id,
-                    seqno: seq,
-                    apply_state: res.apply_state.clone(),
-                    region_local_state: res.region_local_state.clone(),
-                };
-                match seq.version.cmp(&self.fsm.store.latest_seqno_version) {
-                    Ordering::Less => {
-                        // self.fsm.store.seqno_window.push(seq);
-                    }
-                    Ordering::Equal => {
-                        let seqno_relations = self
-                            .fsm
-                            .store
-                            .inflight_seqno_relations
-                            .entry(res.region_id)
-                            .or_default();
-                        seqno_relations.push(relation);
-                    }
-                    Ordering::Greater => {
-                        let seqno_relations = self
-                            .fsm
-                            .store
-                            .inflight_seqno_relations
-                            .remove(&res.region_id);
-                        if let Some(seqno_relations) = seqno_relations {
-                            self.handle_seqno_relations(seqno_relations);
-                        }
-                        self.fsm
-                            .store
-                            .inflight_seqno_relations
-                            .insert(res.region_id, vec![relation]);
-                    }
-                }
-            }
-        }
-        self.ctx.router.notify(apply_res);
-    }
-
-    fn on_seqno_version_updated(&mut self, version: u64) {
-        self.fsm.store.latest_seqno_version = version;
-        for (_, seqno_relations) in std::mem::take(&mut self.fsm.store.inflight_seqno_relations) {
-            self.handle_seqno_relations(seqno_relations);
-        }
-    }
-
-    fn handle_seqno_relations(&mut self, seqno_relations: Vec<SeqnoRelation>) {
-        let mut committed_sn = None;
-        let max_seqno_relation = seqno_relations
-            .into_iter()
-            .map(|r| {
-                // committed_sn = self.fsm.store.seqno_window.push(r.seqno);
-                r
-            })
-            .max_by(|x, y| x.seqno.number.cmp(&y.seqno.number))
-            .unwrap();
-        self.ctx.pending_seqno_relations.push(max_seqno_relation);
-        if let Some(sn) = committed_sn {
-            // Update global sequence
-            if let Some(last) = self.ctx.to_update_sequence.replace(sn) {
-                assert!(
-                    last.number < sn.number,
-                    "last {:?}, committed: {:?}",
-                    last,
-                    sn
-                );
-            }
-        }
     }
 }
 

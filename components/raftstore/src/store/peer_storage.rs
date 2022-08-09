@@ -1084,7 +1084,7 @@ where
                 .raft
                 .get_entry(self.get_region_id(), idx)
                 .unwrap()
-                .expect(format!("region {} entry {} should exist", self.region.id, idx).as_str())
+                .unwrap_or_else(|| panic!("region {} entry {} should exist", self.region.id, idx))
                 .get_term())
         }
     }
