@@ -748,8 +748,8 @@ where
         }
     }
 
-    fn on_update_zone_info(&mut self, update: &HashMap<u64, String>) {
-        self.fsm.peer.update_peers_zone(&update);
+    fn on_update_zone_info(&mut self, update: HashMap<u64, String>) {
+        self.fsm.peer.update_peers_zone(update);
     }
 
     fn on_unsafe_recovery_pre_demote_failed_voters(
@@ -1296,7 +1296,7 @@ where
                     .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
             }
             SignificantMsg::UpdateZoneInfo { zone_info } => {
-                self.on_update_zone_info(&zone_info);
+                self.on_update_zone_info(zone_info);
             }
             SignificantMsg::CaptureChange {
                 cmd,

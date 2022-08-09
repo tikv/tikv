@@ -46,7 +46,7 @@ use pd_client::{BucketStat, INVALID_ID};
 use protobuf::Message;
 use raft::{
     self,
-    eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType},
+    eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType, Forward},
     Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
@@ -731,7 +731,7 @@ where
     pub peer_heartbeats: HashMap<u64, Instant>,
 
     /// Record the zones this Region's Peers belong to.
-    pub peer_zone: HashMap<u64, String>,
+    peer_zone: HashMap<u64, String>,
 
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
@@ -1384,8 +1384,8 @@ where
         self.get_store().region()
     }
 
-    pub fn get_peer_zone(&self, id: &u64) -> Option<&String> {
-        self.peer_zone.get(id)
+    pub fn get_peer_zone(&self, id: u64) -> Option<&String> {
+        self.peer_zone.get(&id)
     }
 
     /// Check whether the peer can be hibernated.
@@ -1696,16 +1696,84 @@ where
     }
 
     #[inline]
+    fn assign_zone_agent(&self, group: &Vec<usize>, msgs: &Vec<eraftpb::Message>) -> u64 {
+        // TODO: Find a better way to decide agent.
+        let idx = group[0];
+        msgs[idx].get_to()
+    }
+
+    fn merge_msg_append(&self, group: &Vec<usize>, msgs: &mut Vec<eraftpb::Message>, discard: &mut HashSet<usize>) {
+        let agent_id = self.assign_zone_agent(group, msgs);
+        let mut forwards: Vec<Forward> = Vec::new();
+        for idx in group {
+            let msg = &msgs[*idx];
+            if msg.get_to() != agent_id {
+                let mut forward = Forward::new();
+                forward.set_to(msg.get_to());
+                forward.set_log_term(msg.get_log_term());
+                forward.set_index(msg.get_index());
+                forwards.push(forward);
+                discard.insert(*idx);
+            }
+        }
+
+        for idx in group {
+            let msg = &mut msgs[*idx];
+            if msg.get_to() == agent_id {
+                msg.set_forwards(forwards.into());
+                msg.set_msg_type(MessageType::MsgGroupBroadcast);
+                break;
+            }
+        }
+    }
+
     pub fn build_raft_messages<T>(
         &mut self,
         ctx: &PollContext<EK, ER, T>,
-        msgs: Vec<eraftpb::Message>,
+        mut msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
+        
+        let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
+        let leader_store_id = self.peer.get_store_id();
+
+        // Filter MsgAppend.
+        for (pos, msg) in msgs.iter().enumerate() {
+            // Follower replication is enabled and msg is append.
+            if self.follower_repl() && msg.get_msg_type() == MessageType::MsgAppend {
+                if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
+                    let to_peer_store_id = to_peer.get_store_id();
+                    let to_peer_zone = self.get_peer_zone(to_peer_store_id);
+                    // Leader and to_peer is not in the same zone.
+                    if to_peer_zone.is_some() && to_peer_zone.unwrap() != self.get_peer_zone(leader_store_id).unwrap() {
+                        if msg_append_group.contains_key(to_peer_zone.unwrap()) {
+                            let msg_group = msg_append_group.get_mut(to_peer_zone.unwrap()).unwrap();
+                            msg_group.push(pos);
+                        } else {
+                            msg_append_group.insert(to_peer_zone.unwrap().clone(), vec![pos]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Record message that should be discarded after merge_msg_append.
+        let mut discard: HashSet<usize> = HashSet::default();
+
+        // Build MsgGroupBroadcast.
+        for (_, group) in msg_append_group.iter() {
+            self.merge_msg_append(group, &mut msgs, &mut discard);
+        }
+
+        let mut pos: usize = 0;
         for msg in msgs {
+            if discard.contains(&pos) {
+                continue;
+            }
             if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
                 raft_msgs.push(m);
             }
+            pos += 1;
         }
         raft_msgs
     }
@@ -5016,16 +5084,8 @@ where
         None
     }
 
-    pub fn update_peers_zone(&mut self, update: &HashMap<u64, String>) {
-        let peer_cache_snap: HashMap<u64, metapb::Peer> = (*self.peer_cache.borrow()).clone();
-        for (store_id, zone_label) in update {
-            for (peer_id, peer) in &peer_cache_snap {
-                if store_id == &peer.store_id {
-                    self.peer_zone.insert(peer_id.clone(), zone_label.clone());
-                    break;
-                }
-            }
-        }
+    pub fn update_peers_zone(&mut self, update: HashMap<u64, String>) {
+        self.peer_zone = update;
     }
 
     fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
