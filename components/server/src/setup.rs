@@ -10,7 +10,7 @@ use std::{
 use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
-use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
+use tikv::config::{check_critical_config, persist_config, MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
@@ -74,7 +74,7 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn initial_logger(config: &TiKvConfig) {
+pub fn initial_logger(config: &TikvConfig) {
     let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
         make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
     } else {
@@ -142,7 +142,7 @@ pub fn initial_logger(config: &TiKvConfig) {
         rocksdb: R,
         raftdb: T,
         slow: Option<S>,
-        config: &TiKvConfig,
+        config: &TikvConfig,
     ) where
         N: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
         R: slog::Drain<Ok = (), Err = io::Error> + Send + 'static,
@@ -238,7 +238,7 @@ pub fn initial_metric(cfg: &MetricConfig) {
 }
 
 #[allow(dead_code)]
-pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
+pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap().into();
         config.log_level = slog::Level::Info.into();
@@ -303,7 +303,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 }
 
 #[allow(dead_code)]
-pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
     config.compatible_adjust();
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {}", e);

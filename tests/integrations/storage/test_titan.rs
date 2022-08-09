@@ -20,7 +20,7 @@ use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, Region
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
-    config::TiKvConfig,
+    config::TikvConfig,
     storage::{mvcc::ScannerBuilder, txn::Scanner},
 };
 use tikv_util::{
@@ -83,7 +83,7 @@ fn test_turnoff_titan() {
 
     // try reopen db when titan isn't properly turned off.
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start_check().is_err());
+    cluster.pre_start_check().unwrap_err();
 
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     cluster.pre_start_check().unwrap();
@@ -148,7 +148,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Set configs and create engines
-    let mut cfg = TiKvConfig::default();
+    let mut cfg = TikvConfig::default();
     let cache = cfg.storage.block_cache.build_shared_cache();
     cfg.rocksdb.titan.enabled = true;
     cfg.rocksdb.titan.disable_gc = true;
