@@ -19,7 +19,7 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use grpcio::{ EnvBuilder, Environment, WriteFlags};
+use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     metapb,
     pdpb::{self, Member},
@@ -37,7 +37,7 @@ use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
     metrics::*,
-    util::{check_resp_header, sync_request,call_option_inner, Client, PdConnector},
+    util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
     UnixSecs, REQUEST_TIMEOUT,
 };
@@ -325,7 +325,7 @@ impl PdClient for RpcClient {
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         use kvproto::pdpb::WatchGlobalConfigRequest;
         let req = WatchGlobalConfigRequest::default();
-        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,_| {
+        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
             client.watch_global_config(&req)
         })
     }
@@ -348,7 +348,7 @@ impl PdClient for RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.bootstrap_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -363,7 +363,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.is_bootstrapped_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -379,7 +379,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.alloc_id_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -400,7 +400,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.put_store_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -417,7 +417,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.get_store_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -443,7 +443,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.get_all_stores_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -459,7 +459,7 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.get_cluster_config_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;
@@ -827,7 +827,7 @@ impl PdClient for RpcClient {
         }
         req.set_region(region.region);
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.scatter_region_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())
@@ -881,7 +881,7 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client,call| {
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, call| {
             client.get_operator_opt(&req, call)
         })?;
         check_resp_header(resp.get_header())?;

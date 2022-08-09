@@ -482,7 +482,7 @@ pub fn call_option_inner(inner: &Inner) -> CallOption {
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &Client, mut retry: usize, func: F) -> Result<R>
 where
-    F: Fn(&PdClientStub,CallOption) -> GrpcResult<R>,
+    F: Fn(&PdClientStub, CallOption) -> GrpcResult<R>,
 {
     loop {
         let ret = {
