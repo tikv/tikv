@@ -1168,6 +1168,12 @@ impl<'a> PeerMsgHandler<'a> {
             self.ctx
                 .raft_wb
                 .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
+            info!(
+                "{} truncate raft logs to {}, term {}",
+                self.peer.tag(),
+                to_truncate_idx,
+                to_truncate_term,
+            );
         }
     }
 }

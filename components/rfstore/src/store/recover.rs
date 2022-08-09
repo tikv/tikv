@@ -13,8 +13,8 @@ use slog_global::info;
 use tikv_util::warn;
 
 use crate::store::{
-    parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, RaftApplyState, RaftState,
-    KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
+    parse_region_state_key, raft_state_key, rlog, Applier, ApplyContext, PeerTag, RaftApplyState,
+    RaftState, RegionIDVer, KV_ENGINE_META_KEY, REGION_META_KEY_BYTE, STORE_IDENT_KEY, TERM_KEY,
 };
 
 #[derive(Clone)]
@@ -58,19 +58,42 @@ impl RecoverHandler {
                     region = Some(state.take_region());
                     Err(rfengine::Error::EOF)
                 });
+        let tag = PeerTag::new(self.store_id, RegionIDVer::new(shard_id, shard_ver));
         if let Some(region) = region {
             let raft_state_key = raft_state_key(region.get_region_epoch().get_version());
             let val = self
                 .rf_engine
                 .get_state(region.get_id(), &raft_state_key)
-                .unwrap();
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} failed to get raft state key, state keys {:?}",
+                        tag,
+                        self.get_state_keys(shard_id)
+                    );
+                });
             let mut raft_state = RaftState::default();
             raft_state.unmarshal(val.as_ref());
             return Ok((region, raft_state.commit));
         }
-        Err(kvengine::Error::ErrOpen(
-            "failed to load region meta".to_string(),
-        ))
+        let err_msg = format!(
+            "{} failed to load region meta, state keys {:?}",
+            tag,
+            self.get_state_keys(shard_id),
+        );
+        Err(kvengine::Error::ErrOpen(err_msg))
+    }
+
+    fn get_state_keys(&self, region_id: u64) -> Vec<Vec<u8>> {
+        let mut state_keys = vec![];
+        let _ = self.rf_engine.iterate_region_states(
+            region_id,
+            false,
+            |k, _| -> rfengine::Result<()> {
+                state_keys.push(k.to_vec());
+                Ok(())
+            },
+        );
+        state_keys
     }
 
     fn execute_admin_request(
@@ -104,10 +127,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
         meta: &ShardMeta,
     ) -> kvengine::Result<()> {
         let applied_index = shard.get_write_sequence();
-        info!(
-            "recover region:{}, ver:{} from index {}",
-            shard.id, shard.ver, applied_index
-        );
+        info!("{} recover from index {}", shard.tag(), applied_index);
         let mut ctx = ApplyContext::new(engine.clone(), None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
@@ -117,7 +137,18 @@ impl kvengine::RecoverHandler for RecoverHandler {
         let mut entries = Vec::with_capacity((high_idx.saturating_sub(low_idx)) as usize);
         self.rf_engine
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)
-            .map_err(|_| kvengine::Error::ErrOpen("entries unavailable.".to_string()))?;
+            .map_err(|e| {
+                let stats = self.rf_engine.get_region_stats(shard.id);
+                let err_msg = format!(
+                    "{} entries unavailable err: {:?}, stats {:?}, low: {}, high {}",
+                    shard.tag(),
+                    e,
+                    stats,
+                    low_idx,
+                    high_idx
+                );
+                kvengine::Error::ErrOpen(err_msg)
+            })?;
 
         let snap = shard.new_snap_access();
         let mut applier = Applier::new_for_recover(self.store_id, region_meta, snap, apply_state);

@@ -115,7 +115,7 @@ impl EngineCore {
             let old_data = shard.get_data();
             let mut new_mem_tbls = old_data.mem_tbls.clone();
             let last = new_mem_tbls.pop().unwrap();
-            assert_eq!(last.get_version(), l0_tbl.version());
+            assert_eq!(last.get_version(), l0_tbl.version(), "{}", shard.tag());
             let mut new_l0_tbls = Vec::with_capacity(old_data.l0_tbls.len() + 1);
             new_l0_tbls.push(l0_tbl);
             new_l0_tbls.extend_from_slice(old_data.l0_tbls.as_slice());
