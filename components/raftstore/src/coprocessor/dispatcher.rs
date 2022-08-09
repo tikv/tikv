@@ -678,6 +678,19 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
+
+        fn post_exec_admin(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &Cmd,
+            _: &RaftApplyState,
+            _: &RegionState,
+            _: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            self.called.fetch_add(18, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
+        }
     }
 
     impl QueryObserver for TestCoprocessor {
@@ -719,6 +732,19 @@ mod tests {
         fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
             self.called.fetch_add(14, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn post_exec_query(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &Cmd,
+            _: &RaftApplyState,
+            _: &RegionState,
+            _: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            self.called.fetch_add(17, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
         }
     }
 
@@ -860,6 +886,20 @@ mod tests {
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_exec(&region, &admin_req, 0, 0);
         assert_all!([&ob.called], &[119]); // 16
+
+        let mut pending_handle_ssts = None;
+        let mut delete_ssts = vec![];
+        let mut pending_clean_ssts =  vec![];
+        let mut info = ApplyCtxInfo {
+            pending_handle_ssts: &mut pending_handle_ssts,
+            pending_clean_ssts: &mut pending_clean_ssts,
+            delete_ssts: &mut delete_ssts,
+        };
+        let apply_state = RaftApplyState::default();
+        let region_state = RegionState::default();
+        let cmd = Cmd::default();
+        host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
+        assert_all!([&ob.called], &[136]); // 17
     }
 
     #[test]

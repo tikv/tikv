@@ -76,6 +76,7 @@ impl<'a> ObserverContext<'a> {
 }
 
 /// Context of a region provided for observers.
+#[derive(Default, Clone)]
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
