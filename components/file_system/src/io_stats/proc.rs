@@ -65,10 +65,6 @@ impl ThreadId {
         let mut io_bytes = IoBytes::default();
         for line in reader.lines() {
             match line {
-                // ESRCH 3 No such process
-                Err(e) if e.raw_os_error() != Some(3) => {
-                    return Err(format!("read: {}", e));
-                }
                 Ok(line) => {
                     if line.len() > 11 {
                         let mut s = line.split_whitespace();
@@ -83,7 +79,9 @@ impl ThreadId {
                         }
                     }
                 }
-                _ => (),
+                // ESRCH 3 No such process
+                Err(e) if e.raw_os_error() == Some(3) => break,
+                Err(e) => return Err(format!("read: {}", e)),
             }
         }
         Ok(io_bytes)
