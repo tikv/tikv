@@ -137,7 +137,7 @@ fn flush_thread_io(sentinel: &mut LocalIoStats) {
 }
 
 pub fn init() -> Result<(), String> {
-    ThreadID::current()
+    ThreadId::current()
         .fetch_io_bytes()
         .map_err(|e| format!("failed to fetch I/O bytes from proc: {}", e))?;
     Ok(())
