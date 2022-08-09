@@ -3385,16 +3385,16 @@ where
         true
     }
 
-    /// Propose a request.
+    /// Proposes a request.
     ///
-    /// Return true means the request has been proposed successfully.
+    /// Return whether the request has been proposed successfully.
     pub fn propose<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut cb: Callback<EK::Snapshot>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        disk_full_opt: DiskFullOpt,
+        mut disk_full_opt: DiskFullOpt,
     ) -> bool {
         if self.pending_remove {
             return false;
@@ -3421,53 +3421,11 @@ where
             }
             Ok(RequestPolicy::ProposeNormal) => {
                 // For admin cmds, only region split/merge comes here.
-                let mut stores = Vec::new();
-                let mut opt = disk_full_opt;
-                let mut maybe_transfer_leader = false;
                 if req.has_admin_request() {
-                    opt = DiskFullOpt::AllowedOnAlmostFull;
+                    disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
                 }
-                if self.check_proposal_normal_with_disk_usage(
-                    ctx,
-                    opt,
-                    &mut stores,
-                    &mut maybe_transfer_leader,
-                ) {
-                    self.propose_normal(ctx, req)
-                } else {
-                    // If leader node is disk full, try to transfer leader to a node with disk usage
-                    // normal to keep write availability not downback.
-                    // if majority node is disk full, to transfer leader or not is not necessary.
-                    // Note: Need to exclude learner node.
-                    if maybe_transfer_leader && !self.disk_full_peers.majority {
-                        let target_peer = self
-                            .get_store()
-                            .region()
-                            .get_peers()
-                            .iter()
-                            .find(|x| {
-                                !self.disk_full_peers.has(x.get_id())
-                                    && x.get_id() != self.peer.get_id()
-                                    && !self.down_peer_ids.contains(&x.get_id())
-                                    && !matches!(x.get_role(), PeerRole::Learner)
-                            })
-                            .cloned();
-                        if let Some(p) = target_peer {
-                            debug!(
-                                "try to transfer leader because of current leader disk full: region id = {}, peer id = {}; target peer id = {}",
-                                self.region_id,
-                                self.peer.get_id(),
-                                p.get_id()
-                            );
-                            self.pre_transfer_leader(&p);
-                        }
-                    }
-                    let errmsg = format!(
-                        "propose failed: tikv disk full, cmd diskFullOpt={:?}, leader diskUsage={:?}",
-                        disk_full_opt, ctx.self_disk_usage
-                    );
-                    Err(Error::DiskFull(stores, errmsg))
-                }
+                self.check_normal_proposal_with_disk_full_opt(ctx, disk_full_opt)
+                    .and_then(|_| self.propose_normal(ctx, req))
             }
             Ok(RequestPolicy::ProposeConfChange) => self.propose_conf_change(ctx, &req),
             Err(e) => Err(e),
@@ -4837,56 +4795,74 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_proposal_normal_with_disk_usage<T>(
+    fn check_normal_proposal_with_disk_full_opt<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
-        disk_full_stores: &mut Vec<u64>,
-        maybe_transfer_leader: &mut bool,
-    ) -> bool {
-        // check self disk status.
-        let allowed = match ctx.self_disk_usage {
+    ) -> Result<()> {
+        let leader_allowed = match ctx.self_disk_usage {
             DiskUsage::Normal => true,
             DiskUsage::AlmostFull => !matches!(disk_full_opt, DiskFullOpt::NotAllowedOnFull),
             DiskUsage::AlreadyFull => false,
         };
-
-        if !allowed {
+        let mut disk_full_stores = Vec::new();
+        if !leader_allowed {
             disk_full_stores.push(ctx.store.id);
-            *maybe_transfer_leader = true;
-            return false;
-        }
-
-        // If all followers diskusage normal, then allowed.
-        if self.disk_full_peers.is_empty() {
-            return true;
-        }
-
-        for peer in self.get_store().region().get_peers() {
-            let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
-            if self.disk_full_peers.peers.get(&peer_id).is_some() {
-                disk_full_stores.push(store_id);
+            // Try to transfer leader to a node with disk usage normal to keep write
+            // availability not downback. If majority node is disk full, to transfer leader
+            // or not is not necessary. Note: Need to exclude learner node.
+            if !self.disk_full_peers.majority {
+                let target_peer = self
+                    .get_store()
+                    .region()
+                    .get_peers()
+                    .iter()
+                    .find(|x| {
+                        !self.disk_full_peers.has(x.get_id())
+                            && x.get_id() != self.peer.get_id()
+                            && !self.down_peer_ids.contains(&x.get_id())
+                            && !matches!(x.get_role(), PeerRole::Learner)
+                    })
+                    .cloned();
+                if let Some(p) = target_peer {
+                    debug!(
+                        "try to transfer leader because of current leader disk full";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "target_peer_id" => p.get_id(),
+                    );
+                    self.pre_transfer_leader(&p);
+                }
+            }
+        } else {
+            // Check followers.
+            if self.disk_full_peers.is_empty() {
+                return Ok(());
+            }
+            if !self.dangerous_majority_set {
+                if !self.disk_full_peers.majority {
+                    return Ok(());
+                }
+                // Majority peers are in disk full status but the request carries a special
+                // flag.
+                if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
+                    && self.disk_full_peers.peers.values().any(|x| x.1)
+                {
+                    return Ok(());
+                }
+            }
+            for peer in self.get_store().region().get_peers() {
+                let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+                if self.disk_full_peers.peers.get(&peer_id).is_some() {
+                    disk_full_stores.push(store_id);
+                }
             }
         }
-
-        // if there are some peers with disk already full status in the majority set,
-        // should not allowed.
-        if self.dangerous_majority_set {
-            return false;
-        }
-
-        if !self.disk_full_peers.majority {
-            return true;
-        }
-
-        if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
-            && self.disk_full_peers.peers.values().any(|x| x.1)
-        {
-            // Majority peers are in disk full status but the request carries a special
-            // flag.
-            return true;
-        }
-        false
+        let errmsg = format!(
+            "propose failed: tikv disk full, cmd diskFullOpt={:?}, leader diskUsage={:?}",
+            disk_full_opt, ctx.self_disk_usage
+        );
+        Err(Error::DiskFull(disk_full_stores, errmsg))
     }
 
     /// Check if the command will be likely to pass all the check and propose.
@@ -5322,6 +5298,7 @@ where
         self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
     }
 
+    #[inline]
     fn maybe_inject_propose_error(
         &self,
         #[allow(unused_variables)] req: &RaftCmdRequest,
