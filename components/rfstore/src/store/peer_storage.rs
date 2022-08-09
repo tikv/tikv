@@ -416,7 +416,7 @@ impl PeerStorage {
             }
         }
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
-            self.write_raft_state(ctx);
+            self.write_raft_state(ctx, self.region().get_region_epoch().get_version());
         }
         res
     }
@@ -449,8 +449,8 @@ impl PeerStorage {
         }
     }
 
-    pub fn write_raft_state(&mut self, ctx: &mut RaftContext) {
-        let key = raft_state_key(self.region.get_region_epoch().get_version());
+    pub fn write_raft_state(&mut self, ctx: &mut RaftContext, region_version: u64) {
+        let key = raft_state_key(region_version);
         ctx.raft_wb
             .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
     }
@@ -583,15 +583,22 @@ fn init_last_term(
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state(raft_wb: &mut rfengine::WriteBatch, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state(
+    raft_wb: &mut rfengine::WriteBatch,
+    region_id: u64,
+    region_version: u64,
+) {
     let raft_state = RaftState {
         last_index: RAFT_INIT_LOG_INDEX,
         vote: 0,
         term: RAFT_INIT_LOG_TERM,
         commit: RAFT_INIT_LOG_INDEX,
     };
-    raft_wb.set_state(region_id, &raft_state_key(1), &raft_state.marshal());
-    Ok(())
+    raft_wb.set_state(
+        region_id,
+        &raft_state_key(region_version),
+        &raft_state.marshal(),
+    );
 }
 
 pub fn write_peer_state(raft_wb: &mut rfengine::WriteBatch, region: &metapb::Region) {

@@ -79,7 +79,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let epoch = region.get_region_epoch();
     let region_state_key = region_state_key(epoch.get_version(), epoch.get_conf_ver());
     raft_wb.set_state(region.get_id(), region_state_key.chunk(), val.as_slice());
-    write_initial_raft_state(&mut raft_wb, region.get_id())?;
+    write_initial_raft_state(&mut raft_wb, region.get_id(), 1);
     let change_set = initial_change_set(region.get_id(), epoch.get_version());
     let cs_bin = change_set.write_to_bytes().unwrap();
     raft_wb.set_state(region.get_id(), KV_ENGINE_META_KEY, &cs_bin);

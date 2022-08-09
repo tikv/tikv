@@ -1420,7 +1420,7 @@ impl Peer {
                     .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 let store = self.mut_store();
                 // The raft state key changed when region version change, we need to set it here.
-                store.write_raft_state(ctx);
+                store.write_raft_state(ctx, new_region.get_region_epoch().get_version());
                 store.shard_meta = Some(new_meta.clone());
                 store.initial_flushed = false;
                 self.preprocessed_region = Some(new_region.clone());
@@ -1430,6 +1430,8 @@ impl Peer {
                     ctx.raft_wb
                         .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 }
+                let region_version = new_region.get_region_epoch().get_version();
+                write_initial_raft_state(&mut ctx.raft_wb, new_region.get_id(), region_version);
             }
         }
     }
