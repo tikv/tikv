@@ -215,9 +215,12 @@ impl FileSystem for ManagedFileSystem {
 
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
-            // Note: `reuse` won't update the data block by the new encrypted
-            // key. Users should be responsible for the data security by
-            // themselves, if `encryption` was opened.
+            // Note: In contrast to `rename`, this func is used for rewriting the
+            // existing file, reducing the cost of `fdatasync`. When encryption
+            // is opened, `reuse` only updates the entrypted metadata from
+            // `src_path` to `dst_path` , without updating the file data blocks.
+            // Therefore, callers should be responsible for the data security
+            // by themselves after calling this func.
             let src_str = src_path.as_ref().to_str().unwrap();
             let dst_str = dst_path.as_ref().to_str().unwrap();
             manager.new_file(dst_path.as_ref().to_str().unwrap())?;

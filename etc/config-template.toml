@@ -1088,9 +1088,11 @@
 
 ## Version of the log file in Raft Engine.
 ##
-## Default: 1. `2` and above versions are only available when
-## TiKV >= 6.3.x, which will introduce new file formats to
-## support new features, i.e. recycling logs, and DIO.
+## Candidates:
+##   1: Can be read by TiKV release 6.1 and above.
+##   2: Can be read by TiKV release 6.3 and above. Supports log recycling.
+##
+## Default: 1.
 # format-version = 1
 
 ## Whether to recycle stale log files in Raft Engine.
