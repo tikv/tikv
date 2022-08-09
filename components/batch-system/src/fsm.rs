@@ -62,7 +62,7 @@ pub trait Fsm {
 ///
 /// 1. NOTIFYSTATE_NOTIFIED: The Fsm is taken by an external executor. `data`
 ///    holds a null pointer.
-/// 2. NOTIFYSTATE_IDLE: No actor is using the Fsm. `data` is owns the Fsm.
+/// 2. NOTIFYSTATE_IDLE: No actor is using the Fsm. `data` owns the Fsm.
 /// 3. NOTIFYSTATE_DROP: The Fsm is dropped. `data` holds a null pointer.
 pub struct FsmState<N> {
     status: AtomicUsize,

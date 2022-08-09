@@ -709,7 +709,7 @@ where
         if should_propose {
             self.propose_pending_batch_raft_command();
         } else if let Some(cmd) = self.fsm.batch_req_builder.request.take() {
-            // We are delaying these requests to next loop. Try to fulfil their
+            // We are delaying these requests to next loop. Try to fulfill their
             // proposed callback early.
             self.fsm.batch_req_builder.propose_checked = Some(false);
             if let Ok(None) = self.pre_propose_raft_command(&cmd) {
