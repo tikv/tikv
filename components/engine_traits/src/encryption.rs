@@ -12,7 +12,7 @@ pub trait EncryptionKeyManager: Sync + Send {
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()>;
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub struct FileEncryptionInfo {
     pub method: EncryptionMethod,
     pub key: Vec<u8>,
@@ -46,7 +46,7 @@ impl FileEncryptionInfo {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum EncryptionMethod {
     Unknown = 0,
     Plaintext = 1,

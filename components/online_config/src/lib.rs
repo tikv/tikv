@@ -296,7 +296,7 @@ mod tests {
         );
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
     pub enum TestEnum {
         First,
         Second,
@@ -364,6 +364,6 @@ mod tests {
 
         let mut diff = HashMap::new();
         diff.insert("e".to_owned(), ConfigValue::String("invalid".into()));
-        assert!(config.update(diff).is_err());
+        config.update(diff).unwrap_err();
     }
 }

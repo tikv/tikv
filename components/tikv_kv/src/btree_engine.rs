@@ -428,6 +428,6 @@ pub mod tests {
     #[test]
     fn test_get_not_exist_cf() {
         let engine = BTreeEngine::new(&[]);
-        assert!(::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).is_err());
+        ::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).unwrap_err();
     }
 }

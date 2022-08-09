@@ -6,7 +6,7 @@ use prometheus::*;
 /// The status of a task.
 /// The ordering of this imples the priority for presenting to the user.
 /// max(TASK_STATUS) of all stores would be probably the state of the task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TaskStatus {
     Running = 0,
     Paused,

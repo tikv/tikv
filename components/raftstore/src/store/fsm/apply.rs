@@ -3817,7 +3817,7 @@ where
                 } => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(_, f) => {
-                    let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
+                    let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
                 }
             }
@@ -4728,7 +4728,7 @@ mod tests {
         // unregistered region should be ignored and notify failed.
         let resp = resp_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().get_error().has_region_not_found());
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         let (cc_tx, cc_rx) = mpsc::channel();
         let pops = vec![
@@ -4831,7 +4831,7 @@ mod tests {
             "{:?}",
             resp
         );
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
 
         system.shutdown();
     }
@@ -6089,29 +6089,29 @@ mod tests {
         let mut region = Region::default();
 
         // Check uuid and cf name
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         sst.set_cf_name(CF_DEFAULT.to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap();
         sst.set_cf_name("test".to_owned());
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_cf_name(CF_WRITE.to_owned());
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region id
         region.set_id(1);
         sst.set_region_id(2);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.set_region_id(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
         // Check region epoch
         region.mut_region_epoch().set_conf_ver(1);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_conf_ver(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
         region.mut_region_epoch().set_version(1);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_region_epoch().set_version(1);
         check_sst_for_ingestion(&sst, &region).unwrap();
 
@@ -6120,9 +6120,9 @@ mod tests {
         region.set_end_key(vec![8]);
         sst.mut_range().set_start(vec![1]);
         sst.mut_range().set_end(vec![8]);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_range().set_start(vec![2]);
-        assert!(check_sst_for_ingestion(&sst, &region).is_err());
+        check_sst_for_ingestion(&sst, &region).unwrap_err();
         sst.mut_range().set_end(vec![7]);
         check_sst_for_ingestion(&sst, &region).unwrap();
     }
