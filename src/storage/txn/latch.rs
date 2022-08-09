@@ -416,6 +416,9 @@ impl Latches {
                 .finished
                 .load(Ordering::Acquire)
             {
+                info!("expired lock wait entry dropped";
+                    "start_ts" => lock_info.0.parameters.start_ts, "for_update_ts" => lock_info.0.parameters.for_update_ts, "key" => %lock_info.0.key,
+                    "is_new_mode" => lock_info.0.allow_lock_with_conflict);
                 // Drop already-finished entry, which might have been canceled by error.
                 continue;
             }

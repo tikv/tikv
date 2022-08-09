@@ -461,7 +461,7 @@ impl WriteResultLockInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ReleasedLocks(pub Vec<ReleasedLock>);
 
 impl ReleasedLocks {

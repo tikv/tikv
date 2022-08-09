@@ -60,6 +60,9 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
                 .finished
                 .load(Ordering::Acquire)
             {
+                info!("expired lock wait entry dropped";
+                    "start_ts" => entry.0.parameters.start_ts, "for_update_ts" => entry.0.parameters.for_update_ts, "key" => %entry.0.key,
+                    "is_new_mode" => entry.0.allow_lock_with_conflict);
                 queue.pop();
                 continue;
             }
@@ -74,9 +77,21 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
                 continue;
             }
 
+            info!("trying to wake up lock in normal way for late arrived or new mode request";
+                    "start_ts" => entry.0.parameters.start_ts, "for_update_ts" => entry.0.parameters.for_update_ts, "key" => %entry.0.key,
+                    "is_new_mode" => entry.0.allow_lock_with_conflict, "conflict_start_ts" => self.conflicting_start_ts, "conflict_commit_ts" => self.conflicting_commit_ts);
             // If we found an waiting request in new mode, or in old mode but inserted later
             // than registering the waking up, wake it up in normal way and stop.
-            released_locks.push(Some(ReleasedLock::new(0.into(), None, self.key, false)));
+            released_locks.push(Some(ReleasedLock::new(
+                self.conflicting_start_ts,
+                if self.conflicting_commit_ts.is_zero() {
+                    None
+                } else {
+                    Some(self.conflicting_commit_ts)
+                },
+                self.key,
+                false,
+            )));
             break;
         }
 
@@ -94,10 +109,13 @@ impl SyncCommand for WakeUpLegacyPessimisticLockWaits {
                             start_ts: entry.parameters.start_ts,
                             conflict_start_ts: conflicting_start_ts,
                             conflict_commit_ts: conflicting_commit_ts,
-                            key: entry.key.into_raw().unwrap(),
+                            key: entry.key.to_raw().unwrap(),
                             primary: entry.parameters.primary,
                         },
                     )));
+                    info!("reporting write conflict after wake-up-delay-duration";
+                        "start_ts" => entry.parameters.start_ts, "for_update_ts" => entry.parameters.for_update_ts, "key" => %entry.key,
+                        "is_new_mode" => entry.allow_lock_with_conflict, "err" => ?e);
                     cb(Err(Arc::new(e)));
                 }
             }));
