@@ -244,7 +244,7 @@ pub enum PeerMsg<EK: KvEngine> {
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,
     },
-    /// Start the Fsm.
+    /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
     Noop,

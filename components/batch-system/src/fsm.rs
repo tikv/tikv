@@ -29,20 +29,20 @@ pub trait FsmScheduler {
     fn shutdown(&self);
 }
 
-/// A Fsm is a finite state machine. It should be able to be notified for
+/// A `Fsm` is a finite state machine. It should be able to be notified for
 /// updating internal state according to incoming messages.
 pub trait Fsm {
     type Message: Send;
 
     fn is_stopped(&self) -> bool;
 
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
+    /// Set a mailbox to FSM, which should be used to send message to itself.
     fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
     }
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
+    /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
@@ -56,14 +56,14 @@ pub trait Fsm {
     }
 }
 
-/// A holder of Fsm.
+/// A holder of FSM.
 ///
 /// There are three possible states:
 ///
-/// 1. NOTIFYSTATE_NOTIFIED: The Fsm is taken by an external executor. `data`
+/// 1. NOTIFYSTATE_NOTIFIED: The FSM is taken by an external executor. `data`
 ///    holds a null pointer.
-/// 2. NOTIFYSTATE_IDLE: No actor is using the Fsm. `data` owns the Fsm.
-/// 3. NOTIFYSTATE_DROP: The Fsm is dropped. `data` holds a null pointer.
+/// 2. NOTIFYSTATE_IDLE: No actor is using the FSM. `data` owns the FSM.
+/// 3. NOTIFYSTATE_DROP: The FSM is dropped. `data` holds a null pointer.
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
@@ -105,7 +105,7 @@ impl<N: Fsm> FsmState<N> {
         }
     }
 
-    /// Notifies Fsm via a `FsmScheduler`.
+    /// Notifies FSM via a `FsmScheduler`.
     #[inline]
     pub fn notify<S: FsmScheduler<Fsm = N>>(
         &self,
@@ -121,10 +121,10 @@ impl<N: Fsm> FsmState<N> {
         }
     }
 
-    /// Releases the Fsm ownership back to this state.
+    /// Releases the FSM ownership back to this state.
     ///
     /// It's not required that all messages should be consumed before
-    /// releasing a Fsm. However, a Fsm is guaranteed to be notified only
+    /// releasing a FSM. However, a FSM is guaranteed to be notified only
     /// when new messages arrives after it's released.
     #[inline]
     pub fn release(&self, fsm: Box<N>) {
@@ -150,7 +150,7 @@ impl<N: Fsm> FsmState<N> {
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }
 
-    /// Clears the Fsm.
+    /// Clears the FSM.
     #[inline]
     pub fn clear(&self) {
         match self.status.swap(Self::NOTIFYSTATE_DROP, Ordering::AcqRel) {

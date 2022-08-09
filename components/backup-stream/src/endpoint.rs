@@ -762,7 +762,6 @@ where
         async move {
             let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
-            #[cfg(feature = "failpoints")]
             fail::fail_point!("delay_on_flush");
             flush_ob.before(resolved.take_region_checkpoints()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {

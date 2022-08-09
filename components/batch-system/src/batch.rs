@@ -1,8 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be
-//! two different kind of Fsms in TiKV's Fsm system. One is normal Fsm, which
-//! usually represents a peer, the other is control Fsm, which usually
+//! two different kind of FSMs in TiKV's FSM system. One is normal FSM, which
+//! usually represents a peer, the other is control FSM, which usually
 //! represents something that controls how the former is created or metrics are
 //! collected.
 
@@ -30,7 +30,7 @@ use crate::{
     router::Router,
 };
 
-/// A unify type for Fsms so that they can be sent to channel easily.
+/// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
     Normal(Box<N>),
     Control(Box<C>),
@@ -166,7 +166,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     /// Releases the ownership of `fsm` so that it can be scheduled in another
     /// poller.
     ///
-    /// When pending messages of the Fsm is different than `expected_len`,
+    /// When pending messages of the FSM is different than `expected_len`,
     /// attempts to schedule it in this poller again. Returns the `fsm` if the
     /// re-scheduling suceeds.
     fn release(&mut self, mut fsm: NormalFsm<N>, expected_len: usize) -> Option<NormalFsm<N>> {
@@ -187,10 +187,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    /// Removes the normal Fsm.
+    /// Removes the normal FSM.
     ///
-    /// This method should only be called when the Fsm is stopped.
-    /// If there are still messages in channel, the Fsm is untouched and
+    /// This method should only be called when the FSM is stopped.
+    /// If there are still messages in channel, the FSM is untouched and
     /// the function will return false to let caller to keep polling.
     fn remove(&mut self, mut fsm: NormalFsm<N>) -> Option<NormalFsm<N>> {
         let mailbox = fsm.take_mailbox().unwrap();
@@ -205,18 +205,11 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    /// Schedules the normal Fsm located at `index`.
-    ///
-    /// If `inplace`, the relative position of all Fsms will not be changed;
-    /// otherwise, the Fsm will be popped and the last Fsm will be swap in to
-    /// reduce memory copy.
-    pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize, inplace: bool) {
+    /// Schedules the normal FSM located at `index`.
+    pub fn schedule(&mut self, router: &BatchRouter<N, C>, index: usize) {
         let to_schedule = match self.normals[index].take() {
             Some(f) => f,
             None => {
-                if !inplace {
-                    self.normals.swap_remove(index);
-                }
                 return;
             }
         };
@@ -233,12 +226,19 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             // failed to reschedule
             f.policy.take();
             self.normals[index] = res;
-        } else if !inplace {
+        }
+    }
+
+    /// Reclaims the slot storage if there is no FSM located at `index`. It will
+    /// alter the positions of other FSMs with index larger than `index`.
+    #[inline]
+    pub fn unsafe_reclaim(&mut self, index: usize) {
+        if self.normals[index].is_none() {
             self.normals.swap_remove(index);
         }
     }
 
-    /// Same as [`release`], but works with control Fsm.
+    /// Same as [`release`], but works with control FSM.
     pub fn release_control(&mut self, control_box: &BasicMailbox<C>, checked_len: usize) -> bool {
         let s = self.control.take().unwrap();
         control_box.release(s);
@@ -255,7 +255,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    /// Same as [`remove`], but works with control Fsm.
+    /// Same as [`remove`], but works with control FSM.
     pub fn remove_control(&mut self, control_box: &BasicMailbox<C>) {
         if control_box.is_empty() {
             let s = self.control.take().unwrap();
@@ -266,14 +266,14 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
 /// The result for `PollHandler::handle_control`.
 pub enum HandleResult {
-    /// The Fsm still needs to be handled in the next run.
+    /// The FSM still needs to be handled in the next run.
     KeepProcessing,
-    /// The Fsm should stop at the progress.
+    /// The FSM should stop at the progress.
     StopAt {
-        /// The amount of messages already handled by the handler. The Fsm
+        /// The amount of messages already handled by the handler. The FSM
         /// should be released unless new messages arrive.
         progress: usize,
-        /// Whether the Fsm should be passed in to `end` call.
+        /// Whether the FSM should be passed in to `end` call.
         skip_end: bool,
     },
 }
@@ -285,7 +285,7 @@ impl HandleResult {
     }
 }
 
-/// A handler that polls all Fsms in ready.
+/// A handler that polls all FSMs in ready.
 ///
 /// A general process works like the following:
 ///
@@ -309,19 +309,19 @@ pub trait PollHandler<N, C>: Send + 'static {
     where
         for<'a> F: FnOnce(&'a Config);
 
-    /// This function is called when the control Fsm is ready.
+    /// This function is called when the control FSM is ready.
     ///
     /// If `Some(len)` is returned, this function will not be called again until
-    /// there are more than `len` pending messages in `control` Fsm.
+    /// there are more than `len` pending messages in `control` FSM.
     ///
     /// If `None` is returned, this function will be called again with the same
-    /// Fsm `control` in the next round, unless it is stopped.
+    /// FSM `control` in the next round, unless it is stopped.
     fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
-    /// This function is called when some normal Fsms are ready.
+    /// This function is called when some normal FSMs are ready.
     fn handle_normal(&mut self, normal: &mut impl DerefMut<Target = N>) -> HandleResult;
 
-    /// This function is called after [`handle_normal`] is called for all Fsms
+    /// This function is called after [`handle_normal`] is called for all FSMs
     /// and before calling [`end`]. The function is expected to run lightweight
     /// works.
     fn light_end(&mut self, _batch: &mut [Option<impl DerefMut<Target = N>>]) {}
@@ -394,7 +394,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         let mut to_skip_end = Vec::with_capacity(self.max_batch_size);
 
         // Fetch batch after every round is finished. It's helpful to protect regions
-        // from becoming hungry if some regions are hot points. Since we fetch new Fsm
+        // from becoming hungry if some regions are hot points. Since we fetch new FSM
         // every time calling `poll`, we do not need to configure a large value for
         // `self.max_batch_size`.
         let mut run = true;
@@ -460,9 +460,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if let Ok(fsm) = self.fsm_receiver.try_recv() {
                     run = batch.push(fsm);
                 }
-                // If we receive a ControlFsm, break this cycle and call `end`. Because
-                // ControlFsm may change state of the handler, we shall deal with it immediately
-                // after calling `begin` of `Handler`.
+                // When `fsm_cnt >= batch.normals.len()`:
+                // - No more FSMs in `fsm_receiver`.
+                // - We receive a control FSM. Break the loop because ControlFsm may change
+                //   state of the handler, we shall deal with it immediately after calling
+                //   `begin` of `Handler`.
                 if !run || fsm_cnt >= batch.normals.len() {
                     break;
                 }
@@ -481,17 +483,19 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 fsm_cnt += 1;
             }
             self.handler.light_end(&mut batch.normals);
-            for offset in &to_skip_end {
-                batch.schedule(&self.router, *offset, true /* inplace */);
+            for index in &to_skip_end {
+                batch.schedule(&self.router, *index);
             }
             to_skip_end.clear();
             self.handler.end(&mut batch.normals);
 
-            // Because release use `swap_remove` internally, so using pop here
-            // to remove the correct Fsm.
-            while let Some(r) = reschedule_fsms.pop() {
-                batch.schedule(&self.router, r, false /* inplace */);
+            // Iterate larger index first, so that `unsafe_reclaim` won't affect other FSMs
+            // in the list.
+            for index in reschedule_fsms.iter().rev() {
+                batch.schedule(&self.router, *index);
+                batch.unsafe_reclaim(*index);
             }
+            reschedule_fsms.clear();
         }
         if let Some(fsm) = batch.control.take() {
             self.router.control_scheduler.schedule(fsm);
@@ -522,11 +526,11 @@ pub trait HandlerBuilder<N, C> {
     fn build(&mut self, priority: Priority) -> Self::Handler;
 }
 
-/// A system that can poll Fsms concurrently and in batch.
+/// A system that can poll FSMs concurrently and in batch.
 ///
-/// To use the system, two type of Fsms and their PollHandlers need to be
-/// defined: Normal and Control. Normal Fsm handles the general task while
-/// Control Fsm creates normal Fsm instances.
+/// To use the system, two type of FSMs and their PollHandlers need to be
+/// defined: Normal and Control. Normal FSM handles the general task while
+/// Control FSM creates normal FSM instances.
 pub struct BatchSystem<N: Fsm, C: Fsm> {
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,

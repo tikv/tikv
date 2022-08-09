@@ -383,7 +383,6 @@ where
         let mut stats = StatisticsSummary::default();
         let start = Instant::now();
         loop {
-            #[cfg(feature = "failpoints")]
             fail::fail_point!("scan_and_async_send", |msg| Err(Error::Other(box_err!(
                 "{:?}", msg
             ))));

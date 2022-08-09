@@ -572,7 +572,7 @@ where
         self.stopped
     }
 
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
+    /// Set a mailbox to FSM, which should be used to send message to itself.
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
@@ -581,7 +581,7 @@ where
         self.mailbox = Some(mailbox.into_owned());
     }
 
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
+    /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
@@ -637,6 +637,7 @@ where
                         continue;
                     }
 
+                    let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
                         // Avoid to merge requests with different `DiskFullOpt`s into one,
                         // so that normal writes can be rejected when proposing if the
@@ -644,7 +645,6 @@ where
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
                             && !self.fsm.peer.disk_full_peers.majority())
                             || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
-                        && let req_size = cmd.request.compute_size()
                         && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
@@ -699,7 +699,6 @@ where
         let mut should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
-        #[cfg(feature = "failpoints")]
         (|| {
             fail_point!("force_delay_propose_pending_batch_raft_command", |_| {
                 should_propose = false

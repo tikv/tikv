@@ -202,7 +202,6 @@ fn scan_executor_loop(
     canceled: Arc<AtomicBool>,
 ) {
     while let Ok(cmd) = cmds.recv() {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("execute_scan_command");
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
@@ -393,7 +392,6 @@ where
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
                 ObserveOp::Start { region } => {
-                    #[cfg(feature = "failpoints")]
                     fail::fail_point!("delay_on_start_observe");
                     self.start_observe(region).await;
                     metrics::INITIAL_SCAN_REASON
@@ -522,7 +520,6 @@ where
             }
 
             Some(for_task) => {
-                #[cfg(feature = "failpoints")]
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
@@ -604,7 +601,6 @@ where
     }
 
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
                 "get_last_checkpoint_of({}, {:?}) failed because {:?}",
@@ -666,8 +662,6 @@ mod test {
     use tikv::storage::Statistics;
 
     use super::InitialScan;
-    #[cfg(feature = "failpoints")]
-    use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
 
     #[derive(Clone, Copy)]
     struct NoopInitialScan;
@@ -687,27 +681,27 @@ mod test {
         }
     }
 
-    #[cfg(feature = "failpoints")]
-    fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            f();
-            tx.send(()).unwrap();
-        });
-        let pool = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        let _e = pool.handle().enter();
-        pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
-    }
-
     #[test]
     #[cfg(feature = "failpoints")]
     fn test_message_delay_and_exit() {
         use std::time::Duration;
 
         use super::ScanCmd;
+        use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
+
+        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                f();
+                tx.send(()).unwrap();
+            });
+            let pool = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let _e = pool.handle().enter();
+            pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
+        }
 
         let pool = spawn_executors(NoopInitialScan, 1);
         let wg = CallbackWaitGroup::new();

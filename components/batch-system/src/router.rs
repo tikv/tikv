@@ -39,19 +39,19 @@ enum CheckDoResult<T> {
     Valid(T),
 }
 
-/// Router routes messages to its target Fsm's mailbox.
+/// Router routes messages to its target FSM's mailbox.
 ///
 /// In our abstract model, every batch system has two different kind of
-/// Fsms. First is normal Fsm, which does the common work like peers in a
-/// raftstore model or apply delegate in apply model. Second is control Fsm,
+/// FSMs. First is normal FSM, which does the common work like peers in a
+/// raftstore model or apply delegate in apply model. Second is control FSM,
 /// which does some work that requires a global view of resources or creates
-/// missing Fsm for specified address.
+/// missing FSM for specified address.
 ///
-/// There are one control Fsm and multiple normal Fsms in a system. Each Fsm
+/// There are one control FSM and multiple normal FSMs in a system. Each FSM
 /// has its own mailbox. We maintain an address book to deliver messages to the
-/// specified normal Fsm.
+/// specified normal FSM.
 ///
-/// Normal Fsm and control Fsm can have different scheduler, but this is not
+/// Normal FSM and control FSM can have different scheduler, but this is not
 /// required.
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<NormalMailMap<N>>>,
@@ -202,7 +202,7 @@ where
         }
     }
 
-    /// Get the mailbox of control Fsm.
+    /// Get the mailbox of control FSM.
     pub fn control_mailbox(&self) -> Mailbox<C, Cs> {
         Mailbox::new(self.control_box.clone(), self.control_scheduler.clone())
     }
@@ -273,7 +273,7 @@ where
         }
     }
 
-    /// Force sending message to control Fsm.
+    /// Force sending message to control FSM.
     #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
         match self.control_box.try_send(msg, &self.control_scheduler) {
@@ -288,7 +288,7 @@ where
         }
     }
 
-    /// Try to notify all normal Fsms a message.
+    /// Try to notify all normal FSMs a message.
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let mailboxes = self.normals.lock().unwrap();
         for mailbox in mailboxes.map.values() {
@@ -296,7 +296,7 @@ where
         }
     }
 
-    /// Try to notify all Fsms that the cluster is being shutdown.
+    /// Try to notify all FSMs that the cluster is being shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         self.shutdown.store(true, Ordering::SeqCst);
