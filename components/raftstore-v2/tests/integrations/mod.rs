@@ -16,10 +16,10 @@ use std::sync::{
 use crossbeam::channel::{self, Receiver, Sender};
 use engine_test::{
     ctor::{CfOptions, DbOptions},
-    kv::{KvTestEngine, TestTabletFactory},
+    kv::{KvTestEngine, TestTabletFactoryV2},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletFactory, ALL_CFS};
+use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use kvproto::{metapb::Store, raft_serverpb::RaftMessage};
 use pd_client::RpcClient;
 use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
@@ -39,7 +39,7 @@ struct TestNode {
     _path: TempDir,
     store: Store,
     raft_engine: Option<RaftTestEngine>,
-    factory: Option<Arc<TestTabletFactory>>,
+    factory: Option<Arc<TestTabletFactoryV2>>,
     system: Option<StoreSystem<KvTestEngine, RaftTestEngine>>,
     logger: Logger,
 }
@@ -56,7 +56,7 @@ impl TestNode {
             .copied()
             .map(|cf| (cf, CfOptions::default()))
             .collect();
-        let factory = Arc::new(TestTabletFactory::new(
+        let factory = Arc::new(TestTabletFactoryV2::new(
             path.path(),
             DbOptions::default(),
             cf_opts,
@@ -72,8 +72,17 @@ impl TestNode {
             .bootstrap_first_region(&store, store_id)
             .unwrap()
             .unwrap();
+        if factory.exists(region.get_id(), RAFT_INIT_LOG_INDEX) {
+            factory
+                .destroy_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
+                .unwrap();
+        }
         factory
-            .create_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
+            .open_tablet(
+                region.get_id(),
+                Some(RAFT_INIT_LOG_INDEX),
+                OpenOptions::default().set_create_new(true),
+            )
             .unwrap();
 
         TestNode {

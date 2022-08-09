@@ -18,7 +18,7 @@ use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raft::INVALID_ID;
 use raftstore::store::{
     fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg,
+    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -53,8 +53,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub tick_batch: Vec<PeerTickBatch>,
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
-    pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-    pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    pub write_senders: WriteSenders<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -62,8 +61,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         cfg: Config,
         trans: T,
         router: StoreRouter<EK, ER>,
-        write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-        io_reschedule_concurrent_count: Arc<AtomicUsize>,
+        write_senders: WriteSenders<EK, ER>,
         logger: Logger,
     ) -> Self {
         Self {
@@ -76,7 +74,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
             write_senders,
-            io_reschedule_concurrent_count,
         }
     }
 }
@@ -170,7 +167,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
             HandleResult::stop_at(0, false)
         };
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
-        delegate.handle_msgs(&mut self.peer_msg_buf);
+        delegate.on_msgs(&mut self.peer_msg_buf);
         delegate
             .fsm
             .peer_mut()
@@ -216,8 +213,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     trans: T,
     router: StoreRouter<EK, ER>,
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-    io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    write_senders: WriteSenders<EK, ER>,
     logger: Logger,
 }
 
@@ -242,8 +238,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             router,
             log_fetch_scheduler,
             logger,
-            write_senders: store_writers.senders().clone(),
-            io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+            write_senders: store_writers.senders(),
         }
     }
 
@@ -302,7 +297,6 @@ where
             self.trans.clone(),
             self.router.clone(),
             self.write_senders.clone(),
-            self.io_reschedule_concurrent_count.clone(),
             self.logger.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());

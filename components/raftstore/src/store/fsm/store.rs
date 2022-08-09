@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -24,7 +21,7 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -71,7 +68,10 @@ use crate::{
         RegionChangeReason,
     },
     store::{
-        async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+        async_io::{
+            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write_router::WriteSenders,
+        },
         config::Config,
         fsm::{
             create_apply_batch_system,
@@ -518,9 +518,8 @@ where
     /// Disk usage for other stores. The store itself is not included.
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
-    pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
-    pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
 
@@ -1072,8 +1071,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-    io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    write_senders: WriteSenders<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1313,7 +1311,6 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             sync_write_worker,
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
         };
         ctx.update_ticks_timeout();
@@ -1364,7 +1361,6 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
         }
     }
 }
@@ -1558,8 +1554,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
-            write_senders: self.store_writers.senders().clone(),
-            io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+            write_senders: self.store_writers.senders(),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(

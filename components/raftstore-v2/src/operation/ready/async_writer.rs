@@ -10,7 +10,7 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::store::{
     local_metrics::RaftMetrics, Config, PersistedNotifier, WriteMsg, WriteRouter,
-    WriteRouterContext, WriteTask,
+    WriteRouterContext, WriteSenders, WriteTask,
 };
 use slog::{warn, Logger};
 
@@ -164,12 +164,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn write_senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>> {
+    fn write_senders(&self) -> &WriteSenders<EK, ER> {
         &self.write_senders
-    }
-
-    fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize> {
-        &self.io_reschedule_concurrent_count
     }
 
     fn config(&self) -> &Config {

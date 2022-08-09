@@ -171,10 +171,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        self.register_raft_tick();
+        self.schedule_raft_tick();
     }
 
-    fn handle_tick(&mut self, tick: PeerTick) {
+    fn on_tick(&mut self, tick: PeerTick) {
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::RaftLogGc => unimplemented!(),
@@ -190,12 +190,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
     }
 
-    pub fn handle_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
+    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
                 PeerMsg::RaftCommand(_) => unimplemented!(),
-                PeerMsg::Tick(tick) => self.handle_tick(tick),
+                PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes { res } => unimplemented!(),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),

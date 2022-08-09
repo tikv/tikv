@@ -30,7 +30,7 @@ pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
         write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
-        write_router::{WriteRouter, WriteRouterContext},
+        write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{
         bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,

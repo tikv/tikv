@@ -42,10 +42,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
-        self.register_raft_tick();
+        self.schedule_raft_tick();
     }
 
-    pub fn register_raft_tick(&mut self) {
+    pub fn schedule_raft_tick(&mut self) {
         self.schedule_tick(PeerTick::Raft);
     }
 }
