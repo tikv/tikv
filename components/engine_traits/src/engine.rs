@@ -153,32 +153,89 @@ impl Drop for TabletErrorCollector {
     }
 }
 
+/// OpenOptionsn is used for specifiying the way of opening a tablet.
+#[derive(Default, Clone)]
+pub struct OpenOptions {
+    // create tablet if non-exist
+    create: bool,
+    create_new: bool,
+    read_only: bool,
+    cache_only: bool,
+    skip_cache: bool,
+}
+
+impl OpenOptions {
+    /// Sets the option to create a tablet, or open it if it already exists.
+    pub fn set_create(mut self, create: bool) -> Self {
+        self.create = create;
+        self
+    }
+
+    /// Sets the option to create a new tablet, failing if it already exists.
+    pub fn set_create_new(mut self, create_new: bool) -> Self {
+        self.create_new = create_new;
+        self
+    }
+
+    /// Sets the option for read only
+    pub fn set_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Sets the option for only reading from cache.
+    pub fn set_cache_only(mut self, cache_only: bool) -> Self {
+        self.cache_only = cache_only;
+        self
+    }
+
+    /// Sets the option to open a tablet without updating the cache.
+    pub fn set_skip_cache(mut self, skip_cache: bool) -> Self {
+        self.skip_cache = skip_cache;
+        self
+    }
+
+    pub fn create(&self) -> bool {
+        self.create
+    }
+
+    pub fn create_new(&self) -> bool {
+        self.create_new
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn cache_only(&self) -> bool {
+        self.cache_only
+    }
+
+    pub fn skip_cache(&self) -> bool {
+        self.skip_cache
+    }
+}
+
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
 pub trait TabletFactory<EK>: TabletAccessor<EK> {
-    /// Create an tablet by id and suffix. If the tablet exists, it will fail.
+    /// Open the tablet with id and suffix according to the OpenOptions.
+    ///
     /// The id is likely the region Id, the suffix could be the current raft log
     /// index. They together could specify a unique path for a region's
     /// tablet. The reason to have suffix is that we can keep more than one
     /// tablet for a region.
-    fn create_tablet(&self, id: u64, suffix: u64) -> Result<EK>;
+    fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
 
-    /// Open a tablet by id and suffix. If the tablet exists, it will open it.
-    /// If the tablet does not exist, it will create it.
-    fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, suffix), false)
-    }
-
-    /// Open a tablet by id and suffix from cache---that means it should already
-    /// be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK>;
-
-    /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK>;
-
-    /// Open tablet by path and readonly flag
-    fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
+    /// Open tablet by raw path without updating cache.
+    fn open_tablet_raw(
+        &self,
+        path: &Path,
+        id: u64,
+        suffix: u64,
+        options: OpenOptions,
+    ) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
@@ -232,23 +289,21 @@ impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
     EK: CfOptionsExt + Clone + Send + 'static,
 {
-    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_cache(&self, _id: u64, _suffix: u64) -> Option<EK> {
-        Some(self.engine.as_ref().unwrap().clone())
-    }
-
-    fn open_tablet_cache_any(&self, _id: u64) -> Option<EK> {
-        Some(self.engine.as_ref().unwrap().clone())
-    }
-
     fn create_shared_db(&self) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet(&self, _id: u64, _suffix: Option<u64>, _options: OpenOptions) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_raw(
+        &self,
+        _path: &Path,
+        _id: u64,
+        _suffix: u64,
+        _options: OpenOptions,
+    ) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
 

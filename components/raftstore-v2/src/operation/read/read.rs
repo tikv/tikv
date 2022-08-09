@@ -154,7 +154,7 @@ mod tests {
         ctor::{CfOptions, DbOptions},
         kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
     };
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
@@ -206,7 +206,9 @@ mod tests {
             meta.readers.insert(1, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet1 = factory.create_tablet(1, 10).unwrap();
+            tablet1 = factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
             tablet1.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
@@ -217,7 +219,9 @@ mod tests {
             meta.readers.insert(2, read_delegate);
 
             // create tablet with region_id 1 and prepare some data
-            tablet2 = factory.create_tablet(2, 10).unwrap();
+            tablet2 = factory
+                .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
             tablet2.put_cf(CF_DEFAULT, b"a2", b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);

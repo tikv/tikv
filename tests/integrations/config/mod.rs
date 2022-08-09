@@ -794,6 +794,8 @@ fn test_serde_custom_tikv_config() {
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),
         renew_batch_min_size: 100,
+        renew_batch_max_size: 8192,
+        available_interval: ReadableDuration::millis(3000),
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
