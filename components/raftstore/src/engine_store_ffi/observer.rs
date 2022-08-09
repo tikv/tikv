@@ -16,8 +16,9 @@ use yatp::{
 use crate::{
     coprocessor::{
         AdminObserver, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-        BoxQueryObserver, BoxRegionChangeObserver, Cmd, Coprocessor, CoprocessorHost,
-        ObserverContext, QueryObserver, RegionChangeEvent, RegionChangeObserver,
+        BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver, Cmd, Coprocessor,
+        CoprocessorHost, ObserverContext, PdTaskObserver, QueryObserver, RegionChangeEvent,
+        RegionChangeObserver, StoreSizeInfo,
     },
     engine_store_ffi::{
         gen_engine_store_server_helper,
@@ -149,10 +150,10 @@ impl TiFlashObserver {
             TIFLASH_OBSERVER_PRIORITY,
             BoxRegionChangeObserver::new(self.clone()),
         );
-        // coprocessor_host.registry.register_pd_task_observer(
-        //     TIFLASH_OBSERVER_PRIORITY,
-        //     BoxPdTaskObserver::new(self.clone()),
-        // );
+        coprocessor_host.registry.register_pd_task_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxPdTaskObserver::new(self.clone()),
+        );
     }
 }
 
@@ -232,5 +233,16 @@ impl RegionChangeObserver for TiFlashObserver {
             self.engine_store_server_helper
                 .handle_destroy(ob_ctx.region().get_id());
         }
+    }
+}
+
+impl PdTaskObserver for TiFlashObserver {
+    fn on_compute_engine_size(&self, store_size: &mut Option<StoreSizeInfo>) {
+        let stats = self.engine_store_server_helper.handle_compute_store_stats();
+        store_size.insert(StoreSizeInfo {
+            capacity: stats.fs_stats.capacity_size,
+            used: stats.fs_stats.used_size,
+            avail: stats.fs_stats.avail_size,
+        });
     }
 }

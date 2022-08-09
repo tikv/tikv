@@ -1019,9 +1019,9 @@ unsafe extern "C" fn ffi_handle_compute_store_stats(
 ) -> ffi_interfaces::StoreStats {
     ffi_interfaces::StoreStats {
         fs_stats: ffi_interfaces::FsStats {
-            used_size: 0,
-            avail_size: 0,
-            capacity_size: 0,
+            capacity_size: 444444,
+            used_size: 111111,
+            avail_size: 333333,
             ok: 1,
         },
         engine_bytes_written: 0,

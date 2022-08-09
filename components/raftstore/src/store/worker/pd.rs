@@ -48,19 +48,22 @@ use tikv_util::{
 };
 use yatp::Remote;
 
-use crate::store::{
-    cmd_resp::new_error,
-    metrics::*,
-    peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
-    transport::SignificantRouter,
-    util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
-    worker::{
-        query_stats::QueryStats,
-        split_controller::{SplitInfo, TOP_N},
-        AutoSplitController, ReadStats, WriteStats,
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{
+        cmd_resp::new_error,
+        metrics::*,
+        peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
+        transport::SignificantRouter,
+        util::{is_epoch_stale, KeysInfoFormatter, LatencyInspector, RaftstoreDuration},
+        worker::{
+            query_stats::QueryStats,
+            split_controller::{SplitInfo, TOP_N},
+            AutoSplitController, ReadStats, WriteStats,
+        },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
     },
-    Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-    RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
 };
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -821,7 +824,6 @@ where
     ER: RaftEngine,
     T: PdClient + 'static,
 {
-    engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
     store_id: u64,
     pd_client: Arc<T>,
     router: RaftRouter<EK, ER>,
@@ -850,6 +852,7 @@ where
     // The health status of the store is updated by the slow score mechanism.
     health_service: Option<HealthService>,
     curr_health_status: ServingStatus,
+    coprocessor_host: CoprocessorHost<EK>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -874,6 +877,7 @@ where
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        coprocessor_host: CoprocessorHost<EK>,
     ) -> Runner<EK, ER, T> {
         let interval = store_heartbeat_interval / Self::INTERVAL_DIVISOR;
         let mut stats_monitor = StatsMonitor::new(
@@ -891,9 +895,6 @@ where
         );
 
         Runner {
-            engine_store_server_helper: crate::engine_store_ffi::gen_engine_store_server_helper(
-                cfg.engine_store_server_helper,
-            ),
             store_id,
             pd_client,
             router,
@@ -912,6 +913,7 @@ where
             slow_score: SlowScore::new(cfg.inspect_interval.0),
             health_service,
             curr_health_status: ServingStatus::Serving,
+            coprocessor_host,
         }
     }
 
@@ -1106,19 +1108,6 @@ where
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
-        let store_stats = self.engine_store_server_helper.handle_compute_store_stats();
-        let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
-            Err(e) => {
-                error!(
-                    "get disk stat for rocksdb failed";
-                    "engine_path" => store_info.kv_engine.path(),
-                    "err" => ?e
-                );
-                return;
-            }
-            Ok(stats) => stats,
-        };
-
         let mut report_peers = HashMap::default();
         for (region_id, region_peer) in &mut self.region_peers {
             let read_bytes = region_peer.read_bytes - region_peer.last_store_report_read_bytes;
@@ -1145,34 +1134,29 @@ where
             report_peers.insert(*region_id, read_stat);
         }
 
-        // We explicitly disable these code from TiKV
-        // let used_size = self.snap_mgr.get_total_snap_size().unwrap()
-        //     + store_info
-        //         .kv_engine
-        //         .get_engine_used_size()
-        //         .expect("kv engine used size")
-        //     + store_info
-        //         .raft_engine
-        //         .get_engine_size()
-        //         .expect("raft engine used size");
-        // stats.set_used_size(used_size);
-        //
-        // let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-        // // We only care about rocksdb SST file size, so we should check disk available here.
-        // available = cmp::min(available, disk_stats.available_space());
+        stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
+        let (capacity, used_size, available) = match collect_engine_size(
+            &self.coprocessor_host,
+            Some(&store_info),
+            self.snap_mgr.get_total_snap_size().unwrap(),
+        ) {
+            Some((capacity, used_size, available)) => (capacity, used_size, available),
+            None => return,
+        };
 
-        let capacity = store_stats.fs_stats.capacity_size;
-        let available = store_stats.fs_stats.avail_size;
+        stats.set_capacity(capacity);
+        stats.set_used_size(used_size);
+
         if available == 0 {
             warn!("no available space");
         }
-        stats.set_used_size(store_stats.fs_stats.used_size);
-        stats.set_capacity(capacity);
         stats.set_available(available);
-        stats.set_bytes_written(store_stats.engine_bytes_written);
-        stats.set_keys_written(store_stats.engine_keys_written);
-        stats.set_bytes_read(store_stats.engine_bytes_read);
-        stats.set_keys_read(store_stats.engine_keys_read);
+
+        // Don't support on TiFlash side
+        // stats.set_bytes_written(store_stats.engine_bytes_written);
+        // stats.set_keys_written(store_stats.engine_keys_written);
+        // stats.set_bytes_read(store_stats.engine_bytes_read);
+        // stats.set_keys_read(store_stats.engine_keys_read);
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -1191,7 +1175,7 @@ where
             .set(available as i64);
         STORE_SIZE_GAUGE_VEC
             .with_label_values(&["used"])
-            .set(store_stats.fs_stats.used_size as i64);
+            .set(used_size as i64);
 
         let slow_score = self.slow_score.get();
         stats.set_slow_score(slow_score as u64);
@@ -2166,6 +2150,48 @@ fn collect_report_read_peer_stats(
     stats
 }
 
+fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
+    coprocessor_host: &CoprocessorHost<EK>,
+    store_info: Option<&StoreInfo<EK, ER>>,
+    snap_mgr_size: u64,
+) -> Option<(u64, u64, u64)> {
+    if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
+        return Some((engine_size.capacity, engine_size.used, engine_size.avail));
+    }
+    let store_info = store_info.unwrap();
+    let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+        Err(e) => {
+            error!(
+                "get disk stat for rocksdb failed";
+                "engine_path" => store_info.kv_engine.path(),
+                "err" => ?e
+            );
+            return None;
+        }
+        Ok(stats) => stats,
+    };
+    let disk_cap = disk_stats.total_space();
+    let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
+        disk_cap
+    } else {
+        store_info.capacity
+    };
+    let used_size = snap_mgr_size
+        + store_info
+            .kv_engine
+            .get_engine_used_size()
+            .expect("kv engine used size")
+        + store_info
+            .raft_engine
+            .get_engine_size()
+            .expect("raft engine used size");
+    let mut available = capacity.checked_sub(used_size).unwrap_or_default();
+    // We only care about rocksdb SST file size, so we should check disk available
+    // here.
+    available = cmp::min(available, disk_stats.available_space());
+    Some((capacity, used_size, available))
+}
+
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
     stat.get_get() + stat.get_coprocessor() + stat.get_scan()
 }
@@ -2356,8 +2382,11 @@ mod tests {
         );
     }
 
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use metapb::Peer;
     use resource_metering::{RawRecord, TagInfos};
+
+    use crate::coprocessor::{BoxPdTaskObserver, Coprocessor, PdTaskObserver, StoreSizeInfo};
 
     #[test]
     fn test_calculate_region_cpu_records() {
@@ -2461,5 +2490,37 @@ mod tests {
             let report = bucket.new_report(UnixSecs::now());
             assert_eq!(report.stats.get_read_qps(), expected);
         }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct PdObserver {}
+
+    impl Coprocessor for PdObserver {}
+
+    impl PdTaskObserver for PdObserver {
+        fn on_compute_engine_size(&self, s: &mut Option<StoreSizeInfo>) {
+            let _ = s.insert(StoreSizeInfo {
+                capacity: 444,
+                used: 111,
+                avail: 333,
+            });
+        }
+    }
+
+    #[test]
+    fn test_pd_task_observer() {
+        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let obs = PdObserver::default();
+        host.registry
+            .register_pd_task_observer(1, BoxPdTaskObserver::new(obs));
+        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0);
+        let (cap, used, avail) = if let Some((cap, used, avail)) = store_size {
+            (cap, used, avail)
+        } else {
+            panic!("store_size should not be none");
+        };
+        assert_eq!(cap, 444);
+        assert_eq!(used, 111);
+        assert_eq!(avail, 333);
     }
 }

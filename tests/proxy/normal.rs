@@ -93,6 +93,34 @@ fn test_config() {
 }
 
 #[test]
+fn test_store_stats() {
+    let (mut cluster, pd_client) = new_mock_cluster(0, 1);
+
+    let _ = cluster.run();
+
+    for id in cluster.engines.keys() {
+        let engine = cluster.get_tiflash_engine(*id);
+        assert_eq!(
+            engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
+            444444
+        );
+    }
+
+    for id in cluster.engines.keys() {
+        cluster.must_send_store_heartbeat(*id);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    // let resp = block_on(pd_client.store_heartbeat(Default::default(), None, None)).unwrap();
+    for id in cluster.engines.keys() {
+        let store_stat = pd_client.get_store_stats(*id).unwrap();
+        assert_eq!(store_stat.get_capacity(), 444444);
+        assert_eq!(store_stat.get_available(), 333333);
+    }
+    // The same to mock-engine-store
+    cluster.shutdown();
+}
+
+#[test]
 fn test_store_setup() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 

@@ -325,7 +325,7 @@ fn test_destroy_peer_on_pending_snapshot_and_restart() {
         if snap_files.is_empty() {
             break;
         }
-        if now.saturating_elapsed() > Duration::from_secs(10) {
+        if now.saturating_elapsed() > Duration::from_secs(25) {
             panic!("snap files are not gc-ed");
         }
         sleep_ms(20);

@@ -46,8 +46,10 @@ use raftstore::{
             store::{StoreMeta, PENDING_MSG_CAP},
             RaftBatchSystem,
         },
-        initial_region, prepare_bootstrap_cluster, Callback, CasualMessage, CasualRouter,
-        RaftCmdExtraOpts, RaftRouter, SnapManager, WriteResponse, INIT_EPOCH_CONF_VER,
+        initial_region,
+        msg::StoreTick,
+        prepare_bootstrap_cluster, Callback, CasualMessage, CasualRouter, RaftCmdExtraOpts,
+        RaftRouter, SnapManager, StoreMsg, StoreRouter, WriteResponse, INIT_EPOCH_CONF_VER,
         INIT_EPOCH_VER,
     },
     Error, Result,
@@ -1112,6 +1114,11 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             try_cnt += 1;
             sleep_ms(20);
         }
+    }
+
+    pub fn must_send_store_heartbeat(&self, node_id: u64) {
+        let router = self.sim.rl().get_router(node_id).unwrap();
+        StoreRouter::send(&router, StoreMsg::Tick(StoreTick::PdStoreHeartbeat)).unwrap();
     }
 }
 
