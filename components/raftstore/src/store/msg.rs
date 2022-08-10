@@ -92,13 +92,13 @@ pub enum Callback<S: Snapshot> {
     Write {
         cb: Box<dyn FnOnce(WriteResponse) + Send>,
         /// `proposed_cb` is called after a request is proposed to the raft
-        /// group successfully. It's used to notify the caller to move
-        /// on early because it's very likely the request will be
-        /// applied to the raftstore.
+        /// group successfully. It's used to notify the caller to move on early
+        /// because it's very likely the request will be applied to the
+        /// raftstore.
         proposed_cb: Option<ExtCallback>,
         /// `committed_cb` is called after a request is committed and before
-        /// it's being applied, and it's guaranteed that the request
-        /// will be successfully applied soon.
+        /// it's being applied, and it's guaranteed that the request will be
+        /// successfully applied soon.
         committed_cb: Option<ExtCallback>,
 
         trackers: SmallVec<[TimeTracker; 4]>,
