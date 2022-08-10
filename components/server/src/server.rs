@@ -1837,7 +1837,7 @@ pub struct EnginesResourceInfo {
     tablet_factory: Arc<KvEngineFactory>,
     raft_engine: Option<RocksEngine>,
     // region_id -> (suffix, normalized_pending_bytes)
-    normalized_pending_baytes_record: Arc<Mutex<HashMap<u64, (u64, u32)>>>,
+    cached_latest_kv_pending_bytes: Arc<Mutex<HashMap<u64, (u64, u32)>>>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
@@ -1853,7 +1853,7 @@ impl EnginesResourceInfo {
         EnginesResourceInfo {
             tablet_factory,
             raft_engine,
-            normalized_pending_baytes_record: Arc::default(),
+            cached_latest_kv_pending_bytes: Arc::default(),
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
@@ -1881,21 +1881,18 @@ impl EnginesResourceInfo {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
 
-        let mut normalized_pending_baytes_record = self
-            .normalized_pending_baytes_record
-            .as_ref()
-            .lock()
-            .unwrap();
-        // normalized_pending_baytes_record records the compaction pending bytes of the
-        // tablet with the latest suffix for each region each round. Clear ensures that
-        // detroyed tablet will not be in it forever.
-        normalized_pending_baytes_record.clear();
+        let mut cached_latest_kv_pending_bytes =
+            self.cached_latest_kv_pending_bytes.as_ref().lock().unwrap();
+        // cached_latest_kv_pending_bytes records the compaction pending bytes of the
+        // tablet with the latest suffix for each region in each regular update. Clear
+        // ensures that detroyed tablet will not be in it forever.
+        cached_latest_kv_pending_bytes.clear();
         self.tablet_factory
             .for_each_opened_tablet(&mut |id, suffix, db: &RocksEngine| {
                 let mut normalized_pending_bytes = 0;
                 for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
                     fetch_engine_cf(db, cf, &mut normalized_pending_bytes);
-                    match normalized_pending_baytes_record.entry(id) {
+                    match cached_latest_kv_pending_bytes.entry(id) {
                         collections::HashMapEntry::Occupied(mut slot) => {
                             if slot.get().0 < suffix {
                                 slot.insert((suffix, normalized_pending_bytes));
@@ -1907,7 +1904,7 @@ impl EnginesResourceInfo {
                     }
                 }
             });
-        for (_, (_, tablet_bytes)) in normalized_pending_baytes_record.iter() {
+        for (_, (_, tablet_bytes)) in cached_latest_kv_pending_bytes.iter() {
             normalized_pending_bytes = std::cmp::max(normalized_pending_bytes, *tablet_bytes);
         }
 
