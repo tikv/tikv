@@ -26,7 +26,11 @@ impl ConnectionConfig {
         if let Some(tls) = &self.tls {
             opts = opts.with_tls(tls.clone())
         }
-        opts = opts.with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout);
+        opts = opts
+            .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
+            .with_timeout(Duration::from_secs(5))
+            .keep_alive_while_idle(false);
+
         opts
     }
 }
