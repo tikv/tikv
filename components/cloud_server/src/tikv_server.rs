@@ -19,7 +19,7 @@ use std::{
     u64,
 };
 
-use api_version::{ApiV1, KvFormat};
+use api_version::{dispatch_api_version, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::from_rocks_compression_type;
@@ -275,7 +275,11 @@ impl TiKVServer {
         self.init_yatp();
         self.init_encryption();
         self.init_engines();
-        let server_config = self.init_servers::<ApiV1>();
+
+        let server_config = dispatch_api_version!(self.config.storage.api_version(), {
+            self.init_servers::<API>()
+        });
+
         self.register_services();
         let fetcher = self.init_io_utility();
         self.init_metrics_flusher(fetcher);
