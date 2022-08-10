@@ -1203,9 +1203,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 // It's already in key-wise mode.
                 let start_time = Instant::now();
                 scheduler.update_wait_for_lock();
-                scheduler.tidy_up_pessimistic_lock_result(cid, pr.as_mut().unwrap());
                 let lock_info_list =
-                    Self::take_lock_info_from_pessimistic_lock_pr(pr.as_mut().unwrap());
+                    scheduler.tidy_up_pessimistic_lock_result(cid, pr.as_mut().unwrap());
 
                 STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
                     .tidy_up_result
@@ -1744,7 +1743,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         ctx
     }
 
-    fn tidy_up_pessimistic_lock_result(&self, cid: u64, pr: &mut ProcessResult) {
+    fn tidy_up_pessimistic_lock_result(
+        &self,
+        cid: u64,
+        pr: &mut ProcessResult,
+    ) -> Option<Vec<WriteResultLockInfo>> {
         let results = match pr {
             ProcessResult::PessimisticLockRes {
                 res: Ok(PessimisticLockResults(res)),
@@ -1772,15 +1775,21 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     finished_cbs.push(cb);
                 }
             });
-        *results = results
-            .drain(..)
-            .filter(|r| match r {
-                PessimisticLockKeyResult::Waiting(_) => false,
-                _ => true,
-            })
-            .collect();
+        let mut lock_info_list = Vec::with_capacity(results.len() - finished_cbs.len());
+        results.retain_mut(|r| match r {
+            PessimisticLockKeyResult::Waiting(lock_info) => {
+                lock_info_list.push(lock_info.take().unwrap());
+                false
+            }
+            _ => true,
+        });
         *cbs = finished_cbs;
         assert_eq!(results.len(), cbs.len());
+        if lock_info_list.is_empty() {
+            None
+        } else {
+            Some(lock_info_list)
+        }
     }
 
     fn take_lock_info_from_pessimistic_lock_pr(
