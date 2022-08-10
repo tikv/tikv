@@ -1910,6 +1910,15 @@ impl EnginesResourceInfo {
                 },
             );
 
+        // todo(SpadeA): Now, there's a potential race condition problem where the
+        // tablet could be destroyed after the clone and before the fetching
+        // which could result in programme panic. It's okay now as the single global
+        // kv_engine will not be destroyed in normal operation and v2 is not
+        // ready for operation. Furthermore, this race condition is general to v2 as
+        // tablet clone is not a case exclusively happened here. We should
+        // propose another PR to tackle it such as destory tablet lazily in a GC
+        // thread.
+
         for (_, (_, tablet)) in cached_latest_tablets.iter() {
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
                 fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
