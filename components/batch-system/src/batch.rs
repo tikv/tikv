@@ -230,9 +230,9 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     }
 
     /// Reclaims the slot storage if there is no FSM located at `index`. It will
-    /// alter the positions of other FSMs with index larger than `index`.
+    /// alter the positions of some other FSMs with index larger than `index`.
     #[inline]
-    pub fn unsafe_reclaim(&mut self, index: usize) {
+    pub fn swap_reclaim(&mut self, index: usize) {
         if self.normals[index].is_none() {
             self.normals.swap_remove(index);
         }
@@ -270,7 +270,7 @@ pub enum HandleResult {
     KeepProcessing,
     /// The FSM should stop at the progress.
     StopAt {
-        /// The amount of messages already handled by the handler. The FSM
+        /// The amount of messages acknowledged by the handler. The FSM
         /// should be released unless new messages arrive.
         progress: usize,
         /// Whether the FSM should be passed in to `end` call.
@@ -489,11 +489,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             to_skip_end.clear();
             self.handler.end(&mut batch.normals);
 
-            // Iterate larger index first, so that `unsafe_reclaim` won't affect other FSMs
+            // Iterate larger index first, so that `swap_reclaim` won't affect other FSMs
             // in the list.
             for index in reschedule_fsms.iter().rev() {
                 batch.schedule(&self.router, *index);
-                batch.unsafe_reclaim(*index);
+                batch.swap_reclaim(*index);
             }
             reschedule_fsms.clear();
         }
