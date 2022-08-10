@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
-    SinkExt,
+    SinkExt, StreamExt,
 };
 use grpcio::{RpcStatus, RpcStatusCode, ServerStreamingSink, WriteFlags};
 use kvproto::{
@@ -13,7 +13,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{box_err, info, warn, worker::Scheduler};
+use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use txn_types::TimeStamp;
 use uuid::Uuid;
 
@@ -55,7 +55,9 @@ struct SubscriptionManager {
 
 impl SubscriptionManager {
     pub async fn main_loop(mut self) {
-        while let Ok(Some(msg)) = self.input.try_next() {
+        info!("subscription manager started!");
+        defer! { info!("subscription manager exit.") }
+        while let Some(msg) = self.input.next().await {
             match msg {
                 SubscriptionOp::Add(sub) => {
                     self.subscribers.insert(Uuid::new_v4(), sub);
@@ -82,15 +84,14 @@ impl SubscriptionManager {
                     for c in canceled {
                         match self.subscribers.remove(&c) {
                             Some(mut sub) => {
-                                let r = async {
-                                    sub.flush().await?;
-                                    sub.close().await
-                                }
-                                .await;
-                                r.report_if_err(format_args!("during removing subscription {}", c))
+                                info!("client is gone, removing subscription"; "id" => %c);
+                                sub.close().await.report_if_err(format_args!(
+                                    "during removing subscription {}",
+                                    c
+                                ))
                             }
                             None => {
-                                warn!("BUG: the subscriber has been removed before we are going to remove it."; "uuid" => %c);
+                                warn!("BUG: the subscriber has been removed before we are going to remove it."; "id" => %c);
                             }
                         }
                     }
