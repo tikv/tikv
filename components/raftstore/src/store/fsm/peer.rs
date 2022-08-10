@@ -700,14 +700,19 @@ where
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
         (|| {
-            fail_point!("force_delay_propose_batch_raft_command", |_| {
-                should_propose = false
-            })
+            fail_point!(
+                "force_delay_propose_batch_raft_command",
+                self.ctx.sync_write_worker.is_none(),
+                |_| should_propose = false
+            )
         })();
         // Propose batch request which may be still waiting for more raft-command
         if should_propose {
             self.propose_pending_batch_raft_command();
-        } else if let Some(cmd) = self.fsm.batch_req_builder.request.take() {
+        } else if self.fsm.batch_req_builder.has_proposed_cb
+            && self.fsm.batch_req_builder.propose_checked.is_none()
+            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
+        {
             // We are delaying these requests to next loop. Try to fulfill their
             // proposed callback early.
             self.fsm.batch_req_builder.propose_checked = Some(false);
@@ -726,14 +731,15 @@ where
     /// Flushes all pending raft commands for immediate execution.
     #[inline]
     fn propose_pending_batch_raft_command(&mut self) {
-        if self.fsm.batch_req_builder.request.is_some() {
-            let (request, callback) = self
-                .fsm
-                .batch_req_builder
-                .build(&mut self.ctx.raft_metrics)
-                .unwrap();
-            self.propose_raft_command(request, callback, DiskFullOpt::NotAllowedOnFull);
+        if self.fsm.batch_req_builder.request.is_none() {
+            return;
         }
+        let (request, callback) = self
+            .fsm
+            .batch_req_builder
+            .build(&mut self.ctx.raft_metrics)
+            .unwrap();
+        self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_update_replication_mode(&mut self) {
