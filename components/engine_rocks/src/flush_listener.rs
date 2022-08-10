@@ -51,7 +51,7 @@ impl EventListener for FlushListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         let flush_seqno = info.largest_seqno();
         let cf = info.cf_name();
-        if let Some(flushed_max_seqno) = FLUSHED_MAX_SEQUENCE_NUMBERS.get(cf) {
+        if let Some(flushed_max_seqno) = FLUSHED_MAX_SEQUENCE_NUMBERS.get().unwrap().get(cf) {
             // notify store to GC relations and raft logs
             let mut current = flushed_max_seqno.load(Ordering::SeqCst);
             while current < flush_seqno {
@@ -99,7 +99,8 @@ mod tests {
     };
     use rocksdb::DBOptions as RawDBOptions;
     use tikv_util::sequence_number::{
-        Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER,
+        init_sequence_number_map, Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS,
+        SYNCED_MAX_SEQUENCE_NUMBER,
     };
 
     use crate::{
@@ -131,6 +132,8 @@ mod tests {
             vec![RocksCFOptions::new(CF_DEFAULT, cf_opts)],
         )
         .unwrap();
+        let db = engine.as_inner();
+        init_sequence_number_map(db.cf_names());
         listener.set_engine(engine.clone());
         let mut batch = engine.write_batch();
         batch.put_cf(CF_DEFAULT, b"k", b"v").unwrap();
@@ -141,7 +144,11 @@ mod tests {
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush(true).unwrap();
-        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS.get(CF_DEFAULT).unwrap();
+        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS
+            .get()
+            .unwrap()
+            .get(CF_DEFAULT)
+            .unwrap();
         assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 3);
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);

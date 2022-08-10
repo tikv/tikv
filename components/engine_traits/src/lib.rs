@@ -343,7 +343,6 @@ pub mod compaction_job;
 pub mod raw_ttl;
 pub mod util;
 pub use compaction_job::*;
-pub use tikv_util::cf_defs::*;
 
 // FIXME: This should live somewhere else
 pub const DATA_KEY_PREFIX_LEN: usize = 1;

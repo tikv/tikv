@@ -7,19 +7,28 @@ use std::{
 
 use collections::HashMap;
 use lazy_static::lazy_static;
-
-use crate::cf_defs::DATA_CFS;
+use once_cell::sync::OnceCell;
 
 lazy_static! {
     static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
     pub static ref VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
-    pub static ref FLUSHED_MAX_SEQUENCE_NUMBERS: HashMap<&'static str, AtomicU64> =
-        HashMap::from_iter(DATA_CFS.iter().map(|cf| (*cf, AtomicU64::new(0))));
+    pub static ref FLUSHED_MAX_SEQUENCE_NUMBERS: OnceCell<HashMap<String, AtomicU64>> =
+        OnceCell::new();
 }
 
 pub trait Notifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
+}
+
+pub fn init_sequence_number_map(cf_names: Vec<&str>) {
+    FLUSHED_MAX_SEQUENCE_NUMBERS
+        .set(HashMap::from_iter(
+            cf_names
+                .into_iter()
+                .map(|name| (name.to_string(), AtomicU64::new(0))),
+        ))
+        .unwrap();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -16,7 +16,7 @@ use engine_traits::{
 };
 use kvproto::kvrpcpb::ApiVersion;
 use raftstore::RegionInfoAccessor;
-use tikv_util::worker::Scheduler;
+use tikv_util::{sequence_number::init_sequence_number_map, worker::Scheduler};
 
 use crate::config::{DbConfig, TiKvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
@@ -171,6 +171,8 @@ impl KvEngineFactory {
         kv_engine.set_shared_block_cache(shared_block_cache);
         if let Some(listener) = &self.inner.flush_listener {
             listener.set_engine(kv_engine.clone());
+            let db = kv_engine.as_inner();
+            init_sequence_number_map(db.cf_names());
         }
         Ok(kv_engine)
     }
