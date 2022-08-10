@@ -88,7 +88,7 @@ use crate::{
         peer_storage,
         transport::Transport,
         util,
-        util::{is_initial_msg, RegionReadProgressRegistry, LocalLeaderInfo},
+        util::{is_initial_msg, LocalLeaderInfo, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -1148,7 +1148,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
             meta.regions.insert(region_id, region.clone());
-            meta.region_leaders.insert(region_id, LocalLeaderInfo::new_with_region(region));
+            meta.region_leaders
+                .insert(region_id, LocalLeaderInfo::new_with_region(region));
             meta.region_read_progress
                 .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key

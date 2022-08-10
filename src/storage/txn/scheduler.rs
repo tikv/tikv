@@ -404,7 +404,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             });
             return;
         }
-        self.schedule_command(cmd, callback);
+        self.schedule_command(cmd, callback, true);
     }
 
     /// Releases all the latches held by a command.
@@ -415,7 +415,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
+    fn schedule_command(&self, cmd: Command, callback: StorageCallback, need_precheck: bool) {
         let cid = self.inner.gen_id();
         let tracker = get_tls_tracker_token();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
@@ -426,43 +426,112 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .get(priority_tag)
             .inc();
 
+        let cmd_ctx = cmd.ctx().clone();
         let mut task_slot = self.inner.get_task_slot(cid);
         let tctx = task_slot.entry(cid).or_insert_with(|| {
             self.inner
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
-        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
-        if self.inner.latches.acquire(&mut tctx.lock, cid) {
-            fail_point!("txn_scheduler_acquire_success");
-            tctx.on_schedule();
-            let task = tctx.task.take().unwrap();
-            drop(task_slot);
-            self.execute(task);
-            return;
+
+        if !need_precheck {
+            let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+            if self.inner.latches.acquire(&mut tctx.lock, cid) {
+                fail_point!("txn_scheduler_acquire_success");
+                tctx.on_schedule();
+                let task = tctx.task.take().unwrap();
+                drop(task_slot);
+                self.execute(task);
+                return;
+            }
+            // Check task deadline in background.
+            let sched = self.clone();
+            self.inner
+                .high_priority_pool
+                .pool
+                .spawn(async move {
+                    GLOBAL_TIMER_HANDLE
+                        .delay(deadline.to_std_instant())
+                        .compat()
+                        .await
+                        .unwrap();
+                    let cb = sched
+                        .inner
+                        .get_task_slot(cid)
+                        .get_mut(&cid)
+                        .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
+                    if let Some(cb) = cb {
+                        cb.execute(ProcessResult::Failed {
+                            err: StorageErrorInner::DeadlineExceeded.into(),
+                        })
+                    }
+                })
+                .unwrap();
+        } else {
+            // Try to acquire all latches.
+            if self.inner.latches.acquire_all_or_none(&mut tctx.lock, cid) {
+                fail_point!("txn_scheduler_acquire_success");
+                tctx.on_schedule();
+                let task = tctx.task.take().unwrap();
+                drop(task_slot);
+                self.execute(task);
+                return;
+            }
+
+            // TODO(cosven): remove this log and add a metric to lator.
+            info!(
+                "acquire all or none failed";
+                "tag" => ?tag,
+                "cid" => cid,
+            );
+
+            // If any latch if not required, the request must has write.
+            // There is samll possibility that the peer is not leader anymore, so do some
+            // prechecking.
+            let sched = self.clone();
+            self.inner
+                .high_priority_pool
+                .pool
+                .spawn(async move {
+                    // Do prechecking.
+                    unsafe {
+                        with_tls_engine(|engine: &E| {
+                            // Precheck failed.
+                            if let Err(e) = engine.precheck_write_with_ctx(&cmd_ctx) {
+                                info!(
+                                    "precheck failed";
+                                    "tag" => ?tag,
+                                    "cid" => cid,
+                                );
+                                let mut tctx = sched.inner.dequeue_task_context(cid);
+                                let task = tctx.task.take().unwrap();
+                                let tag = task.cmd.tag();
+                                let pr = ProcessResult::Failed {
+                                    err: StorageError::from(e),
+                                };
+                                if let Some(cb) = tctx.cb {
+                                    Self::early_response(cid, cb, pr, tag, CommandStageKind::error);
+                                }
+                                return;
+                            }
+                        });
+                    };
+
+                    // Precheck passed, re-schedule the command.
+                    //
+                    // TODO(cosven): maybe add a `schedule_with_task_context` function
+                    // to avoid dequeue and re-schedule.
+                    info!(
+                        "precheck passes";
+                        "tag" => ?tag,
+                        "cid" => cid,
+                    );
+                    let mut tctx = sched.inner.dequeue_task_context(cid);
+                    let task = tctx.task.take().unwrap();
+                    let cb = tctx.cb.take().unwrap();
+                    sched.schedule_command(task.cmd, cb, false);
+                })
+                .unwrap();
         }
-        // Check deadline in background.
-        let sched = self.clone();
-        self.inner
-            .high_priority_pool
-            .pool
-            .spawn(async move {
-                GLOBAL_TIMER_HANDLE
-                    .delay(deadline.to_std_instant())
-                    .compat()
-                    .await
-                    .unwrap();
-                let cb = sched
-                    .inner
-                    .get_task_slot(cid)
-                    .get_mut(&cid)
-                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
-                if let Some(cb) = cb {
-                    cb.execute(ProcessResult::Failed {
-                        err: StorageErrorInner::DeadlineExceeded.into(),
-                    })
-                }
-            })
-            .unwrap();
         fail_point!("txn_scheduler_acquire_fail");
     }
 
@@ -592,7 +661,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap());
+            self.schedule_command(cmd, tctx.cb.unwrap(), false);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -643,7 +712,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb);
+                self.schedule_command(cmd, cb, false);
             } else {
                 cb.execute(pr);
             }
