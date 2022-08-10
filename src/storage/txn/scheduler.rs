@@ -525,27 +525,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let mut awakened_legacy_locks = vec![];
 
-        #[derive(Debug)]
-        struct Info {
-            start_ts: TimeStamp,
-            for_update_ts: TimeStamp,
-            key: txn_types::Key,
-            wait_for_txn: TimeStamp,
-            is_new_mode: bool,
-        }
-
-        let has_wakeup_list = !txn_lock_wakeup_list.is_empty();
-
-        if has_wakeup_list {
-            info!("release_latches: waking up locks"; "lock_waiting" => ?txn_lock_wakeup_list.iter().map(|item| Info {
-                start_ts: item.parameters.start_ts,
-                for_update_ts: item.parameters.for_update_ts,
-                key: item.key.clone(),
-                wait_for_txn: item.last_found_lock.get_lock_version().into(),
-                is_new_mode: item.allow_lock_with_conflict
-            }).collect::<Vec<_>>());
-        }
-
         {
             let mut i = 0;
             while i < txn_lock_wakeup_list.len() {
@@ -560,13 +539,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         assert_eq!(latch_keep_list.is_empty(), txn_lock_wakeup_list.is_empty());
 
         if !txn_lock_wakeup_list.is_empty() {
-            info!("release_latches: waking up new locks"; "lock_waiting" => ?txn_lock_wakeup_list.iter().map(|item| Info {
-                start_ts: item.parameters.start_ts,
-                for_update_ts: item.parameters.for_update_ts,
-                key: item.key.clone(),
-                wait_for_txn: item.last_found_lock.get_lock_version().into(),
-                is_new_mode: item.allow_lock_with_conflict
-            }).collect::<Vec<_>>());
             self.schedule_awakened_pessimistic_locks(
                 next_cid_for_holding_latches.unwrap(),
                 txn_lock_wakeup_list,
@@ -576,13 +548,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
 
         if !awakened_legacy_locks.is_empty() {
-            info!("release_latches: waking up legacy locks"; "lock_waiting" => ?awakened_legacy_locks.iter().map(|item| Info {
-                start_ts: item.parameters.start_ts,
-                for_update_ts: item.parameters.for_update_ts,
-                key: item.key.clone(),
-                wait_for_txn: item.last_found_lock.get_lock_version().into(),
-                is_new_mode: item.allow_lock_with_conflict
-            }).collect::<Vec<_>>());
             let mut wake_up_events = Vec::with_capacity(awakened_legacy_locks.len());
             for lock in &awakened_legacy_locks {
                 wake_up_events.push(lock_manager::KeyWakeUpEvent {
@@ -1221,25 +1186,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             lock_info
                 .iter_mut()
                 .for_each(|i| i.wait_start_time = Some(now));
-            #[derive(Debug)]
-            struct Info {
-                start_ts: TimeStamp,
-                for_update_ts: TimeStamp,
-                key: txn_types::Key,
-                wait_for_txn: TimeStamp,
-                is_new_mode: bool,
-            }
-            info!("lock waiting start"; "lock_waiting" => ?lock_info.iter().map(|item| Info {
-                start_ts: item.parameters.start_ts,
-                for_update_ts: item.parameters.for_update_ts,
-                key: item.key.clone(),
-                wait_for_txn: item.last_found_lock.get_lock_version().into(),
-                is_new_mode: item.allow_lock_with_conflict
-            }).collect::<Vec<_>>());
         }
 
         if let Some(released_locks) = released_locks.as_mut() {
-            info!("releasing locks"; "released_locks" => ?released_locks, "tag" => ?tag);
             scheduler.on_release_locks_pre_persist(cid, released_locks);
         }
 
@@ -1516,8 +1465,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             on_finished: &mut on_finished_cb,
         });
 
-        info!("process_sync result"; "tag" => ?tag, "released_locks" => ?released_locks);
-
         let sched = self.clone();
         self.get_sched_pool(priority)
             .pool
@@ -1628,9 +1575,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .finished
                             .load(Ordering::Acquire)
                         {
-                            info!("expired lock wait entry dropped";
-                                "start_ts" => front.0.parameters.start_ts, "for_update_ts" => front.0.parameters.for_update_ts, "key" => %front.0.key,
-                                "is_new_mode" => front.0.allow_lock_with_conflict);
                             queue.pop();
                             continue;
                         }
@@ -1654,9 +1598,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     });
 
                     if front.0.allow_lock_with_conflict {
-                        info!("request in new mode will be awakened up";
-                                "start_ts" => front.0.parameters.start_ts, "for_update_ts" => front.0.parameters.for_update_ts, "key" => %front.0.key,
-                                "is_new_mode" => front.0.allow_lock_with_conflict);
                         Some(released_lock)
                     } else {
                         let lock_info = queue.pop().unwrap();
@@ -1685,12 +1626,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pool
             .spawn(async move {
                 for (mut lock_info, released_lock) in legacy_wakeup_list {
-                    info!("wake up legacy pessimistic lock";
-                        "released_lock" => ?released_lock,
-                        "start_ts" => lock_info.parameters.start_ts,
-                        "for_update_ts" => lock_info.parameters.for_update_ts,
-                        "key" => %lock_info.key
-                    );
                     let cb = lock_info.key_cb.unwrap();
                     let e = StorageError::from(Error::from(MvccError::from(
                         MvccErrorInner::WriteConflict {
@@ -1951,9 +1886,6 @@ impl<L: LockManager> PartialPessimisticLockRequestContext<L> {
             );
             return;
         };
-
-        info!("finish request invoked"; "start_ts" => self.start_ts, "for_update_ts" => self.for_update_ts,
-            "external_error" => ?external_error, "fail_all_on_error" => fail_all_on_error, "process_result" => ?ctx_inner.pr);
 
         self.shared_states.finished.store(true, Ordering::Release);
 
