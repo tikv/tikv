@@ -343,7 +343,7 @@ mod tests {
 
         // Read more bytes than available
         buffer.set_position(39);
-        assert!(buffer.read_bytes(2).is_err());
+        buffer.read_bytes(2).unwrap_err();
         assert_eq!(buffer.position(), 39);
         assert_eq!(buffer.bytes(), &base[39..40]);
     }
@@ -378,14 +378,14 @@ mod tests {
         assert_eq!(buffer, &base[21..40]);
         assert_eq!(buffer.bytes(), &base[21..40]);
 
-        assert!(buffer.read_bytes(20).is_err());
+        buffer.read_bytes(20).unwrap_err();
 
         buffer.advance(19);
         assert_eq!(buffer, &[]);
         assert_eq!(buffer.bytes(), &[]);
 
         assert_eq!(buffer.read_bytes(0).unwrap(), &[]);
-        assert!(buffer.read_bytes(1).is_err());
+        buffer.read_bytes(1).unwrap_err();
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod tests {
             assert_eq!(buffer.position(), 20);
 
             // Write more bytes than available size
-            assert!(buffer.write_bytes(&base_write[20..]).is_err());
+            buffer.write_bytes(&base_write[20..]).unwrap_err();
             assert_eq!(&buffer.get_ref()[0..20], &base_write[0..20]);
             assert_eq!(&buffer.get_ref()[20..], &base[20..]);
             assert_eq!(buffer.position(), 20);
@@ -522,7 +522,7 @@ mod tests {
             let mut buf_slice = &mut buffer[20..];
 
             // Buffer remain 20, write 21 bytes shall fail.
-            assert!(buf_slice.write_bytes(&base_write[20..41]).is_err());
+            buf_slice.write_bytes(&base_write[20..41]).unwrap_err();
 
             // Write remaining 20 bytes
             buf_slice.bytes_mut(20)[..20].clone_from_slice(&base_write[20..40]);

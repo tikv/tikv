@@ -262,7 +262,7 @@ mod tests {
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];
         for json_str in illegal_cases {
             let resp = Json::from_str(json_str);
-            assert!(resp.is_err());
+            resp.unwrap_err();
         }
     }
 }

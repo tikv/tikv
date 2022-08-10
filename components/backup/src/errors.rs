@@ -24,7 +24,7 @@ impl From<Error> for ErrorPb {
     fn from(e: Error) -> ErrorPb {
         let mut err = ErrorPb::default();
         match e {
-            Error::ClusterID { current, request } => {
+            Error::ClusterId { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["cluster_mismatch"])
                     .inc();
@@ -114,8 +114,8 @@ pub enum Error {
     EngineTrait(#[from] EngineTraitError),
     #[error("Transaction error {0}")]
     Txn(#[from] TxnError),
-    #[error("ClusterID error current {current}, request {request}")]
-    ClusterID { current: u64, request: u64 },
+    #[error("ClusterId error current {current}, request {request}")]
+    ClusterId { current: u64, request: u64 },
     #[error("Invalid cf {cf}")]
     InvalidCf { cf: String },
     #[error("Failed to acquire the semaphore {0}")]

@@ -2,25 +2,25 @@
 
 use std::ops::{Deref, DerefMut};
 
-use tikv::config::TiKvConfig;
+use tikv::config::TikvConfig;
 
 #[derive(Clone)]
 pub struct Config {
-    pub tikv: TiKvConfig,
+    pub tikv: TikvConfig,
     pub prefer_mem: bool,
 }
 
 impl Deref for Config {
-    type Target = TiKvConfig;
+    type Target = TikvConfig;
     #[inline]
-    fn deref(&self) -> &TiKvConfig {
+    fn deref(&self) -> &TikvConfig {
         &self.tikv
     }
 }
 
 impl DerefMut for Config {
     #[inline]
-    fn deref_mut(&mut self) -> &mut TiKvConfig {
+    fn deref_mut(&mut self) -> &mut TikvConfig {
         &mut self.tikv
     }
 }

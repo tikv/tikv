@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV:PD:",
+    "KV:Pd:",
 
-    IO => ("IO", "", ""),
+    IO => ("Io", "", ""),
     CLUSTER_BOOTSTRAPPED => ("ClusterBootstraped", "", ""),
     CLUSTER_NOT_BOOTSTRAPPED => ("ClusterNotBootstraped", "", ""),
     INCOMPATIBLE => ("Imcompatible", "", ""),
-    GRPC => ("gRPC", "", ""),
+    GRPC => ("Grpc", "", ""),
     STREAM_DISCONNECT => ("StreamDisconnect","",""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),

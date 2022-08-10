@@ -43,7 +43,7 @@ pub mod storage;
 
 use std::fmt::{self, Display, Formatter};
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub struct ErrorCode {
     pub code: &'static str,
     pub description: &'static str,
