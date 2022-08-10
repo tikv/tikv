@@ -611,14 +611,14 @@ impl PdConnector {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
-                        let header=r.get_header();
-                        if let Err(e)=check_resp_header(header){
+                        let header = r.get_header();
+                        if let Err(e) = check_resp_header(header) {
                             error!("connect pd failed";"endpoints" => ep, "error" => ?e);
-                        }else{
+                        } else {
                             let new_cluster_id = header.get_cluster_id();
                             if new_cluster_id == cluster_id {
-                                // check whether the response have leader info, otherwise continue to
-                                // loop the rest members
+                                // check whether the response have leader info, otherwise continue
+                                // to loop the rest members
                                 if r.has_leader() {
                                     return Ok(r);
                                 }
@@ -631,7 +631,6 @@ impl PdConnector {
                                 );
                             }
                         }
-                       
                     }
                     Err(e) => {
                         error!("connect failed"; "endpoints" => ep, "error" => ?e);
