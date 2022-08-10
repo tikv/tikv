@@ -50,6 +50,7 @@ tikv_kv = { path = "../tikv_kv", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
+tikv_alloc = { path = "../tikv_alloc" }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test", default-features = false }

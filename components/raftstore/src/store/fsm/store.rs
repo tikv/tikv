@@ -252,6 +252,22 @@ impl StoreMeta {
     }
 }
 
+pub trait RaftSender<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn send_raft_message(
+        &self,
+        msg: RaftMessage,
+    ) -> std::result::Result<(), TrySendError<RaftMessage>>;
+
+    fn send_raft_command(
+        &self,
+        cmd: RaftCommand<EK::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>>;
+}
+
 pub struct RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -313,12 +329,12 @@ where
     }
 }
 
-impl<EK, ER> RaftRouter<EK, ER>
+impl<EK, ER> RaftSender<EK, ER> for RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn send_raft_message(
+    fn send_raft_message(
         &self,
         msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
@@ -370,7 +386,7 @@ where
     }
 
     #[inline]
-    pub fn send_raft_command(
+    fn send_raft_command(
         &self,
         cmd: RaftCommand<EK::Snapshot>,
     ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
@@ -384,7 +400,13 @@ where
             _ => unreachable!(),
         }
     }
+}
 
+impl<EK, ER> RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     fn report_unreachable(&self, store_id: u64) {
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })

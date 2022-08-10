@@ -7,20 +7,21 @@ use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{
     kvrpcpb::{ExtraOp as TxnExtraOp, LockInfo},
     metapb,
-    raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse},
+    raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse, CmdType},
     raft_serverpb::RegionLocalState,
 };
 use pd_client::BucketMeta;
-use raft::{RawNode, StateRole, INVALID_ID};
+use raft::{RawNode, Ready, StateRole, INVALID_ID};
 use raftstore::{
     store::{
         cmd_resp,
-        fsm::{apply::notify_stale_req, Proposal},
-        peer::{propose_read_index, RaftPeer, RequestInspector},
+        fsm::{apply::notify_stale_req, store::RaftSender, Proposal},
+        metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        peer::{propose_read_index, ForceLeaderState, ProposalQueue, RaftPeer, RequestInspector},
         read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
         util::{check_region_epoch, find_peer, Lease, LeaseState, RegionReadProgress},
         worker::{LocalReadContext, RaftlogFetchTask, ReadExecutor},
-        Callback, Config, PdTask, Transport, TxnExt,
+        Callback, Config, PdTask, RaftCommand, Transport, TxnExt,
     },
     Error,
 };
@@ -61,6 +62,9 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Time of the last attempt to wake up inactive leader.
     bcast_wake_up_time: Option<TiInstant>,
     leader_lease: Lease,
+    proposals: ProposalQueue<EK::Snapshot>,
+    pending_remove: bool,
+    force_leader: Option<ForceLeaderState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -136,7 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 REGION_READ_PROGRESS_CAP,
                 tag.clone(),
             )),
-            tag,
+            tag: tag.clone(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             txn_ext: Arc::new(TxnExt::default()),
             should_wake_up: false,
@@ -145,6 +149,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
+            proposals: ProposalQueue::new(tag),
+            pending_remove: false,
+            force_leader: None,
         }))
     }
 
@@ -205,91 +212,45 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "prevents unsafe read index";
                 "err" => ?e,
             );
-            // poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
+            poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
             cmd_resp::bind_error(&mut err_resp, e);
             cb.invoke_with_response(err_resp);
-            // self.should_wake_up = true;
+            self.should_wake_up = true;
             return false;
         }
 
         let now = monotonic_raw_now();
         if self.is_leader() {
-            match self.inspect_lease() {
-                // Here combine the new read request with the previous one even if the lease expired
-                // is ok because in this case, the previous read index must be sent
-                // out with a valid lease instead of a suspect lease. So there must
-                // no pending transfer-leader proposals before or after the previous
-                // read index, and the lease can be renewed when get
-                // heartbeat responses.
-                LeaseState::Valid | LeaseState::Expired => {
-                    // Must use the commit index of `PeerStorage` instead of the commit index
-                    // in raft-rs which may be greater than the former one.
-                    // For more details, see the annotations above `on_leader_commit_idx_changed`.
-                    let commit_index = self.get_store().commit_index();
-                    if let Some(read) = self.pending_reads.back_mut() {
-                        let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-                        let is_read_index_request = req
-                            .get_requests()
-                            .get(0)
-                            .map(|req| req.has_read_index())
-                            .unwrap_or_default();
-                        // A read index request or a read with addition request always needs the
-                        // response of checking memory lock for async
-                        // commit, so we cannot apply the optimization here
-                        if !is_read_index_request
-                            && read.addition_request.is_none()
-                            && read.propose_time + max_lease > now
-                        {
-                            // A read request proposed in the current lease is found; combine the
-                            // new read request to that previous one, so
-                            // that no proposing needed.
-                            read.push_command(req, cb, commit_index);
-                            return false;
-                        }
-                    }
+            let lease_state = self.inspect_lease();
+            if self.can_amend_read::<Peer<EK, ER>>(
+                &req,
+                lease_state,
+                poll_ctx.cfg.raft_store_max_leader_lease(),
+            ) {
+                // Must use the commit index of `PeerStorage` instead of the commit index
+                // in raft-rs which may be greater than the former one.
+                // For more details, see the annotations above `on_leader_commit_idx_changed`.
+                let commit_index = self.store_commit_index();
+                if let Some(read) = self.mut_pending_reads().back_mut() {
+                    // A read request proposed in the current lease is found; combine the new
+                    // read request to that previous one, so that no proposing needed.
+                    read.push_command(req, cb, commit_index);
+                    return false;
                 }
-                // If the current lease is suspect, new read requests can't be appended into
-                // `pending_reads` because if the leader is transferred, the latest read could
-                // be dirty.
-                _ => {}
             }
         }
 
-        // When a replica cannot detect any leader, `MsgReadIndex` will be dropped,
-        // which would cause a long time waiting for a read response. Then we
-        // should return an error directly in this situation.
-        if !self.is_leader() && self.leader_id() == INVALID_ID {
-            // poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
-            // The leader may be hibernated, send a message for trying to awaken the leader.
-            if self.bcast_wake_up_time.is_none()
-                || self
-                    .bcast_wake_up_time
-                    .as_ref()
-                    .unwrap()
-                    .saturating_elapsed()
-                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
-            {
-                self.bcast_wake_up_message(&mut poll_ctx.trans);
-                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
-
-                let task = PdTask::QueryRegionLeader {
-                    region_id: self.region_id(),
-                };
-                if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
-                    error!(
-                        self.logger,
-                        "failed to notify pd";
-                        "err" => %e,
-                    )
-                }
-            }
-            // self.should_wake_up = true;
-            cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id(), None));
+        if self.read_index_no_leader(
+            &mut poll_ctx.trans,
+            &mut poll_ctx.pd_scheduler,
+            &mut err_resp,
+        ) {
+            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
             return false;
         }
 
-        // poll_ctx.raft_metrics.propose.read_index += 1;
+        poll_ctx.raft_metrics.propose.read_index += 1;
         self.bcast_wake_up_time = None;
 
         let request = req
@@ -301,21 +262,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             notify_stale_req(self.term(), cb);
-            // poll_ctx.raft_metrics.propose.dropped_read_index += 1;
+            poll_ctx.raft_metrics.propose.dropped_read_index += 1;
             return false;
         }
 
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
         self.push_pending_read(read, self.is_leader());
-        // self.should_wake_up = true;
+        self.should_wake_up = true;
 
         debug!(
             self.logger,
             "request to get a read index";
             "request_id" => ?id,
-            "region_id" => self.region_id(),
-            "peer_id" => self.peer_id(),
             "is_leader" => self.is_leader(),
         );
 
@@ -324,15 +283,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.leader_lease.is_suspect() {
             let req = RaftCmdRequest::default();
             if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
-                // let p = Proposal {
-                // is_conf_change: false,
-                // index,
-                // term: self.term(),
-                // cb: Callback::None,
-                // propose_time: Some(now),
-                // must_pass_epoch_check: false,
-                // };
-                // self.post_propose(poll_ctx, p);
+                let p = Proposal {
+                    is_conf_change: false,
+                    index,
+                    term: self.term(),
+                    cb: Callback::None,
+                    propose_time: Some(now),
+                    must_pass_epoch_check: false,
+                };
+                self.post_propose(&mut poll_ctx.current_time, p);
             }
         }
 
@@ -345,54 +304,93 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) {
-        // ctx.raft_metrics.propose.local_read += 1;
+        ctx.raft_metrics.propose.local_read += 1;
         let commit_index = self.get_store().commit_index();
         let mut reader = self.tablet.clone();
         cb.invoke_read(self.handle_read(&mut reader, req, false, Some(commit_index)))
     }
 
-    // pub fn propose<T: Transport>(
-    // &mut self,
-    // ctx: &mut StoreContext<T>,
-    // mut cb: Callback<EK::Snapshot>,
-    // req: RaftCmdRequest,
-    // mut err_resp: RaftCmdResponse,
-    // disk_full_opt: DiskFullOpt,
-    // ) -> bool {
-    // if self.pending_remove {
-    // return false;
-    // }
-    //
-    // ctx.raft_metrics.propose.all += 1;*/
-    //
-    // let req_admin_cmd_type = if !req.has_admin_request() {
-    // None
-    // } else {
-    // Some(req.get_admin_request().get_cmd_type())
-    // };
-    // let is_urgent = is_request_urgent(&req);
-    //
-    // let policy = self.inspect(&req);
-    // let res = match policy {
-    // Ok(RequestPolicy::ReadLocal) | Ok(RequestPolicy::StaleRead) => {
-    // self.read_local(ctx, req, cb);
-    // return false;
-    // }
-    // Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp,
-    // cb), Ok(_) => {},
-    // Err(e) => Err(e),
-    // };
-    // fail_point!("after_propose");
-    //
-    // match res {
-    // Err(e) => {
-    // cmd_resp::bind_error(&mut err_resp, e);
-    // cb.invoke_with_response(err_resp);
-    // self.post_propose_fail(req_admin_cmd_type);
-    // false
-    // }
-    // }
-    // }
+    /// Responses to the ready read index request on the replica, the replica is
+    /// not a leader.
+    fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        while let Some(mut read) = self.pending_reads.pop_front() {
+            // The response of this read index request is lost, but we need it for
+            // the memory lock checking result. Resend the request.
+            if let Some(read_index) = read.addition_request.take() {
+                assert_eq!(read.cmds().len(), 1);
+                let (mut req, cb, _) = read.take_cmds().pop().unwrap();
+                assert_eq!(req.requests.len(), 1);
+                req.requests[0].set_read_index(*read_index);
+                let read_cmd = RaftCommand::new(req, cb);
+                info!(
+                    self.logger,
+                    "re-propose read index request because the response is lost";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.peer_id(),
+                );
+                RAFT_READ_INDEX_PENDING_COUNT.sub(1);
+                self.send_read_command(&ctx.router, read_cmd);
+                continue;
+            }
+
+            assert!(read.read_index.is_some());
+            let is_read_index_request = read.cmds().len() == 1
+                && read.cmds()[0].0.get_requests().len() == 1
+                && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
+            if is_read_index_request {
+                self.response_read(&mut read, ctx, false);
+            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                self.response_read(&mut read, ctx, true);
+            } else {
+                // TODO: `ReadIndex` requests could be blocked.
+                self.mut_pending_reads().push_front(read);
+                break;
+            }
+        }
+    }
+
+    fn apply_reads<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
+        let mut propose_time = None;
+        let states = ready.read_states().iter().map(|state| {
+            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
+        });
+        // The follower may lost `ReadIndexResp`, so the pending_reads does not
+        // guarantee the orders are consistent with read_states. `advance` will
+        // update the `read_index` of read request that before this successful
+        // `ready`.
+        if !self.is_leader() {
+            // NOTE: there could still be some pending reads proposed by the peer when it
+            // was leader. They will be cleared in `clear_uncommitted_on_role_change` later
+            // in the function.
+            self.pending_reads.advance_replica_reads(states);
+            self.post_pending_read_index_on_replica(ctx);
+        } else {
+            self.pending_reads.advance_leader_reads(&self.tag, states);
+            propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
+            if self.ready_to_handle_read() {
+                while let Some(mut read) = self.pending_reads.pop_front() {
+                    self.response_read(&mut read, ctx, false);
+                }
+            }
+        }
+
+        // Note that only after handle read_states can we identify what requests are
+        // actually stale.
+        if ready.ss().is_some() {
+            let term = self.term();
+            // all uncommitted reads will be dropped silently in raft.
+            self.pending_reads.clear_uncommitted_on_role_change(term);
+        }
+
+        if let Some(propose_time) = propose_time {
+            if self.leader_lease.is_suspect() {
+                return;
+            }
+            self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
+        }
+    }
 }
 
 impl<EK, ER> RaftPeer<EK, ER> for Peer<EK, ER>
@@ -492,6 +490,31 @@ where
     fn set_should_wake_up(&mut self, should_wake_up: bool) {
         self.should_wake_up = should_wake_up;
     }
+
+    #[inline]
+    fn mut_proposals(&mut self) -> &mut ProposalQueue<EK::Snapshot> {
+        &mut self.proposals
+    }
+
+    #[inline]
+    fn pending_remove(&self) -> bool {
+        self.pending_remove
+    }
+
+    #[inline]
+    fn has_force_leader(&self) -> bool {
+        self.force_leader.is_some()
+    }
+
+    #[inline]
+    fn mut_leader_lease(&mut self) -> &mut Lease {
+        &mut self.leader_lease
+    }
+
+    #[inline]
+    fn store_applied_term(&self) -> u64 {
+        self.get_store().applied_term()
+    }
 }
 
 impl<EK> ReadExecutor<EK> for CachedTablet<EK>
@@ -538,5 +561,14 @@ where
             self.leader_lease.expire();
         }
         state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_peer<EK: KvEngine, ER: RaftEngine>() -> Result<Option<Peer<EK, ER>>> {
+        Ok(None)
     }
 }

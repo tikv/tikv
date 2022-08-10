@@ -88,7 +88,7 @@ use crate::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
-            store::{PollContext, RaftRouter},
+            store::{PollContext, RaftRouter, RaftSender, StoreMeta},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
@@ -121,7 +121,7 @@ pub enum StaleState {
 }
 
 #[derive(Debug)]
-struct ProposalQueue<S>
+pub struct ProposalQueue<S>
 where
     S: Snapshot,
 {
@@ -130,7 +130,7 @@ where
 }
 
 impl<S: Snapshot> ProposalQueue<S> {
-    fn new(tag: String) -> ProposalQueue<S> {
+    pub fn new(tag: String) -> ProposalQueue<S> {
         ProposalQueue {
             tag,
             queue: VecDeque::new(),
@@ -754,6 +754,30 @@ where
     fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<EK::Snapshot>;
     fn mut_bcast_wake_up_time(&mut self) -> &mut Option<TiInstant>;
     fn set_should_wake_up(&mut self, should_wake_up: bool);
+    fn mut_proposals(&mut self) -> &mut ProposalQueue<EK::Snapshot>;
+    fn pending_remove(&self) -> bool;
+    fn has_force_leader(&self) -> bool;
+    fn mut_leader_lease(&mut self) -> &mut Lease;
+    fn store_applied_term(&self) -> u64;
+    fn store_applied_index(&self) -> u64;
+
+    #[inline]
+    fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
+        // There may be some values that are not applied by this leader yet but the old
+        // leader, if applied_term isn't equal to current term.
+        self.store_applied_term() == self.term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the split range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
+    }
 
     fn pre_read_index(&self) -> Result<()> {
         fail_point!(
@@ -921,6 +945,95 @@ where
         false
     }
 
+    fn send_read_command<S: RaftSender<EK, ER>>(
+        &self,
+        sender: &S,
+        read_cmd: RaftCommand<EK::Snapshot>,
+    ) {
+        let mut err = errorpb::Error::default();
+        let read_cb = match sender.send_raft_command(read_cmd) {
+            Ok(()) => return,
+            Err(TrySendError::Full(cmd)) => {
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                cmd.callback
+            }
+            Err(TrySendError::Disconnected(cmd)) => {
+                err.set_message(format!("region {} is missing", self.region_id()));
+                err.mut_region_not_found().set_region_id(self.region_id());
+                cmd.callback
+            }
+        };
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        let read_resp = ReadResponse {
+            response: resp,
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        read_cb.invoke_read(read_resp);
+    }
+
+    fn response_read<E: ReadExecutor<EK>>(
+        &self,
+        read_index_req: &mut ReadIndexRequest<EK::Snapshot>,
+        reader: &mut E,
+        replica_read: bool,
+    ) {
+        debug!(
+            "handle reads with a read index";
+            "request_id" => ?read_index_req.id,
+            "region_id" => self.region_id(),
+            "peer_id" => self.peer_id(),
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
+        for (req, cb, mut read_index) in read_index_req.take_cmds().drain(..) {
+            // leader reports key is locked
+            if let Some(locked) = read_index_req.locked.take() {
+                let mut response = raft_cmdpb::Response::default();
+                response.mut_read_index().set_locked(*locked);
+                let mut cmd_resp = RaftCmdResponse::default();
+                cmd_resp.mut_responses().push(response);
+                cb.invoke_read(ReadResponse {
+                    response: cmd_resp,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                });
+                continue;
+            }
+            if !replica_read {
+                match (read_index, read_index_req.read_index) {
+                    (Some(local_responsed_index), Some(batch_index)) => {
+                        // `read_index` could be less than `read_index_req.read_index` because the
+                        // former is filled with `committed index` when
+                        // proposed, and the latter is filled
+                        // after a read-index procedure finished.
+                        read_index = Some(cmp::max(local_responsed_index, batch_index));
+                    }
+                    (None, _) => {
+                        // Actually, the read_index is none if and only if it's the first one in
+                        // read_index_req.cmds. Starting from the second, all the following ones'
+                        // read_index is not none.
+                        read_index = read_index_req.read_index;
+                    }
+                    _ => {}
+                }
+                cb.invoke_read(self.handle_read(reader, req, true, read_index));
+                continue;
+            }
+            if req.get_header().get_replica_read() {
+                // We should check epoch since the range could be changed.
+                cb.invoke_read(self.handle_read(reader, req, true, read_index_req.read_index));
+            } else {
+                // The request could be proposed when the peer was leader.
+                // TODO: figure out that it's necessary to notify stale or not.
+                let term = self.term();
+                apply::notify_stale_req(term, cb);
+            }
+        }
+    }
+
     fn handle_read<E: ReadExecutor<EK>>(
         &self,
         reader: &mut E,
@@ -974,6 +1087,99 @@ where
         resp.txn_extra_op = self.txn_extra_op().load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
+    }
+
+    /// Try to renew leader lease.
+    fn maybe_renew_leader_lease(
+        &mut self,
+        ts: Timespec,
+        store_meta: &mut Arc<Mutex<StoreMeta>>,
+        progress: Option<ReadProgress>,
+    ) {
+        // A nonleader peer should never has leader lease.
+        let read_progress = if !self.is_leader() {
+            None
+        } else if self.is_splitting() {
+            // A splitting leader should not renew its lease.
+            // Because we split regions asynchronous, the leader may read stale results
+            // if splitting runs slow on the leader.
+            debug!(
+                "prevents renew lease while splitting";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            None
+        } else if self.is_merging() {
+            // A merging leader should not renew its lease.
+            // Because we merge regions asynchronous, the leader may read stale results
+            // if commit merge runs slow on sibling peers.
+            debug!(
+                "prevents renew lease while merging";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            None
+        } else if self.has_force_leader() {
+            debug!(
+                "prevents renew lease while in force leader state";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            None
+        } else {
+            self.mut_leader_lease().renew(ts);
+            let term = self.term();
+            self.mut_leader_lease()
+                .maybe_new_remote_lease(term)
+                .map(ReadProgress::leader_lease)
+        };
+        if let Some(progress) = progress {
+            let mut meta = store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+        if let Some(progress) = read_progress {
+            let mut meta = store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+    }
+
+    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
+        if self.pending_remove() {
+            return;
+        }
+        debug!(
+            "update read progress";
+            "region_id" => self.region_id(),
+            "peer_id" => self.peer_id(),
+            "progress" => ?progress,
+        );
+        reader.update(progress);
+    }
+
+    fn post_propose(&mut self, current_time: &mut Option<Timespec>, mut p: Proposal<EK::Snapshot>) {
+        // Try to renew leader lease on every consistent read/write request.
+        if current_time.is_none() {
+            *current_time = Some(monotonic_raw_now());
+        }
+        p.propose_time = *current_time;
+
+        self.mut_proposals().push(p);
+    }
+
+    fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
+        // Wait until the follower applies all values before the read. There is still a
+        // problem if the leader applies fewer values than the follower, the follower
+        // read could get a newer value, and after that, the leader may read a stale
+        // value, which violates linearizability.
+        self.store_applied_index() >= read_index
+            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
+            // TODO: Add a test to cover this case
+            && self.pending_merge_state.is_none()
+            // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
+            // during between the two operations a replica read could read empty data.
+            && !self.is_handling_snapshot()
     }
 }
 
@@ -2319,7 +2525,7 @@ where
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress_term = ReadProgress::term(self.term());
-                    self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
+                    self.maybe_renew_leader_lease(monotonic_raw_now(), &mut ctx.store_meta, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
@@ -2469,38 +2675,6 @@ where
             // TODO: Instead of sharing the counter, we should apply snapshots
             //       in apply workers.
             && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
-    }
-
-    #[inline]
-    fn ready_to_handle_read(&self) -> bool {
-        // TODO: It may cause read index to wait a long time.
-
-        // There may be some values that are not applied by this leader yet but the old
-        // leader, if applied_term isn't equal to current term.
-        self.get_store().applied_term() == self.term()
-            // There may be stale read if the old leader splits really slow,
-            // the new region may already elected a new leader while
-            // the old leader still think it owns the split range.
-            && !self.is_splitting()
-            // There may be stale read if a target leader is in another store and
-            // applied commit merge, written new values, but the sibling peer in
-            // this store does not apply commit merge, so the leader is not ready
-            // to read, until the merge is rollbacked.
-            && !self.is_merging()
-    }
-
-    fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
-        // Wait until the follower applies all values before the read. There is still a
-        // problem if the leader applies fewer values than the follower, the follower
-        // read could get a newer value, and after that, the leader may read a stale
-        // value, which violates linearizability.
-        self.get_store().applied_index() >= read_index
-            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
-            // TODO: Add a test to cover this case
-            && self.pending_merge_state.is_none()
-            // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
-            // during between the two operations a replica read could read empty data.
-            && !self.is_handling_snapshot()
     }
 
     /// Checks if leader needs to keep sending logs for follower.
@@ -2984,7 +3158,7 @@ where
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                     ));
-                    self.maybe_renew_leader_lease(propose_time, ctx, None);
+                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
                     lease_to_be_updated = false;
                 }
             }
@@ -3291,64 +3465,6 @@ where
         !self.unpersisted_readies.is_empty()
     }
 
-    fn response_read<T>(
-        &self,
-        read: &mut ReadIndexRequest<EK::Snapshot>,
-        ctx: &mut PollContext<EK, ER, T>,
-        replica_read: bool,
-    ) {
-        debug!(
-            "handle reads with a read index";
-            "request_id" => ?read.id,
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
-        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
-        for (req, cb, mut read_index) in read.take_cmds().drain(..) {
-            // leader reports key is locked
-            if let Some(locked) = read.locked.take() {
-                let mut response = raft_cmdpb::Response::default();
-                response.mut_read_index().set_locked(*locked);
-                let mut cmd_resp = RaftCmdResponse::default();
-                cmd_resp.mut_responses().push(response);
-                cb.invoke_read(ReadResponse {
-                    response: cmd_resp,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                });
-                continue;
-            }
-            if !replica_read {
-                match (read_index, read.read_index) {
-                    (Some(local_responsed_index), Some(batch_index)) => {
-                        // `read_index` could be less than `read.read_index` because the former is
-                        // filled with `committed index` when proposed, and the latter is filled
-                        // after a read-index procedure finished.
-                        read_index = Some(cmp::max(local_responsed_index, batch_index));
-                    }
-                    (None, _) => {
-                        // Actually, the read_index is none if and only if it's the first one in
-                        // read.cmds. Starting from the second, all the following ones' read_index
-                        // is not none.
-                        read_index = read.read_index;
-                    }
-                    _ => {}
-                }
-                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
-                continue;
-            }
-            if req.get_header().get_replica_read() {
-                // We should check epoch since the range could be changed.
-                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-            } else {
-                // The request could be proposed when the peer was leader.
-                // TODO: figure out that it's necessary to notify stale or not.
-                let term = self.term();
-                apply::notify_stale_req(term, cb);
-            }
-        }
-    }
-
     /// Responses to the ready read index request on the replica, the replica is
     /// not a leader.
     fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
@@ -3363,11 +3479,11 @@ where
                 let read_cmd = RaftCommand::new(req, cb);
                 info!(
                     "re-propose read index request because the response is lost";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.peer_id(),
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
-                self.send_read_command(ctx, read_cmd);
+                self.send_read_command(&ctx.router, read_cmd);
                 continue;
             }
 
@@ -3382,40 +3498,10 @@ where
                 self.response_read(&mut read, ctx, true);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
-                self.pending_reads.push_front(read);
+                self.mut_pending_reads().push_front(read);
                 break;
             }
         }
-    }
-
-    fn send_read_command<T>(
-        &self,
-        ctx: &mut PollContext<EK, ER, T>,
-        read_cmd: RaftCommand<EK::Snapshot>,
-    ) {
-        let mut err = errorpb::Error::default();
-        let read_cb = match ctx.router.send_raft_command(read_cmd) {
-            Ok(()) => return,
-            Err(TrySendError::Full(cmd)) => {
-                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
-                err.mut_server_is_busy()
-                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
-                cmd.callback
-            }
-            Err(TrySendError::Disconnected(cmd)) => {
-                err.set_message(format!("region {} is missing", self.region_id));
-                err.mut_region_not_found().set_region_id(self.region_id);
-                cmd.callback
-            }
-        };
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        let read_resp = ReadResponse {
-            response: resp,
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        read_cb.invoke_read(read_resp);
     }
 
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
@@ -3456,7 +3542,7 @@ where
             if self.leader_lease.is_suspect() {
                 return;
             }
-            self.maybe_renew_leader_lease(propose_time, ctx, None);
+            self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
         }
     }
 
@@ -3539,74 +3625,6 @@ where
         }
     }
 
-    /// Try to renew leader lease.
-    fn maybe_renew_leader_lease<T>(
-        &mut self,
-        ts: Timespec,
-        ctx: &mut PollContext<EK, ER, T>,
-        progress: Option<ReadProgress>,
-    ) {
-        // A nonleader peer should never has leader lease.
-        let read_progress = if !self.is_leader() {
-            None
-        } else if self.is_splitting() {
-            // A splitting leader should not renew its lease.
-            // Because we split regions asynchronous, the leader may read stale results
-            // if splitting runs slow on the leader.
-            debug!(
-                "prevents renew lease while splitting";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            None
-        } else if self.is_merging() {
-            // A merging leader should not renew its lease.
-            // Because we merge regions asynchronous, the leader may read stale results
-            // if commit merge runs slow on sibling peers.
-            debug!(
-                "prevents renew lease while merging";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            None
-        } else if self.force_leader.is_some() {
-            debug!(
-                "prevents renew lease while in force leader state";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            None
-        } else {
-            self.leader_lease.renew(ts);
-            let term = self.term();
-            self.leader_lease
-                .maybe_new_remote_lease(term)
-                .map(ReadProgress::leader_lease)
-        };
-        if let Some(progress) = progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
-        }
-        if let Some(progress) = read_progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
-        }
-    }
-
-    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove {
-            return;
-        }
-        debug!(
-            "update read progress";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "progress" => ?progress,
-        );
-        reader.update(progress);
-    }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
         if self.region().get_peers().len() <= 1 {
@@ -3756,7 +3774,7 @@ where
                     self.cmd_epoch_checker
                         .post_propose(cmd_type, idx, self.term());
                 }
-                self.post_propose(ctx, p);
+                self.post_propose(&mut ctx.current_time, p);
                 true
             }
         }
@@ -3781,20 +3799,6 @@ where
                 }
             }
         }
-    }
-
-    fn post_propose<T>(
-        &mut self,
-        poll_ctx: &mut PollContext<EK, ER, T>,
-        mut p: Proposal<EK::Snapshot>,
-    ) {
-        // Try to renew leader lease on every consistent read/write request.
-        if poll_ctx.current_time.is_none() {
-            poll_ctx.current_time = Some(monotonic_raw_now());
-        }
-        p.propose_time = poll_ctx.current_time;
-
-        self.proposals.push(p);
     }
 
     // TODO: set higher election priority of voter/incoming voter than demoting
@@ -4152,7 +4156,7 @@ where
                     propose_time: Some(now),
                     must_pass_epoch_check: false,
                 };
-                self.post_propose(poll_ctx, p);
+                self.post_propose(&mut poll_ctx.current_time, p);
             }
         }
 
@@ -5134,6 +5138,30 @@ where
     #[inline]
     fn set_should_wake_up(&mut self, should_wake_up: bool) {
         self.should_wake_up = should_wake_up;
+    }
+    #[inline]
+    fn mut_proposals(&mut self) -> &mut ProposalQueue<EK::Snapshot> {
+        &mut self.proposals
+    }
+    #[inline]
+    fn pending_remove(&self) -> bool {
+        self.pending_remove
+    }
+    #[inline]
+    fn has_force_leader(&self) -> bool {
+        self.force_leader.is_some()
+    }
+    #[inline]
+    fn mut_leader_lease(&mut self) -> &mut Lease {
+        &mut self.leader_lease
+    }
+    #[inline]
+    fn store_applied_term(&self) -> u64 {
+        self.get_store().applied_term()
+    }
+    #[inline]
+    fn store_applied_index(&self) -> u64 {
+        self.get_store().applied_index()
     }
 }
 

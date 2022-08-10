@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::Cell,
     mem,
     ops::DerefMut,
     sync::{Arc, Mutex},
@@ -11,23 +12,36 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
+use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures_util::{compat::Future01CompatExt, FutureExt};
-use kvproto::{metapb::Store, raft_serverpb::PeerState};
-use raftstore::store::{
-    fsm::store::{PeerTickBatch, StoreMeta},
-    worker::{RaftlogFetchRunner, RaftlogFetchTask},
-    Config, PdTask, RaftRouter, Transport,
+use kvproto::{
+    metapb::Store,
+    raft_serverpb::{PeerState, RaftMessage},
+};
+use raftstore::{
+    bytes_capacity,
+    store::{
+        fsm::store::{PeerTickBatch, RaftSender, StoreMeta},
+        local_metrics::RaftMetrics,
+        memory::*,
+        worker::{RaftlogFetchRunner, RaftlogFetchTask},
+        Config, InspectedRaftMessage, PdTask, RaftRouter, Transport,
+    },
 };
 use slog::Logger;
+use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
+    defer,
     future::poll_future_notify,
     time::Instant as TiInstant,
     timer::SteadyTimer,
     worker::{LazyWorker, Scheduler, Worker},
+    Either,
 };
+use time::Timespec;
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
@@ -53,6 +67,10 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta>>,
+    /// raft metrics
+    pub raft_metrics: RaftMetrics,
+    pub current_time: Option<Timespec>,
+    router: RaftRouter<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -62,7 +80,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         logger: Logger,
         pd_scheduler: Scheduler<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        raft_router: RaftRouter<EK, ER>,
     ) -> Self {
+        let waterfall_metrics = cfg.waterfall_metrics;
         Self {
             logger,
             trans,
@@ -71,6 +91,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             timer: SteadyTimer::default(),
             pd_scheduler,
             store_meta,
+            raft_metrics: RaftMetrics::new(waterfall_metrics),
+            current_time: None,
+            router: raft_router,
         }
     }
 }
@@ -209,6 +232,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
     raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     store_meta: Arc<Mutex<StoreMeta>>,
+    raft_router: RaftRouter<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -222,6 +246,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         pd_scheduler: Scheduler<PdTask<EK, ER>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        raft_router: RaftRouter<EK, ER>,
     ) -> Self {
         StorePollerBuilder {
             cfg,
@@ -233,6 +258,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             pd_scheduler,
             raftlog_fetch_scheduler,
             store_meta,
+            raft_router,
         }
     }
 
@@ -291,6 +317,7 @@ where
             self.logger.clone(),
             self.pd_scheduler.clone(),
             self.store_meta.clone(),
+            self.raft_router.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -335,6 +362,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
                 RaftlogFetchRunner::new(raft_router, raft_engine),
             ),
             store_meta,
+            raft_router.clone(),
         );
         let peers = builder.init()?;
         self.apply_system

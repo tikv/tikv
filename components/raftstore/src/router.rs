@@ -11,14 +11,13 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::RaftRouter,
+        fsm::{store::RaftSender, RaftRouter},
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
         CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
         RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
-
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter<EK>:
     StoreRouter<EK>

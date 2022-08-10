@@ -9,7 +9,10 @@ use kvproto::raft_serverpb::RaftMessage;
 use tikv_util::{error, warn};
 
 use crate::{
-    store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
+    store::{
+        fsm::store::RaftSender, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg,
+        StoreMsg,
+    },
     DiscardReason, Error, Result,
 };
 
