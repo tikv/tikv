@@ -1,13 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This module contains the peer implementation for batch system.
-//!
-//! You may get confused about the peer in fsm and peer in raft module. The
-//! guideline is that if any functions doesn't depend on the details of batch
-//! system, then it should be implemented for peer in raft module.
-//!
-//! If we change to other concurrent programming solution, we can easily just
-//! change the peer in fsm.
 
 use std::borrow::Cow;
 

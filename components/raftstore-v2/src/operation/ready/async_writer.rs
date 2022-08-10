@@ -28,7 +28,7 @@ struct UnpersistedReady {
     raft_msgs: Vec<Vec<RaftMessage>>,
 }
 
-/// A writer that handles asynchrouns writes.
+/// A writer that handles asynchronous writes.
 pub struct AsyncWriter<EK: KvEngine, ER: RaftEngine> {
     write_router: WriteRouter<EK, ER>,
     unpersisted_readies: VecDeque<UnpersistedReady>,

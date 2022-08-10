@@ -252,7 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx.raft_metrics.ready.has_ready_region += 1;
     }
 
-    /// Called when an asynchrounsly write finishes.
+    /// Called when an asynchronously write finishes.
     pub fn on_persisted<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
