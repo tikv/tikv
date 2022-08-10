@@ -85,7 +85,7 @@ use crate::{
         },
         transport::Transport,
         util,
-        util::{is_learner, KeysInfoFormatter, LeaseState},
+        util::{is_learner, KeysInfoFormatter, LeaseState, LocalLeaderInfo},
         worker::{
             new_change_peer_v2_request, Bucket, BucketRange, CleanupTask, ConsistencyCheckTask,
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
@@ -3314,6 +3314,9 @@ where
         // Destroy read delegates.
         meta.readers.remove(&region_id);
 
+        // Remove region local leader info.
+        meta.region_leaders.remove(&region_id);
+
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
             self.fsm.peer.region(),
@@ -3776,6 +3779,10 @@ where
                 .insert(enc_end_key(&new_region), new_region_id)
                 .is_none();
             assert!(not_exist, "[region {}] should not exist", new_region_id);
+            meta.region_leaders.insert(
+                new_region_id,
+                LocalLeaderInfo::new(new_peer.peer.leader_id(), new_peer.peer.term(), &new_region),
+            );
             meta.readers
                 .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             meta.region_read_progress
@@ -4230,6 +4237,7 @@ where
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
+        meta.region_leaders.remove(&source.get_id());
         meta.set_region(
             &self.ctx.coprocessor_host,
             region,
@@ -4488,6 +4496,7 @@ where
         for r in &persist_res.destroy_regions {
             let prev = meta.region_ranges.remove(&enc_end_key(r));
             assert_eq!(prev, Some(r.get_id()));
+            meta.region_leaders.remove(&r.get_id());
             assert!(meta.regions.remove(&r.get_id()).is_some());
             if let Some(d) = meta.readers.get_mut(&r.get_id()) {
                 d.mark_pending_remove();
@@ -4539,6 +4548,10 @@ where
             panic!("{} unexpected region {:?}", self.fsm.peer.tag, r);
         }
         let prev = meta.regions.insert(region.get_id(), region.clone());
+        meta.region_leaders.insert(
+            region.get_id(),
+            LocalLeaderInfo::new(self.fsm.peer.leader_id(), self.fsm.peer.term(), &region),
+        );
         assert_eq!(prev, Some(prev_region));
         drop(meta);
 

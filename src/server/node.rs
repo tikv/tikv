@@ -16,7 +16,7 @@ use kvproto::{
 use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
     store::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
@@ -61,7 +61,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     feature_gate: FeatureGate,
 ) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
 where
-    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
+    S: RaftStoreRouter<EK> + LocalReadRouter<EK> + WritePreChecker + 'static,
     EK: KvEngine,
 {
     let store = Storage::from_engine(

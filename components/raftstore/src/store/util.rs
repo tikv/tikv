@@ -1167,13 +1167,21 @@ pub struct LocalLeaderInfo {
 }
 
 impl LocalLeaderInfo {
-    fn new(region: &Region) -> LocalLeaderInfo {
+    pub fn new(leader_id: u64, leader_term: u64, region: &Region) -> LocalLeaderInfo {
         LocalLeaderInfo {
-            leader_id: raft::INVALID_ID,
-            leader_term: 0,
+            leader_id,
+            leader_term,
             epoch: region.get_region_epoch().clone(),
             peers: region.get_peers().to_vec(),
         }
+    }
+
+    pub fn new_with_region(region: &Region) -> LocalLeaderInfo {
+        Self::new(raft::INVALID_ID, 0, region)
+    }
+
+    pub fn leader_peer(&self) -> Option<&metapb::Peer> {
+        self.peers.iter().find(|&p| p.get_id() == self.leader_id)
     }
 }
 
@@ -1184,7 +1192,7 @@ impl RegionReadProgressCore {
             region_id: region.get_id(),
             applied_index,
             read_state: ReadState::default(),
-            leader_info: LocalLeaderInfo::new(region),
+            leader_info: LocalLeaderInfo::new_with_region(region),
             pending_items: VecDeque::with_capacity(cap),
             last_merge_index: 0,
             pause: false,

@@ -88,7 +88,7 @@ use crate::{
         peer_storage,
         transport::Transport,
         util,
-        util::{is_initial_msg, RegionReadProgressRegistry},
+        util::{is_initial_msg, RegionReadProgressRegistry, LocalLeaderInfo},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -120,6 +120,8 @@ pub struct StoreMeta {
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
+    /// region_id -> LocalLeaderInfo
+    pub region_leaders: HashMap<u64, LocalLeaderInfo>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
@@ -159,6 +161,7 @@ impl StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
+            region_leaders: HashMap::default(),
             readers: HashMap::default(),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
@@ -1145,6 +1148,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             }
             meta.region_ranges.insert(enc_end_key(region), region_id);
             meta.regions.insert(region_id, region.clone());
+            meta.region_leaders.insert(region_id, LocalLeaderInfo::new_with_region(region));
             meta.region_read_progress
                 .insert(region_id, peer.peer.read_progress.clone());
             // No need to check duplicated here, because we use region id as the key
@@ -1183,6 +1187,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .insert(enc_end_key(&region), region.get_id());
             meta.region_read_progress
                 .insert(region.get_id(), peer.peer.read_progress.clone());
+            meta.region_leaders.insert(
+                region.get_id(),
+                LocalLeaderInfo::new(peer.peer.leader_id(), peer.peer.term(), &region),
+            );
             meta.regions.insert(region.get_id(), region);
             region_peers.push((tx, peer));
         }

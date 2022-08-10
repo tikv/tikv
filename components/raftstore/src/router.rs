@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex},
+};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -11,7 +14,7 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::RaftRouter,
+        fsm::{store::StoreMeta, RaftRouter},
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
         CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
         RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
@@ -125,6 +128,15 @@ where
     fn release_snapshot_cache(&self);
 }
 
+/// A checker do some checking before routing raft write requests.
+pub trait WritePreChecker: Send + Clone {
+    /// Before sending write command to the given region.
+    ///
+    /// Just like other pre_xxx methods, prechecking or pre-hooks can be done
+    /// here.
+    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()>;
+}
+
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
@@ -176,6 +188,7 @@ where
     router: RaftRouter<EK, ER>,
     local_reader:
         RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
+    store_meta: Arc<Mutex<StoreMeta>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -187,6 +200,7 @@ where
         ServerRaftStoreRouter {
             router: self.router.clone(),
             local_reader: self.local_reader.clone(),
+            store_meta: self.store_meta.clone(),
         }
     }
 }
@@ -196,12 +210,36 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     pub fn new(
         router: RaftRouter<EK, ER>,
         reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
+            store_meta,
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK, ER> {
+    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
+        let meta = self.store_meta.lock().unwrap();
+        // Only return NotLeader error when the leader info exists.
+        if let Some(leader_info) = meta.region_leaders.get(&region_id) {
+            match leader_info.leader_peer() {
+                Some(peer) => {
+                    // The local peer is not leader.
+                    if peer.get_store_id() != meta.store_id.unwrap() {
+                        return Err(RaftStoreError::NotLeader(region_id, Some(peer.clone())));
+                    }
+                }
+                None => {
+                    // Leader is unknown.
+                    return Err(RaftStoreError::NotLeader(region_id, None));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

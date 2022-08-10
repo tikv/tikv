@@ -569,6 +569,7 @@ where
                     StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
                     self.router.clone(),
                 ),
+                store_meta.clone(),
             ),
             engines.kv.clone(),
         );

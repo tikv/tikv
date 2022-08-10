@@ -29,7 +29,7 @@ use raftstore::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
     },
     errors::Error as RaftServerError,
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
     store::{
         Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
         RegionSnapshot, WriteResponse,
@@ -153,7 +153,7 @@ where
 pub struct RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
 {
     router: S,
     engine: E,
@@ -163,7 +163,7 @@ where
 impl<E, S> RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
 {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S, engine: E) -> RaftKv<E, S> {
@@ -286,7 +286,7 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
 impl<E, S> Display for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
@@ -296,7 +296,7 @@ where
 impl<E, S> Debug for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
@@ -306,7 +306,7 @@ where
 impl<E, S> Engine for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
 {
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
@@ -351,6 +351,11 @@ where
             }
         }
         write_modifies(&self.engine, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
+        self.router.pre_send_write_to(ctx.get_region_id())?;
+        Ok(())
     }
 
     fn async_write(
