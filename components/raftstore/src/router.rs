@@ -223,8 +223,14 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK, ER> {
     fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
+        // TODO(cosven): store_meta is used too much. I'm afraid this lock may be
+        // acquired too frequently. Do TPCC perf test lator.
         let meta = self.store_meta.lock().unwrap();
-        // Only return NotLeader error when the leader info exists.
+        // Currently only return NotLeader error when the leader info exists.
+        // The leader info should exist.
+        //
+        // Maybe just return NotLeader in case there is no leader info???
+        // TODO(cosven): eagerly or conservatively???
         if let Some(leader_info) = meta.region_leaders.get(&region_id) {
             match leader_info.leader_peer() {
                 Some(peer) => {

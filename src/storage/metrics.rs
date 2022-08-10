@@ -159,6 +159,8 @@ make_auto_flush_static_metric! {
         new,
         snapshot,
         async_snapshot_err,
+        precheck_ok,
+        precheck_err,
         snapshot_ok,
         snapshot_err,
         read_finish,

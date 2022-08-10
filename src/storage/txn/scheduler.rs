@@ -477,12 +477,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 return;
             }
 
-            // TODO(cosven): remove this log and add a metric to lator.
-            info!(
-                "acquire all or none failed";
-                "tag" => ?tag,
-                "cid" => cid,
-            );
+            // TODO(cosven): remove this log and refine the following comments.
+            // info!(
+            //     "acquire all or none failed";
+            //     "tag" => ?tag,
+            //     "cid" => cid,
+            // );
+            //
+            // In local tpcc tests, I found the following `acquire_pessimistic_lock` and
+            // `check_txn_status` commands often reach this branch. `prewrite`,
+            // `commit` and `resolve_lock_lite` also have small chance.
+            //
+            // We can examine the ratio of the requests that have been prechecked by
+            // following metrics => (precheck_ok + precheck_err) / new
 
             // If any latch if not required, the request must has write.
             // There is samll possibility that the peer is not leader anymore, so do some
@@ -497,20 +504,20 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         with_tls_engine(|engine: &E| {
                             // Precheck failed.
                             if let Err(e) = engine.precheck_write_with_ctx(&cmd_ctx) {
-                                info!(
-                                    "precheck failed";
-                                    "tag" => ?tag,
-                                    "cid" => cid,
-                                );
                                 let mut tctx = sched.inner.dequeue_task_context(cid);
                                 let task = tctx.task.take().unwrap();
                                 let tag = task.cmd.tag();
                                 let pr = ProcessResult::Failed {
                                     err: StorageError::from(e),
                                 };
-                                if let Some(cb) = tctx.cb {
-                                    Self::early_response(cid, cb, pr, tag, CommandStageKind::error);
-                                }
+                                // The task is not scheduled, so the cb must not be none.
+                                Self::early_response(
+                                    cid,
+                                    tctx.cb.unwrap(),
+                                    pr,
+                                    tag,
+                                    CommandStageKind::precheck_err,
+                                );
                                 return;
                             }
                         });
@@ -520,11 +527,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     //
                     // TODO(cosven): maybe add a `schedule_with_task_context` function
                     // to avoid dequeue and re-schedule.
-                    info!(
-                        "precheck passes";
-                        "tag" => ?tag,
-                        "cid" => cid,
-                    );
+                    SCHED_STAGE_COUNTER_VEC.get(tag).precheck_ok.inc();
                     let mut tctx = sched.inner.dequeue_task_context(cid);
                     let task = tctx.task.take().unwrap();
                     let cb = tctx.cb.take().unwrap();
