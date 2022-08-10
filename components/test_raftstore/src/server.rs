@@ -289,7 +289,8 @@ impl ServerCluster {
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
         );
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+        let raft_router =
+            ServerRaftStoreRouter::new(router.clone(), local_reader, store_meta.clone());
         let sim_router = SimulateTransport::new(raft_router.clone());
 
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());

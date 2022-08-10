@@ -15,7 +15,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
     store::{
         Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
@@ -211,6 +211,13 @@ impl<C: Transport> Transport for SimulateTransport<C> {
 
     fn flush(&mut self) {
         self.ch.flush();
+    }
+}
+
+impl<C: RaftStoreRouter<RocksEngine>> WritePreChecker for SimulateTransport<C> {
+    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
+        // TODO(cosven): implement this lator.
+        Ok(())
     }
 }
 

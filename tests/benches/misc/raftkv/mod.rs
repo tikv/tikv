@@ -12,7 +12,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
     store::{
         cmd_resp, util, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter,
         RaftCmdExtraOpts, RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg,
@@ -68,6 +68,13 @@ impl SyncBenchRouter {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+impl WritePreChecker for SyncBenchRouter {
+    fn pre_send_write_to(&self, _region_id: u64) -> Result<()> {
+        // TODO(cosven): implement it lator.
+        Ok(())
     }
 }
 

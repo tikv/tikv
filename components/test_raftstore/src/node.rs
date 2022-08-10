@@ -311,7 +311,7 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            store_meta,
+            store_meta.clone(),
             coprocessor_host,
             importer,
             split_scheduler,
@@ -362,7 +362,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router, local_reader);
+        let router = ServerRaftStoreRouter::new(router, local_reader, store_meta.clone());
         self.trans
             .core
             .lock()
