@@ -32,7 +32,6 @@ cloud-azure = ["raftstore/cloud-azure"]
 batch-system = { path = "../batch-system", default-features = false }
 collections = { path = "../collections" }
 crossbeam = "0.8"
-engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.5"
@@ -46,7 +45,6 @@ raft-proto = { version = "0.7.0" }
 raftstore = { path = "../raftstore" }
 slog = "2.3"
 smallvec = "1.4"
-tikv_kv = { path = "../tikv_kv", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
