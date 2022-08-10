@@ -288,6 +288,8 @@ impl ShardMeta {
         let props = self.properties.clone();
         let mut new_meta = Self::new(self.engine_id, cs);
         new_meta.properties = props;
+        // self.data_sequence may be advanced on raft log gc tick.
+        new_meta.data_sequence = std::cmp::max(new_meta.data_sequence, self.data_sequence);
         *self = new_meta;
     }
 
