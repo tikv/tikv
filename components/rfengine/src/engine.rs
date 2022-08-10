@@ -343,6 +343,12 @@ impl RfEngine {
         }
     }
 
+    pub fn can_truncate(&self, region_id: u64) -> bool {
+        self.regions
+            .get(&region_id)
+            .map_or(false, |data| data.read().unwrap().can_truncate())
+    }
+
     /// Dumps the state of the engine.
     pub fn get_engine_stats(&self) -> EngineStats {
         let mut total_mem_size = 0;
@@ -461,7 +467,7 @@ impl RegionData {
             truncated_blocks = self.raft_logs.truncate(TRUNCATE_ALL_INDEX);
             self.truncated_idx = 0;
             self.truncated_term = 0;
-        } else if self.can_truncate() && self.truncated_idx < batch.truncated_idx {
+        } else if self.truncated_idx < batch.truncated_idx {
             self.truncated_idx = batch.truncated_idx;
             self.truncated_term = batch.truncated_term;
             truncated_blocks = self.raft_logs.truncate(self.truncated_idx);

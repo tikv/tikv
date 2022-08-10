@@ -1093,11 +1093,16 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_raft_log_gc_tick(&mut self) {
         self.ticker.schedule(PEER_TICK_RAFT_LOG_GC);
-        if !self.peer.is_initialized() || self.peer.is_applying_snapshot() {
+
+        let region_id = self.region_id();
+        let engines = &self.ctx.global.engines;
+        if !self.peer.is_initialized()
+            || self.peer.is_applying_snapshot()
+            || !engines.raft.can_truncate(region_id)
+        {
             return;
         }
 
-        let region_id = self.region_id();
         let last_idx = self.peer.get_store().last_index();
         let replicated_idx = if self.peer.is_leader() {
             self.peer
@@ -1117,7 +1122,6 @@ impl<'a> PeerMsgHandler<'a> {
             // One solution is that leader propagates truncated index to followers.
             last_idx
         };
-        let engines = &self.ctx.global.engines;
         let size_limit_index = engines.raft.index_to_truncate_to_size(
             self.region_id(),
             self.ctx.cfg.raft_log_gc_size_limit.unwrap().0 as usize,
@@ -1161,7 +1165,6 @@ impl<'a> PeerMsgHandler<'a> {
             to_truncate_idx = cmp::min(to_truncate_idx, persisted_log_idx);
         };
         assert!(to_truncate_idx <= persisted_log_idx && to_truncate_idx <= applied_idx);
-
         let truncated_idx = self.peer.get_store().truncated_index();
         if to_truncate_idx > truncated_idx {
             let to_truncate_term = self.peer.get_store().term(to_truncate_idx).unwrap();

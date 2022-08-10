@@ -1433,6 +1433,10 @@ impl Peer {
                 let region_version = new_region.get_region_epoch().get_version();
                 write_initial_raft_state(&mut ctx.raft_wb, new_region.get_id(), region_version);
             }
+            ctx.global
+                .engines
+                .raft
+                .add_dependent(self.region_id, new_region.get_id());
         }
     }
 
