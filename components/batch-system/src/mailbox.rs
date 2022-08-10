@@ -14,10 +14,8 @@ use crate::fsm::{Fsm, FsmScheduler, FsmState};
 /// A basic mailbox.
 ///
 /// A mailbox holds an FSM owner, and the sending end of a channel to send
-/// messages to that owner.
-///
-/// Mailbox is designed to be shared. Multiple producers can send messages to
-/// the same mailbox concurrently.
+/// messages to that owner. Multiple producers share the same mailbox to
+/// communicate with a FSM.
 ///
 /// The mailbox's FSM owner needs to be scheduled to a [`Poller`] to handle its
 /// pending messages. Therefore, the producer of messages also needs to provide

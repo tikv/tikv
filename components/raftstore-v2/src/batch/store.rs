@@ -133,8 +133,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         } else {
             Some(0)
         };
-        let mut fsm = StoreFsmDelegate::new(fsm, &mut self.poll_ctx);
-        fsm.handle_msgs(&mut self.store_msg_buf);
+        let mut delegate = StoreFsmDelegate::new(fsm, &mut self.poll_ctx);
+        delegate.handle_msgs(&mut self.store_msg_buf);
         expected_msg_count
     }
 
@@ -146,8 +146,8 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
         } else {
             HandleResult::stop_at(0, false)
         };
-        let mut fsm = PeerFsmDelegate::new(fsm, &mut self.poll_ctx);
-        fsm.handle_msgs(&mut self.peer_msg_buf);
+        let mut delegate = PeerFsmDelegate::new(fsm, &mut self.poll_ctx);
+        delegate.handle_msgs(&mut self.peer_msg_buf);
         handle_result
     }
 

@@ -4808,9 +4808,9 @@ where
         let mut disk_full_stores = Vec::new();
         if !leader_allowed {
             disk_full_stores.push(ctx.store.id);
-            // Try to transfer leader to a node with disk usage normal to keep write
-            // availability not downback. If majority node is disk full, to transfer leader
-            // or not is not necessary. Note: Need to exclude learner node.
+            // Try to transfer leader to a node with disk usage normal to maintain write
+            // availability. If majority node is disk full, to transfer leader or not is not
+            // necessary. Note: Need to exclude learner node.
             if !self.disk_full_peers.majority {
                 let target_peer = self
                     .get_store()

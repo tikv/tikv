@@ -639,13 +639,13 @@ where
 
                     let req_size = cmd.request.compute_size();
                     if self.ctx.cfg.cmd_batch
+                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
                         // Avoid to merge requests with different `DiskFullOpt`s into one,
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
                             && !self.fsm.peer.disk_full_peers.majority())
                             || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
-                        && self.fsm.batch_req_builder.can_batch(&self.ctx.cfg, &cmd.request, req_size)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
@@ -700,7 +700,7 @@ where
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
         (|| {
-            fail_point!("force_delay_propose_pending_batch_raft_command", |_| {
+            fail_point!("force_delay_propose_batch_raft_command", |_| {
                 should_propose = false
             })
         })();
