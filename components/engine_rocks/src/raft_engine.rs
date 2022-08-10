@@ -312,10 +312,6 @@ impl RaftEngine for RocksEngine {
         Ok(total)
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        Ok(vec![])
-    }
-
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }

@@ -1378,9 +1378,9 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
     region_worker: Worker,
-    // Used for calling `purge_expired_files`, which can be time-consuming for certain
-    // engine implementations.
-    purge_worker: Worker,
+    // Used for calling `manual_purge` if the specific engine implementation requires it
+    // (`need_manual_purge`).
+    purge_worker: Option<Worker>,
 
     raftlog_fetch_worker: Worker,
 
@@ -1445,12 +1445,36 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let purge_worker = if engines.raft.need_manual_purge() {
+            let worker = Worker::new("purge-worker");
+            let raft_clone = engines.raft.clone();
+            let router_clone = self.router();
+            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for region_id in regions {
+                            let _ = router_clone.send(
+                                region_id,
+                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("purge expired files"; "err" => %e);
+                    }
+                };
+            });
+            Some(worker)
+        } else {
+            None
+        };
+
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
-            purge_worker: Worker::new("purge-worker"),
+            purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
@@ -1477,26 +1501,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-        let router_clone = self.router();
-        let engines_clone = engines.clone();
-        workers.purge_worker.spawn_interval_task(
-            cfg.value().raft_engine_purge_interval.0,
-            move || {
-                match engines_clone.raft.purge_expired_files() {
-                    Ok(regions) => {
-                        for region_id in regions {
-                            let _ = router_clone.send(
-                                region_id,
-                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!("purge expired files"; "err" => %e);
-                    }
-                };
-            },
-        );
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1705,7 +1709,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
-        workers.purge_worker.stop();
+        if let Some(w) = workers.purge_worker {
+            w.stop();
+        }
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
     }
