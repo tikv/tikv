@@ -147,6 +147,7 @@ impl Node {
         }
         self.store.set_id(store_id);
         engines.kv.set_engine_id(store_id);
+        engines.raft.set_engine_id(store_id);
         Ok(())
     }
 

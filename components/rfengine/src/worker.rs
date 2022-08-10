@@ -4,7 +4,11 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{mpsc::Receiver, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::Receiver,
+        Arc,
+    },
 };
 
 use bytes::{Buf, BufMut, Bytes};
@@ -23,6 +27,7 @@ pub(crate) struct Worker {
     task_rx: Receiver<Task>,
     all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
     buf: Vec<u8>,
+    engine_id: Arc<AtomicU64>,
 }
 
 impl Worker {
@@ -31,6 +36,7 @@ impl Worker {
         epoches: Vec<Epoch>,
         task_rx: Receiver<Task>,
         all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
+        engine_id: Arc<AtomicU64>,
     ) -> Self {
         let rate_limiter = Arc::new(file_system::IORateLimiter::new(
             IORateLimitMode::WriteOnly,
@@ -47,6 +53,7 @@ impl Worker {
             task_rx,
             all_states,
             buf: vec![],
+            engine_id,
         }
     }
 
@@ -60,7 +67,11 @@ impl Worker {
         for i in 0..self.epoches.len() - 1 {
             if self.epoches[i].has_wal_file {
                 if let Err(err) = self.compact(i) {
-                    error!("failed to compact epoch {} {:?}", self.epoches[i].id, err);
+                    let engine_id = self.get_engine_id();
+                    error!(
+                        "{}: failed to compact epoch {} {:?}",
+                        engine_id, self.epoches[i].id, err
+                    );
                 }
             }
         }
@@ -100,7 +111,11 @@ impl Worker {
             let idx = self.epoches.len() - 2;
             let compact_id = self.epoches[idx].id;
             if let Err(err) = self.compact(idx) {
-                error!("failed to compact epoch {} {:?}", compact_id, err);
+                let engine_id = self.get_engine_id();
+                error!(
+                    "{}: failed to compact epoch {} {:?}",
+                    engine_id, compact_id, err
+                );
             }
         }
     }
@@ -122,7 +137,8 @@ impl Worker {
         self.buf.put_u32_le(crc32);
         let filename = states_file_name(&self.dir, epoch_id);
         self.writer.write_to_file(&self.buf, &filename)?;
-        info!("write state file for epoch {}", epoch_id);
+        let engine_id = self.get_engine_id();
+        info!("{}: write state file for epoch {}", engine_id, epoch_id);
         if epoch_id == 1 {
             return Ok(());
         }
@@ -165,15 +181,16 @@ impl Worker {
                 generated_files += 1;
             }
         }
+        let engine_id = self.get_engine_id();
         info!(
-            "epoch {} compact wal file generated {} files",
-            epoch_id, generated_files,
+            "{}: epoch {} compact wal file generated {} files",
+            engine_id, epoch_id, generated_files,
         );
         self.write_all_states(epoch_id)?;
         let _ = file_system::sync_dir(self.dir.as_path());
 
         if let Err(e) = self.recycle_wal_file(epoch_id) {
-            warn!("failed to recycle wal file"; "epoch_id" => epoch_id, "err" => %e);
+            warn!("{}: failed to recycle wal file", engine_id; "epoch_id" => epoch_id, "err" => %e);
         }
         Ok(())
     }
@@ -246,6 +263,7 @@ impl Worker {
         let mut removed_epoch_ids = HashSet::new();
         let mut remove_cnt = 0;
         let mut retain_cnt = 0;
+        let engine_id = self.get_engine_id();
         for ep in &mut self.epoches {
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
             if let Some((first, end)) = raft_log_files.get(&region_id) {
@@ -253,7 +271,10 @@ impl Worker {
                     let filename =
                         raft_log_file_name(self.dir.as_path(), ep.id, region_id, *first, *end);
                     if let Err(err) = fs::remove_file(filename.clone()) {
-                        error!("failed to remove rlog file {:?}, {:?}", filename, err);
+                        error!(
+                            "{}: failed to remove rlog file {:?}, {:?}",
+                            engine_id, filename, err
+                        );
                     }
                     raft_log_files.remove(&region_id);
                     if raft_log_files.len() == 0 {
@@ -265,18 +286,24 @@ impl Worker {
                 }
             }
         }
+
         if let Err(e) = file_system::sync_dir(self.dir.as_path()) {
-            error!("failed to sync directory: {}", e);
+            error!("{}: failed to sync directory: {}", engine_id, e);
         }
+        let tag = RegionTag::new(engine_id, region_id);
         info!(
-            "region {} truncate raft log to {}, remove {} files, retain {} files",
-            region_id, truncated_index, remove_cnt, retain_cnt
+            "{}: truncate raft log to {}, remove {} files, retain {} files",
+            tag, truncated_index, remove_cnt, retain_cnt
         );
         if removed_epoch_ids.is_empty() {
             return;
         }
-        info!("remove epoches {:?}", &removed_epoch_ids);
+        info!("{}: remove epoches {:?}", engine_id, &removed_epoch_ids);
         self.epoches.retain(|x| !removed_epoch_ids.contains(&x.id));
+    }
+
+    fn get_engine_id(&self) -> u64 {
+        self.engine_id.load(Ordering::Acquire)
     }
 }
 

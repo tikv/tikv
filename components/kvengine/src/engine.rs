@@ -140,6 +140,7 @@ impl Engine {
             if let Some(parent) = &meta.parent {
                 if !parents.contains(&parent.id) {
                     parents.insert(parent.id);
+                    info!("load parent of {}", meta.tag());
                     let parent_shard = self.load_shard(parent)?;
                     recoverer.recover(self, &parent_shard, parent)?;
                 }

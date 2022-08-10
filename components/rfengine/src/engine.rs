@@ -2,10 +2,15 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::{Display, Formatter},
     fs,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{mpsc::SyncSender, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::SyncSender,
+        Arc, Mutex, RwLock,
+    },
     thread::{self, JoinHandle},
 };
 
@@ -79,6 +84,8 @@ pub struct RfEngine {
     pub(crate) task_sender: SyncSender<Task>,
 
     pub(crate) worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+
+    pub(crate) engine_id: Arc<AtomicU64>,
 }
 
 impl RfEngine {
@@ -95,6 +102,7 @@ impl RfEngine {
             writer: Arc::new(Mutex::new(writer)),
             task_sender: tx,
             worker_handle: Arc::default(),
+            engine_id: Arc::new(AtomicU64::new(0)),
         };
         let mut offset = 0;
         let mut worker_states = HashMap::new();
@@ -115,7 +123,13 @@ impl RfEngine {
         }
 
         {
-            let mut worker = Worker::new(dir.to_owned(), epoches, rx, worker_states);
+            let mut worker = Worker::new(
+                dir.to_owned(),
+                epoches,
+                rx,
+                worker_states,
+                en.engine_id.clone(),
+            );
             let join_handle = thread::spawn(move || worker.run());
             en.worker_handle.lock().unwrap().replace(join_handle);
         }
@@ -307,9 +321,10 @@ impl RfEngine {
             data.dependents.insert(dependent_id);
             data.dependents.len()
         }) {
+            let tag = RegionTag::new(self.get_engine_id(), region_id);
             info!(
-                "region {} add dependent {}, dependents_len {}",
-                region_id, dependent_id, len
+                "{} add dependent {}, dependents_len {}",
+                tag, dependent_id, len
             );
         }
     }
@@ -320,9 +335,10 @@ impl RfEngine {
             data.dependents.remove(&dependent_id);
             data.dependents.len()
         }) {
+            let tag = RegionTag::new(self.get_engine_id(), region_id);
             info!(
-                "region {} remove dependent {}, dependents_len {}",
-                region_id, dependent_id, len
+                "{} remove dependent {}, dependents_len {}",
+                tag, dependent_id, len
             );
         }
     }
@@ -382,6 +398,14 @@ impl RfEngine {
                     .index_to_truncate_to_size(size)
             })
             .unwrap_or_default()
+    }
+
+    pub fn set_engine_id(&self, engine_id: u64) {
+        self.engine_id.store(engine_id, Ordering::Release)
+    }
+
+    pub fn get_engine_id(&self) -> u64 {
+        self.engine_id.load(Ordering::Acquire)
     }
 }
 
@@ -507,6 +531,26 @@ pub struct RegionStats {
     pub last_idx: u64,
     pub truncated_idx: u64,
     pub dep_count: usize,
+}
+
+pub struct RegionTag {
+    pub engine_id: u64,
+    pub region_id: u64,
+}
+
+impl RegionTag {
+    pub fn new(engine_id: u64, region_id: u64) -> Self {
+        Self {
+            engine_id,
+            region_id,
+        }
+    }
+}
+
+impl Display for RegionTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.engine_id, self.region_id)
+    }
 }
 
 #[cfg(test)]
