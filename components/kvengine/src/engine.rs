@@ -145,19 +145,7 @@ impl Engine {
                     recoverer.recover(self, &parent_shard, parent)?;
                 }
                 if parent.id != meta.id {
-                    // Newly split region need parent's mem-table.
-                    let parent_data = self.shards.get(&parent.id).unwrap().get_data();
-                    let shard = self.load_shard(meta).unwrap();
-                    let shard_data = shard.get_data();
-                    let new_data = ShardData::new(
-                        shard_data.start.clone(),
-                        shard_data.end.clone(),
-                        shard_data.del_prefixes.clone(),
-                        shard.split_mem_tables(&parent_data.mem_tbls),
-                        shard_data.l0_tbls.clone(),
-                        shard_data.cfs.clone(),
-                    );
-                    shard.set_data(new_data);
+                    self.load_with_parent_mem_tables(meta);
                 }
             }
         }
@@ -173,6 +161,11 @@ impl Engine {
             let token_tx = token_tx.clone();
             token_rx.recv().unwrap();
             std::thread::spawn(move || {
+                if let Some(parent) = &meta.parent {
+                    if parent.id == meta.id {
+                        engine.load_with_parent_mem_tables(&meta);
+                    }
+                }
                 let shard = engine.load_shard(&meta).unwrap();
                 recoverer.recover(&engine, &shard, &meta).unwrap();
                 token_tx.send(true).unwrap();
@@ -182,6 +175,22 @@ impl Engine {
             token_rx.recv().unwrap();
         }
         Ok(())
+    }
+
+    fn load_with_parent_mem_tables(&self, meta: &ShardMeta) {
+        let parent_id = meta.parent.as_ref().unwrap().id;
+        let parent_data = self.shards.get(&parent_id).unwrap().get_data();
+        let shard = self.load_shard(&meta).unwrap();
+        let shard_data = shard.get_data();
+        let new_data = ShardData::new(
+            shard_data.start.clone(),
+            shard_data.end.clone(),
+            shard_data.del_prefixes.clone(),
+            shard.split_mem_tables(&parent_data.mem_tbls),
+            shard_data.l0_tbls.clone(),
+            shard_data.cfs.clone(),
+        );
+        shard.set_data(new_data);
     }
 
     pub fn set_engine_id(&self, engine_id: u64) {
