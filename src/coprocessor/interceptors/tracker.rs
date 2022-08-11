@@ -7,42 +7,38 @@ use std::{
 };
 
 use pin_project::pin_project;
-use tikv_kv::Engine;
 
 use crate::coprocessor::tracker::Tracker as CopTracker;
 
-pub fn track<'a, F: Future + 'a, E: Engine>(
+pub fn track<'a, F: Future + 'a>(
     fut: F,
-    cop_tracker: &'a mut CopTracker<E>,
+    cop_tracker: &'a mut CopTracker,
 ) -> impl Future<Output = F::Output> + 'a {
     Tracker::new(fut, cop_tracker)
 }
 
 #[pin_project]
-struct Tracker<'a, F, E>
+struct Tracker<'a, F>
 where
     F: Future,
-    E: Engine,
 {
     #[pin]
     fut: F,
-    cop_tracker: &'a mut CopTracker<E>,
+    cop_tracker: &'a mut CopTracker,
 }
 
-impl<'a, F, E> Tracker<'a, F, E>
+impl<'a, F> Tracker<'a, F>
 where
     F: Future,
-    E: Engine,
 {
-    fn new(fut: F, cop_tracker: &'a mut CopTracker<E>) -> Self {
+    fn new(fut: F, cop_tracker: &'a mut CopTracker) -> Self {
         Tracker { fut, cop_tracker }
     }
 }
 
-impl<'a, F, E> Future for Tracker<'a, F, E>
+impl<'a, F: Future> Future for Tracker<'a, F>
 where
     F: Future,
-    E: Engine,
 {
     type Output = F::Output;
 

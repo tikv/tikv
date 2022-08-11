@@ -14,7 +14,6 @@ use std::{
 use fail::fail_point;
 use futures::channel::oneshot::{self, Canceled};
 use prometheus::{IntCounter, IntGauge};
-use tracker::TrackedFuture;
 use yatp::task::future;
 
 pub type ThreadPool = yatp::ThreadPool<future::TaskCell>;
@@ -82,7 +81,7 @@ impl FuturePool {
     where
         F: Future + Send + 'static,
     {
-        self.inner.spawn(TrackedFuture::new(future))
+        self.inner.spawn(future)
     }
 
     /// Spawns a future in the pool and returns a handle to the result of the future.
@@ -96,7 +95,7 @@ impl FuturePool {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        self.inner.spawn_handle(TrackedFuture::new(future))
+        self.inner.spawn_handle(future)
     }
 }
 
