@@ -317,6 +317,10 @@ impl MiscExt for RocksEngine {
         ))
     }
 
+    fn get_range_puts(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<u64>> {
+        Ok(crate::properties::get_range_puts(self, cf, start, end))
+    }
+
     fn is_stalled_or_stopped(&self) -> bool {
         const ROCKSDB_IS_WRITE_STALLED: &str = "rocksdb.is-write-stalled";
         const ROCKSDB_IS_WRITE_STOPPED: &str = "rocksdb.is-write-stopped";

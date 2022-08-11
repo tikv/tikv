@@ -106,6 +106,9 @@ pub struct Config {
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_tombstones_percent: u64,
+    /// Threshold of stale versions to trigger manual compaction.
+    /// Should be larger than 1.
+    pub region_compact_stale_versions_threshold: f64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -323,6 +326,7 @@ impl Default for Config {
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
+            region_compact_stale_versions_threshold: 1.1,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -578,6 +582,13 @@ impl Config {
             ));
         }
 
+        if self.region_compact_stale_versions_threshold < 0.0 {
+            return Err(box_err!(
+                "region-compact-stale-versions-threshold must be greater than 0, current value is {}",
+                self.region_compact_stale_versions_threshold
+            ));
+        }
+
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
         }
@@ -788,6 +799,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["region_compact_tombstones_percent"])
             .set(self.region_compact_tombstones_percent as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["region_compact_stale_versions_threshold"])
+            .set(self.region_compact_stale_versions_threshold as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["pd_heartbeat_tick_interval"])
             .set(self.pd_heartbeat_tick_interval.as_secs_f64());

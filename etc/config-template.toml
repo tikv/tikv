@@ -427,10 +427,14 @@
 # region-compact-min-tombstones = 10000
 
 ## The minimum percentage of delete tombstones to trigger manual compaction.
-## It should be set between 1 and 100. Manual compaction is only triggered when the number of
+## It should be set between 1 and 100. Manual compaction is triggered when the number of
 ## delete tombstones exceeds `region-compact-min-tombstones` and the percentage of delete tombstones
 ## exceeds `region-compact-tombstones-percent`.
 # region-compact-tombstones-percent = 30
+
+## The threshold of stale versions to trigger manual compaction.
+## It should be greater than 1.0.
+# region_compact_stale_versions_threshold = 1.1
 
 ## Interval to check whether to start a manual compaction for Lock Column Family.
 ## If written bytes reach `lock-cf-compact-bytes-threshold` for Lock Column Family, TiKV will

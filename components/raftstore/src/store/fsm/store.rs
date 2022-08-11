@@ -2302,6 +2302,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 ranges: ranges_need_check,
                 tombstones_num_threshold: self.ctx.cfg.region_compact_min_tombstones,
                 tombstones_percent_threshold: self.ctx.cfg.region_compact_tombstones_percent,
+                stale_versions_ratio_threshold: self
+                    .ctx
+                    .cfg
+                    .region_compact_stale_versions_threshold,
             },
         )) {
             error!(

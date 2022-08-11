@@ -192,6 +192,7 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
+        region_compact_stale_versions_threshold: 1.3,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,

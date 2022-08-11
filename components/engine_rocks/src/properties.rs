@@ -534,6 +534,34 @@ pub fn get_range_entries_and_versions(
     Some((num_entries, props.num_versions))
 }
 
+pub fn get_range_puts(
+    engine: &crate::RocksEngine,
+    cf: &str,
+    start: &[u8],
+    end: &[u8],
+) -> Option<u64> {
+    let range = Range::new(start, end);
+    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    if collection.is_empty() {
+        return None;
+    }
+
+    // Aggregate total MVCC properties and get the puts in range.
+    let mut props = MvccProperties::new();
+    for (_, v) in collection.iter() {
+        let mvcc = match RocksMvccProperties::decode(v.user_collected_properties()) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        props.add(&mvcc);
+    }
+
+    Some(props.num_puts)
+}
 #[cfg(test)]
 mod tests {
     use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};

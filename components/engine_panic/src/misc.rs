@@ -75,6 +75,10 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn get_range_puts(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<u64>> {
+        panic!()
+    }
+
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }

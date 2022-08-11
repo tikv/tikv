@@ -30,6 +30,7 @@ pub enum Task {
         // The minimum RocksDB tombstones a range that need compacting has
         tombstones_num_threshold: u64,
         tombstones_percent_threshold: u64,
+        stale_versions_ratio_threshold: f64,
     },
 }
 
@@ -57,6 +58,7 @@ impl Display for Task {
                 ref ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                stale_versions_ratio_threshold,
             } => f
                 .debug_struct("CheckAndCompact")
                 .field("cf_names", cf_names)
@@ -71,6 +73,10 @@ impl Display for Task {
                 .field(
                     "tombstones_percent_threshold",
                     &tombstones_percent_threshold,
+                )
+                .field(
+                    "stale_versions_ratio_threshold",
+                    &stale_versions_ratio_threshold,
                 )
                 .finish(),
         }
@@ -146,11 +152,13 @@ where
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                stale_versions_ratio_threshold,
             } => match collect_ranges_need_compact(
                 &self.engine,
                 ranges,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                stale_versions_ratio_threshold,
             ) {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
@@ -177,9 +185,19 @@ where
 fn need_compact(
     num_entires: u64,
     num_versions: u64,
+    num_puts: u64,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
+    stale_versions_ratio_threshold: f64,
 ) -> bool {
+    // When there are too many stale MVCC, this range need compacting.
+    // Skip this check if stale_versions_ratio_threshold is less than 1.0
+    if stale_versions_ratio_threshold > 1.0
+        && num_versions as f64 > num_puts as f64 * stale_versions_ratio_threshold
+    {
+        return true;
+    }
+
     if num_entires <= num_versions {
         return false;
     }
@@ -196,6 +214,7 @@ fn collect_ranges_need_compact(
     ranges: Vec<Key>,
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
+    stale_versions_ratio_threshold: f64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
     // Check the SST properties for each range, and TiKV will compact a range if the
     // range contains too many RocksDB tombstones. TiKV will merge multiple
@@ -206,14 +225,17 @@ fn collect_ranges_need_compact(
     for range in ranges.windows(2) {
         // Get total entries and total versions in this range and checks if it needs to
         // be compacted.
-        if let Some((num_ent, num_ver)) =
-            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
-        {
+        if let (Some((num_ent, num_ver)), Some(num_puts)) = (
+            box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1])),
+            box_try!(engine.get_range_puts(CF_WRITE, &range[0], &range[1])),
+        ) {
             if need_compact(
                 num_ent,
                 num_ver,
+                num_puts,
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
+                stale_versions_ratio_threshold,
             ) {
                 if compact_start.is_none() {
                     // The previous range doesn't need compacting.
@@ -384,6 +406,7 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
+            1.3,
         )
         .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
@@ -411,6 +434,7 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
+            1.3,
         )
         .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
