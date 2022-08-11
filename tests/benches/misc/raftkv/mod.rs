@@ -73,7 +73,7 @@ impl SyncBenchRouter {
 
 impl WritePreChecker for SyncBenchRouter {
     fn pre_send_write_to(&self, _region_id: u64) -> Result<()> {
-        // TODO(cosven): implement it lator.
+        // TODO(cosven): implement this method when needed.
         Ok(())
     }
 }

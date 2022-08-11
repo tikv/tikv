@@ -10,7 +10,7 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
-use tikv_util::time::ThreadReadId;
+use tikv_util::{error, time::ThreadReadId};
 
 use crate::{
     store::{
@@ -130,10 +130,7 @@ where
 
 /// A checker do some checking before routing raft write requests.
 pub trait WritePreChecker: Send + Clone {
-    /// Before sending write command to the given region.
-    ///
-    /// Just like other pre_xxx methods, prechecking or pre-hooks can be done
-    /// here.
+    /// Check before sending write command to the given region.
     fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()>;
 }
 
@@ -223,14 +220,12 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
 
 impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK, ER> {
     fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
-        // TODO(cosven): store_meta is used too much. I'm afraid this lock may be
-        // acquired too frequently. Do TPCC perf test lator.
+        // Note that the store_meta instance is shared and used by many other code
+        // currently. If this is called too frequently, there is possibility of
+        // performance regression.
         let meta = self.store_meta.lock().unwrap();
-        // Currently only return NotLeader error when the leader info exists.
-        // The leader info should exist.
-        //
-        // Maybe just return NotLeader in case there is no leader info???
-        // TODO(cosven): eagerly or conservatively???
+
+        // The leader info should always exist.
         if let Some(leader_info) = meta.region_leaders.get(&region_id) {
             match leader_info.leader_peer() {
                 Some(peer) => {
@@ -240,11 +235,15 @@ impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK,
                     }
                 }
                 None => {
-                    // Leader is unknown.
+                    // Leader is unknown. For example, when the store is network partitioned,
+                    // the region leader is unknown.
                     return Err(RaftStoreError::NotLeader(region_id, None));
                 }
             }
         }
+        // In case the leader info does not exist, just return ok and
+        // let raftstore handle the write request as usual.
+        error!("no region leader info found for region"; "region_id" => region_id);
         Ok(())
     }
 }

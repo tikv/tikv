@@ -362,7 +362,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router, local_reader, store_meta.clone());
+        let router = ServerRaftStoreRouter::new(router, local_reader, store_meta);
         self.trans
             .core
             .lock()

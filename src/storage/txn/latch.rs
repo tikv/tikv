@@ -194,13 +194,14 @@ impl Latches {
         lock.acquired()
     }
 
-    /// Tries to acquire the latches specified by the `lock` for command with ID
-    /// `who`. If any one of the latch is not required, rollback all the
-    /// latches.
+    /// Try to acquire all the latches specified by the `lock` for command with
+    /// ID `who`. If any latch is failed to acquire, release all acquired
+    /// latch.
     pub fn acquire_all_or_none(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_hashes: Vec<u64> = vec![];
 
-        // Try to acquire all latches. If anyone is not acquired, break.
+        // Try to acquire all latches and records corresponding key_hashes.
+        // If anyone is not acquired, break.
         for &key_hash in &lock.required_hashes[lock.owned_count..] {
             let mut latch = self.lock_latch(key_hash);
             match latch.get_first_req_by_hash(key_hash) {
@@ -219,7 +220,7 @@ impl Latches {
         }
         lock.owned_count += acquired_hashes.len();
 
-        // Rollback acquired latch.
+        // Release acquired latches.
         if !lock.acquired() {
             for &key_hash in acquired_hashes.iter() {
                 let mut latch = self.lock_latch(key_hash);

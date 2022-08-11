@@ -48,7 +48,9 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
@@ -415,7 +417,70 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_command(&self, cmd: Command, callback: StorageCallback, need_precheck: bool) {
+    fn run_deadline_checker(&self, cid: u64, deadline: Deadline) {
+        let sched = self.clone();
+        self.inner
+            .high_priority_pool
+            .pool
+            .spawn(async move {
+                GLOBAL_TIMER_HANDLE
+                    .delay(deadline.to_std_instant())
+                    .compat()
+                    .await
+                    .unwrap();
+                let cb = sched
+                    .inner
+                    .get_task_slot(cid)
+                    .get_mut(&cid)
+                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
+                if let Some(cb) = cb {
+                    cb.execute(ProcessResult::Failed {
+                        err: StorageErrorInner::DeadlineExceeded.into(),
+                    })
+                }
+            })
+            .unwrap();
+    }
+
+    /// Do some checking to decide whether fail fast or re-schedule.
+    fn fail_fast_or_reschedule(&self, cid: u64, cmd_ctx: Context) {
+        let sched = self.clone();
+        self.inner
+            .high_priority_pool
+            .pool
+            .spawn(async move {
+                let mut tctx = sched.inner.dequeue_task_context(cid);
+                let task = tctx.task.take().unwrap();
+                let cb = tctx.cb.take().unwrap();
+                let tag = task.cmd.tag();
+                match unsafe {
+                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                } {
+                    Err(e) => {
+                        // Precheck failed, return err early.
+                        let pr = ProcessResult::Failed {
+                            err: StorageError::from(e),
+                        };
+                        // The task is not scheduled, so the cb must not be none.
+                        Self::early_response(
+                            cid,
+                            cb,
+                            pr,
+                            tag,
+                            CommandStageKind::precheck_write_err,
+                        );
+                    }
+                    Ok(()) => {
+                        // Precheck passed, try to re-schedule the command with precheck disabled.
+                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                        sched.schedule_command(task.cmd, cb, false);
+                    }
+                }
+            })
+            .unwrap();
+    }
+
+    fn schedule_command(&self, cmd: Command, callback: StorageCallback, fail_fast: bool) {
         let cid = self.inner.gen_id();
         let tracker = get_tls_tracker_token();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
@@ -433,41 +498,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
 
-        if !need_precheck {
-            let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
-            if self.inner.latches.acquire(&mut tctx.lock, cid) {
-                fail_point!("txn_scheduler_acquire_success");
-                tctx.on_schedule();
-                let task = tctx.task.take().unwrap();
-                drop(task_slot);
-                self.execute(task);
-                return;
-            }
-            // Check task deadline in background.
-            let sched = self.clone();
-            self.inner
-                .high_priority_pool
-                .pool
-                .spawn(async move {
-                    GLOBAL_TIMER_HANDLE
-                        .delay(deadline.to_std_instant())
-                        .compat()
-                        .await
-                        .unwrap();
-                    let cb = sched
-                        .inner
-                        .get_task_slot(cid)
-                        .get_mut(&cid)
-                        .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
-                    if let Some(cb) = cb {
-                        cb.execute(ProcessResult::Failed {
-                            err: StorageErrorInner::DeadlineExceeded.into(),
-                        })
-                    }
-                })
-                .unwrap();
-        } else {
-            // Try to acquire all latches.
+        if fail_fast {
+            // In fail fast mode, execute task only when all latches are required.
+            //
+            // For general workloads such as TPC-C,
+            // which usually has less conflicts, there is little chance
+            // the request fail to acquire all latches.
             if self.inner.latches.acquire_all_or_none(&mut tctx.lock, cid) {
                 fail_point!("txn_scheduler_acquire_success");
                 tctx.on_schedule();
@@ -477,64 +513,32 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 return;
             }
 
-            // TODO(cosven): remove this log and refine the following comments.
-            // info!(
-            //     "acquire all or none failed";
-            //     "tag" => ?tag,
-            //     "cid" => cid,
-            // );
+            // One or more latches are not required, there must be another running request.
+            // The request may run properly or hang due to other problems.
+            // Do some prechecking to fail fast in case there are problems.
             //
-            // In local tpcc tests, I found the following `acquire_pessimistic_lock` and
-            // `check_txn_status` commands often reach this branch. `prewrite`,
-            // `commit` and `resolve_lock_lite` also have small chance.
-            //
-            // We can examine the ratio of the requests that have been prechecked by
-            // following metrics => (precheck_ok + precheck_err) / new
+            // For example, a request hangs in the following case, and following
+            // requests should fail fast.
+            // 1. schedule/send a command to peer which is leader at the moment.
+            // 2. the store is network partitioned, the peer becomes follower.
+            // 3. the command may hang, and the latches are acquired.
+            self.fail_fast_or_reschedule(cid, cmd_ctx);
+        } else {
+            let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
 
-            // If any latch if not required, the request must has write.
-            // There is samll possibility that the peer is not leader anymore, so do some
-            // prechecking.
-            let sched = self.clone();
-            self.inner
-                .high_priority_pool
-                .pool
-                .spawn(async move {
-                    // Do prechecking.
-                    match unsafe {
-                        with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
-                    } {
-                        Err(e) => {
-                            let mut tctx = sched.inner.dequeue_task_context(cid);
-                            let task = tctx.task.take().unwrap();
-                            let tag = task.cmd.tag();
-                            let pr = ProcessResult::Failed {
-                                err: StorageError::from(e),
-                            };
-                            // The task is not scheduled, so the cb must not be none.
-                            Self::early_response(
-                                cid,
-                                tctx.cb.unwrap(),
-                                pr,
-                                tag,
-                                CommandStageKind::precheck_err,
-                            );
-                        }
-                        Ok(()) => {
-                            // Precheck passed, re-schedule the command.
-                            //
-                            // TODO(cosven): maybe add a `schedule_with_task_context` function
-                            // to avoid: enqueue -> dequeue -> re-enqueue.
-                            SCHED_STAGE_COUNTER_VEC.get(tag).precheck_ok.inc();
-                            let mut tctx = sched.inner.dequeue_task_context(cid);
-                            let task = tctx.task.take().unwrap();
-                            let cb = tctx.cb.take().unwrap();
-                            sched.schedule_command(task.cmd, cb, false);
-                        }
-                    }
-                })
-                .unwrap();
+            // Acquire latches for the task as possible, and leave it in the task slot.
+            // It will be waked up when remain latches are available.
+            if self.inner.latches.acquire(&mut tctx.lock, cid) {
+                fail_point!("txn_scheduler_acquire_success");
+                tctx.on_schedule();
+                let task = tctx.task.take().unwrap();
+                drop(task_slot);
+                self.execute(task);
+                return;
+            }
+            self.run_deadline_checker(cid, deadline);
+            fail_point!("txn_scheduler_acquire_fail");
         }
-        fail_point!("txn_scheduler_acquire_fail");
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches
