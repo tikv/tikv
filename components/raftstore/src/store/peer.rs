@@ -2214,6 +2214,15 @@ where
             let leader_info = LocalLeaderInfo::new(leader_id, term, self.region());
             meta.region_leaders.insert(self.region_id, leader_info);
         }
+
+        {
+            let mut region_leaders = ctx.region_leaders.write().unwrap();
+            if self.peer_id() == leader_id {
+                region_leaders.insert(self.region_id);
+            } else {
+                region_leaders.remove(&self.region_id);
+            }
+        }
     }
 
     #[inline]

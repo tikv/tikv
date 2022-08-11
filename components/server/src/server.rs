@@ -20,7 +20,7 @@ use std::{
     str::FromStr,
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Mutex, RwLock,
     },
     time::Duration,
     u64,
@@ -34,6 +34,7 @@ use backup_stream::{
 };
 use causal_ts::{BatchTsoProvider, CausalTsProvider};
 use cdc::{CdcConfigManager, MemoryQuota};
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -239,6 +240,7 @@ struct TikvServer<ER: RaftEngine> {
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
     engines: Engines<EK, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
     engine: RaftKv<EK, ServerRaftStoreRouter<EK, ER>>,
 }
 
@@ -561,6 +563,7 @@ where
 
     fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
+        let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
                 self.router.clone(),
@@ -570,6 +573,7 @@ where
                     self.router.clone(),
                 ),
                 store_meta.clone(),
+                region_leaders.clone(),
             ),
             engines.kv.clone(),
         );
@@ -577,6 +581,7 @@ where
         self.engines = Some(TikvEngines {
             engines,
             store_meta,
+            region_leaders,
             engine,
         });
     }
@@ -1019,6 +1024,7 @@ where
             snap_mgr,
             pd_worker,
             engines.store_meta.clone(),
+            engines.region_leaders.clone(),
             self.coprocessor_host.clone().unwrap(),
             importer.clone(),
             split_check_scheduler,

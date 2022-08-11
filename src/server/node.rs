@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
@@ -189,6 +190,7 @@ where
         snap_mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -225,6 +227,7 @@ where
             snap_mgr,
             pd_worker,
             store_meta,
+            region_leaders,
             coprocessor_host,
             importer,
             split_check_scheduler,
@@ -466,6 +469,7 @@ where
         snap_mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -495,6 +499,7 @@ where
             snap_mgr,
             pd_worker,
             store_meta,
+            region_leaders,
             coprocessor_host,
             importer,
             split_check_scheduler,

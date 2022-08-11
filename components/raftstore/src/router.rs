@@ -3,14 +3,15 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::RefCell,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
+use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
-use tikv_util::{error, time::ThreadReadId};
+use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
@@ -186,6 +187,8 @@ where
     local_reader:
         RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
     store_meta: Arc<Mutex<StoreMeta>>,
+    /// Region leader ids set on the store.
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -198,6 +201,7 @@ where
             router: self.router.clone(),
             local_reader: self.local_reader.clone(),
             store_meta: self.store_meta.clone(),
+            region_leaders: self.region_leaders.clone(),
         }
     }
 }
@@ -208,43 +212,24 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
         router: RaftRouter<EK, ER>,
         reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
             store_meta,
+            region_leaders,
         }
     }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK, ER> {
     fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
-        // Note that the store_meta instance is shared and used by many other code
-        // currently. If this is called too frequently, there is possibility of
-        // performance regression.
-        let meta = self.store_meta.lock().unwrap();
-
-        // The leader info should always exist.
-        if let Some(leader_info) = meta.region_leaders.get(&region_id) {
-            match leader_info.leader_peer() {
-                Some(peer) => {
-                    // The local peer is not leader.
-                    if peer.get_store_id() != meta.store_id.unwrap() {
-                        return Err(RaftStoreError::NotLeader(region_id, Some(peer.clone())));
-                    }
-                }
-                None => {
-                    // Leader is unknown. For example, when the store is network partitioned,
-                    // the region leader is unknown.
-                    return Err(RaftStoreError::NotLeader(region_id, None));
-                }
-            }
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(RaftStoreError::NotLeader(region_id, None)),
         }
-        // In case the leader info does not exist, just return ok and
-        // let raftstore handle the write request as usual.
-        error!("no region leader info found for region"; "region_id" => region_id);
-        Ok(())
     }
 }
 
