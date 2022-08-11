@@ -621,20 +621,11 @@ impl PdConnector {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
-<<<<<<< HEAD
-                        let new_cluster_id = r.get_header().get_cluster_id();
-                        if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to loop the rest members
-                            if r.has_leader() {
-                                return Ok(r);
-                            }
-=======
                         let header = r.get_header();
                         // Try next follower endpoint if the cluster has not ready since this pr:
                         // pd#5412.
                         if let Err(e) = check_resp_header(header) {
                             error!("connect pd failed";"endpoints" => ep, "error" => ?e);
->>>>>>> 693ae46f2... pd-client: tikv should continue if cluster-id is zero. (#13242)
                         } else {
                             let new_cluster_id = header.get_cluster_id();
                             // it is new cluster if the new cluster id is zero.
