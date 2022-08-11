@@ -60,7 +60,7 @@ fn test_deadline_3() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = {
+    let (_, endpoint, _) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let cfg = tikv::server::Config {
             end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
@@ -174,7 +174,7 @@ fn test_region_error_in_scan() {
     let (_cluster, raft_engine, mut ctx) = new_raft_engine(1, "");
     ctx.set_isolation_level(IsolationLevel::Si);
 
-    let (_, endpoint) =
+    let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     fail::cfg("region_snapshot_seek", "return()").unwrap();
