@@ -144,6 +144,21 @@ impl Engine {
                     let parent_shard = self.load_shard(parent)?;
                     recoverer.recover(self, &parent_shard, parent)?;
                 }
+                if parent.id != meta.id {
+                    // Newly split region need parent's mem-table.
+                    let parent_data = self.shards.get(&parent.id).unwrap().get_data();
+                    let shard = self.load_shard(meta).unwrap();
+                    let shard_data = shard.get_data();
+                    let new_data = ShardData::new(
+                        shard_data.start.clone(),
+                        shard_data.end.clone(),
+                        shard_data.del_prefixes.clone(),
+                        shard.split_mem_tables(&parent_data.mem_tbls),
+                        shard_data.l0_tbls.clone(),
+                        shard_data.cfs.clone(),
+                    );
+                    shard.set_data(new_data);
+                }
             }
         }
         let concurrency = num_cpus::get();

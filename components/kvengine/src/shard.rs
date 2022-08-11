@@ -221,12 +221,10 @@ impl Shard {
         data.get_all_files()
     }
 
-    pub fn split_mem_tables(&self, old_mem_tbls: &[CFTable]) -> Vec<CFTable> {
-        let mut new_mem_tbls = Vec::with_capacity(old_mem_tbls.len());
-        for old_mem_tbl in old_mem_tbls {
-            if old_mem_tbl.is_empty()
-                || old_mem_tbl.has_data_in_range(self.start.chunk(), self.end.chunk())
-            {
+    pub fn split_mem_tables(&self, parent_mem_tbls: &[CFTable]) -> Vec<CFTable> {
+        let mut new_mem_tbls = vec![CFTable::new()];
+        for old_mem_tbl in parent_mem_tbls {
+            if old_mem_tbl.has_data_in_range(self.start.chunk(), self.end.chunk()) {
                 new_mem_tbls.push(old_mem_tbl.new_split());
             }
         }

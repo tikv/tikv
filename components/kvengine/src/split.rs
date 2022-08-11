@@ -7,7 +7,7 @@ use dashmap::mapref::entry::Entry;
 use kvenginepb as pb;
 use slog_global::info;
 
-use crate::{table::memtable::CFTable, *};
+use crate::*;
 
 impl Engine {
     pub fn split(&self, mut cs: pb::ChangeSet, initial_seq: u64) -> Result<()> {
@@ -62,12 +62,7 @@ impl Engine {
         }
         let old_data = old_shard.get_data();
         for new_shard in &new_shards {
-            let mut new_mem_tbls = vec![CFTable::new()];
-            for mem_tbl in &old_data.mem_tbls {
-                if mem_tbl.has_data_in_range(new_shard.start.chunk(), new_shard.end.chunk()) {
-                    new_mem_tbls.push(mem_tbl.new_split());
-                }
-            }
+            let new_mem_tbls = new_shard.split_mem_tables(&old_data.mem_tbls);
             let mut new_l0s = vec![];
             for l0 in &old_data.l0_tbls {
                 if new_shard.overlap_table(l0.smallest(), l0.biggest()) {
