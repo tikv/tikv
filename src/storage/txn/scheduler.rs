@@ -500,38 +500,37 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .pool
                 .spawn(async move {
                     // Do prechecking.
-                    unsafe {
-                        with_tls_engine(|engine: &E| {
-                            // Precheck failed.
-                            if let Err(e) = engine.precheck_write_with_ctx(&cmd_ctx) {
-                                let mut tctx = sched.inner.dequeue_task_context(cid);
-                                let task = tctx.task.take().unwrap();
-                                let tag = task.cmd.tag();
-                                let pr = ProcessResult::Failed {
-                                    err: StorageError::from(e),
-                                };
-                                // The task is not scheduled, so the cb must not be none.
-                                Self::early_response(
-                                    cid,
-                                    tctx.cb.unwrap(),
-                                    pr,
-                                    tag,
-                                    CommandStageKind::precheck_err,
-                                );
-                                return;
-                            }
-                        });
-                    };
-
-                    // Precheck passed, re-schedule the command.
-                    //
-                    // TODO(cosven): maybe add a `schedule_with_task_context` function
-                    // to avoid dequeue and re-schedule.
-                    SCHED_STAGE_COUNTER_VEC.get(tag).precheck_ok.inc();
-                    let mut tctx = sched.inner.dequeue_task_context(cid);
-                    let task = tctx.task.take().unwrap();
-                    let cb = tctx.cb.take().unwrap();
-                    sched.schedule_command(task.cmd, cb, false);
+                    match unsafe {
+                        with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                    } {
+                        Err(e) => {
+                            let mut tctx = sched.inner.dequeue_task_context(cid);
+                            let task = tctx.task.take().unwrap();
+                            let tag = task.cmd.tag();
+                            let pr = ProcessResult::Failed {
+                                err: StorageError::from(e),
+                            };
+                            // The task is not scheduled, so the cb must not be none.
+                            Self::early_response(
+                                cid,
+                                tctx.cb.unwrap(),
+                                pr,
+                                tag,
+                                CommandStageKind::precheck_err,
+                            );
+                        }
+                        Ok(()) => {
+                            // Precheck passed, re-schedule the command.
+                            //
+                            // TODO(cosven): maybe add a `schedule_with_task_context` function
+                            // to avoid: enqueue -> dequeue -> re-enqueue.
+                            SCHED_STAGE_COUNTER_VEC.get(tag).precheck_ok.inc();
+                            let mut tctx = sched.inner.dequeue_task_context(cid);
+                            let task = tctx.task.take().unwrap();
+                            let cb = tctx.cb.take().unwrap();
+                            sched.schedule_command(task.cmd, cb, false);
+                        }
+                    }
                 })
                 .unwrap();
         }
