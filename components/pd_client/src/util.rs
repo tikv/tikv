@@ -484,13 +484,6 @@ where
 {
     loop {
         let ret = {
-<<<<<<< HEAD
-            // Drop the read lock immediately to prevent the deadlock between the caller thread
-            // which may hold the read lock and wait for PD client thread completing the request
-            // and the PD client thread which may block on acquiring the write lock.
-            let client_stub = client.inner.rl().client_stub.clone();
-            func(&client_stub).map_err(Error::Grpc)
-=======
             // Drop the read lock immediately to prevent the deadlock between the caller
             // thread which may hold the read lock and wait for PD client thread
             // completing the request and the PD client thread which may block
@@ -501,7 +494,6 @@ where
             };
 
             func(&client_stub, option).map_err(Error::Grpc)
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
         };
         match ret {
             Ok(r) => {
