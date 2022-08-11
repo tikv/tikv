@@ -603,6 +603,12 @@ impl PdConnector {
         }
     }
 
+    // load_members returns the pd members by calling getMember, there are three
+    // scene for the reponse: header is error: the pd is not ready to server.
+    // cluster id is different: avoid to connect the different cluster.
+    // cluster id is zero:  etcd start server but the follower did not get cluster
+    // id already. about this case, load_members returns error, so the client
+    // will not update client address.
     pub async fn load_members(&self, previous: &GetMembersResponse) -> Result<GetMembersResponse> {
         let previous_leader = previous.get_leader();
         let members = previous.get_members();
@@ -618,8 +624,8 @@ impl PdConnector {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
                         let header = r.get_header();
-                        // PD will return  ErrorType::NotBootstrapped
-                        // if the cluster has not ready since this pr: pd#5412.
+                        // Try next follower endpoint if the cluster has not ready since this pr:
+                        // pd#5412.
                         if let Err(e) = check_resp_header(header) {
                             error!("connect pd failed";"endpoints" => ep, "error" => ?e);
                         } else {
@@ -630,11 +636,10 @@ impl PdConnector {
                                 if r.has_leader() {
                                     return Ok(r);
                                 }
-                            // Before pd #5412, PD server returns no error but
-                            // the cluster id is zero,
-                            // so it should not panic and try next pd follower.
+                            // Try next follower endpoint if PD server returns
+                            // the cluster id is zero without any error.
                             } else if new_cluster_id == 0 {
-                                warn!("{} connect success, but cluster id is not ready", ep);
+                                error!("{} connect success, but cluster id is not ready", ep);
                             } else {
                                 panic!(
                                     "{} no longer belongs to cluster {}, it is in {}",
