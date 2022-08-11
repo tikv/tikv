@@ -5,14 +5,11 @@
 use std::{cell::RefCell, mem, sync::Arc};
 
 use collections::HashMap;
-use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
 use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
 use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
-use tikv_kv::{with_tls_engine, Engine};
-use tracker::get_tls_tracker_token;
 
 use crate::{
     server::metrics::{GcKeysCF as ServerGcKeysCF, GcKeysDetail as ServerGcKeysDetail},
@@ -297,65 +294,6 @@ impl From<ServerGcKeysDetail> for GcKeysDetail {
             ServerGcKeysDetail::raw_value_tombstone => GcKeysDetail::raw_value_tombstone,
         }
     }
-}
-
-// Safety: It should be only called when the thread-local engine exists.
-pub unsafe fn with_perf_context<E: Engine, Fn, T>(cmd: CommandKind, f: Fn) -> T
-where
-    Fn: FnOnce() -> T,
-{
-    thread_local! {
-        static GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static BATCH_GET: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static BATCH_GET_COMMAND: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static SCAN: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static PREWRITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static ACQUIRE_PESSIMISTIC_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static COMMIT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static CLEANUP: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static PESSIMISTIC_ROLLBACK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static TXN_HEART_BEAT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static CHECK_TXN_STATUS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static CHECK_SECONDARY_LOCKS: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static SCAN_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static RESOLVE_LOCK: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-        static RESOLVE_LOCK_LITE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-    }
-    let tls_cell = match cmd {
-        CommandKind::get => &GET,
-        CommandKind::batch_get => &BATCH_GET,
-        CommandKind::batch_get_command => &BATCH_GET_COMMAND,
-        CommandKind::scan => &SCAN,
-        CommandKind::prewrite => &PREWRITE,
-        CommandKind::acquire_pessimistic_lock => &ACQUIRE_PESSIMISTIC_LOCK,
-        CommandKind::commit => &COMMIT,
-        CommandKind::cleanup => &CLEANUP,
-        CommandKind::rollback => &ROLLBACK,
-        CommandKind::pessimistic_rollback => &PESSIMISTIC_ROLLBACK,
-        CommandKind::txn_heart_beat => &TXN_HEART_BEAT,
-        CommandKind::check_txn_status => &CHECK_TXN_STATUS,
-        CommandKind::check_secondary_locks => &CHECK_SECONDARY_LOCKS,
-        CommandKind::scan_lock => &SCAN_LOCK,
-        CommandKind::resolve_lock => &RESOLVE_LOCK,
-        CommandKind::resolve_lock_lite => &RESOLVE_LOCK_LITE,
-        _ => return f(),
-    };
-    tls_cell.with(|c| {
-        let mut c = c.borrow_mut();
-        let perf_context = c.get_or_insert_with(|| {
-            with_tls_engine(|engine: &E| {
-                Box::new(engine.kv_engine().get_perf_context(
-                    PerfLevel::Uninitialized,
-                    PerfContextKind::Storage(cmd.get_str()),
-                ))
-            })
-        });
-        perf_context.start_observe();
-        let res = f();
-        perf_context.report_metrics(&[get_tls_tracker_token()]);
-        res
-    })
 }
 
 lazy_static! {

@@ -1930,19 +1930,10 @@ macro_rules! txn_command_future {
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
-            let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-                $req.get_context(),
-                RequestType::Unknown,
-                0,
-            )));
-            set_tls_tracker_token(tracker);
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);
 
             async move {
-                defer!{{
-                    GLOBAL_TRACKERS.remove(tracker);
-                }};
                 let $v = match res {
                     Err(e) => Err(e),
                     Ok(_) => f.await?,

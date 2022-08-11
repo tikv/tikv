@@ -6643,7 +6643,6 @@ name = "tracker"
 version = "0.0.1"
 dependencies = [
  "collections",
- "crossbeam-utils 0.8.8",
  "kvproto",
  "lazy_static",
  "parking_lot 0.12.0",

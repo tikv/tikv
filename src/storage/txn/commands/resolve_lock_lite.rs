@@ -36,7 +36,6 @@ command! {
 impl CommandExt for ResolveLockLite {
     ctx!();
     tag!(resolve_lock_lite);
-    request_type!(KvResolveLock);
     ts!(start_ts);
     property!(is_sys_cmd);
     write_bytes!(resolve_keys: multiple);

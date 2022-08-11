@@ -57,7 +57,6 @@ command! {
 impl CommandExt for CheckTxnStatus {
     ctx!();
     tag!(check_txn_status);
-    request_type!(KvCheckTxnStatus);
     ts!(lock_ts);
     write_bytes!(primary_key);
     gen_lock!(primary_key);

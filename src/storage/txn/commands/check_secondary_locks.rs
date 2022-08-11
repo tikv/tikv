@@ -41,7 +41,6 @@ command! {
 impl CommandExt for CheckSecondaryLocks {
     ctx!();
     tag!(check_secondary_locks);
-    request_type!(KvCheckSecondaryLocks);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

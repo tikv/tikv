@@ -2,7 +2,6 @@
 
 use std::{array, cell::Cell, fmt};
 
-use crossbeam_utils::CachePadded;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use slab::Slab;
@@ -30,16 +29,16 @@ fn next_shard_id() -> usize {
 }
 
 pub struct ShardedSlab {
-    shards: [CachePadded<Mutex<TrackerSlab>>; SLAB_SHARD_COUNT],
+    shards: [Mutex<TrackerSlab>; SLAB_SHARD_COUNT],
 }
 
 impl ShardedSlab {
     pub fn new(capacity_per_shard: usize) -> ShardedSlab {
         let shards = array::from_fn(|shard_id| {
-            CachePadded::new(Mutex::new(TrackerSlab::with_capacity(
+            Mutex::new(TrackerSlab::with_capacity(
                 shard_id as u32,
                 capacity_per_shard,
-            )))
+            ))
         });
         ShardedSlab { shards }
     }
