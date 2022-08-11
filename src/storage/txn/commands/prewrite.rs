@@ -215,7 +215,6 @@ impl Prewrite {
 impl CommandExt for Prewrite {
     ctx!();
     tag!(prewrite);
-    request_type!(KvPrewrite);
     ts!(start_ts);
 
     fn write_bytes(&self) -> usize {
@@ -380,7 +379,6 @@ impl PrewritePessimistic {
 impl CommandExt for PrewritePessimistic {
     ctx!();
     tag!(prewrite);
-    request_type!(KvPrewrite);
     ts!(start_ts);
 
     fn write_bytes(&self) -> usize {

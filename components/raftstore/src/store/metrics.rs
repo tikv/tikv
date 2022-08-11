@@ -355,12 +355,6 @@ lazy_static! {
             "Bucketed histogram of proposals' send to write queue duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
-    pub static ref STORE_WF_SEND_PROPOSAL_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_store_wf_send_proposal_duration_seconds",
-            "Bucketed histogram of proposals' waterfall send duration",
-            exponential_buckets(1e-6, 2.0, 26).unwrap()
-        ).unwrap();
     pub static ref STORE_WF_BEFORE_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_store_wf_before_write_duration_seconds",
@@ -429,21 +423,21 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
             "Bucketed histogram of peer applying log duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_wait_time_duration_secs",
             "Bucketed histogram of apply task wait time duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -494,7 +488,7 @@ lazy_static! {
             "tikv_raftstore_raft_process_duration_secs",
             "Bucketed histogram of peer processing raft duration.",
             &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref PEER_PROPOSE_LOG_SIZE_HISTOGRAM: Histogram =
@@ -525,7 +519,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref PEER_GC_RAFT_LOG_COUNTER: IntCounter =
@@ -655,7 +649,7 @@ lazy_static! {
             "tikv_raftstore_apply_perf_context_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
             &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec =
@@ -663,7 +657,7 @@ lazy_static! {
             "tikv_raftstore_store_perf_context_time_duration_secs",
             "Bucketed histogram of request wait time duration.",
             &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration=
@@ -755,7 +749,7 @@ lazy_static! {
             "tikv_raftstore_inspect_duration_seconds",
             "Bucketed histogram of inspect duration.",
             &["type"],
-            exponential_buckets(0.00001, 2.0, 26).unwrap()
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
     pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =

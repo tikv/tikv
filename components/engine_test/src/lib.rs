@@ -88,7 +88,7 @@ pub mod kv {
     #[cfg(feature = "test-engine-kv-rocksdb")]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
-        RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
+        RocksSnapshot as KvTestSnapshot, RocksWriteBatch as KvTestWriteBatch,
     };
     use engine_traits::{
         CFOptionsExt, ColumnFamilyOptions, Result, TabletAccessor, TabletFactory, CF_DEFAULT,
@@ -374,7 +374,6 @@ pub mod ctor {
     pub struct DBOptions {
         key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IORateLimiter>>,
-        enable_multi_batch_write: bool,
     }
 
     impl DBOptions {
@@ -384,10 +383,6 @@ pub mod ctor {
 
         pub fn set_rate_limiter(&mut self, rate_limiter: Option<Arc<IORateLimiter>>) {
             self.rate_limiter = rate_limiter;
-        }
-
-        pub fn set_enable_multi_batch_write(&mut self, enable: bool) {
-            self.enable_multi_batch_write = enable;
         }
     }
 
@@ -660,11 +655,6 @@ pub mod ctor {
             let mut rocks_db_opts = RawRocksDBOptions::new();
             let env = get_env(db_opts.key_manager.clone(), db_opts.rate_limiter)?;
             rocks_db_opts.set_env(env);
-            if db_opts.enable_multi_batch_write {
-                rocks_db_opts.enable_unordered_write(false);
-                rocks_db_opts.enable_pipelined_write(false);
-                rocks_db_opts.enable_multi_batch_write(true);
-            }
             let rocks_db_opts = RocksDBOptions::from_raw(rocks_db_opts);
             Ok(rocks_db_opts)
         }
