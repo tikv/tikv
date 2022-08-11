@@ -918,7 +918,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1458,7 +1458,7 @@ mod tests {
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        kv_engine.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
+        kv_engine.put(b"a1", b"val1").unwrap();
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
@@ -1489,16 +1489,20 @@ mod tests {
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         assert!(snap_cache.as_ref().is_some());
         assert_eq!(

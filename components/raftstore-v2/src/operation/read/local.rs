@@ -161,7 +161,6 @@ mod tests {
         RaftCommand,
     };
     use tempfile::{Builder, TempDir};
-    use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
     use txn_types::{Key, Lock, LockType, WriteBatchFlags};
@@ -213,7 +212,7 @@ mod tests {
             tablet1 = factory
                 .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet1.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
+            tablet1.put(b"a1", b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
@@ -226,7 +225,7 @@ mod tests {
             tablet2 = factory
                 .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet2.put_cf(CF_DEFAULT, b"a2", b"val2").unwrap();
+            tablet2.put(b"a2", b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);
         }
@@ -238,10 +237,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
-            snapshot
-                .get(&Key::from_encoded(b"a1".to_vec()))
-                .unwrap()
-                .unwrap()
+            *snapshot.get_value(b"a1").unwrap().unwrap()
         );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
@@ -251,10 +247,7 @@ mod tests {
         let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),
-            snapshot
-                .get(&Key::from_encoded(b"a2".to_vec()))
-                .unwrap()
-                .unwrap()
+            *snapshot.get_value(b"a2").unwrap().unwrap()
         );
     }
 }
