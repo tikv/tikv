@@ -819,6 +819,15 @@ where
         let router = self.range_router.clone();
         let store_id = self.store_id;
         async move {
+            #[cfg(feature = "failpoints")]
+            {
+                // fail-rs doesn't support async code blocks now.
+                // let's borrow the feature name and do it ourselves :3
+                if std::env::var("LOG_BACKUP_UGC_SLEEP_AND_RETURN").is_ok() {
+                    tokio::time::sleep(Duration::from_secs(100)).await;
+                    return;
+                }
+            }
             let ts = meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
