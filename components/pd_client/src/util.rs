@@ -618,6 +618,8 @@ impl PdConnector {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
                         let header = r.get_header();
+                        // PD will return  ErrorType::NotBootstrapped
+                        // if the cluster has not ready since this pr: pd#5412.
                         if let Err(e) = check_resp_header(header) {
                             error!("connect pd failed";"endpoints" => ep, "error" => ?e);
                         } else {
@@ -628,6 +630,9 @@ impl PdConnector {
                                 if r.has_leader() {
                                     return Ok(r);
                                 }
+                            // Before pd #5412, PD server returns no error but
+                            // the cluster id is zero,
+                            // so it should not panic and try next pd follower.
                             } else if new_cluster_id == 0 {
                                 warn!("{} connect success, but cluster id is not ready", ep);
                             } else {
