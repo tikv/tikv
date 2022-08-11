@@ -13,6 +13,7 @@
 
 use std::{
     cmp,
+    collections::HashMap,
     convert::TryFrom,
     env, fmt,
     net::SocketAddr,
@@ -44,7 +45,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletAccessor, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -97,8 +98,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
-        GRPC_THREAD_PREFIX,
+        KvEngineFactory, KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
+        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
@@ -1685,13 +1686,15 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
                 self.config.storage.block_cache.shared,
             )),
         );
-        self.tablet_factory = Some(factory);
+        self.tablet_factory = Some(factory.clone());
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, // max_samples_to_preserve
+            factory,
+            engines.raft.as_rocks_engine().cloned(),
+            180, // max_samples_to_preserve
         ));
 
         (engines, engines_info)
@@ -1841,8 +1844,13 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 }
 
 pub struct EnginesResourceInfo {
-    kv_engine: RocksEngine,
+    tablet_factory: Arc<KvEngineFactory>,
     raft_engine: Option<RocksEngine>,
+    // region_id -> (suffix, tablet)
+    // `update` is called perodically which needs this map for recording the latest tablet for each
+    // region and cached_latest_tablets is used to avoid memory allocation each time when
+    // calling `update`.
+    cached_latest_tablets: Arc<Mutex<HashMap<u64, (u64, RocksEngine)>>>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
@@ -1850,14 +1858,15 @@ pub struct EnginesResourceInfo {
 impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
-    fn new<CER: ConfiguredRaftEngine>(
-        engines: &Engines<RocksEngine, CER>,
+    fn new(
+        tablet_factory: Arc<KvEngineFactory>,
+        raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
-        let raft_engine = engines.raft.as_rocks_engine().cloned();
         EnginesResourceInfo {
-            kv_engine: engines.kv.clone(),
+            tablet_factory,
             raft_engine,
+            cached_latest_tablets: Arc::default(),
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
@@ -1884,9 +1893,41 @@ impl EnginesResourceInfo {
         if let Some(raft_engine) = &self.raft_engine {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
-        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
+
+        let mut cached_latest_tablets = self.cached_latest_tablets.as_ref().lock().unwrap();
+
+        self.tablet_factory
+            .for_each_opened_tablet(
+                &mut |id, suffix, db: &RocksEngine| match cached_latest_tablets.entry(id) {
+                    collections::HashMapEntry::Occupied(mut slot) => {
+                        if slot.get().0 < suffix {
+                            slot.insert((suffix, db.clone()));
+                        }
+                    }
+                    collections::HashMapEntry::Vacant(slot) => {
+                        slot.insert((suffix, db.clone()));
+                    }
+                },
+            );
+
+        // todo(SpadeA): Now, there's a potential race condition problem where the
+        // tablet could be destroyed after the clone and before the fetching
+        // which could result in programme panic. It's okay now as the single global
+        // kv_engine will not be destroyed in normal operation and v2 is not
+        // ready for operation. Furthermore, this race condition is general to v2 as
+        // tablet clone is not a case exclusively happened here. We should
+        // propose another PR to tackle it such as destory tablet lazily in a GC
+        // thread.
+
+        for (_, (_, tablet)) in cached_latest_tablets.iter() {
+            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+                fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
+            }
         }
+
+        // Clear ensures that these tablets are not hold forever.
+        cached_latest_tablets.clear();
+
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
