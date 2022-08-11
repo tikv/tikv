@@ -693,21 +693,21 @@ where
     }
 
     #[inline]
-    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn on_loop_finished(&mut self) {
-        let mut ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
-        let mut should_propose = self.ctx.sync_write_worker.is_some()
+        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
-        (|| {
+        let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",
                 self.ctx.sync_write_worker.is_none(),
-                |_| should_propose = false
-            )
-        })();
+                |_| true
+            );
+            false
+        };
         // Propose batch request which may be still waiting for more raft-command
-        if should_propose {
+        if should_propose && !force_delay_fp() {
             self.propose_pending_batch_raft_command();
         } else if self.fsm.batch_req_builder.has_proposed_cb
             && self.fsm.batch_req_builder.propose_checked.is_none()
