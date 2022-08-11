@@ -130,7 +130,7 @@ pub fn init_with_data(
     vals: &[(i64, Option<&str>, i64)],
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
     let (store, endpoint, _) = init_data_with_commit(tbl, vals, true);
-    return (store, endpoint);
+    (store, endpoint)
 }
 
 // Same as init_with_data except returned values include Arc<QuotaLimiter>
