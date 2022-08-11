@@ -4973,6 +4973,7 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        persist_when_pre_commit: Arc<AtomicBool>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -5056,7 +5057,7 @@ mod tests {
 
     impl RegionChangeObserver for ApplyObserver {
         fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
-            false
+            self.persist_when_pre_commit.load(Ordering::SeqCst)
         }
     }
 
@@ -5726,7 +5727,7 @@ mod tests {
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         let apply_res = fetch_apply_res(&rx);
 
-        // We don't persist when finish.
+        // We don't persist at `finish_for`, since we disabled `pre_commit`.
         let state: RaftApplyState = engine
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
             .unwrap()
@@ -5735,6 +5736,7 @@ mod tests {
             apply_res.apply_state.get_applied_index(),
             state.get_applied_index() + 1
         );
+        obs.persist_when_pre_commit.store(true, Ordering::SeqCst);
 
         // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
@@ -5755,6 +5757,16 @@ mod tests {
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
+
+        // We persist at `finish_for`, since we enabled `pre_commit`.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index()
+        );
 
         index_id += 1;
         // Don't filter CompactLog

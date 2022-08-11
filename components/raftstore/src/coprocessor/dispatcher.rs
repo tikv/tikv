@@ -583,6 +583,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    /// `pre_commit` is called we we want to persist data or meta for a region.
+    /// For example, in `finish_for` and `commit`,
+    /// we will separately call `pre_commit` with is_finished = true/false.
+    /// By returning false, we reject this persistence.
     pub fn pre_commit(&self, region: &Region, is_finished: bool) -> bool {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.region_change_observers {
