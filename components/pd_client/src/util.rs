@@ -490,8 +490,12 @@ where
             // thread which may hold the read lock and wait for PD client thread
             // completing the request and the PD client thread which may block
             // on acquiring the write lock.
-            let inner = client.inner.rl();
-            func(&inner.client_stub, call_option_inner(&inner)).map_err(Error::Grpc)
+            let (client_stub, option) = {
+                let inner = client.inner.rl();
+                (inner.client_stub.clone(), call_option_inner(&inner))
+            };
+
+            func(&client_stub, option).map_err(Error::Grpc)
         };
         match ret {
             Ok(r) => {
