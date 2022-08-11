@@ -66,6 +66,10 @@ fn test_select() {
     // for dag selection
     let req = DagSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
+    let mut total_chunk_size = 0;
+    for chunk in resp.get_chunks() {
+        total_chunk_size += chunk.get_rows_data().len();
+    }
     let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
@@ -77,7 +81,7 @@ fn test_select() {
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
-    assert!(limiter.total_read_bytes_consumed(true) > 0); // the consume_sample is called due to read bytes quota
+    assert_eq!(limiter.total_read_bytes_consumed(true), total_chunk_size); // the consume_sample is called due to read bytes quota
 }
 
 #[test]
