@@ -477,6 +477,20 @@ fn test_change_leader_async() {
 }
 
 #[test]
+fn test_pd_client_ok_when_cluster_not_ready() {
+    let pd_client_cluster_id_zero = "cluster_id_is_not_ready";
+    let server = MockServer::with_case(3, Arc::new(AlreadyBootstrapped));
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    fail::cfg(pd_client_cluster_id_zero, "return()").unwrap();
+    // wait 100ms to let client load member.
+    thread::sleep(Duration::from_millis(101));
+    assert_eq!(client.reconnect().is_err(), true);
+    fail::remove(pd_client_cluster_id_zero);
+}
+
+#[test]
 fn test_pd_client_heartbeat_send_failed() {
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
