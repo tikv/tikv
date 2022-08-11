@@ -537,8 +537,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 return;
             }
             self.run_deadline_checker(cid, deadline);
-            fail_point!("txn_scheduler_acquire_fail");
         }
+        fail_point!("txn_scheduler_acquire_fail");
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches
