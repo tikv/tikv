@@ -77,7 +77,7 @@ use super::{
     transport::Transport,
     util::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
-        Lease, LeaseState, LocalLeaderInfo, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     DestroyPeerJob, LocalReadContext,
 };
@@ -2208,13 +2208,7 @@ where
         self.read_progress
             .update_leader_info(leader_id, term, self.region());
 
-        // Update region leader info stored in store meta.
-        {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let leader_info = LocalLeaderInfo::new(leader_id, term, self.region());
-            meta.region_leaders.insert(self.region_id, leader_info);
-        }
-
+        // Update region leader info stored in poll context.
         {
             let mut region_leaders = ctx.region_leaders.write().unwrap();
             if self.peer_id() == leader_id {

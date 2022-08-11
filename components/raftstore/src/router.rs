@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     cell::RefCell,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use collections::HashSet;
@@ -15,7 +15,7 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::{store::StoreMeta, RaftRouter},
+        fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
         CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
         RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
@@ -186,7 +186,6 @@ where
     router: RaftRouter<EK, ER>,
     local_reader:
         RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
     /// Region leader ids set on the store.
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
@@ -200,7 +199,6 @@ where
         ServerRaftStoreRouter {
             router: self.router.clone(),
             local_reader: self.local_reader.clone(),
-            store_meta: self.store_meta.clone(),
             region_leaders: self.region_leaders.clone(),
         }
     }
@@ -211,14 +209,12 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     pub fn new(
         router: RaftRouter<EK, ER>,
         reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
         region_leaders: Arc<RwLock<HashSet<u64>>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
-            store_meta,
             region_leaders,
         }
     }
