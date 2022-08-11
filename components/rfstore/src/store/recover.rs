@@ -166,7 +166,10 @@ impl kvengine::RecoverHandler for RecoverHandler {
             }
             if req.has_admin_request() {
                 if req.get_admin_request().has_split() {
-                    // We are recovering an parent shard, the split is the last command, we can skip it and return now.
+                    // We are recovering an parent shard, we need to switch the mem-table for
+                    // children to copy.
+                    engine.switch_mem_table(&shard, meta.base_version + ctx.exec_log_index);
+                    // It is the last command for a parent shard, we should return here.
                     return Ok(());
                 }
                 Self::execute_admin_request(&mut applier, &mut ctx, req)?;

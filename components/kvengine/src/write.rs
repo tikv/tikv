@@ -102,7 +102,7 @@ impl WriteBatch {
 }
 
 impl Engine {
-    pub(crate) fn switch_mem_table(&self, shard: &Shard, version: u64) {
+    pub fn switch_mem_table(&self, shard: &Shard, version: u64) {
         let data = shard.get_data();
         let mem_table = data.get_writable_mem_table();
         if mem_table.is_empty() {
