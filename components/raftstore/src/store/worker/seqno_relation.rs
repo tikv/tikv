@@ -7,9 +7,11 @@ use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, Snapshot};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, RegionSequenceNumberRelation};
 use tikv_util::{
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
+    time::Instant,
     worker::Runnable,
 };
 
+use super::metrics::*;
 use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
     fsm::{store::ApplyResNotifier, ApplyNotifier, ApplyRes},
@@ -108,6 +110,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
     fn handle_sync_relations(&mut self, relations: HashMap<u64, SeqnoRelation>) {
         let mut relation = RegionSequenceNumberRelation::default();
+        let count = relations.len();
         for (region_id, r) in relations {
             assert!(r.seqno.number <= self.last_flushed_seqno);
             self.seqno_window.push(r.seqno);
@@ -116,6 +119,9 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             relation.set_sequence_number(r.seqno.number);
             self.wb.put_seqno_relation(region_id, &relation).unwrap();
         }
+        SEQNO_RELATIONS_KEYS_FLOW.inc_by(count as u64);
+        SEQNO_RELATIONS_WRITE_FLOW.inc_by(self.wb.persist_size() as u64);
+        let start = Instant::now();
         self.raftdb
             .consume_and_shrink(
                 &mut self.wb,
@@ -124,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 RAFT_WB_DEFAULT_SIZE,
             )
             .unwrap();
+        SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
         SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
     }
 }

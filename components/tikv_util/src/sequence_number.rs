@@ -65,6 +65,9 @@ pub struct SequenceNumberWindow {
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) {
         let start_delta = sn.start_counter.checked_sub(self.ack_counter).unwrap() as usize;
+        if start_delta == 0 {
+            return;
+        }
         if start_delta > self.pending_start_counter.len() {
             self.pending_start_counter.resize(start_delta, false);
         }
@@ -74,6 +77,10 @@ impl SequenceNumberWindow {
                 *value = SequenceNumber::max(*value, sn);
             })
             .or_insert(sn);
+        // info!(
+        //     "push seqno {:?} to window, pending_start_counter: {:?}, pending_sequence: {:?}, ack_counter: {}",
+        //     sn, self.pending_start_counter, self.pending_sequence, self.ack_counter,
+        // );
         self.pending_start_counter[start_delta - 1] = true;
         let mut acks = 0;
         for received in self.pending_start_counter.iter() {
