@@ -605,7 +605,7 @@ impl PdConnector {
 
     // load_members returns the PD members by calling getMember, there are two
     // abnormal scenes for the reponse:
-    // 1. header is error: the PD is not ready to server.
+    // 1. header has an error: the PD is not ready to serve.
     // 2. cluster id is zero: etcd start server but the follower did not get
     // cluster id yet.
     // In this case, load_members should return an error, so the client
@@ -631,14 +631,15 @@ impl PdConnector {
                             error!("connect pd failed";"endpoints" => ep, "error" => ?e);
                         } else {
                             let new_cluster_id = header.get_cluster_id();
-                            if new_cluster_id == cluster_id {
+                            // it is new cluster if the new cluster id is zero.
+                            if cluster_id == 0 || new_cluster_id == cluster_id {
                                 // check whether the response have leader info, otherwise continue
                                 // to loop the rest members
                                 if r.has_leader() {
                                     return Ok(r);
                                 }
-                            // Try next follower endpoint if PD server returns
-                            // the cluster id is zero without any error.
+                            // Try next endpoint if PD server returns the
+                            // cluster id is zero without any error.
                             } else if new_cluster_id == 0 {
                                 error!("{} connect success, but cluster id is not ready", ep);
                             } else {
