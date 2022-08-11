@@ -241,6 +241,7 @@ impl AcquirePessimisticLock {
         let mut res = PessimisticLockResults::with_capacity(total_keys);
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
+        let mut new_locked_keys = Vec::with_capacity(keys.len());
         for (index, (key, should_not_exist)) in keys.iter().enumerate() {
             let lock_key_ctx = PessimisticLockKeyContext::from_key(index, key);
             match acquire_pessimistic_lock(
@@ -259,6 +260,7 @@ impl AcquirePessimisticLock {
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
+                    new_locked_keys.push((params.start_ts, key.clone()));
                     if old_value.resolved() {
                         let key = key.clone().append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
@@ -284,6 +286,7 @@ impl AcquirePessimisticLock {
                         // The request is in legacy behavior. Do not lock previously succeeded keys.
                         txn.clear();
                         res.0.clear();
+                        new_locked_keys.clear();
                         res.push(PessimisticLockKeyResult::Waiting(Some(lock_info)));
                         break;
                     } else {
@@ -314,6 +317,7 @@ impl AcquirePessimisticLock {
             rows: written_rows,
             pr,
             released_locks: None,
+            new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })
@@ -337,6 +341,8 @@ impl AcquirePessimisticLock {
         let mut res = PessimisticLockResults::with_capacity(items.len());
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
         let mut old_values = OldValues::default();
+
+        let mut new_locked_keys = Vec::with_capacity(items.len());
 
         for item in items.into_iter() {
             let ResumedPessimisticLockItem {
@@ -391,6 +397,7 @@ impl AcquirePessimisticLock {
             ) {
                 Ok((key_res, old_value)) => {
                     res.push(key_res);
+                    new_locked_keys.push((params.start_ts, key.clone()));
                     if old_value.resolved() {
                         let key = key.append_ts(txn.start_ts);
                         // MutationType is unknown in AcquirePessimisticLock stage.
@@ -450,6 +457,7 @@ impl AcquirePessimisticLock {
             rows: written_rows,
             pr,
             released_locks: None,
+            new_acquired_locks: new_locked_keys,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
         })

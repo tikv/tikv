@@ -3294,7 +3294,7 @@ mod tests {
             },
             lock_manager::{
                 DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken,
-                WaitTimeout,
+                UpdateWaitForEvent, WaitTimeout,
             },
             mvcc::LockType,
             txn::{
@@ -8010,6 +8010,8 @@ mod tests {
                 })
                 .unwrap();
         }
+
+        fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
 
         fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
             self.tx

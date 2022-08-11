@@ -21,6 +21,7 @@ use futures::{
     task::{Context, Poll},
 };
 use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
+use log_wrappers;
 use prometheus::HistogramTimer;
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -38,7 +39,8 @@ use txn_types::Key;
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
     lock_manager::{
-        DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken, WaitTimeout,
+        DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken,
+        UpdateWaitForEvent, WaitTimeout,
     },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp},
     txn::Error as TxnError,
@@ -139,6 +141,9 @@ pub enum Task {
     RemoveLockWait {
         token: LockWaitToken,
     },
+    UpdateWaitFor {
+        events: Vec<UpdateWaitForEvent>,
+    },
     Dump {
         cb: Callback,
     },
@@ -203,6 +208,9 @@ impl Display for Task {
             }
             Task::RemoveLockWait { token } => {
                 write!(f, "waking up txns waiting for token {:?}", token)
+            }
+            Task::UpdateWaitFor { events } => {
+                write!(f, "updating wait info {:?}", events)
             }
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
@@ -481,7 +489,7 @@ struct WaitTable {
     legacy_wakeup_in_progress: HashMap<Key, DelayedLegacyWakeUp>,
 
     on_waiter_cancel_by_region_error:
-        Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
+        Option<Box<dyn Fn(LockWaitToken, TimeStamp, Vec<KeyLockWaitInfo>) + Send>>,
     wake_up_key_delay_callback: Option<Box<dyn Fn(&Key, TimeStamp, TimeStamp, Instant) + Send>>,
 }
 
@@ -500,7 +508,7 @@ impl WaitTable {
 
     fn set_on_waiter_cancel_by_region_error(
         &mut self,
-        cb: Option<Box<dyn Fn(LockWaitToken, Vec<KeyLockWaitInfo>) + Send>>,
+        cb: Option<Box<dyn Fn(LockWaitToken, TimeStamp, Vec<KeyLockWaitInfo>) + Send>>,
     ) {
         self.on_waiter_cancel_by_region_error = cb;
     }
@@ -600,9 +608,10 @@ impl WaitTable {
                     .remove(&(waiting_item.lock_digest.hash, waiter.start_ts));
             }
             // TODO: Cancel with a region error.
+            let start_ts = waiter.start_ts;
             let wait_info = waiter.cancel_for_timeout(false);
             if let Some(cb) = &self.on_waiter_cancel_by_region_error {
-                cb(token, wait_info)
+                cb(token, start_ts, wait_info);
             }
         }
         self.waiter_count.fetch_sub(count, Ordering::SeqCst);
@@ -651,6 +660,39 @@ impl WaitTable {
         }
         // WAIT_TABLE_STATUS_GAUGE.txns.dec();
         Some(waiter)
+    }
+
+    fn update_waiter(&mut self, update_event: &UpdateWaitForEvent) -> Option<KeyLockWaitInfo> {
+        let waiter = self.waiter_pool.get_mut(&update_event.token)?;
+
+        for previous_wait_info in &mut waiter.wait_info {
+            if previous_wait_info.lock_digest.hash != update_event.wait_info.lock_digest.hash
+                || previous_wait_info.key != update_event.wait_info.key
+            {
+                continue;
+            }
+
+            if previous_wait_info.lock_digest.ts == update_event.wait_info.lock_digest.ts {
+                // Unchanged.
+                return None;
+            }
+
+            let result = previous_wait_info.clone();
+            previous_wait_info.lock_digest = update_event.wait_info.lock_digest.clone();
+            // TODO: Update the detailed lock info.
+
+            waiter.diag_ctx = update_event.diag_ctx.clone();
+            return Some(result);
+        }
+
+        error!(
+            "cannot find matching wait info in the waiter";
+            "token" => ?update_event.token,
+            "start_ts" => %update_event.start_ts,
+            "key" => log_wrappers::Value::key(update_event.wait_info.key.as_encoded()),
+            "new_wait_for_txn" => %update_event.wait_info.lock_digest.ts
+        );
+        None
     }
 
     fn take_waiter_by_lock_digest(
@@ -779,6 +821,10 @@ impl Scheduler {
         self.notify_scheduler(Task::RemoveLockWait { token });
     }
 
+    pub fn update_wait_for(&self, events: Vec<UpdateWaitForEvent>) {
+        self.notify_scheduler(Task::UpdateWaitFor { events });
+    }
+
     pub fn dump_wait_table(&self, cb: Callback) -> bool {
         self.notify_scheduler(Task::Dump { cb })
     }
@@ -839,9 +885,11 @@ impl WaiterManager {
     ) -> Self {
         let mut wait_table = WaitTable::new(waiter_count);
         let detector_scheduler1 = detector_scheduler.clone();
-        wait_table.set_on_waiter_cancel_by_region_error(Some(Box::new(move |token, wait_info| {
-            detector_scheduler1.clean_up_wait_for(token, wait_info);
-        })));
+        wait_table.set_on_waiter_cancel_by_region_error(Some(Box::new(
+            move |token, start_ts, wait_info| {
+                detector_scheduler1.clean_up_wait_for(token, start_ts, wait_info);
+            },
+        )));
 
         Self {
             wait_table: Rc::new(RefCell::new(wait_table)),
@@ -866,8 +914,9 @@ impl WaiterManager {
                 let skip_resolving_lock = wait_table
                     .legacy_wakeup_in_progress
                     .contains_key(&waiter.wait_info[0].key);
+                let start_ts = waiter.start_ts;
                 let wait_info = waiter.cancel_for_timeout(skip_resolving_lock);
-                detector_scheduler.clean_up_wait_for(token, wait_info);
+                detector_scheduler.clean_up_wait_for(token, start_ts, wait_info);
             }
         });
         if self.wait_table.borrow_mut().add_waiter(token, waiter) {
@@ -967,8 +1016,10 @@ impl WaiterManager {
         } else {
             return;
         };
+        let start_ts = waiter.start_ts;
         let wait_info = waiter.cancel_for_finished();
-        self.detector_scheduler.clean_up_wait_for(token, wait_info);
+        self.detector_scheduler
+            .clean_up_wait_for(token, start_ts, wait_info);
         // for hash in hashes {
         //     let _lock = LockDigest { ts: lock_ts, hash };
         //     if let Some((mut oldest, others)) =
@@ -992,6 +1043,31 @@ impl WaiterManager {
         //         }
         //     }
         // }
+    }
+
+    fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
+        let mut wait_table = self.wait_table.borrow_mut();
+        for event in events {
+            let previous_wait_info = wait_table.update_waiter(&event);
+
+            if event.is_first_lock {
+                continue;
+            }
+
+            if let Some(previous_wait_info) = previous_wait_info {
+                self.detector_scheduler.clean_up_wait_for(
+                    event.token,
+                    event.start_ts,
+                    vec![previous_wait_info],
+                );
+                self.detector_scheduler.detect(
+                    event.token,
+                    event.start_ts,
+                    vec![event.wait_info],
+                    event.diag_ctx,
+                );
+            }
+        }
     }
 
     fn handle_dump(&self, cb: Callback) {
@@ -1095,6 +1171,10 @@ impl FutureRunnable<Task> for WaiterManager {
             Task::RemoveLockWait { token } => {
                 self.handle_remove_lock_wait(token);
                 TASK_COUNTER_METRICS.wake_up.inc();
+            }
+            Task::UpdateWaitFor { events } => {
+                self.handle_update_wait_for(events);
+                TASK_COUNTER_METRICS.update_wait_for.inc();
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);

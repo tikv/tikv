@@ -58,7 +58,7 @@ use txn_types::{Key, TimeStamp, Value, Write};
 
 use crate::storage::{
     kv::WriteData,
-    lock_manager::{LockManager, WaitTimeout},
+    lock_manager::{LockManager, LockWaitToken, WaitTimeout},
     metrics,
     mvcc::{Lock as MvccLock, MvccReader, ReleasedLock, SnapshotReader},
     txn::{
@@ -382,6 +382,7 @@ pub struct WriteResult {
     pub rows: usize,
     pub pr: ProcessResult,
     pub released_locks: Option<ReleasedLocks>,
+    pub new_acquired_locks: Vec<(TimeStamp, Key)>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
 }
@@ -417,6 +418,7 @@ pub struct WriteResultLockInfo {
     // Option<Callback<PessimisticLockKeyResult>>)>,
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
+    pub lock_wait_token: LockWaitToken,
     pub req_states: Option<Arc<PartialPessimisticLockRequestSharedState>>,
     pub wait_start_time: Option<Instant>,
 }
@@ -451,6 +453,7 @@ impl WriteResultLockInfo {
             key_cb,
             term,
             parameters,
+            lock_wait_token: LockWaitToken(None),
             req_states: None,
             wait_start_time: None,
         }

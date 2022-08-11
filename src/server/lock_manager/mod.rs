@@ -7,8 +7,6 @@ mod metrics;
 pub mod waiter_manager;
 
 use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -17,11 +15,8 @@ use std::{
     time::Instant,
 };
 
-use collections::HashSet;
-use crossbeam::utils::CachePadded;
 use engine_traits::KvEngine;
 use kvproto::metapb::RegionEpoch;
-use parking_lot::Mutex;
 use pd_client::PdClient;
 use raftstore::coprocessor::CoprocessorHost;
 use security::SecurityManager;
@@ -42,20 +37,20 @@ use crate::{
     storage::{
         lock_manager::{
             DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockManager as LockManagerTrait,
-            LockWaitToken, WaitTimeout,
+            LockWaitToken, UpdateWaitForEvent, WaitTimeout,
         },
         DynamicConfigs as StorageDynamicConfigs, Error as StorageError,
     },
 };
 
-const DETECTED_SLOTS_NUM: usize = 128;
-
-#[inline]
-fn detected_slot_idx(token: LockWaitToken) -> usize {
-    let mut s = DefaultHasher::new();
-    token.hash(&mut s);
-    (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
-}
+// const DETECTED_SLOTS_NUM: usize = 128;
+//
+// #[inline]
+// fn detected_slot_idx(token: LockWaitToken) -> usize {
+//     let mut s = DefaultHasher::new();
+//     token.hash(&mut s);
+//     (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
+// }
 
 /// `LockManager` has two components working in two threads:
 ///   * One is the `WaiterManager` which manages transactions waiting for locks.
@@ -71,8 +66,7 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<[CachePadded<Mutex<HashSet<LockWaitToken>>>]>,
-
+    // detected: Arc<[CachePadded<Mutex<HashSet<LockWaitToken>>>]>,
     token_allocator: Arc<AtomicU64>,
 
     pipelined: Arc<AtomicBool>,
@@ -88,7 +82,7 @@ impl Clone for LockManager {
             waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
             detector_scheduler: self.detector_scheduler.clone(),
             waiter_count: self.waiter_count.clone(),
-            detected: self.detected.clone(),
+            // detected: self.detected.clone(),
             token_allocator: self.token_allocator.clone(),
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
@@ -100,8 +94,9 @@ impl LockManager {
     pub fn new(cfg: &Config) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
-        let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
-        detected.resize_with(DETECTED_SLOTS_NUM, || Mutex::new(HashSet::default()).into());
+        // let mut detected = Vec::with_capacity(DETECTED_SLOTS_NUM);
+        // detected.resize_with(DETECTED_SLOTS_NUM, ||
+        // Mutex::new(HashSet::default()).into());
 
         Self {
             waiter_mgr_scheduler: WaiterMgrScheduler::new(waiter_mgr_worker.scheduler()),
@@ -109,7 +104,7 @@ impl LockManager {
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            detected: detected.into(),
+            // detected: detected.into(),
             token_allocator: Arc::new(AtomicU64::new(0)),
             pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
@@ -249,15 +244,15 @@ impl LockManager {
         }
     }
 
-    fn add_to_detected(&self, token: LockWaitToken) {
-        let mut detected = self.detected[detected_slot_idx(token)].lock();
-        detected.insert(token);
-    }
-
-    fn remove_from_detected(&self, token: LockWaitToken) -> bool {
-        let mut detected = self.detected[detected_slot_idx(token)].lock();
-        detected.remove(&token)
-    }
+    // fn add_to_detected(&self, token: LockWaitToken) {
+    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
+    //     detected.insert(token);
+    // }
+    //
+    // fn remove_from_detected(&self, token: LockWaitToken) -> bool {
+    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
+    //     detected.remove(&token)
+    // }
 }
 
 impl LockManagerTrait for LockManager {
@@ -300,7 +295,7 @@ impl LockManagerTrait for LockManager {
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
         if !is_first_lock {
-            self.add_to_detected(token);
+            // self.add_to_detected(token);
             self.detector_scheduler
                 .detect(token, start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
         }
@@ -315,6 +310,10 @@ impl LockManagerTrait for LockManager {
             cancel_callback,
             diag_ctx,
         );
+    }
+
+    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>) {
+        self.waiter_mgr_scheduler.update_wait_for(updated_items);
     }
 
     fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
@@ -534,7 +533,7 @@ mod tests {
                 DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
-            assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
+            // assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
             lock_mgr.remove_lock_wait(token);
             // block_on(f).unwrap();
             f.try_recv().unwrap_err();

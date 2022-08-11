@@ -30,7 +30,8 @@ impl LockDigest {
 }
 
 /// DiagnosticContext is for diagnosing problems about locks
-#[derive(Clone, Default)]
+/// TODO: Avoid deriving Debug here which might cause security issue.
+#[derive(Clone, Default, Debug)]
 pub struct DiagnosticContext {
     /// The key we care about
     pub key: Vec<u8>,
@@ -100,6 +101,15 @@ pub struct KeyWakeUpEvent {
     pub awakened_allow_resuming: bool,
 }
 
+#[derive(Debug)]
+pub struct UpdateWaitForEvent {
+    pub token: LockWaitToken,
+    pub start_ts: TimeStamp,
+    pub is_first_lock: bool,
+    pub wait_info: KeyLockWaitInfo,
+    pub diag_ctx: DiagnosticContext,
+}
+
 /// `LockManager` manages transactions waiting for locks held by other
 /// transactions. It has responsibility to handle deadlocks between
 /// transactions.
@@ -132,9 +142,7 @@ pub trait LockManager: Clone + Send + 'static {
         diag_ctx: DiagnosticContext,
     );
 
-    fn update_wait_for() {
-        unimplemented!()
-    }
+    fn update_wait_for(&self, updated_items: Vec<UpdateWaitForEvent>);
 
     fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>);
 
@@ -187,6 +195,8 @@ impl LockManager for DummyLockManager {
             cancel_callback(StorageError::from(TxnError::from(error)));
         }
     }
+
+    fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
 
     fn on_keys_wakeup(&self, _wake_up_events: Vec<KeyWakeUpEvent>) {}
 

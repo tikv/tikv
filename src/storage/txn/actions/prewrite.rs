@@ -21,7 +21,7 @@ use crate::storage::{
     Snapshot,
 };
 
-/// Prewrite a single mutation by creating and storing a lock and value.
+// TODO: Remove this adapter function
 pub fn prewrite<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut SnapshotReader<S>,
@@ -30,6 +30,26 @@ pub fn prewrite<S: Snapshot>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     is_pessimistic_lock: bool,
 ) -> Result<(TimeStamp, OldValue)> {
+    prewrite_internal(
+        txn,
+        reader,
+        txn_props,
+        mutation,
+        secondary_keys,
+        is_pessimistic_lock,
+    )
+    .map(|res| (res.0, res.1))
+}
+
+/// Prewrite a single mutation by creating and storing a lock and value.
+pub fn prewrite_internal<S: Snapshot>(
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<S>,
+    txn_props: &TransactionProperties<'_>,
+    mutation: Mutation,
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    is_pessimistic_lock: bool,
+) -> Result<(TimeStamp, OldValue, Option<Key>)> {
     let mut mutation =
         PrewriteMutation::from_mutation(mutation, secondary_keys, is_pessimistic_lock, txn_props)?;
 
@@ -66,7 +86,7 @@ pub fn prewrite<S: Snapshot>(
     };
 
     if let LockStatus::Locked(ts) = lock_status {
-        return Ok((ts, OldValue::Unspecified));
+        return Ok((ts, OldValue::Unspecified, None));
     }
 
     // Note that the `prev_write` may have invalid GC fence.
@@ -108,7 +128,7 @@ pub fn prewrite<S: Snapshot>(
         } else {
             TimeStamp::zero()
         };
-        return Ok((min_commit_ts, OldValue::Unspecified));
+        return Ok((min_commit_ts, OldValue::Unspecified, None));
     }
 
     let old_value = if txn_props.need_old_value
@@ -146,11 +166,16 @@ pub fn prewrite<S: Snapshot>(
         OldValue::Unspecified
     };
 
+    let new_locked_key = if (!is_pessimistic_lock || lock_amended) && !mutation.try_one_pc() {
+        Some(mutation.key.clone())
+    } else {
+        None
+    };
     let final_min_commit_ts = mutation.write_lock(lock_status, txn)?;
 
     fail_point!("after_prewrite_one_key");
 
-    Ok((final_min_commit_ts, old_value))
+    Ok((final_min_commit_ts, old_value, new_locked_key))
 }
 
 #[derive(Clone, Debug)]
@@ -1033,7 +1058,8 @@ pub mod tests {
             Error(box ErrorInner::CommitTsTooLarge { .. })
         ));
 
-        fallback_1pc_locks(&mut txn);
+        let mut dummy_vec = vec![];
+        fallback_1pc_locks(&mut txn, &mut dummy_vec);
         let modifies = txn.into_modifies();
         assert_eq!(modifies.len(), 2); // the mutation that meets CommitTsTooLarge still exists
         write(&engine, &Default::default(), modifies);

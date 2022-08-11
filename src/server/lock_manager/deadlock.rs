@@ -488,11 +488,16 @@ impl Scheduler {
         });
     }
 
-    pub fn clean_up_wait_for(&self, token: LockWaitToken, wait_info: Vec<KeyLockWaitInfo>) {
+    pub fn clean_up_wait_for(
+        &self,
+        token: LockWaitToken,
+        start_ts: TimeStamp,
+        wait_info: Vec<KeyLockWaitInfo>,
+    ) {
         self.notify_scheduler(Task::Detect {
             tp: DetectType::CleanUpWaitFor,
             token,
-            txn_ts: TimeStamp::default(),
+            txn_ts: start_ts,
             wait_info,
             diag_ctx: DiagnosticContext::default(),
         });

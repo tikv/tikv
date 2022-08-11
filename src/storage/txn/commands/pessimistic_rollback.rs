@@ -91,6 +91,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             rows,
             pr: ProcessResult::MultiRes { results: vec![] },
             released_locks: Some(released_locks),
+            new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

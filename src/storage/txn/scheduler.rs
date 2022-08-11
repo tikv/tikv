@@ -808,6 +808,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         lock_guards: Vec<KeyHandleGuard>,
         wait_for_locks: Option<Vec<WriteResultLockInfo>>,
         mut released_locks: Option<ReleasedLocks>,
+        new_acquired_locks: Vec<(TimeStamp, txn_types::Key)>,
         pipelined: bool,
         async_apply_prewrite: bool,
         tag: CommandKind,
@@ -858,6 +859,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         } else {
             assert!((pipelined && wait_for_locks.is_none()) || async_apply_prewrite);
         }
+        self.update_wait_for_lock_after_acquiring(&tctx.lock, new_acquired_locks);
         self.release_latches(tctx.lock, cid, wait_for_locks, released_locks, tag);
     }
 
@@ -899,8 +901,81 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
     }
 
-    fn update_wait_for_lock(&self) {
-        // TODO: unimplemented.
+    fn update_wait_for_lock_after_acquiring(
+        &self,
+        latch: &Lock,
+        new_acquired_locks: Vec<(TimeStamp, txn_types::Key)>,
+    ) {
+        if new_acquired_locks.is_empty() || latch.lock_wait_queues.is_empty() {
+            return;
+        }
+
+        let mut events = vec![];
+
+        for (locking_start_ts, key) in new_acquired_locks {
+            let hash_for_latch = Lock::hash(&key);
+            let queue_map = match latch.lock_wait_queues.get(&hash_for_latch) {
+                Some(q) => q,
+                None => continue,
+            };
+            let queue = match queue_map.get(&key) {
+                Some(q) => q,
+                None => continue,
+            };
+            if queue.is_empty() {
+                continue;
+            }
+            let hash = key.gen_hash();
+            let raw_key = key.to_raw().unwrap();
+            for item in queue.iter() {
+                let diag_ctx = DiagnosticContext {
+                    key: raw_key.clone(),
+                    resource_group_tag: item.0.parameters.pb_ctx.get_resource_group_tag().into(),
+                };
+                events.push(lock_manager::UpdateWaitForEvent {
+                    token: item.0.lock_wait_token,
+                    start_ts: item.0.parameters.start_ts,
+                    is_first_lock: false, // TODO: Pass is_first_lock here.
+                    wait_info: lock_manager::KeyLockWaitInfo {
+                        key: key.clone(),
+                        lock_digest: LockDigest {
+                            ts: locking_start_ts,
+                            hash,
+                        },
+                        lock_info: Default::default(),
+                    },
+                    diag_ctx,
+                });
+            }
+        }
+
+        if !events.is_empty() {
+            self.inner.lock_mgr.update_wait_for(events);
+        }
+    }
+
+    fn update_wait_for_lock(&self, lock_info: &[WriteResultLockInfo]) {
+        let events = lock_info
+            .iter()
+            .map(|item| lock_manager::UpdateWaitForEvent {
+                token: item.lock_wait_token,
+                start_ts: item.parameters.start_ts,
+                is_first_lock: false, // TODO: Pass is_first_lock here.
+                wait_info: lock_manager::KeyLockWaitInfo {
+                    key: item.key.clone(),
+                    lock_digest: LockDigest {
+                        ts: item.last_found_lock.get_lock_version().into(),
+                        hash: item.hash_for_latch,
+                    },
+                    lock_info: item.last_found_lock.clone(),
+                },
+                diag_ctx: DiagnosticContext {
+                    key: item.key.to_raw().unwrap(),
+                    resource_group_tag: item.parameters.pb_ctx.get_resource_group_tag().into(),
+                },
+            })
+            .collect();
+        self.inner.lock_mgr.update_wait_for(events);
     }
 
     fn need_wake_up_pessimistic_lock_on_error(_e: &EngineError) -> bool {
@@ -1071,6 +1146,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             rows,
             pr,
             mut released_locks,
+            new_acquired_locks,
             lock_guards,
             response_policy,
         } = match deadline
@@ -1153,6 +1229,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 lock_req_ctx
                                     .get_callback_for_blocked_key(lock_info.index_in_request),
                             );
+                            lock_info.lock_wait_token = wait_token;
                             lock_info.req_states = Some(lock_req_ctx.get_shared_states());
                             key_callback_count += 1;
                         }
@@ -1167,10 +1244,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             } else {
                 // It's already in key-wise mode.
                 let start_time = Instant::now();
-                scheduler.update_wait_for_lock();
                 let lock_info_list =
                     scheduler.tidy_up_pessimistic_lock_result(cid, pr.as_mut().unwrap());
 
+                if let Some(l) = lock_info_list.as_ref() {
+                    scheduler.update_wait_for_lock(l);
+                }
                 STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
                     .tidy_up_result
                     .observe(start_time.saturating_elapsed_secs());
@@ -1200,6 +1279,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 lock_guards,
                 lock_info,
                 released_locks,
+                new_acquired_locks,
                 false,
                 false,
                 tag,
@@ -1231,6 +1311,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 lock_guards,
                 lock_info,
                 released_locks,
+                new_acquired_locks,
                 false,
                 false,
                 tag,
@@ -1420,6 +1501,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         lock_guards,
                         lock_info,
                         released_locks,
+                        new_acquired_locks,
                         pipelined,
                         is_async_apply_prewrite,
                         tag,

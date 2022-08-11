@@ -22,7 +22,9 @@ use crate::storage::{
         Result as MvccResult, SnapshotReader, TxnCommitRecord,
     },
     txn::{
-        actions::prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
+        actions::prewrite::{
+            prewrite_internal, CommitKind, TransactionKind, TransactionProperties,
+        },
         commands::{
             CommandExt, ReleasedLocks, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
             WriteResult,
@@ -206,6 +208,8 @@ impl Prewrite {
 
             assertion_level: self.assertion_level,
 
+            new_locked_keys: vec![],
+
             ctx: self.ctx,
             old_values: OldValues::default(),
         }
@@ -369,6 +373,8 @@ impl PrewritePessimistic {
             min_commit_ts: self.min_commit_ts,
             max_commit_ts: self.max_commit_ts,
 
+            new_locked_keys: vec![],
+
             assertion_level: self.assertion_level,
 
             ctx: self.ctx,
@@ -424,6 +430,7 @@ struct Prewriter<K: PrewriteKind> {
     secondary_keys: Option<Vec<Vec<u8>>>,
     old_values: OldValues,
     try_one_pc: bool,
+    new_locked_keys: Vec<(TimeStamp, Key)>,
     assertion_level: AssertionLevel,
 
     ctx: Context,
@@ -525,7 +532,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         // GC can remove the old committed records, then we cannot determine
         // whether the transaction has been committed, so the error is still returned.
         fn check_committed_record_on_err(
-            prewrite_result: MvccResult<(TimeStamp, OldValue)>,
+            prewrite_result: MvccResult<(TimeStamp, OldValue, Option<Key>)>,
             txn: &mut MvccTxn,
             reader: &mut SnapshotReader<impl Snapshot>,
             key: &Key,
@@ -560,9 +567,9 @@ impl<K: PrewriteKind> Prewriter<K> {
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
             let prewrite_result =
-                prewrite(txn, reader, &props, m, secondaries, is_pessimistic_lock);
+                prewrite_internal(txn, reader, &props, m, secondaries, is_pessimistic_lock);
             match prewrite_result {
-                Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
+                Ok((ts, old_value, new_locked_key)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
                         final_min_commit_ts = ts;
                     }
@@ -571,8 +578,11 @@ impl<K: PrewriteKind> Prewriter<K> {
                         self.old_values
                             .insert(key, (old_value, Some(mutation_type)));
                     }
+                    if let Some(k) = new_locked_key {
+                        self.new_locked_keys.push((self.start_ts, k));
+                    }
                 }
-                Ok((..)) => {
+                Ok((_, _, new_locked_key)) => {
                     // If it needs min_commit_ts but min_commit_ts is zero, the lock
                     // has been prewritten and has fallen back from async commit or 1PC.
                     // We should let later keys prewrite in the old 2PC way.
@@ -580,10 +590,13 @@ impl<K: PrewriteKind> Prewriter<K> {
                     async_commit_pk = None;
                     self.secondary_keys = None;
                     self.try_one_pc = false;
-                    fallback_1pc_locks(txn);
+                    fallback_1pc_locks(txn, &mut self.new_locked_keys);
                     // release memory locks
                     txn.guards = Vec::new();
                     final_min_commit_ts = TimeStamp::zero();
+                    if let Some(k) = new_locked_key {
+                        self.new_locked_keys.push((self.start_ts, k));
+                    }
                 }
                 Err(MvccError(box MvccErrorInner::WriteConflict {
                     start_ts,
@@ -608,7 +621,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                     async_commit_pk = None;
                     self.secondary_keys = None;
                     self.try_one_pc = false;
-                    fallback_1pc_locks(txn);
+                    fallback_1pc_locks(txn, &mut self.new_locked_keys);
                     // release memory locks
                     txn.guards = Vec::new();
                     final_min_commit_ts = TimeStamp::zero();
@@ -682,6 +695,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 } else {
                     Some(released_locks)
                 },
+                new_acquired_locks: self.new_locked_keys,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -700,6 +714,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 released_locks: None,
+                new_acquired_locks: self.new_locked_keys,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -859,8 +874,12 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
 }
 
 /// Change all 1pc locks in txn to 2pc locks.
-pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
+pub(in crate::storage::txn) fn fallback_1pc_locks(
+    txn: &mut MvccTxn,
+    new_locked_keys: &mut Vec<(TimeStamp, Key)>,
+) {
     for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
+        new_locked_keys.push((txn.start_ts, key.clone()));
         txn.put_lock(key, &lock);
     }
 }

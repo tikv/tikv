@@ -180,14 +180,7 @@ impl Lock {
         I: IntoIterator<Item = &'a K>,
     {
         // prevent from deadlock, so we sort and deduplicate the index
-        let mut required_hashes: Vec<u64> = keys
-            .into_iter()
-            .map(|key| {
-                let mut s = DefaultHasher::new();
-                key.hash(&mut s);
-                s.finish()
-            })
-            .collect();
+        let mut required_hashes: Vec<u64> = keys.into_iter().map(|key| Self::hash(key)).collect();
         required_hashes.sort_unstable();
         required_hashes.dedup();
         Lock {
@@ -207,6 +200,12 @@ impl Lock {
             lock_wait_queues,
             owned_count,
         }
+    }
+
+    pub fn hash<K: Hash>(key: &K) -> u64 {
+        let mut s = DefaultHasher::new();
+        key.hash(&mut s);
+        s.finish()
     }
 
     /// Returns true if all the required latches have be acquired, false
