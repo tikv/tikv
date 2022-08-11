@@ -133,7 +133,7 @@ pub fn init_with_data(
     return (store, endpoint);
 }
 
-// Same as init_with_data except returned values include Arc<QuotaLimiter> 
+// Same as init_with_data except returned values include Arc<QuotaLimiter>
 pub fn init_with_data_ext(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
