@@ -603,11 +603,12 @@ impl PdConnector {
         }
     }
 
-    // load_members returns the pd members by calling getMember, there are three
-    // scene for the reponse: header is error: the pd is not ready to server.
-    // cluster id is different: avoid to connect the different cluster.
-    // cluster id is zero:  etcd start server but the follower did not get cluster
-    // id already. about this case, load_members returns error, so the client
+    // load_members returns the PD members by calling getMember, there are two
+    // abnormal scenes for the reponse:
+    // 1. header is error: the PD is not ready to server.
+    // 2. cluster id is zero: etcd start server but the follower did not get
+    // cluster id yet.
+    // In this case, load_members should return an error, so the client
     // will not update client address.
     pub async fn load_members(&self, previous: &GetMembersResponse) -> Result<GetMembersResponse> {
         let previous_leader = previous.get_leader();
