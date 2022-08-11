@@ -479,7 +479,7 @@ fn test_change_leader_async() {
 #[test]
 fn test_pd_client_heartbeat_send_failed() {
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
-    let pd_client_cluster_id_zero ="cluster_id_is_not_ready";
+    let pd_client_cluster_id_zero = "cluster_id_is_not_ready";
     let server = MockServer::with_case(3, Arc::new(AlreadyBootstrapped));
     let eps = server.bind_addrs();
 
@@ -495,7 +495,7 @@ fn test_pd_client_heartbeat_send_failed() {
     poller.spawn(f);
     fail::cfg(pd_client_cluster_id_zero, "return()").unwrap();
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
-    
+
     let heartbeat_send_fail = |ok| {
         let mut region = metapb::Region::default();
         region.set_id(1);

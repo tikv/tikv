@@ -586,7 +586,10 @@ impl PdConnector {
             self.security_mgr.connect(cb, addr_trim)
         };
         fail_point!("cluster_id_is_not_ready", |_| {
-            Ok((PdClientStub::new(channel.clone()),GetMembersResponse::default()))
+            Ok((
+                PdClientStub::new(channel.clone()),
+                GetMembersResponse::default(),
+            ))
         });
         let client = PdClientStub::new(channel);
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
