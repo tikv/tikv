@@ -864,10 +864,13 @@ where
 
     fn on_update_global_checkpoint(&self, task: String) {
         let _guard = self.pool.handle().enter();
-        self.pool.spawn(tokio::time::timeout(
+        let result = self.pool.block_on(tokio::time::timeout(
             TICK_UPDATE_TIMEOUT,
             self.update_global_checkpoint(task),
         ));
+        if let Err(err) = result {
+            warn!("log backup update global checkpoint timed out"; "err" => %err)
+        }
     }
 
     /// Modify observe over some region.
