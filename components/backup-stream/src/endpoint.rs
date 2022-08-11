@@ -817,12 +817,13 @@ where
     fn update_global_checkpoint(&self, task: String) -> future![()] {
         let meta_client = self.meta_client.clone();
         let router = self.range_router.clone();
+        let store_id = self.store_id;
         async move {
             let ts = meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
                     let r = router
-                        .update_global_checkpoint(&task, global_checkpoint, self.store_id)
+                        .update_global_checkpoint(&task, global_checkpoint, store_id)
                         .await;
                     match r {
                         Ok(true) => {
