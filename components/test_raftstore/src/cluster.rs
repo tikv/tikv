@@ -37,7 +37,7 @@ use raftstore::{
     store::{
         fsm::{
             create_raft_batch_system,
-            store::{StoreMeta, PENDING_MSG_CAP},
+            store::{ApplyResNotifier, StoreMeta, PENDING_MSG_CAP},
             RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
@@ -77,7 +77,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>,
+        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -281,6 +281,9 @@ impl<T: Simulator> Cluster<T> {
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
 
+            let apply_notifier =
+                ApplyResNotifier::new(router.clone(), seqno_worker.map(|w| w.scheduler()));
+
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
                 0,
@@ -290,7 +293,7 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
-                seqno_worker.map(|w| w.scheduler()),
+                apply_notifier,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
@@ -363,6 +366,7 @@ impl<T: Simulator> Cluster<T> {
         self.group_props.insert(node_id, props.clone());
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
+        let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim.wl().run_node(
             node_id,
@@ -372,7 +376,7 @@ impl<T: Simulator> Cluster<T> {
             key_mgr,
             router,
             system,
-            seqno_scheduler,
+            apply_notifier,
         )?;
         debug!("node {} started", node_id);
         Ok(())

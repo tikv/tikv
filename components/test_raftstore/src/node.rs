@@ -24,7 +24,10 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        fsm::{
+            store::{ApplyResNotifier, StoreMeta},
+            RaftBatchSystem, RaftRouter,
+        },
         SnapManagerBuilder, *,
     },
     Result,
@@ -39,7 +42,7 @@ use tikv::{
 use tikv_util::{
     config::VersionTrack,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
+    worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
 use super::*;
@@ -224,7 +227,7 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>,
+        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -315,7 +318,7 @@ impl Simulator for NodeCluster {
             AutoSplitController::default(),
             cm,
             CollectorRegHandle::new_for_test(),
-            seqno_scheduler,
+            apply_notifier,
         )?;
         assert!(
             engines

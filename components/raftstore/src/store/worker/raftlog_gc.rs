@@ -6,6 +6,7 @@ use std::{
     sync::mpsc::Sender,
 };
 
+use collections::HashMap;
 use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
 use file_system::{IOType, WithIOType};
 use thiserror::Error;
@@ -21,47 +22,67 @@ use crate::store::worker::metrics::*;
 const MAX_GC_REGION_BATCH: usize = 512;
 const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
 
-pub struct Task {
-    region_id: u64,
-    start_idx: u64,
-    end_idx: u64,
-    flush: bool,
-    cb: Option<Box<dyn FnOnce() + Send>>,
+pub enum Task {
+    Gc(GcTask),
+    MemtableFlushed(u64),
 }
 
 impl Task {
-    pub fn gc(region_id: u64, start: u64, end: u64) -> Self {
-        Task {
+    pub fn gc(region_id: u64, start: u64, end: u64) -> Task {
+        Task::Gc(GcTask {
             region_id,
             start_idx: start,
             end_idx: end,
             flush: false,
             cb: None,
+        })
+    }
+
+    pub fn flush(self) -> Self {
+        match self {
+            Task::Gc(mut gc) => {
+                gc.flush = true;
+                Task::Gc(gc)
+            }
+            _ => self,
         }
     }
 
-    pub fn flush(mut self) -> Self {
-        self.flush = true;
-        self
-    }
-
-    pub fn when_done(mut self, callback: impl FnOnce() + Send + 'static) -> Self {
-        self.cb = Some(Box::new(callback));
-        self
+    pub fn when_done(self, callback: impl FnOnce() + Send + 'static) -> Self {
+        match self {
+            Task::Gc(mut gc) => {
+                gc.cb = Some(Box::new(callback));
+                Task::Gc(gc)
+            }
+            _ => self,
+        }
     }
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "GC Raft Logs [region: {}, from: {}, to: {}, has_cb: {}]",
-            self.region_id,
-            self.start_idx,
-            self.end_idx,
-            self.cb.is_some()
-        )
+        match self {
+            Task::Gc(task) => {
+                write!(
+                    f,
+                    "GC Raft Logs [region: {}, from: {}, to: {}, has_cb: {}]",
+                    task.region_id,
+                    task.start_idx,
+                    task.end_idx,
+                    task.cb.is_some()
+                )
+            }
+            Task::MemtableFlushed(max_seqno) => write!(f, "MemtableFlushed({})", max_seqno),
+        }
     }
+}
+
+pub struct GcTask {
+    region_id: u64,
+    start_idx: u64,
+    end_idx: u64,
+    flush: bool,
+    cb: Option<Box<dyn FnOnce() + Send>>,
 }
 
 #[derive(Debug, Error)]
@@ -71,19 +92,28 @@ enum Error {
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
-    tasks: Vec<Task>,
+    tasks: Vec<GcTask>,
     engines: Engines<EK, ER>,
     gc_entries: Option<Sender<usize>>,
     compact_sync_interval: Duration,
+    // region_id -> end index
+    residual_log_regions: HashMap<u64, u64>,
+    flushed_seqno: Option<u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
-    pub fn new(engines: Engines<EK, ER>, compact_log_interval: Duration) -> Runner<EK, ER> {
+    pub fn new(
+        engines: Engines<EK, ER>,
+        compact_log_interval: Duration,
+        flushed_seqno: Option<u64>,
+    ) -> Runner<EK, ER> {
         Runner {
             engines,
+            flushed_seqno,
             tasks: vec![],
             gc_entries: None,
             compact_sync_interval: compact_log_interval,
+            residual_log_regions: HashMap::default(),
         }
     }
 
@@ -103,6 +133,14 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
+    fn seqno_flushed_index(&self, region_id: u64, seqno: u64) -> Option<u64> {
+        self.engines
+            .raft
+            .get_seqno_relation(region_id, seqno)
+            .unwrap()
+            .map(|relation| relation.get_apply_state().get_applied_index())
+    }
+
     fn flush(&mut self) {
         if self.tasks.is_empty() {
             return;
@@ -117,7 +155,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         let tasks = std::mem::take(&mut self.tasks);
         let mut groups = Vec::with_capacity(tasks.len());
         let mut cbs = Vec::new();
-        for t in tasks {
+        for mut t in tasks {
             debug!("gc raft log"; "region_id" => t.region_id, "start_index" => t.start_idx, "end_index" => t.end_idx);
             if let Some(cb) = t.cb {
                 cbs.push(cb);
@@ -125,6 +163,23 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             if t.start_idx == t.end_idx {
                 // It's only for flush.
                 continue;
+            }
+            if let Some(seqno) = self.flushed_seqno {
+                let max_compact_to = self
+                    .seqno_flushed_index(t.region_id, seqno)
+                    .unwrap_or_default()
+                    + 1;
+                if t.end_idx > max_compact_to {
+                    t.end_idx = max_compact_to;
+                    let end_idx = t.end_idx;
+                    self.residual_log_regions
+                        .entry(t.region_id)
+                        .and_modify(|v| *v = u64::max(*v, end_idx))
+                        .or_insert(t.end_idx);
+                }
+                if t.start_idx >= max_compact_to {
+                    continue;
+                }
             }
             if t.start_idx == 0 {
                 RAFT_LOG_GC_SEEK_OPERATIONS.inc();
@@ -171,8 +226,26 @@ where
 
     fn run(&mut self, task: Task) {
         let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
-        let flush_now = task.flush;
-        self.tasks.push(task);
+        let mut flush_now = false;
+        match task {
+            Task::Gc(task) => {
+                flush_now = task.flush;
+                self.tasks.push(task);
+            }
+            Task::MemtableFlushed(seqno) => {
+                assert!(self.flushed_seqno.is_some());
+                self.flushed_seqno = Some(seqno);
+                for (region_id, end_idx) in self.residual_log_regions.drain() {
+                    self.tasks.push(GcTask {
+                        region_id,
+                        start_idx: 0,
+                        end_idx,
+                        cb: None,
+                        flush: false,
+                    });
+                }
+            }
+        }
         // TODO: maybe they should also be batched even `flush_now` is true.
         if flush_now || self.tasks.len() > MAX_GC_REGION_BATCH {
             self.flush();
@@ -224,6 +297,8 @@ mod tests {
             engines,
             tasks: vec![],
             compact_sync_interval: Duration::from_secs(5),
+            residual_log_regions: HashMap::default(),
+            flushed_seqno: None,
         };
 
         // generate raft logs

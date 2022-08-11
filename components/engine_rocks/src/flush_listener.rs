@@ -1,15 +1,20 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, Arc, Mutex};
+use std::{
+    iter::FromIterator,
+    lazy::SyncOnceCell,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
 
+use collections::HashMap;
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
 use tikv_util::{
     debug,
-    sequence_number::{
-        Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS, SYNCED_MAX_SEQUENCE_NUMBER,
-        VERSION_COUNTER_ALLOCATOR,
-    },
+    sequence_number::{Notifier, SYNCED_MAX_SEQUENCE_NUMBER, VERSION_COUNTER_ALLOCATOR},
 };
 
 use crate::RocksEngine;
@@ -18,6 +23,7 @@ use crate::RocksEngine;
 pub struct FlushListener {
     notifier: Arc<Mutex<dyn Notifier>>,
     engine: Arc<Mutex<Option<RocksEngine>>>,
+    flushed_seqnos: Arc<SyncOnceCell<HashMap<String, AtomicU64>>>,
 }
 
 impl FlushListener {
@@ -25,10 +31,20 @@ impl FlushListener {
         FlushListener {
             notifier: Arc::new(Mutex::new(notifier)),
             engine: Arc::default(),
+            flushed_seqnos: Arc::new(SyncOnceCell::new()),
         }
     }
 
     pub fn set_engine(&self, engine: RocksEngine) {
+        let db = engine.as_inner();
+        let cf_names = db.cf_names();
+        self.flushed_seqnos
+            .set(HashMap::from_iter(
+                cf_names
+                    .into_iter()
+                    .map(|name| (name.to_string(), AtomicU64::new(0))),
+            ))
+            .unwrap();
         let mut e = self.engine.lock().unwrap();
         *e = Some(engine);
     }
@@ -49,23 +65,32 @@ impl EventListener for FlushListener {
     }
 
     fn on_flush_completed(&self, info: &FlushJobInfo) {
-        let flush_seqno = info.largest_seqno();
+        let largest_seqno = info.largest_seqno();
         let cf = info.cf_name();
-        if let Some(flushed_max_seqno) = FLUSHED_MAX_SEQUENCE_NUMBERS.get().unwrap().get(cf) {
-            // notify store to GC relations and raft logs
-            let mut current = flushed_max_seqno.load(Ordering::SeqCst);
-            while current < flush_seqno {
-                if let Err(cur) = flushed_max_seqno.compare_exchange_weak(
-                    current,
-                    flush_seqno,
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                ) {
-                    current = cur;
-                }
+        let flushed_seqnos = self.flushed_seqnos.get().unwrap();
+        let cf_flushed_seqno = flushed_seqnos.get(cf).unwrap();
+        let mut current = cf_flushed_seqno.load(Ordering::SeqCst);
+        while current < largest_seqno {
+            if let Err(cur) = cf_flushed_seqno.compare_exchange_weak(
+                current,
+                largest_seqno,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                current = cur;
             }
         }
-        debug!("flush completed"; "seqno" => flush_seqno);
+        let min_flushed_seqno = flushed_seqnos
+            .iter()
+            .map(|(_, seqno)| seqno.load(Ordering::SeqCst))
+            .min()
+            .unwrap();
+        if min_flushed_seqno == largest_seqno {
+            // notify raftlog GC worker to GC relations and raft logs
+            let notifier = self.notifier.lock().unwrap();
+            notifier.notify_memtable_flushed(largest_seqno);
+        }
+        debug!("flush completed"; "seqno" => largest_seqno);
     }
 
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
@@ -98,10 +123,7 @@ mod tests {
         ColumnFamilyOptions, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
     use rocksdb::DBOptions as RawDBOptions;
-    use tikv_util::sequence_number::{
-        init_sequence_number_map, Notifier, FLUSHED_MAX_SEQUENCE_NUMBERS,
-        SYNCED_MAX_SEQUENCE_NUMBER,
-    };
+    use tikv_util::sequence_number::{Notifier, SYNCED_MAX_SEQUENCE_NUMBER};
 
     use crate::{
         util::{new_engine_opt, RocksCFOptions},
@@ -113,6 +135,7 @@ mod tests {
 
     impl Notifier for TestNotifier {
         fn notify_memtable_sealed(&self, _seqno: u64) {}
+        fn notify_memtable_flushed(&self, _seqno: u64) {}
     }
 
     #[test]
@@ -132,9 +155,8 @@ mod tests {
             vec![RocksCFOptions::new(CF_DEFAULT, cf_opts)],
         )
         .unwrap();
-        let db = engine.as_inner();
-        init_sequence_number_map(db.cf_names());
         listener.set_engine(engine.clone());
+        let flushed_seqnos = listener.flushed_seqnos.get().unwrap();
         let mut batch = engine.write_batch();
         batch.put_cf(CF_DEFAULT, b"k", b"v").unwrap();
         let mut write_opts = WriteOptions::new();
@@ -144,11 +166,7 @@ mod tests {
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush(true).unwrap();
-        let flushed_max_seqno = FLUSHED_MAX_SEQUENCE_NUMBERS
-            .get()
-            .unwrap()
-            .get(CF_DEFAULT)
-            .unwrap();
+        let flushed_max_seqno = flushed_seqnos.get(CF_DEFAULT).unwrap();
         assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 3);
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);

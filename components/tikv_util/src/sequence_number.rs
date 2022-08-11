@@ -1,34 +1,20 @@
 use std::{
     cmp,
     collections::{BTreeMap, VecDeque},
-    iter::FromIterator,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use collections::HashMap;
 use lazy_static::lazy_static;
-use once_cell::sync::OnceCell;
 
 lazy_static! {
     static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
     pub static ref VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
-    pub static ref FLUSHED_MAX_SEQUENCE_NUMBERS: OnceCell<HashMap<String, AtomicU64>> =
-        OnceCell::new();
 }
 
 pub trait Notifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
-}
-
-pub fn init_sequence_number_map(cf_names: Vec<&str>) {
-    FLUSHED_MAX_SEQUENCE_NUMBERS
-        .set(HashMap::from_iter(
-            cf_names
-                .into_iter()
-                .map(|name| (name.to_string(), AtomicU64::new(0))),
-        ))
-        .unwrap();
+    fn notify_memtable_flushed(&self, seqno: u64);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -8,6 +8,7 @@ use std::{
         BTreeMap,
         Bound::{Excluded, Included, Unbounded},
     },
+    lazy::SyncOnceCell,
     mem,
     ops::{Deref, DerefMut},
     sync::{
@@ -397,6 +398,7 @@ where
 pub struct ApplyResNotifier<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+    raftlog_gc_scheduler: SyncOnceCell<Scheduler<RaftlogGcTask>>,
 }
 
 impl<EK, ER> ApplyResNotifier<EK, ER>
@@ -411,6 +413,13 @@ where
         ApplyResNotifier {
             router,
             seqno_scheduler,
+            raftlog_gc_scheduler: SyncOnceCell::new(),
+        }
+    }
+
+    pub fn init_raftlog_gc_scheduler(&self, scheduler: Scheduler<RaftlogGcTask>) {
+        if self.raftlog_gc_scheduler.set(scheduler).is_err() {
+            panic!("raft log gc scheduler is already initialized")
         }
     }
 }
@@ -424,6 +433,7 @@ where
         Self {
             router: self.router.clone(),
             seqno_scheduler: self.seqno_scheduler.clone(),
+            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
         }
     }
 }
@@ -482,6 +492,17 @@ where
                 "failed to schedule memtable seqno to seqno relation worker";
                 "err" => ?e,
             );
+        }
+    }
+
+    fn notify_memtable_flushed(&self, seqno: u64) {
+        if let Some(scheduler) = self.raftlog_gc_scheduler.get() {
+            if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed(seqno)) {
+                warn!(
+                    "failed to schedule memtable seqno to raftlog gc worker";
+                    "err" => ?e,
+                );
+            }
         }
     }
 }
@@ -1650,7 +1671,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+        apply_notifier: ApplyResNotifier<EK, ER>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1688,6 +1709,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
+            None,
         );
         let raftlog_gc_scheduler = workers
             .background_worker
@@ -1782,7 +1804,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
-            seqno_scheduler,
+            apply_notifier,
         )?;
         Ok(())
     }
@@ -1799,14 +1821,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+        apply_notifier: ApplyResNotifier<EK, ER>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
+        apply_notifier.init_raftlog_gc_scheduler(builder.raftlog_gc_scheduler.clone());
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
-            Box::new(ApplyResNotifier::new(self.router.clone(), seqno_scheduler)),
+            Box::new(apply_notifier),
             self.apply_router.clone(),
         );
         self.apply_system

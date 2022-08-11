@@ -10,7 +10,11 @@ use engine_traits::{Engines, Peekable, ALL_CFS, CF_RAFT};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
+    store::{
+        bootstrap_store, fsm,
+        fsm::store::{ApplyResNotifier, StoreMeta},
+        AutoSplitController, SnapManager,
+    },
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
@@ -41,7 +45,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
-    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
+    let (raft_router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine = Arc::new(
@@ -103,6 +107,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
+    let apply_notifier = ApplyResNotifier::new(raft_router, None);
 
     node.try_bootstrap_store(engines.clone()).unwrap();
     // try to restart this node, will clear the prepare data
@@ -118,7 +123,7 @@ fn test_node_bootstrap_with_prepared_data() {
         AutoSplitController::default(),
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
-        None,
+        apply_notifier,
     )
     .unwrap();
     assert!(

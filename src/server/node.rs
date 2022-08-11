@@ -19,9 +19,12 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self,
-        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
+        fsm::{
+            store::{ApplyResNotifier, StoreMeta},
+            ApplyRouter, RaftBatchSystem, RaftRouter,
+        },
         initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
-        RefreshConfigTask, SeqnoRelationTask, SnapManager, SplitCheckTask, Transport,
+        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
     },
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -195,7 +198,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+        apply_notifier: ApplyResNotifier<EK, ER>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -232,7 +235,7 @@ where
             auto_split_controller,
             concurrency_manager,
             collector_reg_handle,
-            seqno_scheduler,
+            apply_notifier,
         )?;
 
         Ok(())
@@ -471,7 +474,7 @@ where
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
-        seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
+        apply_notifier: ApplyResNotifier<EK, ER>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -504,7 +507,7 @@ where
             concurrency_manager,
             collector_reg_handle,
             self.health_service.clone(),
-            seqno_scheduler,
+            apply_notifier,
         )?;
         Ok(())
     }

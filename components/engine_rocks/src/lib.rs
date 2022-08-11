@@ -14,6 +14,7 @@
 //!
 //! Please read the engine_trait crate docs before hacking.
 
+#![feature(once_cell)]
 #![cfg_attr(test, feature(test))]
 
 #[allow(unused_extern_crates)]

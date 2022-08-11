@@ -233,6 +233,7 @@ struct TiKvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     seqno_worker: Option<Box<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
+    apply_notifier: Option<ApplyResNotifier<RocksEngine, ER>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
@@ -358,6 +359,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             causal_ts_provider,
             tablet_factory: None,
             seqno_worker: None,
+            apply_notifier: None,
         }
     }
 
@@ -1026,7 +1028,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
-            self.seqno_worker.as_ref().map(|w| w.scheduler()),
+            self.apply_notifier.take().unwrap(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1680,12 +1682,14 @@ impl<CER: ConfiguredRaftEngine> TiKvServer<CER> {
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
-        if let Some(scheduler) = self.init_seqno_relation_sender() {
-            builder = builder.flush_listener(FlushListener::new(ApplyResNotifier::new(
-                self.router.clone(),
-                Some(scheduler),
-            )));
-        }
+        let apply_notifier = if let Some(scheduler) = self.init_seqno_relation_sender() {
+            let notifier = ApplyResNotifier::new(self.router.clone(), Some(scheduler));
+            builder = builder.flush_listener(FlushListener::new(notifier.clone()));
+            notifier
+        } else {
+            ApplyResNotifier::new(self.router.clone(), None)
+        };
+        self.apply_notifier = Some(apply_notifier);
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }
