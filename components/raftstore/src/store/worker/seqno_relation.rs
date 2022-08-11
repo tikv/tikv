@@ -17,6 +17,8 @@ use crate::store::{
     fsm::{store::ApplyResNotifier, ApplyNotifier, ApplyRes},
 };
 
+const RAFT_WB_MAX_KEYS: u64 = 256;
+
 pub enum Task<S: Snapshot> {
     ApplyRes(Vec<Box<ApplyRes<S>>>),
     MemtableSealed(u64),
@@ -110,7 +112,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
     fn handle_sync_relations(&mut self, relations: HashMap<u64, SeqnoRelation>) {
         let mut relation = RegionSequenceNumberRelation::default();
-        let count = relations.len();
+        let mut count = 0;
+        let size = relations.len();
         for (region_id, r) in relations {
             assert!(r.seqno.number <= self.last_flushed_seqno);
             self.seqno_window.push(r.seqno);
@@ -118,19 +121,36 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             relation.set_apply_state(r.apply_state);
             relation.set_sequence_number(r.seqno.number);
             self.wb.put_seqno_relation(region_id, &relation).unwrap();
+            count += 1;
+            if count % RAFT_WB_MAX_KEYS == 0 || count as usize == size - 1 {
+                SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.wb.persist_size() as f64);
+                let start = Instant::now();
+                self.raftdb
+                    .consume_and_shrink(
+                        &mut self.wb,
+                        false,
+                        RAFT_WB_SHRINK_SIZE,
+                        RAFT_WB_DEFAULT_SIZE,
+                    )
+                    .unwrap();
+                SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+            }
         }
-        SEQNO_RELATIONS_KEYS_FLOW.inc_by(count as u64);
-        SEQNO_RELATIONS_WRITE_FLOW.inc_by(self.wb.persist_size() as u64);
-        let start = Instant::now();
-        self.raftdb
-            .consume_and_shrink(
-                &mut self.wb,
-                true,
-                RAFT_WB_SHRINK_SIZE,
-                RAFT_WB_DEFAULT_SIZE,
-            )
-            .unwrap();
-        SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        if !self.wb.is_empty() {
+            SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.wb.persist_size() as f64);
+            let start = Instant::now();
+            self.raftdb
+                .consume_and_shrink(
+                    &mut self.wb,
+                    false,
+                    RAFT_WB_SHRINK_SIZE,
+                    RAFT_WB_DEFAULT_SIZE,
+                )
+                .unwrap();
+            SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        }
+        self.raftdb.sync().unwrap();
+        SEQNO_RELATIONS_KEYS_FLOW.inc_by(count);
         SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
     }
 }
