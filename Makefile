@@ -185,7 +185,6 @@ ifeq ($(TIKV_FRAME_POINTER),1)
 build:
 	rustup component add rust-src
 	cargo build --no-default-features --features "${ENABLE_FEATURES}" \
-		-Z build-std=core,std,alloc,proc_macro,test \
 		-Z unstable-options \
 		--target "${TIKV_BUILD_RUSTC_TARGET}" \
 		--out-dir "${CARGO_TARGET_DIR}/debug"
@@ -209,7 +208,6 @@ ifeq ($(TIKV_FRAME_POINTER),1)
 release:
 	rustup component add rust-src
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" \
-		-Z build-std=core,std,alloc,proc_macro,test \
 		-Z unstable-options \
 		--target "${TIKV_BUILD_RUSTC_TARGET}" \
 		--out-dir "${CARGO_TARGET_DIR}/release"

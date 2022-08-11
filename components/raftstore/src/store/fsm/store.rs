@@ -1034,6 +1034,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
             }
         }
     }
+
+    fn parallel_loop(&mut self) {
+        todo!()
+    }
 }
 
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
@@ -1518,7 +1522,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let mut builder = RaftPollerBuilder {
             cfg,
             store: meta,
-            engines,
+            engines: engines.clone(),
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,
@@ -1552,6 +1556,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            engines,
         )?;
         Ok(())
     }
@@ -1568,14 +1573,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
+        engines: Engines<EK, ER>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
 
-        let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
+        info!("[for debug] start_system";
+            "use_global" => self.apply_system.use_global,
+        );
+        let apply_poller_builder = ApplyPollerBuilder::<EK, ER>::new(
             &builder,
             Box::new(self.router.clone()),
             self.apply_router.clone(),
+            if self.apply_system.use_global {
+                Some(self.apply_system.global_receiver.clone())
+            } else {
+                None
+            },
+            engines.clone(),
         );
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
@@ -1667,7 +1682,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Wait all workers finish.
         workers.pd_worker.stop();
 
-        self.apply_system.shutdown();
+        self.apply_system.shutdown_apply_system();
         MEMTRACE_APPLY_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
         MEMTRACE_APPLY_ROUTER_LEAK.trace(TraceEvent::Reset(0));
 

@@ -87,7 +87,7 @@ use crate::{
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
-            apply::{self, CatchUpLogs},
+            apply::{self, ApplyFsm, CatchUpLogs},
             store::{PollContext, RaftRouter},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
@@ -3763,7 +3763,7 @@ where
         cb: Callback<EK::Snapshot>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
-            debug!(
+            info!(
                 "prevents unsafe read index";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),

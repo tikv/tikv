@@ -4742,6 +4742,10 @@ where
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
             Err(Error::EpochNotMatch(m, mut new_regions)) => {
+                warn!("[for debug] check_region_epoch failed";
+                    "msg" => ?&msg,
+                    "peer region" => ?self.fsm.peer.region(),
+                );
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -4800,7 +4804,7 @@ where
                 return;
             }
             Err(e) => {
-                debug!(
+                info!(
                     "failed to propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),

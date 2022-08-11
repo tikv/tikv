@@ -337,6 +337,8 @@ pub trait PollHandler<N, C>: Send + 'static {
     fn get_priority(&self) -> Priority {
         Priority::Normal
     }
+
+    fn parallel_loop(&mut self);
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -515,6 +517,17 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         batch.clear();
     }
 
+    fn poll_parallel_apply_v2(&mut self) {
+        info!("[for debug] poll_parallel_apply_v2");
+        let mut run = true;
+        let mut loop_cnt = 0;
+        assert!(self.name.contains("apply"));
+        self.handler.parallel_loop();
+        error!("[for debug error] quite poll_parallel_apply_v2";
+            "name" => ?&self.name,
+        );
+    }
+
     fn poll_parallel_apply(&mut self) {
         info!("[for debug] poll_parallel_apply");
         fail_point!("poll_parallel_apply");
@@ -586,7 +599,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         if !self.parallel_apply {
             self.poll_normal();
         } else {
-            self.poll_parallel_apply();
+            //self.poll_parallel_apply();
+            self.poll_parallel_apply_v2();
         }
     }
 }
@@ -623,6 +637,10 @@ where
     N: Fsm + Send + 'static,
     C: Fsm + Send + 'static,
 {
+    pub fn pool_size(&self) -> usize {
+        self.pool_size
+    }
+
     pub fn router(&self) -> &BatchRouter<N, C> {
         &self.router
     }
@@ -691,6 +709,7 @@ where
                 &mut builder,
             );
         }
+        /*
         for i in 0..self.low_priority_pool_size {
             self.start_poller(
                 thd_name!(format!("{}-low-{}", name_prefix, i)),
@@ -698,6 +717,7 @@ where
                 &mut builder,
             );
         }
+        */
         self.name_prefix = Some(name_prefix);
     }
 
@@ -711,7 +731,6 @@ where
         self.router.broadcast_shutdown();
         let mut last_error = None;
         for h in self.workers.lock().unwrap().drain(..) {
-            debug!("waiting for {}", h.thread().name().unwrap());
             if let Err(e) = h.join() {
                 error!("failed to join worker thread: {:?}", e);
                 last_error = Some(e);
@@ -816,8 +835,5 @@ pub fn create_system<N: Fsm, C: Fsm>(
         pool_state_builder: Some(pool_state_builder),
         parallel_apply: cfg.parallel_apply,
     };
-    info!("[for debug] parallel apply";
-        "parallel_apply" => cfg.parallel_apply,
-    );
     (router, system)
 }

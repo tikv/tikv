@@ -28,7 +28,7 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
+    DeleteStrategy, Engines, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
     RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
@@ -75,7 +75,8 @@ use crate::{
     coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel},
     store::{
         cmd_resp,
-        fsm::RaftPollerBuilder,
+        fsm::{ExecResult::DeleteRange, RaftPollerBuilder},
+        initial_region,
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
@@ -973,7 +974,7 @@ where
 
             let expect_index = self.apply_state.get_applied_index() + 1;
             if expect_index != entry.get_index() {
-                panic!(
+                debug!(
                     "{} expect index {}, but got {}",
                     self.tag,
                     expect_index,
@@ -987,6 +988,7 @@ where
             let res = match entry.get_entry_type() {
                 EntryType::EntryNormal => self.handle_raft_entry_normal(apply_ctx, &entry),
                 EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => {
+                    unreachable!();
                     self.handle_raft_entry_conf_change(apply_ctx, &entry)
                 }
             };
@@ -2948,19 +2950,14 @@ impl<S: Snapshot> Apply<S> {
     }
 
     fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
-        assert_eq!(self.region_id, other.region_id);
-        assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
             if other.bucket_meta.is_some() {
                 self.bucket_meta = other.bucket_meta.take();
             }
 
-            assert!(other.term >= self.term);
             self.term = other.term;
 
-            assert!(other.commit_index >= self.commit_index);
             self.commit_index = other.commit_index;
-            assert!(other.commit_term >= self.commit_term);
             self.commit_term = other.commit_term;
 
             self.entries.append(&mut other.entries);
@@ -2996,6 +2993,19 @@ impl Registration {
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
             is_merging: peer.pending_merge_state.is_some(),
             raft_engine: Box::new(peer.get_store().engines.raft.clone()),
+        }
+    }
+
+    pub fn new_mock(raft_engine: Box<dyn RaftEngineReadOnly>) -> Registration {
+        Registration {
+            id: 2,
+            term: 5,
+            apply_state: RaftApplyState::default(),
+            applied_index_term: 5,
+            region: initial_region(2, 2, 2),
+            pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
+            is_merging: false,
+            raft_engine,
         }
     }
 }
@@ -3178,6 +3188,7 @@ where
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
     Validate(u64, Box<dyn FnOnce(*const u8) + Send>),
+    ShutDownGlobal,
 }
 
 impl<EK> Msg<EK>
@@ -3225,6 +3236,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::ShutDownGlobal => write!(f, "shutdown_global"),
         }
     }
 }
@@ -3373,13 +3385,14 @@ where
         );
         let cur_state = (apply.commit_index, apply.commit_term);
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
-            panic!(
+            debug!(
                 "{} commit state jump backward {:?} -> {:?}",
                 self.delegate.tag, prev_state, cur_state
             );
+        } else {
+            self.delegate.apply_state.set_commit_index(cur_state.0);
+            self.delegate.apply_state.set_commit_term(cur_state.1);
         }
-        self.delegate.apply_state.set_commit_index(cur_state.0);
-        self.delegate.apply_state.set_commit_term(cur_state.1);
 
         self.append_proposal(apply.cbs.drain(..));
         // If there is any apply task, we change this fsm to normal-priority.
@@ -3659,6 +3672,70 @@ where
         cb.invoke_read(resp);
     }
 
+    fn handle_tasks_apply(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
+        let mut drainer = msgs.drain(..);
+        let mut batch_apply = None;
+        loop {
+            let msg = match drainer.next() {
+                Some(m) => m,
+                None => {
+                    if let Some(apply) = batch_apply {
+                        self.handle_apply(apply_ctx, apply);
+                    }
+                    break;
+                }
+            };
+
+            if batch_apply.is_some() {
+                match &msg {
+                    Msg::Apply { .. } => (),
+                    _ => {
+                        warn!("[for debug] apply task is skipped";
+                            "task" => ?msg,
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            match msg {
+                Msg::Apply { start, mut apply } => {
+                    let apply_wait = start.saturating_elapsed();
+                    apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
+                    for tracker in apply
+                        .cbs
+                        .iter()
+                        .flat_map(|p| p.cb.get_trackers())
+                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
+                    {
+                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
+                        });
+                    }
+
+                    if let Some(batch) = batch_apply.as_mut() {
+                        if batch.try_batch(&mut apply) {
+                            continue;
+                        } else {
+                            self.handle_apply(apply_ctx, batch_apply.take().unwrap());
+                            if let Some(ref mut state) = self.delegate.yield_state {
+                                state.pending_msgs.push(Msg::Apply { start, apply });
+                                state.pending_msgs.extend(drainer);
+                                break;
+                            }
+                        }
+                    }
+                    batch_apply = Some(apply);
+                }
+                _ => {
+                    warn!("[for debug] apply task is skipped";
+                        "task" => ?msg,
+                    );
+                }
+            }
+        }
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
@@ -3730,6 +3807,9 @@ where
                 Msg::Validate(_, f) => {
                     let delegate: *const u8 = unsafe { mem::transmute(&self.delegate) };
                     f(delegate)
+                }
+                Msg::ShutDownGlobal => {
+                    unreachable!()
                 }
             }
         }
@@ -3817,9 +3897,10 @@ impl Fsm for ControlFsm {
     }
 }
 
-pub struct ApplyPoller<EK>
+pub struct ApplyPoller<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     msg_buf: Vec<Msg<EK>>,
     apply_ctx: ApplyContext<EK>,
@@ -3827,11 +3908,15 @@ where
     cfg_tracker: Tracker<Config>,
 
     trace_event: TraceEvent,
+
+    global_receiver: Option<crossbeam::channel::Receiver<Msg<EK>>>,
+    engines: Engines<EK, ER>,
 }
 
-impl<EK> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK>
+impl<EK, ER> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
     where
@@ -3948,9 +4033,48 @@ where
     fn get_priority(&self) -> Priority {
         self.apply_ctx.priority
     }
+
+    fn parallel_loop(&mut self) {
+        // The mock_apply_fsm is a mocked globally used apply message processor, its region_id is 2
+        // and it could only handle apply requests related to region 2.
+        // This is just for demo use.
+        let (_, mut mock_apply_fsm) = ApplyFsm::<EK>::from_registration(Registration::new_mock(
+            Box::new(self.engines.raft.clone()),
+        ));
+        loop {
+            while self.msg_buf.len() < self.messages_per_tick {
+                let msg = self.global_receiver.as_mut().unwrap().recv().unwrap();
+                if let Msg::ShutDownGlobal = &msg {
+                    info!("quit parallel_loop");
+                    return;
+                }
+                self.msg_buf.push(msg);
+                match self.global_receiver.as_mut().unwrap().try_recv() {
+                    Ok(msg) => {
+                        if let Msg::ShutDownGlobal = &msg {
+                            info!("quit parallel_loop");
+                            return;
+                        }
+                        self.msg_buf.push(msg)
+                    }
+                    Err(TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        unreachable!();
+                        break;
+                    }
+                }
+            }
+            if self.msg_buf.len() > 0 {
+                mock_apply_fsm.handle_tasks_apply(&mut self.apply_ctx, &mut self.msg_buf);
+                self.apply_ctx.flush();
+            }
+        }
+    }
 }
 
-pub struct Builder<EK: KvEngine> {
+pub struct Builder<EK: KvEngine, ER: RaftEngine> {
     tag: String,
     cfg: Arc<VersionTrack<Config>>,
     coprocessor_host: CoprocessorHost<EK>,
@@ -3961,14 +4085,19 @@ pub struct Builder<EK: KvEngine> {
     router: ApplyRouter<EK>,
     store_id: u64,
     pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
+    global_receiver: Option<crossbeam::channel::Receiver<Msg<EK>>>,
+    engines: Engines<EK, ER>,
 }
 
-impl<EK: KvEngine> Builder<EK> {
-    pub fn new<T, ER: RaftEngine>(
+impl<EK: KvEngine, ER: RaftEngine> Builder<EK, ER> {
+    pub fn new<T>(
         builder: &RaftPollerBuilder<EK, ER, T>,
         sender: Box<dyn Notifier<EK>>,
         router: ApplyRouter<EK>,
-    ) -> Builder<EK> {
+        global_receiver: Option<crossbeam::channel::Receiver<Msg<EK>>>,
+        engines: Engines<EK, ER>,
+    ) -> Builder<EK, ER> {
         Builder {
             tag: format!("[store {}]", builder.store.get_id()),
             cfg: builder.cfg.clone(),
@@ -3980,17 +4109,20 @@ impl<EK: KvEngine> Builder<EK> {
             router,
             store_id: builder.store.get_id(),
             pending_create_peers: builder.pending_create_peers.clone(),
+            global_receiver,
+            engines,
         }
     }
 }
 
-impl<EK> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK>
+impl<EK, ER> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for Builder<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    type Handler = ApplyPoller<EK>;
+    type Handler = ApplyPoller<EK, ER>;
 
-    fn build(&mut self, priority: Priority) -> ApplyPoller<EK> {
+    fn build(&mut self, priority: Priority) -> ApplyPoller<EK, ER> {
         let cfg = self.cfg.value();
         ApplyPoller {
             msg_buf: Vec::with_capacity(cfg.messages_per_tick),
@@ -4010,13 +4142,17 @@ where
             messages_per_tick: cfg.messages_per_tick,
             cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
             trace_event: Default::default(),
+
+            global_receiver: self.global_receiver.clone(),
+            engines: self.engines.clone(),
         }
     }
 }
 
-impl<EK> Clone for Builder<EK>
+impl<EK, ER> Clone for Builder<EK, ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn clone(&self) -> Self {
         Builder {
@@ -4030,6 +4166,8 @@ where
             router: self.router.clone(),
             store_id: self.store_id,
             pending_create_peers: self.pending_create_peers.clone(),
+            global_receiver: self.global_receiver.clone(),
+            engines: self.engines.clone(),
         }
     }
 }
@@ -4040,6 +4178,9 @@ where
     EK: KvEngine,
 {
     pub router: BatchRouter<ApplyFsm<EK>, ControlFsm>,
+    pub global_sender: crossbeam::channel::Sender<Msg<EK>>,
+    pub global_receiver: crossbeam::channel::Receiver<Msg<EK>>,
+    pub use_global_sender: bool,
 }
 
 impl<EK> Deref for ApplyRouter<EK>
@@ -4134,6 +4275,10 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::ShutDownGlobal => {
+                    error!("[for debug] ShutDownGlobal message is not scheduled by apply router");
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4143,7 +4288,16 @@ where
         // queued inside both queue of control fsm and normal fsm, which can reorder
         // messages.
         let (sender, apply_fsm) = ApplyFsm::from_registration(reg);
-        let mailbox = BasicMailbox::new(sender, apply_fsm, self.state_cnt().clone());
+        let mailbox = if !self.use_global_sender {
+            BasicMailbox::new(sender, apply_fsm, self.state_cnt().clone())
+        } else {
+            BasicMailbox::new_global(
+                sender,
+                apply_fsm,
+                self.state_cnt().clone(),
+                self.global_sender.clone(),
+            )
+        };
         self.register(region_id, mailbox);
     }
 
@@ -4170,7 +4324,10 @@ where
 }
 
 pub struct ApplyBatchSystem<EK: KvEngine> {
-    system: BatchSystem<ApplyFsm<EK>, ControlFsm>,
+    pub system: BatchSystem<ApplyFsm<EK>, ControlFsm>,
+    pub global_sender: crossbeam::channel::Sender<Msg<EK>>,
+    pub global_receiver: crossbeam::channel::Receiver<Msg<EK>>,
+    pub use_global: bool,
 }
 
 impl<EK: KvEngine> Deref for ApplyBatchSystem<EK> {
@@ -4194,10 +4351,33 @@ impl<EK: KvEngine> ApplyBatchSystem<EK> {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
             mailboxes.push((
                 peer.region().get_id(),
-                BasicMailbox::new(tx, fsm, self.router().state_cnt().clone()),
+                if !self.use_global {
+                    BasicMailbox::new(tx, fsm, self.router().state_cnt().clone())
+                } else {
+                    info!("[for debug] schedule_all, new global basicmailbox";
+                        "peer region id" => peer.region().get_id(),
+                    );
+                    BasicMailbox::new_global(
+                        tx,
+                        fsm,
+                        self.router().state_cnt().clone(),
+                        self.global_sender.clone(),
+                    )
+                },
             ));
         }
         self.router().register_all(mailboxes);
+    }
+
+    pub fn shutdown_apply_system(&mut self) {
+        info!("shutdown_apply_system use_global={}", self.use_global);
+        if self.use_global {
+            for _ in 0..self.system.pool_size() {
+                info!("[for debug] schedule shutdown global to global sender");
+                self.global_sender.send(Msg::ShutDownGlobal).unwrap();
+            }
+        }
+        self.shutdown();
     }
 }
 
@@ -4205,9 +4385,26 @@ pub fn create_apply_batch_system<EK: KvEngine>(
     cfg: &Config,
 ) -> (ApplyRouter<EK>, ApplyBatchSystem<EK>) {
     let (control_tx, control_fsm) = ControlFsm::new();
+    let (global_sender, global_receiver) = crossbeam::channel::unbounded();
     let (router, system) =
         batch_system::create_system(&cfg.apply_batch_system, control_tx, control_fsm);
-    (ApplyRouter { router }, ApplyBatchSystem { system })
+    info!("[for debug] parallel apply log for create_apply_batch_system";
+        "parallel_apply" => cfg.apply_batch_system.parallel_apply,
+    );
+    (
+        ApplyRouter {
+            router,
+            global_sender: global_sender.clone(),
+            global_receiver: global_receiver.clone(),
+            use_global_sender: cfg.apply_batch_system.parallel_apply,
+        },
+        ApplyBatchSystem {
+            system,
+            global_sender,
+            global_receiver,
+            use_global: cfg.apply_batch_system.parallel_apply,
+        },
+    )
 }
 
 mod memtrace {
@@ -4269,6 +4466,7 @@ mod memtrace {
                 | Msg::Change { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
+                Msg::ShutDownGlobal => 0,
             }
         }
     }

@@ -25,7 +25,6 @@ impl Config {
 
     pub fn apply_config() -> Self {
         let mut conf = Config::default();
-        conf.parallel_apply = true;
         conf
     }
 }

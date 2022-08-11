@@ -79,6 +79,7 @@ impl<T> Drop for Sender<T> {
 }
 
 /// The receive end of a channel.
+#[derive(Clone)]
 pub struct Receiver<T> {
     receiver: channel::Receiver<T>,
     state: Arc<State>,
