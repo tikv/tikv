@@ -38,7 +38,7 @@ use crate::{
     store::{
         config::Config,
         fsm::RaftRouter,
-        local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics, TimeTracker},
+        local_metrics::{RaftSendMessageMetrics, StoreWriteMetrics},
         metrics::*,
         transport::Transport,
         util::LatencyInspector,
@@ -97,7 +97,7 @@ where
     pub cut_logs: Option<(u64, u64)>,
     pub raft_state: Option<RaftLocalState>,
     pub messages: Vec<RaftMessage>,
-    pub trackers: Vec<TimeTracker>,
+    pub request_times: Vec<Instant>,
 }
 
 impl<EK, ER> WriteTask<EK, ER>
@@ -117,7 +117,7 @@ where
             cut_logs: None,
             raft_state: None,
             messages: vec![],
-            trackers: vec![],
+            request_times: vec![],
         }
     }
 
@@ -298,12 +298,12 @@ where
         }
         self.state_size = 0;
         if metrics.waterfall_metrics {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             for task in &self.tasks {
-                for tracker in &task.trackers {
-                    tracker.observe(now, &metrics.wf_before_write, |t| {
-                        &mut t.metrics.wf_before_write_nanos
-                    });
+                for t in &task.request_times {
+                    metrics
+                        .wf_before_write
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
         }
@@ -311,12 +311,12 @@ where
 
     fn after_write_to_kv_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             for task in &self.tasks {
-                for tracker in &task.trackers {
-                    tracker.observe(now, &metrics.wf_kvdb_end, |t| {
-                        &mut t.metrics.wf_kvdb_end_nanos
-                    });
+                for t in &task.request_times {
+                    metrics
+                        .wf_kvdb_end
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
                 }
             }
         }
@@ -324,12 +324,12 @@ where
 
     fn after_write_to_raft_db(&mut self, metrics: &StoreWriteMetrics) {
         if metrics.waterfall_metrics {
-            let now = std::time::Instant::now();
+            let now = Instant::now();
             for task in &self.tasks {
-                for tracker in &task.trackers {
-                    tracker.observe(now, &metrics.wf_write_end, |t| {
-                        &mut t.metrics.wf_write_end_nanos
-                    });
+                for t in &task.request_times {
+                    metrics
+                        .wf_write_end
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)))
                 }
             }
         }
@@ -353,7 +353,7 @@ where
     raft_write_size_limit: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
-    perf_context: ER::PerfContext,
+    perf_context: EK::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
 }
 
@@ -378,7 +378,7 @@ where
             engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
         );
         let perf_context = engines
-            .raft
+            .kv
             .get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
         let cfg_tracker = cfg.clone().tracker(tag.clone());
         Self {
@@ -535,13 +535,7 @@ where
                         self.store_id, self.tag, e
                     );
                 });
-            let trackers: Vec<_> = self
-                .batch
-                .tasks
-                .iter()
-                .flat_map(|task| task.trackers.iter().flat_map(|t| t.as_tracker_token()))
-                .collect();
-            self.perf_context.report_metrics(&trackers);
+            self.perf_context.report_metrics();
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
         }

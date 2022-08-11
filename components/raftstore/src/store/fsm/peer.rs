@@ -73,7 +73,7 @@ use crate::{
             ExecResult,
         },
         hibernate_state::{GroupState, HibernateState},
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
@@ -523,11 +523,11 @@ where
                 }))
             };
 
-            let tokens: SmallVec<[TimeTracker; 4]> = cbs
+            let times: SmallVec<[TiInstant; 4]> = cbs
                 .iter_mut()
                 .filter_map(|cb| {
-                    if let Callback::Write { trackers, .. } = cb {
-                        Some(trackers[0])
+                    if let Callback::Write { request_times, .. } = cb {
+                        Some(request_times[0])
                     } else {
                         None
                     }
@@ -546,8 +546,8 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { trackers, .. } = &mut cb {
-                *trackers = tokens;
+            if let Callback::Write { request_times, .. } = &mut cb {
+                *request_times = times;
             }
 
             return Some((req, cb));
@@ -3306,7 +3306,7 @@ where
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(
             &self.ctx.engines,
-            &mut self.ctx.raft_perf_context,
+            &mut self.ctx.perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
         ) {
@@ -4786,11 +4786,14 @@ where
         }
 
         if self.ctx.raft_metrics.waterfall_metrics {
-            let now = Instant::now();
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
-                tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
-                    &mut t.metrics.wf_batch_wait_nanos
-                });
+            if let Some(request_times) = cb.get_request_times() {
+                let now = TiInstant::now();
+                for t in request_times {
+                    self.ctx
+                        .raft_metrics
+                        .wf_batch_wait
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
             }
         }
 

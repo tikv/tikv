@@ -38,7 +38,6 @@ command! {
 impl CommandExt for PessimisticRollback {
     ctx!();
     tag!(pessimistic_rollback);
-    request_type!(KvPessimisticRollback);
     ts!(start_ts);
     write_bytes!(keys: multiple);
     gen_lock!(keys: multiple);

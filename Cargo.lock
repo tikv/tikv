@@ -1455,7 +1455,6 @@ dependencies = [
  "raft",
  "tikv_alloc",
  "tikv_util",
- "tracker",
  "txn_types",
 ]
 
@@ -1494,7 +1493,6 @@ dependencies = [
  "tikv_util",
  "time",
  "toml",
- "tracker",
  "txn_types",
 ]
 
@@ -1555,7 +1553,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "toml",
- "tracker",
  "txn_types",
 ]
 
@@ -2749,7 +2746,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#7d003c61fc6bff4c06d464f070c3a3408c9aec64"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2768,7 +2765,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#7d003c61fc6bff4c06d464f070c3a3408c9aec64"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4103,7 +4100,6 @@ dependencies = [
  "slog-global",
  "tikv_util",
  "time",
- "tracker",
 ]
 
 [[package]]
@@ -4169,7 +4165,6 @@ dependencies = [
  "tikv_util",
  "time",
  "tokio",
- "tracker",
  "txn_types",
  "uuid",
  "yatp",
@@ -4587,7 +4582,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#da5a68f76930f1f2f7ec5598f6996541fc64e53b"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.1#7d003c61fc6bff4c06d464f070c3a3408c9aec64"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -5714,7 +5709,6 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
- "tracker",
  "txn_types",
 ]
 
@@ -6120,7 +6114,6 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
- "tracker",
  "txn_types",
  "url",
  "uuid",
@@ -6269,7 +6262,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tikv_util",
- "tracker",
  "txn_types",
 ]
 
@@ -6331,7 +6323,6 @@ dependencies = [
  "tokio-executor",
  "tokio-timer",
  "toml",
- "tracker",
  "url",
  "utime",
  "yatp",
@@ -6638,20 +6629,6 @@ checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
  "pin-project",
  "tracing",
-]
-
-[[package]]
-name = "tracker"
-version = "0.0.1"
-dependencies = [
- "collections",
- "crossbeam-utils 0.8.8",
- "kvproto",
- "lazy_static",
- "parking_lot 0.12.0",
- "pin-project",
- "prometheus",
- "slab",
 ]
 
 [[package]]

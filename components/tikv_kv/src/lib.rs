@@ -20,14 +20,7 @@ mod raftstore_impls;
 mod rocksdb_engine;
 mod stats;
 
-use std::{
-    cell::UnsafeCell,
-    error,
-    num::NonZeroU64,
-    ptr, result,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{cell::UnsafeCell, error, num::NonZeroU64, ptr, result, sync::Arc, time::Duration};
 
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
@@ -45,7 +38,6 @@ use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{deadline::Deadline, escape, time::ThreadReadId};
-use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
 pub use self::{
@@ -569,7 +561,6 @@ pub fn snapshot<E: Engine>(
     engine: &E,
     ctx: SnapContext<'_>,
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
-    let begin = Instant::now();
     let (callback, future) =
         tikv_util::future::paired_must_called_future_callback(drop_snapshot_callback::<E>);
     let val = engine.async_snapshot(ctx, callback);
@@ -579,9 +570,6 @@ pub fn snapshot<E: Engine>(
         let result = future
             .map_err(|cancel| Error::from(ErrorInner::Other(box_err!(cancel))))
             .await?;
-        with_tls_tracker(|tracker| {
-            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
-        });
         fail_point!("after-snapshot");
         result
     }

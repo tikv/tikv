@@ -22,9 +22,8 @@ use pd_client::BucketMeta;
 use raft::{GetEntriesContext, SnapshotStatus};
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
+use super::{AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -99,7 +98,7 @@ pub enum Callback<S: Snapshot> {
         /// `committed_cb` is called after a request is committed and before it's being applied, and
         /// it's guaranteed that the request will be successfully applied soon.
         committed_cb: Option<ExtCallback>,
-        trackers: SmallVec<[TimeTracker; 4]>,
+        request_times: SmallVec<[Instant; 4]>,
     },
     #[cfg(any(test, feature = "testexport"))]
     /// Test purpose callback
@@ -121,28 +120,17 @@ where
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
-        let tracker_token = get_tls_tracker_token();
-        let now = std::time::Instant::now();
-        let tracker = if tracker_token == INVALID_TRACKER_TOKEN {
-            TimeTracker::Instant(now)
-        } else {
-            GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-                tracker.metrics.write_instant = Some(now);
-            });
-            TimeTracker::Tracker(tracker_token)
-        };
-
         Callback::Write {
             cb,
             proposed_cb,
             committed_cb,
-            trackers: smallvec![tracker],
+            request_times: smallvec![Instant::now()],
         }
     }
 
-    pub fn get_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+    pub fn get_request_times(&self) -> Option<&SmallVec<[Instant; 4]>> {
         match self {
-            Callback::Write { trackers, .. } => Some(trackers),
+            Callback::Write { request_times, .. } => Some(request_times),
             _ => None,
         }
     }

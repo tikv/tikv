@@ -65,7 +65,6 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -78,7 +77,7 @@ use crate::{
     store::{
         cmd_resp,
         fsm::RaftPollerBuilder,
-        local_metrics::{RaftMetrics, TimeTracker},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
@@ -438,7 +437,6 @@ where
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
-
         ApplyContext {
             tag,
             timer: None,
@@ -531,15 +529,7 @@ where
             self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            let trackers: Vec<_> = self
-                .applied_batch
-                .cb_batch
-                .iter()
-                .flat_map(|(cb, _)| cb.get_trackers())
-                .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
-                .flatten()
-                .collect();
-            self.perf_context.report_metrics(&trackers);
+            self.perf_context.report_metrics();
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
@@ -570,10 +560,13 @@ where
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
-                tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
+            if let Some(times) = cb.get_request_times() {
+                for t in times {
+                    self.apply_time
+                        .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                }
             }
             cb.invoke_with_response(resp);
         }
@@ -2965,17 +2958,17 @@ impl<S: Snapshot> Apply<S> {
     }
 
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
-        let now = std::time::Instant::now();
+        let mut now = None;
         for cb in &mut self.cbs {
-            if let Callback::Write { trackers, .. } = &mut cb.cb {
-                for tracker in trackers {
-                    tracker.observe(now, &metrics.store_time, |t| {
-                        t.metrics.write_instant = Some(now);
-                        &mut t.metrics.store_time_nanos
-                    });
-                    if let TimeTracker::Instant(t) = tracker {
-                        *t = now;
-                    }
+            if let Callback::Write { request_times, .. } = &mut cb.cb {
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                for t in request_times {
+                    metrics
+                        .store_time
+                        .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
+                    *t = now.unwrap();
                 }
             }
         }
@@ -3723,18 +3716,9 @@ where
 
             match msg {
                 Msg::Apply { start, mut apply } => {
-                    let apply_wait = start.saturating_elapsed();
-                    apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
-                    for tracker in apply
-                        .cbs
-                        .iter()
-                        .flat_map(|p| p.cb.get_trackers())
-                        .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
-                    {
-                        GLOBAL_TRACKERS.with_tracker(tracker, |t| {
-                            t.metrics.apply_wait_nanos = apply_wait.as_nanos() as u64;
-                        });
-                    }
+                    apply_ctx
+                        .apply_wait
+                        .observe(start.saturating_elapsed_secs());
 
                     if let Some(batch) = batch_apply.as_mut() {
                         if batch.try_batch(&mut apply) {

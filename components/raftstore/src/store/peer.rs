@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, RaftReadyMetrics, TimeTracker},
+    local_metrics::{RaftMetrics, RaftReadyMetrics},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -137,16 +137,16 @@ impl<S: Snapshot> ProposalQueue<S> {
         }
     }
 
-    /// Find the trackers of given index.
-    /// Caller should check if term is matched before using trackers.
-    fn find_trackers(&self, index: u64) -> Option<(u64, &SmallVec<[TimeTracker; 4]>)> {
+    /// Find the request times of given index.
+    /// Caller should check if term is matched before using request times.
+    fn find_request_times(&self, index: u64) -> Option<(u64, &SmallVec<[TiInstant; 4]>)> {
         self.queue
             .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
             .ok()
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .get_trackers()
+                    .get_request_times()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -1220,7 +1220,7 @@ where
     pub fn destroy(
         &mut self,
         engines: &Engines<EK, ER>,
-        perf_context: &mut ER::PerfContext,
+        perf_context: &mut EK::PerfContext,
         keep_data: bool,
         pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
     ) -> Result<()> {
@@ -1310,7 +1310,7 @@ where
 
             perf_context.start_observe();
             engines.raft.consume(&mut raft_wb, true)?;
-            perf_context.report_metrics(&[]);
+            perf_context.report_metrics();
 
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
@@ -1574,8 +1574,6 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         msgs: Vec<RaftMessage>,
     ) {
-        let mut now = None;
-        let std_now = Instant::now();
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
@@ -1591,7 +1589,7 @@ where
                 // network partition from the new leader.
                 // For lease safety during leader transfer, transit `leader_lease`
                 // to suspect.
-                self.leader_lease.suspect(*now.insert(monotonic_raw_now()));
+                self.leader_lease.suspect(monotonic_raw_now());
             }
 
             let to_peer_id = msg.get_to_peer().get_id();
@@ -1606,28 +1604,6 @@ where
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );
-
-            for (term, index) in msg
-                .get_message()
-                .get_entries()
-                .iter()
-                .map(|e| (e.get_term(), e.get_index()))
-            {
-                if let Ok(idx) = self
-                    .proposals
-                    .queue
-                    .binary_search_by_key(&index, |p: &Proposal<_>| p.index)
-                {
-                    let proposal = &self.proposals.queue[idx];
-                    if term == proposal.term {
-                        for tracker in proposal.cb.get_trackers().iter().flat_map(|v| v.iter()) {
-                            tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
-                                &mut t.metrics.wf_send_proposal_nanos
-                            });
-                        }
-                    }
-                }
-            }
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
@@ -1752,19 +1728,22 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let now = Instant::now();
+        let mut now = None;
         for index in pre_persist_index + 1..=self.raft_group.raft.raft_log.persisted {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    for tracker in trackers {
-                        tracker.observe(now, &metrics.wf_persist_log, |t| {
-                            &mut t.metrics.wf_persist_log_nanos
-                        });
+                    if now.is_none() {
+                        now = Some(TiInstant::now());
+                    }
+                    for t in times {
+                        metrics
+                            .wf_persist_log
+                            .observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
             }
@@ -1775,26 +1754,25 @@ where
         if !metrics.waterfall_metrics || self.proposals.is_empty() {
             return;
         }
-        let now = Instant::now();
+        let mut now = None;
         for index in pre_commit_index + 1..=self.raft_group.raft.raft_log.committed {
-            if let Some((term, trackers)) = self.proposals.find_trackers(index) {
+            if let Some((term, times)) = self.proposals.find_request_times(index) {
                 if self
                     .get_store()
                     .term(index)
                     .map(|t| t == term)
                     .unwrap_or(false)
                 {
-                    let commit_persisted = index <= self.raft_group.raft.raft_log.persisted;
-                    let hist = if commit_persisted {
+                    if now.is_none() {
+                        now = Some(TiInstant::now());
+                    }
+                    let hist = if index <= self.raft_group.raft.raft_log.persisted {
                         &metrics.wf_commit_log
                     } else {
                         &metrics.wf_commit_not_persist_log
                     };
-                    for tracker in trackers {
-                        tracker.observe(now, hist, |t| {
-                            t.metrics.commit_not_persisted = !commit_persisted;
-                            &mut t.metrics.wf_commit_log_nanos
-                        });
+                    for t in times {
+                        hist.observe(duration_to_sec(now.unwrap().saturating_duration_since(*t)));
                     }
                 }
             }
@@ -2516,17 +2494,20 @@ where
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
-        let mut trackers = vec![];
+        let mut request_times = vec![];
         if ctx.raft_metrics.waterfall_metrics {
-            let now = Instant::now();
+            let mut now = None;
             for entry in ready.entries() {
-                if let Some((term, times)) = self.proposals.find_trackers(entry.get_index()) {
+                if let Some((term, times)) = self.proposals.find_request_times(entry.get_index()) {
                     if entry.term == term {
-                        trackers.extend_from_slice(times);
-                        for tracker in times {
-                            tracker.observe(now, &ctx.raft_metrics.wf_send_to_queue, |t| {
-                                &mut t.metrics.wf_send_to_queue_nanos
-                            });
+                        request_times.extend_from_slice(times);
+                        if now.is_none() {
+                            now = Some(TiInstant::now());
+                        }
+                        for t in times {
+                            ctx.raft_metrics.wf_send_to_queue.observe(duration_to_sec(
+                                now.unwrap().saturating_duration_since(*t),
+                            ));
                         }
                     }
                 }
@@ -2553,8 +2534,8 @@ where
                     task.messages = self.build_raft_messages(ctx, persisted_msgs);
                 }
 
-                if !trackers.is_empty() {
-                    task.trackers = trackers;
+                if !request_times.is_empty() {
+                    task.request_times = request_times;
                 }
 
                 if let Some(write_worker) = &mut ctx.sync_write_worker {
