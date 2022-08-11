@@ -236,7 +236,7 @@ impl QuotaLimiter {
     pub fn total_read_bytes_consumed(&self, is_foreground: bool) -> usize {
         self.get_limiters(is_foreground)
             .read_bandwidth_limiter
-            .total_bytes_consumed() 
+            .total_bytes_consumed()
     }
 
     // To generate a sampler.
