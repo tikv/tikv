@@ -10,6 +10,8 @@ use tokio::sync::OnceCell;
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
 use crate::errors::{ContextualResultExt, Result};
 
+const RPC_TIMEOUT: Duration = Duration::from_sec(30);
+
 #[derive(Clone)]
 pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
@@ -28,7 +30,7 @@ impl ConnectionConfig {
         }
         opts = opts
             .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
-            .with_timeout(Duration::from_secs(5))
+            .with_timeout(RPC_TIMEOUT)
             .keep_alive_while_idle(false);
 
         opts

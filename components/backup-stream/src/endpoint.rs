@@ -66,6 +66,10 @@ const SLOW_EVENT_THRESHOLD: f64 = 120.0;
 /// CHECKPOINT_SAFEPOINT_TTL_IF_ERROR specifies the safe point TTL(24 hour) if
 /// task has fatal error.
 const CHECKPOINT_SAFEPOINT_TTL_IF_ERROR: u64 = 24;
+/// The timeout for tick updating the checkpoint.
+/// Generally, it would take ~100ms.
+/// 5s would be enough for it.
+const TICK_UPDATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Endpoint<S, R, E, RT, PDC> {
     // Note: those fields are more like a shared context between components.
@@ -810,19 +814,19 @@ where
         }));
     }
 
-    fn on_update_global_checkpoint(&self, task: String) {
-        self.pool.block_on(async move {
-            let ts = self.meta_client.global_progress_of_task(&task).await;
+    fn update_global_checkpoint(&self, task: String) -> future![()] {
+        let meta_client = self.meta_client.clone();
+        let router = self.range_router.clone();
+        async move {
+            let ts = meta_client.global_progress_of_task(&task).await;
             match ts {
                 Ok(global_checkpoint) => {
-                    let r = self
-                        .range_router
+                    let r = router
                         .update_global_checkpoint(&task, global_checkpoint, self.store_id)
                         .await;
                     match r {
                         Ok(true) => {
-                            if let Err(err) = self
-                                .meta_client
+                            if let Err(err) = meta_client
                                 .set_storage_checkpoint(&task, global_checkpoint)
                                 .await
                             {
@@ -854,7 +858,14 @@ where
                     );
                 }
             }
-        });
+        }
+    }
+
+    fn on_update_global_checkpoint(&self, task: String) {
+        self.pool.spawn(tokio::time::timeout(
+            TICK_UPDATE_TIMEOUT,
+            self.update_global_checkpoint(task),
+        ));
     }
 
     /// Modify observe over some region.
