@@ -474,7 +474,6 @@ impl<'client> S3Uploader<'client> {
                 sleep(delay_duration).await;
             }
 
-            #[cfg(feature = "failpoints")]
             fail_point!("s3_put_obj_err", |_| {
                 Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
