@@ -410,9 +410,9 @@ where
     delete_ssts: Vec<SstMetaInfo>,
 
     /// A self-defined engine may be slow to ingest ssts.
-    /// It may move some elements of `delete_ssts` into `pending_clean_ssts` to
+    /// It may move some elements of `delete_ssts` into `pending_delete_ssts` to
     /// delay deletion. Otherwise we may lost data.
-    pending_clean_ssts: Vec<SstMetaInfo>,
+    pending_delete_ssts: Vec<SstMetaInfo>,
 
     /// The priority of this Handler.
     priority: Priority,
@@ -471,7 +471,7 @@ where
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
-            pending_clean_ssts: vec![],
+            pending_delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -1343,7 +1343,7 @@ where
         let mut apply_ctx_info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
             delete_ssts: &mut ctx.delete_ssts,
-            pending_clean_ssts: &mut ctx.pending_clean_ssts,
+            pending_delete_ssts: &mut ctx.pending_delete_ssts,
         };
         let should_write = ctx.host.post_exec(
             &self.region,
@@ -5018,7 +5018,7 @@ mod tests {
                     let mut ssts = std::mem::take(v);
                     assert_ne!(ssts.len(), 0);
                     if self.delay_remove_ssts.load(Ordering::SeqCst) {
-                        apply_info.pending_clean_ssts.append(&mut ssts);
+                        apply_info.pending_delete_ssts.append(&mut ssts);
                     } else {
                         apply_info.delete_ssts.append(&mut ssts);
                     }
@@ -5028,7 +5028,7 @@ mod tests {
             self.last_delete_sst_count
                 .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
             self.last_pending_clean_sst_count
-                .store(apply_info.pending_clean_ssts.len() as u64, Ordering::SeqCst);
+                .store(apply_info.pending_delete_ssts.len() as u64, Ordering::SeqCst);
             self.last_pending_handle_sst_count.store(
                 match apply_info.pending_handle_ssts {
                     Some(ref v) => v.len() as u64,

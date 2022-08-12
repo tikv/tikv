@@ -87,7 +87,7 @@ pub struct RegionState {
 pub struct ApplyCtxInfo<'a> {
     pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
     pub delete_ssts: &'a mut Vec<SstMetaInfo>,
-    pub pending_clean_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_delete_ssts: &'a mut Vec<SstMetaInfo>,
 }
 
 pub trait AdminObserver: Coprocessor {

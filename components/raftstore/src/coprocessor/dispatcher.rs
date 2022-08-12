@@ -916,10 +916,10 @@ mod tests {
 
         let mut pending_handle_ssts = None;
         let mut delete_ssts = vec![];
-        let mut pending_clean_ssts = vec![];
+        let mut pending_delete_ssts = vec![];
         let mut info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
-            pending_clean_ssts: &mut pending_clean_ssts,
+            pending_delete_ssts: &mut pending_delete_ssts,
             delete_ssts: &mut delete_ssts,
         };
         let apply_state = RaftApplyState::default();
