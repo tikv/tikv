@@ -5,7 +5,7 @@ use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
 use crate::engine::PanicEngine;
 
 impl MiscExt for PanicEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
+    fn flush_cfs(&self, sync: bool) -> Result<()> {
         panic!()
     }
 

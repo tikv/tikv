@@ -211,7 +211,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Flush and compact the kvs into L6.
-    engines.kv.flush(true).unwrap();
+    engines.kv.flush_cfs(true).unwrap();
     engines.kv.compact_files_in_range(None, None, None).unwrap();
     let db = engines.kv.as_inner();
     let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
@@ -254,9 +254,9 @@ fn test_delete_files_in_range_for_titan() {
     // Used to trigger titan gc
     let engine = &engines.kv;
     engine.put(b"1", b"1").unwrap();
-    engine.flush(true).unwrap();
+    engine.flush_cfs(true).unwrap();
     engine.put(b"2", b"2").unwrap();
-    engine.flush(true).unwrap();
+    engine.flush_cfs(true).unwrap();
     engine
         .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
         .unwrap();

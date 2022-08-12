@@ -533,7 +533,7 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             let trackers: Vec<_> = self

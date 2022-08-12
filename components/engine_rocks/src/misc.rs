@@ -127,7 +127,7 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
+    fn flush_cfs(&self, sync: bool) -> Result<()> {
         self.as_inner().flush(sync).map_err(r2e)
     }
 
