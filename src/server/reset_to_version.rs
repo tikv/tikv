@@ -487,8 +487,9 @@ mod tests {
     }
 
     fn get_all_keys(engine: &RocksEngine, cf: &str) -> Vec<Vec<u8>> {
-        let readopts = IterOptions::new(None, None, false);
-        let mut iter = engine.iterator_opt(cf, readopts.clone()).unwrap();
+        let mut iter = engine
+            .iterator_opt(cf, IterOptions::new(None, None, false))
+            .unwrap();
         iter.seek_to_first().unwrap();
         let mut keys = vec![];
         while iter.valid().unwrap() {
