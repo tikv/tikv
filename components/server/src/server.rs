@@ -1282,9 +1282,10 @@ where
         let engines_info_clone = engines_info.clone();
 
         // region_id -> (suffix, tablet)
-        // `update` is called perodically which needs this map for recording the latest
-        // tablet for each region. `cached_latest_tablets` is passed to `update` to
-        // avoid memory allocation each time when calling `update`.
+        // `update` of EnginesResourceInfo is called perodically which needs this map
+        // for recording the latest tablet for each region.
+        // `cached_latest_tablets` is passed to `update` to avoid memory
+        // allocation each time when calling `update`.
         let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
