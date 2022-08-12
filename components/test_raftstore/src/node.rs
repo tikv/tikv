@@ -221,6 +221,7 @@ impl Simulator for NodeCluster {
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
@@ -311,7 +312,8 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            store_meta.clone(),
+            store_meta,
+            region_leaders.clone(),
             coprocessor_host,
             importer,
             split_scheduler,
@@ -362,7 +364,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router, local_reader, store_meta);
+        let router = ServerRaftStoreRouter::new(router, local_reader, region_leaders);
         self.trans
             .core
             .lock()

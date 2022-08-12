@@ -330,6 +330,37 @@ fn test_invalid_read_index_when_no_leader() {
     );
 }
 
+#[test]
+fn test_raftkv_precheck_write_with_ctx() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(b"k1"), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let follower = region
+        .get_peers()
+        .iter()
+        .find(|p| p.get_id() != leader.get_id())
+        .unwrap();
+
+    let leader_storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+    let follower_storage = cluster.sim.rl().storages[&follower.get_id()].clone();
+
+    // Assume this is a write request.
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(region.get_peers()[0].clone());
+
+    // The (write) request can be sent to the leader.
+    leader_storage.precheck_write_with_ctx(&ctx).unwrap();
+    // The (write) request should not be send to a follower.
+    follower_storage.precheck_write_with_ctx(&ctx).unwrap_err();
+}
+
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
     engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
 }

@@ -214,10 +214,9 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> WritePreChecker for SimulateTransport<C> {
-    fn pre_send_write_to(&self, _region_id: u64) -> RaftStoreResult<()> {
-        // TODO(cosven): implement this method when needed.
-        Ok(())
+impl<C: WritePreChecker> WritePreChecker for SimulateTransport<C> {
+    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
+        self.ch.pre_send_write_to(region_id)
     }
 }
 

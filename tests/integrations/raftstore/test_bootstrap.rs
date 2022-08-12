@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Peekable, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
@@ -104,6 +105,7 @@ fn test_node_bootstrap_with_prepared_data() {
         snap_mgr,
         pd_worker,
         Arc::new(Mutex::new(StoreMeta::new(0))),
+        Arc::new(RwLock::new(HashSet::default())),
         coprocessor_host,
         importer,
         split_check_scheduler,
