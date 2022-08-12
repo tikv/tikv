@@ -1251,7 +1251,6 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
-            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
             apply_ctx.commit(self);
         }
         exec_result
