@@ -8,6 +8,7 @@ publish = false
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+bitflags = "1.0.1"
 case_macros = { path = "../case_macros" }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.5"

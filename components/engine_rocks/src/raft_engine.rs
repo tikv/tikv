@@ -1,9 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{convert::TryInto, ops::Deref};
+
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, StoreVersion, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
@@ -365,6 +367,16 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    }
+
+    fn store_version(&self) -> Result<Option<StoreVersion>> {
+        Ok(self.get_value(&keys::STORE_VERSION_KEY)?.map(|v| {
+            StoreVersion::from_bits(u64::from_be_bytes(v.deref().try_into().unwrap())).unwrap()
+        }))
+    }
+
+    fn put_store_version(&self, version: StoreVersion) -> Result<()> {
+        self.put(&keys::STORE_VERSION_KEY, &u64::to_be_bytes(version.bits()))
     }
 }
 

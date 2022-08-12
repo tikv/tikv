@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{
+    Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result, StoreVersion,
+};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
@@ -143,6 +145,14 @@ impl RaftEngine for PanicEngine {
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>,
     {
+        panic!()
+    }
+
+    fn store_version(&self) -> Result<Option<StoreVersion>> {
+        panic!()
+    }
+
+    fn put_store_version(&self, version: StoreVersion) -> Result<()> {
         panic!()
     }
 }

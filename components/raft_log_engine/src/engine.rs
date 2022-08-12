@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    convert::TryInto,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -11,7 +12,7 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result,
+    RaftLogGcTask, Result, StoreVersion,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -247,6 +248,10 @@ impl FileSystem for ManagedFileSystem {
             })
         }
     }
+
+    fn rename<P: AsRef<Path>>(&self, _src_path: P, _dst_path: P) -> IoResult<()> {
+        todo!()
+    }
 }
 
 #[derive(Clone)]
@@ -302,6 +307,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
+const STORE_VERSION_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -569,6 +575,23 @@ impl RaftEngine for RaftLogEngine {
         E: From<engine_traits::Error>,
     {
         unimplemented!()
+    }
+
+    fn store_version(&self) -> Result<Option<StoreVersion>> {
+        Ok(self.0.get(STORE_REGION_ID, &STORE_VERSION_KEY).map(|v| {
+            StoreVersion::from_bits(u64::from_be_bytes(v.as_slice().try_into().unwrap())).unwrap()
+        }))
+    }
+
+    fn put_store_version(&self, version: StoreVersion) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch.0.put(
+            STORE_REGION_ID,
+            STORE_VERSION_KEY.to_vec(),
+            u64::to_be_bytes(version.bits()).to_vec(),
+        );
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
+        Ok(())
     }
 }
 

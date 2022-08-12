@@ -10,6 +10,12 @@ use crate::*;
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
+bitflags::bitflags! {
+    pub struct StoreVersion: u64 {
+        const RECOVER_FROM_RAFTDB = 0b00000001;
+    }
+}
+
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn is_empty(&self) -> Result<bool>;
 
@@ -138,6 +144,10 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
+
+    fn store_version(&self) -> Result<Option<StoreVersion>>;
+
+    fn put_store_version(&self, version: StoreVersion) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {

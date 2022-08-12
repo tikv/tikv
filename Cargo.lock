@@ -1540,6 +1540,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
+ "bitflags",
  "case_macros",
  "error_code",
  "fail",
@@ -1770,7 +1771,7 @@ dependencies = [
  "serde",
  "slog",
  "slog-global",
- "strum",
+ "strum 0.20.0",
  "tempfile",
  "thread_local",
  "tikv_alloc",
@@ -2464,6 +2465,12 @@ dependencies = [
  "unicode-bidi",
  "unicode-normalization",
 ]
+
+[[package]]
+name = "if_chain"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb56e1aa765b4b4f3aadfab769793b7087bb03a4ea4920644a6d238e2df5b9ed"
 
 [[package]]
 name = "indexmap"
@@ -4036,7 +4043,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
+source = "git+https://github.com/5kbpers/raft-engine.git?branch=impl-get#04316c4a5571961269c8b4eabd5c95076f6cfed1"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4045,6 +4052,7 @@ dependencies = [
  "fs2",
  "hashbrown 0.12.0",
  "hex 0.4.2",
+ "if_chain",
  "lazy_static",
  "libc 0.2.125",
  "log",
@@ -4061,13 +4069,15 @@ dependencies = [
  "rhai",
  "scopeguard",
  "serde",
+ "serde_repr",
+ "strum 0.24.1",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#7a436eae40a6b62371123c96941e058b7fe52b63"
+source = "git+https://github.com/5kbpers/raft-engine.git?branch=impl-get#04316c4a5571961269c8b4eabd5c95076f6cfed1"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4998,6 +5008,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_repr"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fe39d9fbb0ebf5eb2c7cb7e2a47e4f462fad1379f1166b8ae49ad9eae89a7ca"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5376,7 +5397,16 @@ version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7318c509b5ba57f18533982607f24070a55d353e90d4cae30c467cdb2ad5ac5c"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.20.1",
+]
+
+[[package]]
+name = "strum"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+dependencies = [
+ "strum_macros 0.24.3",
 ]
 
 [[package]]
@@ -5388,6 +5418,19 @@ dependencies = [
  "heck 0.3.1",
  "proc-macro2",
  "quote",
+ "syn",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.0",
+ "proc-macro2",
+ "quote",
+ "rustversion",
  "syn",
 ]
 
@@ -6068,7 +6111,7 @@ dependencies = [
  "slog",
  "slog-global",
  "sst_importer",
- "strum",
+ "strum 0.20.0",
  "sysinfo",
  "tempfile",
  "test_sst_importer",
