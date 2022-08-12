@@ -5027,8 +5027,10 @@ mod tests {
             }
             self.last_delete_sst_count
                 .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
-            self.last_pending_clean_sst_count
-                .store(apply_info.pending_delete_ssts.len() as u64, Ordering::SeqCst);
+            self.last_pending_clean_sst_count.store(
+                apply_info.pending_delete_ssts.len() as u64,
+                Ordering::SeqCst,
+            );
             self.last_pending_handle_sst_count.store(
                 match apply_info.pending_handle_ssts {
                     Some(ref v) => v.len() as u64,
