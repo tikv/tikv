@@ -165,7 +165,7 @@ impl kvengine::RecoverHandler for RecoverHandler {
                 continue;
             }
             if req.has_admin_request() {
-                if req.get_admin_request().has_split() {
+                if req.get_admin_request().has_splits() {
                     // We are recovering an parent shard, we need to switch the mem-table for
                     // children to copy.
                     engine.switch_mem_table(&shard, meta.base_version + ctx.exec_log_index);
