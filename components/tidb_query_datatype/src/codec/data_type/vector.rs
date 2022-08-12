@@ -366,7 +366,7 @@ impl VectorValue {
                         output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.write_evaluable_datum_decimal(*val)?;
+                        output.write_evaluable_datum_decimal(val)?;
                     }
                 }
                 Ok(())

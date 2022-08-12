@@ -130,7 +130,7 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum RangeOffsetKind {
     Size,
     Keys,

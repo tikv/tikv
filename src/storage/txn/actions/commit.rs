@@ -151,7 +151,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
     }
 
     #[cfg(test)]

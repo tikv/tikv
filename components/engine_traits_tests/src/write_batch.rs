@@ -717,12 +717,10 @@ fn write_batch_delete_range_backward_range() {
     let mut wb = db.engine.write_batch();
 
     wb.delete_range(b"c", b"a").unwrap();
-    assert!(
-        recover_safe(|| {
-            wb.write().unwrap();
-        })
-        .is_err()
-    );
+    recover_safe(|| {
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -745,12 +743,10 @@ fn write_batch_delete_range_backward_range() {
     wb.delete_range(&256_usize.to_be_bytes(), &0_usize.to_be_bytes())
         .unwrap();
 
-    assert!(
-        recover_safe(|| {
-            wb.write().unwrap();
-        })
-        .is_err()
-    );
+    recover_safe(|| {
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -787,12 +783,10 @@ fn write_batch_delete_range_backward_range_partial_commit() {
     wb.put(b"f", b"").unwrap();
     wb.delete(b"a").unwrap();
 
-    assert!(
-        recover_safe(|| {
-            wb.write().unwrap();
-        })
-        .is_err()
-    );
+    recover_safe(|| {
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());
@@ -835,12 +829,10 @@ fn write_batch_delete_range_backward_range_partial_commit() {
         wb.delete(&i.to_be_bytes()).unwrap();
     }
 
-    assert!(
-        recover_safe(|| {
-            wb.write().unwrap();
-        })
-        .is_err()
-    );
+    recover_safe(|| {
+        wb.write().unwrap();
+    })
+    .unwrap_err();
 
     assert!(db.engine.get_value(b"a").unwrap().is_some());
     assert!(db.engine.get_value(b"b").unwrap().is_some());

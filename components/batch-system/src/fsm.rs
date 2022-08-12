@@ -19,7 +19,7 @@ const NOTIFYSTATE_IDLE: usize = 1;
 // The FSM is expected to be dropped.
 const NOTIFYSTATE_DROP: usize = 2;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Priority {
     Low,
     Normal,
@@ -155,7 +155,7 @@ impl<N: Fsm> FsmState<N> {
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
             unsafe {
-                Box::from_raw(ptr);
+                let _ = Box::from_raw(ptr);
             }
         }
     }

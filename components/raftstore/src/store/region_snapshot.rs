@@ -492,7 +492,7 @@ mod tests {
         assert!(v0.is_none());
 
         let v4 = snap.get_value(b"key5");
-        assert!(v4.is_err());
+        v4.unwrap_err();
     }
 
     #[allow(clippy::type_complexity)]

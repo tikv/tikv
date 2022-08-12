@@ -423,7 +423,7 @@ fn test_store_allowlist() {
     for _ in 0..3 {
         let mut raft_m = RaftMessage::default();
         raft_m.mut_to_peer().set_store_id(1);
-        assert!(raft_client.send(raft_m).is_err());
+        raft_client.send(raft_m).unwrap_err();
     }
     for _ in 0..5 {
         let mut raft_m = RaftMessage::default();

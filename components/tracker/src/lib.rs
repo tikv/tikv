@@ -1,7 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(array_from_fn)]
-
 mod metrics;
 mod slab;
 mod tls;
@@ -92,7 +90,7 @@ impl RequestInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum RequestType {
     #[default]
     Unknown,

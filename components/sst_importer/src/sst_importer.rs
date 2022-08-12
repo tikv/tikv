@@ -823,7 +823,7 @@ mod tests {
             check_file_not_exists(&path.clone, key_manager.as_deref());
 
             // Cannot create the same file again.
-            assert!(dir.create(&meta, key_manager.clone()).is_err());
+            dir.create(&meta, key_manager.clone()).unwrap_err();
         }
 
         // Test ImportDir::delete()
@@ -912,12 +912,10 @@ mod tests {
             let mut f =
                 ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap();
             // Cannot create the same file again.
-            assert!(
-                ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).is_err()
-            );
+            ImportFile::create(meta.clone(), path.clone(), data_key_manager.clone()).unwrap_err();
             f.append(data).unwrap();
             // Invalid crc32 and length.
-            assert!(f.finish().is_err());
+            f.finish().unwrap_err();
             check_file_exists(&path.temp, data_key_manager.as_deref());
             check_file_not_exists(&path.save, data_key_manager.as_deref());
         }
@@ -1595,7 +1593,7 @@ mod tests {
             meta.set_length(0); // disable validation.
             meta.set_crc32(0);
             let meta_info = importer.validate(&meta).unwrap();
-            let _ = importer.ingest(&[meta_info.clone()], &db).unwrap();
+            importer.ingest(&[meta_info.clone()], &db).unwrap();
             // key1 = "zt9102_r01", value1 = "abc", len = 13
             // key2 = "zt9102_r04", value2 = "xyz", len = 13
             // key3 = "zt9102_r07", value3 = "pqrst", len = 15

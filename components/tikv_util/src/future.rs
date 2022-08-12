@@ -147,7 +147,7 @@ impl PollAtWake {
         };
 
         let waker = task::waker_ref(arc_self);
-        let cx = &mut Context::from_waker(&*waker);
+        let cx = &mut Context::from_waker(&waker);
         loop {
             match fut.as_mut().poll(cx) {
                 // Likely pending

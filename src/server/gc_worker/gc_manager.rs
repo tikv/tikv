@@ -321,7 +321,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             self.wait_for_next_safe_point()?;
 
             // Don't need to run GC any more if compaction filter is enabled.
-            if !is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
+            if !is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
                 set_status_metrics(GcManagerState::Working);
                 self.gc_a_round()?;
                 if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -451,7 +451,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         // periodically. If it's updated, rewinding will happen.
         loop {
             self.gc_manager_ctx.check_stopped()?;
-            if is_compaction_filter_allowed(&*self.cfg_tracker.value(), &self.feature_gate) {
+            if is_compaction_filter_allowed(&self.cfg_tracker.value(), &self.feature_gate) {
                 return Ok(());
             }
 

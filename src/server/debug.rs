@@ -913,10 +913,10 @@ fn dump_default_cf_properties(
     let sst_files = collection
         .iter()
         .map(|(k, _)| {
-            Path::new(&*k)
+            Path::new(k)
                 .file_name()
                 .map(|f| f.to_str().unwrap())
-                .unwrap_or(&*k)
+                .unwrap_or(k)
                 .to_string()
         })
         .collect::<Vec<_>>()
@@ -950,10 +950,10 @@ fn dump_write_cf_properties(
     let sst_files = collection
         .iter()
         .map(|(k, _)| {
-            Path::new(&*k)
+            Path::new(k)
                 .file_name()
                 .map(|f| f.to_str().unwrap())
-                .unwrap_or(&*k)
+                .unwrap_or(k)
                 .to_string()
         })
         .collect::<Vec<_>>()
@@ -1987,7 +1987,7 @@ mod tests {
 
         region.set_start_key(b"k".to_vec());
         region.set_end_key(b"z".to_vec());
-        assert!(debugger.recreate_region(region.clone()).is_err());
+        debugger.recreate_region(region.clone()).unwrap_err();
 
         remove_region_state(1);
         remove_region_state(2);
@@ -1996,7 +1996,7 @@ mod tests {
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());
-        assert!(debugger.recreate_region(region).is_err());
+        debugger.recreate_region(region).unwrap_err();
     }
 
     #[test]

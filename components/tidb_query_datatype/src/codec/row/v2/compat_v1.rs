@@ -102,7 +102,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
-            FieldTypeTp::JSON => {
+            FieldTypeTp::Json => {
                 self.write_u8(datum::JSON_FLAG)?;
                 // Copy datum payload as it is
                 self.write_bytes(src)?;
@@ -288,7 +288,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for value in cases {
-            let col = Column::new(1, value.clone()).with_tp(FieldTypeTp::JSON);
+            let col = Column::new(1, value.clone()).with_tp(FieldTypeTp::Json);
             let buf = encode_to_v1_compatible(&mut ctx, &col);
             let got: Json = buf.decode(col.ft(), &mut ctx).unwrap().unwrap();
             assert_eq!(value, got);

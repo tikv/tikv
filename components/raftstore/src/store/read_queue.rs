@@ -82,7 +82,7 @@ where
     }
 
     pub fn cmds(&self) -> &[(RaftCmdRequest, Callback<S>, Option<u64>)] {
-        &*self.cmds
+        &self.cmds
     }
 
     pub fn take_cmds(&mut self) -> MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)> {

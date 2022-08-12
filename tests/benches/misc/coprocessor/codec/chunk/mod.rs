@@ -22,7 +22,7 @@ fn bench_encode_chunk(b: &mut Bencher) {
         FieldTypeTp::VarChar.into(),
         FieldTypeTp::VarChar.into(),
         FieldTypeTp::NewDecimal.into(),
-        FieldTypeTp::JSON.into(),
+        FieldTypeTp::Json.into(),
     ];
     let mut chunk = Chunk::new(&fields, rows);
     for row_id in 0..rows {

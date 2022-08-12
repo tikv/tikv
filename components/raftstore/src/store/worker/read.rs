@@ -4,6 +4,7 @@
 use std::{
     cell::Cell,
     fmt::{self, Display, Formatter},
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -41,16 +42,21 @@ use crate::{
     Error, Result,
 };
 
+/// #[RaftstoreCommon]
 pub trait ReadExecutor<E: KvEngine> {
-    fn get_engine(&self) -> &E;
-    fn get_snapshot(&mut self, ts: Option<ThreadReadId>) -> Arc<E::Snapshot>;
+    fn get_tablet(&mut self) -> &E;
+    fn get_snapshot(
+        &mut self,
+        ts: Option<ThreadReadId>,
+        read_context: &mut Option<LocalReadContext<'_, E>>,
+    ) -> Arc<E::Snapshot>;
 
-    fn get_value(&self, req: &Request, region: &metapb::Region) -> Result<Response> {
+    fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let engine = self.get_engine();
+        let engine = self.get_tablet();
         let mut resp = Response::default();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -88,6 +94,7 @@ pub trait ReadExecutor<E: KvEngine> {
         region: &Arc<metapb::Region>,
         read_index: Option<u64>,
         mut ts: Option<ThreadReadId>,
+        mut read_context: Option<LocalReadContext<'_, E>>,
     ) -> ReadResponse<E::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -111,8 +118,10 @@ pub trait ReadExecutor<E: KvEngine> {
                     }
                 },
                 CmdType::Snap => {
-                    let snapshot =
-                        RegionSnapshot::from_snapshot(self.get_snapshot(ts.take()), region.clone());
+                    let snapshot = RegionSnapshot::from_snapshot(
+                        self.get_snapshot(ts.take(), &mut read_context),
+                        region.clone(),
+                    );
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -142,7 +151,7 @@ pub trait ReadExecutor<E: KvEngine> {
     }
 }
 
-/// A read only delegate of `Peer`.
+/// #[RaftstoreCommon]: A read only delegate of `Peer`.
 #[derive(Clone, Debug)]
 pub struct ReadDelegate {
     pub region: Arc<metapb::Region>,
@@ -164,6 +173,49 @@ pub struct ReadDelegate {
     pub track_ver: TrackVer,
 }
 
+/// CachedReadDelegate is a wrapper the ReadDelegate and kv_engine. LocalReader
+/// dispatch local read requests to ReadDeleage according to the region_id where
+/// ReadDelegate needs kv_engine to read data or fetch snapshot.
+pub struct CachedReadDelegate<E>
+where
+    E: KvEngine,
+{
+    delegate: Arc<ReadDelegate>,
+    kv_engine: E,
+}
+
+impl<E> Deref for CachedReadDelegate<E>
+where
+    E: KvEngine,
+{
+    type Target = ReadDelegate;
+
+    fn deref(&self) -> &Self::Target {
+        self.delegate.as_ref()
+    }
+}
+
+impl<E> Clone for CachedReadDelegate<E>
+where
+    E: KvEngine,
+{
+    fn clone(&self) -> Self {
+        CachedReadDelegate {
+            delegate: Arc::clone(&self.delegate),
+            kv_engine: self.kv_engine.clone(),
+        }
+    }
+}
+
+/// #[RaftstoreCommon]: LocalReadContext combines some LocalReader's fields for temporary usage.
+pub struct LocalReadContext<'a, E>
+where
+    E: KvEngine,
+{
+    read_id: &'a mut ThreadReadId,
+    snap_cache: &'a mut Box<Option<Arc<E::Snapshot>>>,
+}
+
 impl Drop for ReadDelegate {
     fn drop(&mut self) {
         // call `inc` to notify the source `ReadDelegate` is dropped
@@ -171,6 +223,70 @@ impl Drop for ReadDelegate {
     }
 }
 
+/// #[RaftstoreCommon]
+pub trait ReadExecutorProvider<E>: Send + Clone + 'static
+where
+    E: KvEngine,
+{
+    type Executor: ReadExecutor<E>;
+
+    fn store_id(&self) -> Option<u64>;
+
+    /// get the ReadDelegate with region_id and the number of delegates in the
+    /// StoreMeta
+    fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
+}
+
+#[derive(Clone)]
+pub struct StoreMetaDelegate<E>
+where
+    E: KvEngine,
+{
+    store_meta: Arc<Mutex<StoreMeta>>,
+    kv_engine: E,
+}
+
+impl<E> StoreMetaDelegate<E>
+where
+    E: KvEngine,
+{
+    pub fn new(store_meta: Arc<Mutex<StoreMeta>>, kv_engine: E) -> Self {
+        StoreMetaDelegate {
+            store_meta,
+            kv_engine,
+        }
+    }
+}
+
+impl<E> ReadExecutorProvider<E> for StoreMetaDelegate<E>
+where
+    E: KvEngine,
+{
+    type Executor = CachedReadDelegate<E>;
+
+    fn store_id(&self) -> Option<u64> {
+        self.store_meta.as_ref().lock().unwrap().store_id
+    }
+
+    /// get the ReadDelegate with region_id and the number of delegates in the
+    /// StoreMeta
+    fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>) {
+        let meta = self.store_meta.as_ref().lock().unwrap();
+        let reader = meta.readers.get(&region_id).cloned();
+        if let Some(reader) = reader {
+            return (
+                meta.readers.len(),
+                Some(CachedReadDelegate {
+                    delegate: Arc::new(reader),
+                    kv_engine: self.kv_engine.clone(),
+                }),
+            );
+        }
+        (meta.readers.len(), None)
+    }
+}
+
+/// #[RaftstoreCommon]
 #[derive(Debug)]
 pub struct TrackVer {
     version: Arc<AtomicU64>,
@@ -192,14 +308,14 @@ impl TrackVer {
     }
 
     // Take `&mut self` to prevent calling `inc` and `clone` at the same time
-    fn inc(&mut self) {
+    pub fn inc(&mut self) {
         // Only the source `TrackVer` can increase version
         if self.source {
             self.version.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    fn any_new(&self) -> bool {
+    pub fn any_new(&self) -> bool {
         self.version.load(Ordering::Relaxed) > self.local_ver
     }
 }
@@ -242,7 +358,7 @@ impl ReadDelegate {
         }
     }
 
-    fn fresh_valid_ts(&mut self) {
+    pub fn fresh_valid_ts(&mut self) {
         self.last_valid_ts = monotonic_raw_now();
     }
 
@@ -275,7 +391,11 @@ impl ReadDelegate {
 
     // If the remote lease will be expired in near future send message
     // to `raftstore` renew it
-    fn maybe_renew_lease_advance<EK: KvEngine>(&self, router: &dyn CasualRouter<EK>, ts: Timespec) {
+    pub fn maybe_renew_lease_advance<EK: KvEngine>(
+        &self,
+        router: &dyn CasualRouter<EK>,
+        ts: Timespec,
+    ) {
         if !self
             .leader_lease
             .as_ref()
@@ -295,7 +415,7 @@ impl ReadDelegate {
         }
     }
 
-    fn is_in_leader_lease(&self, ts: Timespec) -> bool {
+    pub fn is_in_leader_lease(&self, ts: Timespec) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
@@ -315,7 +435,7 @@ impl ReadDelegate {
         false
     }
 
-    fn check_stale_read_safe<S: Snapshot>(
+    pub fn check_stale_read_safe<S: Snapshot>(
         &self,
         read_ts: u64,
     ) -> std::result::Result<(), ReadResponse<S>> {
@@ -381,6 +501,7 @@ impl Display for ReadDelegate {
     }
 }
 
+/// #[RaftstoreCommon]
 #[derive(Debug)]
 pub enum Progress {
     Region(metapb::Region),
@@ -412,63 +533,74 @@ impl Progress {
     }
 }
 
-pub struct LocalReader<C, E>
+/// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
+/// relevant regions by LocalReader so that these requests can be handled by the
+/// relevant ReadDelegate respectively.
+pub struct LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
-    store_id: Cell<Option<u64>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_id: Cell<Option<u64>>,
+    store_meta: S,
     kv_engine: E,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
-    delegates: LruCache<u64, Arc<ReadDelegate>>,
-    snap_cache: Option<Arc<E::Snapshot>>,
+    pub delegates: LruCache<u64, D>,
+    snap_cache: Box<Option<Arc<E::Snapshot>>>,
     cache_read_id: ThreadReadId,
     // A channel to raftstore.
     router: C,
 }
 
-impl<C, E> ReadExecutor<E> for LocalReader<C, E>
+impl<E> ReadExecutor<E> for CachedReadDelegate<E>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
 {
-    fn get_engine(&self) -> &E {
+    fn get_tablet(&mut self) -> &E {
         &self.kv_engine
     }
 
-    fn get_snapshot(&mut self, create_time: Option<ThreadReadId>) -> Arc<E::Snapshot> {
+    fn get_snapshot(
+        &mut self,
+        create_time: Option<ThreadReadId>,
+        read_context: &mut Option<LocalReadContext<'_, E>>,
+    ) -> Arc<E::Snapshot> {
+        let ctx = read_context.as_mut().unwrap();
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
         if let Some(ts) = create_time {
-            if ts == self.cache_read_id {
-                if let Some(snap) = self.snap_cache.as_ref() {
+            if ts == *ctx.read_id {
+                if let Some(snap) = ctx.snap_cache.as_ref().as_ref() {
                     TLS_LOCAL_READ_METRICS
                         .with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.inc());
                     return snap.clone();
                 }
             }
             let snap = Arc::new(self.kv_engine.snapshot());
-            self.cache_read_id = ts;
-            self.snap_cache = Some(snap.clone());
+            *ctx.read_id = ts;
+            *ctx.snap_cache = Box::new(Some(snap.clone()));
             return snap;
         }
         Arc::new(self.kv_engine.snapshot())
     }
 }
 
-impl<C, E> LocalReader<C, E>
+impl<C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
-    pub fn new(kv_engine: E, store_meta: Arc<Mutex<StoreMeta>>, router: C) -> Self {
+    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         LocalReader {
             store_meta,
             kv_engine,
             router,
-            snap_cache: None,
+            snap_cache: Box::new(None),
             cache_read_id,
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
@@ -513,28 +645,22 @@ where
     // choice is use `Rc` but `LocalReader: Send` will be violated, which is
     // required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
-    fn get_delegate(&mut self, region_id: u64) -> Option<Arc<ReadDelegate>> {
+    pub fn get_delegate(&mut self, region_id: u64) -> Option<D> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
-            Some(d) if !d.track_ver.any_new() => Some(Arc::clone(d)),
+            Some(d) if !d.track_ver.any_new() => Some(d.clone()),
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.cache_miss.inc());
 
-                let (meta_len, meta_reader) = {
-                    let meta = self.store_meta.lock().unwrap();
-                    (
-                        meta.readers.len(),
-                        meta.readers.get(&region_id).cloned().map(Arc::new),
-                    )
-                };
+                let (meta_len, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
 
                 // Remove the stale delegate
                 self.delegates.remove(&region_id);
                 self.delegates.resize(meta_len);
                 match meta_reader {
                     Some(reader) => {
-                        self.delegates.insert(region_id, Arc::clone(&reader));
+                        self.delegates.insert(region_id, reader.clone());
                         Some(reader)
                     }
                     None => None,
@@ -545,13 +671,13 @@ where
         rd.filter(|r| !r.pending_remove)
     }
 
-    fn pre_propose_raft_command(
+    pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
-    ) -> Result<Option<(Arc<ReadDelegate>, RequestPolicy)>> {
+    ) -> Result<Option<(D, RequestPolicy)>> {
         // Check store id.
         if self.store_id.get().is_none() {
-            let store_id = self.store_meta.lock().unwrap().store_id;
+            let store_id = self.store_meta.store_id();
             self.store_id.set(store_id);
         }
         let store_id = self.store_id.get().unwrap();
@@ -628,7 +754,8 @@ where
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
-            Ok(Some((delegate, policy))) => {
+            Ok(Some((mut delegate, policy))) => {
+                let delegate_ext: LocalReadContext<'_, E>;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
@@ -648,7 +775,15 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+
+                        delegate_ext = LocalReadContext {
+                            snap_cache: &mut self.snap_cache,
+                            read_id: &mut self.cache_read_id,
+                        };
+
+                        let region = Arc::clone(&delegate.region);
+                        let response =
+                            delegate.execute(&req, &region, None, read_id, Some(delegate_ext));
                         // Try renew lease in advance
                         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
@@ -662,8 +797,15 @@ where
                             return;
                         }
 
+                        delegate_ext = LocalReadContext {
+                            snap_cache: &mut self.snap_cache,
+                            read_id: &mut self.cache_read_id,
+                        };
+
+                        let region = Arc::clone(&delegate.region);
                         // Getting the snapshot
-                        let response = self.execute(&req, &delegate.region, None, read_id);
+                        let response =
+                            delegate.execute(&req, &region, None, read_id, Some(delegate_ext));
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
@@ -719,14 +861,16 @@ where
     }
 
     pub fn release_snapshot_cache(&mut self) {
-        self.snap_cache.take();
+        self.snap_cache.as_mut().take();
     }
 }
 
-impl<C, E> Clone for LocalReader<C, E>
+impl<C, E, D, S> Clone for LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
     fn clone(&self) -> Self {
         LocalReader {
@@ -741,6 +885,7 @@ where
     }
 }
 
+/// #[RaftstoreCommon]
 struct Inspector<'r> {
     delegate: &'r ReadDelegate,
 }
@@ -782,7 +927,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::ALL_CFS;
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -839,13 +984,18 @@ mod tests {
         store_meta: Arc<Mutex<StoreMeta>>,
     ) -> (
         TempDir,
-        LocalReader<MockRouter, KvTestEngine>,
+        LocalReader<
+            MockRouter,
+            KvTestEngine,
+            CachedReadDelegate<KvTestEngine>,
+            StoreMetaDelegate<KvTestEngine>,
+        >,
         Receiver<RaftCommand<KvTestSnapshot>>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(db, store_meta, ch);
+        let mut reader = LocalReader::new(db.clone(), StoreMetaDelegate::new(store_meta, db), ch);
         reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
@@ -863,7 +1013,12 @@ mod tests {
     }
 
     fn must_redirect(
-        reader: &mut LocalReader<MockRouter, KvTestEngine>,
+        reader: &mut LocalReader<
+            MockRouter,
+            KvTestEngine,
+            CachedReadDelegate<KvTestEngine>,
+            StoreMetaDelegate<KvTestEngine>,
+        >,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         cmd: RaftCmdRequest,
     ) {
@@ -883,7 +1038,12 @@ mod tests {
     }
 
     fn must_not_redirect(
-        reader: &mut LocalReader<MockRouter, KvTestEngine>,
+        reader: &mut LocalReader<
+            MockRouter,
+            KvTestEngine,
+            CachedReadDelegate<KvTestEngine>,
+            StoreMetaDelegate<KvTestEngine>,
+        >,
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
@@ -1028,11 +1188,7 @@ mod tests {
             })),
         );
         assert_eq!(
-            TLS_LOCAL_READ_METRICS.with(|m| m
-                .borrow()
-                .reject_reason
-                .store_id_mismatch
-                .get()),
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.store_id_mismatch.get()),
             1
         );
         assert_eq!(
@@ -1154,9 +1310,10 @@ mod tests {
                 .request,
             cmd9
         );
-        assert_eq!(TLS_LOCAL_READ_METRICS.with(
-            |m| m.borrow().reject_reason.term_mismatch.get()
-        ),  previous_term_rejection + 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.term_mismatch.get()),
+            previous_term_rejection + 1
+        );
         assert_eq!(
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
             4
@@ -1300,5 +1457,176 @@ mod tests {
         }
         let d = reader.get_delegate(1).unwrap();
         assert_eq!(d.leader_lease.clone().unwrap().term(), 3);
+    }
+
+    #[test]
+    fn test_read_delegate() {
+        let path = Builder::new()
+            .prefix("test-local-reader")
+            .tempdir()
+            .unwrap();
+        let kv_engine =
+            engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+        kv_engine.put(b"a1", b"val1").unwrap();
+        let store_meta =
+            StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
+
+        {
+            let mut meta = store_meta.store_meta.as_ref().lock().unwrap();
+
+            // Create read_delegate with region id 1
+            let read_delegate = ReadDelegate::mock(1);
+            meta.readers.insert(1, read_delegate);
+
+            // Create read_delegate with region id 1
+            let read_delegate = ReadDelegate::mock(2);
+            meta.readers.insert(2, read_delegate);
+        }
+
+        let mut read_id = ThreadReadId::new();
+        let mut snap_cache = Box::new(None);
+
+        let read_id_copy = Some(read_id.clone());
+
+        let mut read_context = Some(LocalReadContext {
+            read_id: &mut read_id,
+            snap_cache: &mut snap_cache,
+        });
+
+        let (_, delegate) = store_meta.get_executor_and_len(1);
+        let mut delegate = delegate.unwrap();
+        let tablet = delegate.get_tablet();
+        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
+
+        let (_, delegate) = store_meta.get_executor_and_len(2);
+        let mut delegate = delegate.unwrap();
+        let tablet = delegate.get_tablet();
+        assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
+        let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
+
+        assert!(snap_cache.as_ref().is_some());
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_requests.get()),
+            2
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            1
+        );
+    }
+
+    #[test]
+    fn test_snap_cache_hit() {
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, _) = new_reader("test-local-reader", 1, store_meta.clone());
+
+        let mut region1 = metapb::Region::default();
+        region1.set_id(1);
+
+        // Register region 1
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: Arc::new(region1.clone()),
+                peer_id: 1,
+                term: 1,
+                applied_term: 1,
+                leader_lease: None,
+                last_valid_ts: Timespec::new(0, 0),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                txn_ext: Arc::new(TxnExt::default()),
+                read_progress: Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned())),
+                pending_remove: false,
+                track_ver: TrackVer::new(),
+                bucket_meta: None,
+            };
+            meta.readers.insert(1, read_delegate);
+        }
+
+        let mut delegate = reader.get_delegate(region1.id).unwrap();
+        let read_id = Some(ThreadReadId::new());
+
+        {
+            let mut read_context = Some(LocalReadContext {
+                snap_cache: &mut reader.snap_cache,
+                read_id: &mut reader.cache_read_id,
+            });
+
+            for _ in 0..10 {
+                // Different region id should reuse the cache
+                let _ = delegate.get_snapshot(read_id.clone(), &mut read_context);
+            }
+        }
+        // We should hit cache 9 times
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            9
+        );
+
+        let read_id = Some(ThreadReadId::new());
+
+        {
+            let read_context = LocalReadContext {
+                snap_cache: &mut reader.snap_cache,
+                read_id: &mut reader.cache_read_id,
+            };
+
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+        }
+        // This time, we will miss the cache
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            9
+        );
+
+        {
+            let read_context = LocalReadContext {
+                snap_cache: &mut reader.snap_cache,
+                read_id: &mut reader.cache_read_id,
+            };
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+            // We can hit it again.
+            assert_eq!(
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+                10
+            );
+        }
+
+        reader.release_snapshot_cache();
+        {
+            let read_context = LocalReadContext {
+                snap_cache: &mut reader.snap_cache,
+                read_id: &mut reader.cache_read_id,
+            };
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
+        }
+        // After release, we will mss the cache even with the prevsiou read_id.
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            10
+        );
+
+        {
+            let read_context = LocalReadContext {
+                snap_cache: &mut reader.snap_cache,
+                read_id: &mut reader.cache_read_id,
+            };
+            let _ = delegate.get_snapshot(read_id, &mut Some(read_context));
+        }
+        // We can hit it again.
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            11
+        );
     }
 }

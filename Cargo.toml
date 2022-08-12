@@ -38,7 +38,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]

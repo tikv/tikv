@@ -58,10 +58,10 @@ impl RangePropertiesExt for RocksEngine {
                     let keys = props.get_approximate_keys_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
-                        Path::new(&*k)
+                        Path::new(k)
                             .file_name()
                             .map(|f| f.to_str().unwrap())
-                            .unwrap_or(&*k),
+                            .unwrap_or(k),
                         keys
                     )
                 })
@@ -118,10 +118,10 @@ impl RangePropertiesExt for RocksEngine {
                     let size = props.get_approximate_size_in_range(start_key, end_key);
                     format!(
                         "{}:{}",
-                        Path::new(&*k)
+                        Path::new(k)
                             .file_name()
                             .map(|f| f.to_str().unwrap())
-                            .unwrap_or(&*k),
+                            .unwrap_or(k),
                         size
                     )
                 })

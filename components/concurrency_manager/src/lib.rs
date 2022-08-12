@@ -137,7 +137,8 @@ mod tests {
         let concurrency_manager = ConcurrencyManager::new(1.into());
         let keys: Vec<_> = [b"c", b"a", b"b"]
             .iter()
-            .map(|k| Key::from_raw(*k))
+            .copied()
+            .map(|k| Key::from_raw(k))
             .collect();
         let guards = concurrency_manager.lock_keys(keys.iter()).await;
         for (key, guard) in keys.iter().zip(&guards) {
@@ -181,8 +182,9 @@ mod tests {
             vec![20, 40, 30],
             vec![30, 20, 40],
         ];
-        let keys: Vec<_> = vec![b"a", b"b", b"c"]
-            .into_iter()
+        let keys: Vec<_> = [b"a", b"b", b"c"]
+            .iter()
+            .copied()
             .map(|k| Key::from_raw(k))
             .collect();
 
