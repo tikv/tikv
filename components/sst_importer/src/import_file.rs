@@ -50,7 +50,6 @@ pub struct ImportPath {
 impl ImportPath {
     // move file from temp to save.
     pub fn save(mut self, key_manager: Option<&DataKeyManager>) -> Result<()> {
-        file_system::rename(&self.temp, &self.save)?;
         if let Some(key_manager) = key_manager {
             let temp_str = self
                 .temp
@@ -61,7 +60,15 @@ impl ImportPath {
                 .to_str()
                 .ok_or_else(|| Error::InvalidSstPath(self.save.clone()))?;
             key_manager.link_file(temp_str, save_str)?;
-            key_manager.delete_file(temp_str)?;
+            let r = file_system::rename(&self.temp, &self.save);
+            let del_file = if r.is_ok() { temp_str } else { save_str };
+            if let Err(e) = key_manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'save'";
+                      "file" => ?self, "err" => ?e);
+            }
+            r?;
+        } else {
+            file_system::rename(&self.temp, &self.save)?;
         }
         // sync the directory after rename
         self.save.pop();
@@ -137,12 +144,19 @@ impl ImportFile {
                 "finalize SST write cache",
             ));
         }
-        file_system::rename(&self.path.temp, &self.path.save)?;
         if let Some(ref manager) = self.key_manager {
             let tmp_str = self.path.temp.to_str().unwrap();
             let save_str = self.path.save.to_str().unwrap();
             manager.link_file(tmp_str, save_str)?;
-            manager.delete_file(self.path.temp.to_str().unwrap())?;
+            let r = file_system::rename(&self.path.temp, &self.path.save);
+            let del_file = if r.is_ok() { tmp_str } else { save_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during finishing importing files.";
+                      "err" => ?e);
+            }
+            r?;
+        } else {
+            file_system::rename(&self.path.temp, &self.path.save)?;
         }
         Ok(())
     }

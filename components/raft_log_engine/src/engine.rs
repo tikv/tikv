@@ -194,6 +194,48 @@ impl FileSystem for ManagedFileSystem {
         self.base_file_system.delete(path)
     }
 
+    fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: `rename` will reuse the old entryption info from `src_path`.
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.link_file(src_str, dst_str)?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
+        }
+    }
+
+    fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
+        if let Some(ref manager) = self.key_manager {
+            // Note: In contrast to `rename`, `reuse` will make sure the encryption
+            // metadata is properly updated by rotating the encryption key for safety,
+            // when encryption flag is true. It won't rewrite the data blocks with
+            // the updated encryption metadata. Therefore, the old encrypted data
+            // won't be accessible after this calling.
+            let src_str = src_path.as_ref().to_str().unwrap();
+            let dst_str = dst_path.as_ref().to_str().unwrap();
+            manager.new_file(dst_path.as_ref().to_str().unwrap())?;
+            let r = self
+                .base_file_system
+                .rename(src_path.as_ref(), dst_path.as_ref());
+            let del_file = if r.is_ok() { src_str } else { dst_str };
+            if let Err(e) = manager.delete_file(del_file) {
+                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            }
+            r
+        } else {
+            self.base_file_system.rename(src_path, dst_path)
+        }
+    }
+
     fn exists_metadata<P: AsRef<Path>>(&self, path: P) -> bool {
         if let Some(ref manager) = self.key_manager {
             if let Ok(info) = manager.get_file(path.as_ref().to_str().unwrap()) {
