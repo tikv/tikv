@@ -370,13 +370,13 @@ impl RaftEngine for RocksEngine {
     }
 
     fn store_version(&self) -> Result<Option<StoreVersion>> {
-        Ok(self.get_value(&keys::STORE_VERSION_KEY)?.map(|v| {
+        Ok(self.get_value(keys::STORE_VERSION_KEY)?.map(|v| {
             StoreVersion::from_bits(u64::from_be_bytes(v.deref().try_into().unwrap())).unwrap()
         }))
     }
 
     fn put_store_version(&self, version: StoreVersion) -> Result<()> {
-        self.put(&keys::STORE_VERSION_KEY, &u64::to_be_bytes(version.bits()))
+        self.put(keys::STORE_VERSION_KEY, &u64::to_be_bytes(version.bits()))
     }
 }
 

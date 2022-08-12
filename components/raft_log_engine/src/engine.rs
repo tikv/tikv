@@ -250,7 +250,7 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn rename<P: AsRef<Path>>(&self, _src_path: P, _dst_path: P) -> IoResult<()> {
-        todo!()
+        unimplemented!()
     }
 }
 
@@ -578,7 +578,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn store_version(&self) -> Result<Option<StoreVersion>> {
-        Ok(self.0.get(STORE_REGION_ID, &STORE_VERSION_KEY).map(|v| {
+        Ok(self.0.get(STORE_REGION_ID, STORE_VERSION_KEY).map(|v| {
             StoreVersion::from_bits(u64::from_be_bytes(v.as_slice().try_into().unwrap())).unwrap()
         }))
     }
