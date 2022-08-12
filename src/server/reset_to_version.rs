@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    ops::Bound,
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
@@ -27,8 +28,8 @@ pub enum ResetToVersionState {
     RemovingWrite { scanned: usize },
     /// `RemovingWrite` means we are removing stale data in the `LOCK` cf
     RemovingLock { scanned: usize },
-    /// `Done` means we have finshed the task
-    Done,
+    /// `Done` means we have finished the task
+    Done { total_scanned: usize },
 }
 
 impl ResetToVersionState {
@@ -36,7 +37,7 @@ impl ResetToVersionState {
         match self {
             ResetToVersionState::RemovingWrite { scanned } => scanned,
             ResetToVersionState::RemovingLock { scanned } => scanned,
-            _ => unreachable!(),
+            ResetToVersionState::Done { total_scanned } => total_scanned,
         }
     }
 }
@@ -215,8 +216,16 @@ impl ResetToVersionManager {
         let readopts = IterOptions::new(None, None, false);
         let write_iter = self
             .engine
-            .iterator_opt(CF_WRITE, readopts.clone())
+            .iterator_opt(CF_WRITE, {
+                // Filter out the SST that does not have a newer version than `ts` in
+                // `CF_WRITE`.
+                let mut cf_write_readopts = readopts.clone();
+                cf_write_readopts.set_hint_min_ts(Bound::Excluded(ts.into_inner()));
+                cf_write_readopts
+            })
             .unwrap();
+        // All keys in `CF_LOCK` should be removed, so no need to set `hint_min_ts`
+        // here.
         let lock_iter = self.engine.iterator_opt(CF_LOCK, readopts).unwrap();
         let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
         let mut wb = self.engine.write_batch();
@@ -231,16 +240,23 @@ impl ResetToVersionManager {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
 
+                let mut total_scanned = 0;
                 while worker.process_next_batch(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid writes") {
                 }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`")
-                    = ResetToVersionState::RemovingLock { scanned: 0 };
+                {
+                    let mut state = worker.state.lock()
+                            .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`");
+                    total_scanned += *state.scanned();
+                    *state = ResetToVersionState::RemovingLock { scanned: 0 };
+                }
                 while worker.process_next_batch_lock(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid locks") {
                 }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
-                    = ResetToVersionState::Done;
+                {
+                    let mut state = worker.state.lock()
+                            .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`");
+                    total_scanned += *state.scanned();
+                    *state = ResetToVersionState::Done { total_scanned };
+                }
                 info!("Reset to version done!");
                 tikv_alloc::remove_thread_memory_accessor();
             })
@@ -263,7 +279,10 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use engine_rocks::{
+        properties::MvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions,
+    };
+    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_LOCK};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
 
@@ -276,26 +295,155 @@ mod tests {
         let fake_engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let write = vec![
-            // key, start_ts, commit_ts
-            (b"k", 104, 105),
-            (b"k", 102, 103),
-            (b"k", 100, 101),
-            (b"k", 98, 99),
+            (b"k".as_slice(), 104, 105),
+            (b"k".as_slice(), 102, 103),
+            (b"k".as_slice(), 100, 101),
+            (b"k".as_slice(), 98, 99),
         ];
         let default = vec![
-            // key, start_ts
-            (b"k", 104),
-            (b"k", 102),
-            (b"k", 100),
-            (b"k", 98),
+            (b"k".as_slice(), 104),
+            (b"k".as_slice(), 102),
+            (b"k".as_slice(), 100),
+            (b"k".as_slice(), 98),
         ];
         let lock = vec![
-            // key, start_ts, for_update_ts, lock_type, short_value, check
-            (b"k", 100, 0, LockType::Put, false),
-            (b"k", 100, 0, LockType::Delete, false),
-            (b"k", 100, 0, LockType::Put, true),
-            (b"k", 100, 0, LockType::Delete, true),
+            (b"k".as_slice(), 100, 0, LockType::Put, false),
+            (b"k".as_slice(), 100, 0, LockType::Delete, false),
+            (b"k".as_slice(), 100, 0, LockType::Put, true),
+            (b"k".as_slice(), 100, 0, LockType::Delete, true),
         ];
+        prepare_data_for_cfs(&fake_engine, &write, &default, &lock);
+
+        let manager = ResetToVersionManager::new(fake_engine.clone());
+        manager.start(100.into());
+        manager.wait();
+
+        let remaining_writes = get_all_keys(&fake_engine, CF_WRITE);
+        let remaining_defaults = get_all_keys(&fake_engine, CF_DEFAULT);
+        let remaining_locks = get_all_keys(&fake_engine, CF_LOCK);
+        // In `CF_WRITE`, the key whose commit_ts > 100 should be removed.
+        assert_eq!(remaining_writes.len(), 1);
+        let key = &remaining_writes[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            99.into()
+        );
+        // In `CF_DEFAULT`, the key which is removed in `CF_WRITE` should be removed
+        // also.
+        assert_eq!(remaining_defaults.len(), 1);
+        let key = &remaining_defaults[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            98.into()
+        );
+        // All keys in `CF_LOCK` should be removed.
+        assert!(remaining_locks.is_empty());
+        // 4 keys in `CF_WRITE` + 1 key in `CF_LOCK` are scanned.
+        assert_eq!(*manager.state().scanned(), 5);
+    }
+
+    #[test]
+    fn test_ts_filter() {
+        let tmp = Builder::new().prefix("test_ts_filter").tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let mut cf_opts = RocksCfOptions::default();
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector",
+            MvccPropertiesCollectorFactory::default(),
+        );
+        let fake_engine = engine_rocks::util::new_engine_opt(
+            path,
+            RocksDbOptions::default(),
+            ALL_CFS
+                .iter()
+                .map(|name| (*name, cf_opts.clone()))
+                .collect(),
+        )
+        .unwrap();
+
+        let write = vec![
+            (b"k".as_slice(), 104, 105),
+            (b"k".as_slice(), 102, 103),
+            (b"k".as_slice(), 100, 101),
+            (b"k".as_slice(), 98, 99),
+        ];
+        let default = vec![
+            (b"k".as_slice(), 104),
+            (b"k".as_slice(), 102),
+            (b"k".as_slice(), 100),
+            (b"k".as_slice(), 98),
+        ];
+        let lock = vec![
+            (b"k".as_slice(), 100, 0, LockType::Put, false),
+            (b"k".as_slice(), 100, 0, LockType::Delete, false),
+            (b"k".as_slice(), 100, 0, LockType::Put, true),
+            (b"k".as_slice(), 100, 0, LockType::Delete, true),
+        ];
+        prepare_data_for_cfs(&fake_engine, &write, &default, &lock);
+
+        let manager = ResetToVersionManager::new(fake_engine.clone());
+        manager.start(105.into());
+        manager.wait();
+
+        let remaining_writes = get_all_keys(&fake_engine, CF_WRITE);
+        let remaining_defaults = get_all_keys(&fake_engine, CF_DEFAULT);
+        let remaining_locks = get_all_keys(&fake_engine, CF_LOCK);
+        // No key in `CF_WRITE` and `CF_DEFAULT` should be removed.
+        assert_eq!(remaining_writes.len(), 4);
+        let key = &remaining_writes[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            105.into()
+        );
+        assert_eq!(remaining_defaults.len(), 4);
+        let key = &remaining_defaults[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            104.into()
+        );
+        // All keys in `CF_LOCK` should be removed.
+        assert!(remaining_locks.is_empty());
+        // No key should be scanned in `CF_WRITE` and `CF_DEFAULT` since the
+        // `hint_min_ts` is greater than the largest commit_ts, and only one key in
+        // `CF_LOCK` should be scanned.
+        assert_eq!(*manager.state().scanned(), 1);
+
+        manager.start(104.into());
+        manager.wait();
+
+        let remaining_writes = get_all_keys(&fake_engine, CF_WRITE);
+        let remaining_defaults = get_all_keys(&fake_engine, CF_DEFAULT);
+        let remaining_locks = get_all_keys(&fake_engine, CF_LOCK);
+        // In `CF_WRITE`, the key whose commit_ts > 104 should be removed.
+        assert_eq!(remaining_writes.len(), 3);
+        let key = &remaining_writes[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            103.into()
+        );
+        // In `CF_DEFAULT`, the key which is removed in `CF_WRITE` should be removed
+        // also.
+        assert_eq!(remaining_defaults.len(), 3);
+        let key = &remaining_defaults[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            102.into()
+        );
+        // `CF_LOCK` should still be empty.
+        assert!(remaining_locks.is_empty());
+        // All keys in `CF_WRITE` should be scanned.
+        assert_eq!(*manager.state().scanned(), 4);
+    }
+
+    fn prepare_data_for_cfs(
+        engine: &RocksEngine,
+        // key, start_ts, commit_ts
+        write: &[(&[u8], u64, u64)],
+        // key, start_ts
+        default: &[(&[u8], u64)],
+        // key, start_ts, for_update_ts, lock_type, short_value, check
+        lock: &[(&[u8], u64, u64, LockType, bool)],
+    ) {
         let mut kv = vec![];
         for (key, start_ts, commit_ts) in write {
             let write = Write::new(WriteType::Put, start_ts.into(), None);
@@ -313,13 +461,13 @@ mod tests {
             ));
         }
         for (key, ts, for_update_ts, tp, short_value) in lock {
-            let v = if short_value {
+            let v = if *short_value {
                 Some(b"v".to_vec())
             } else {
                 None
             };
             let lock = Lock::new(
-                tp,
+                *tp,
                 vec![],
                 ts.into(),
                 0,
@@ -330,66 +478,23 @@ mod tests {
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
-        let mut wb = fake_engine.write_batch();
         for &(cf, ref k, ref v) in &kv {
-            wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
+            engine
+                .put_cf(cf, &keys::data_key(k.as_encoded()), v)
+                .unwrap();
         }
-        wb.write().unwrap();
+        engine.flush_cf(CF_WRITE, true).unwrap();
+    }
 
-        let manager = ResetToVersionManager::new(fake_engine.clone());
-        manager.start(100.into());
-        manager.wait();
-
+    fn get_all_keys(engine: &RocksEngine, cf: &str) -> Vec<Vec<u8>> {
         let readopts = IterOptions::new(None, None, false);
-        let mut write_iter = fake_engine
-            .iterator_opt(CF_WRITE, readopts.clone())
-            .unwrap();
-        write_iter.seek_to_first().unwrap();
-        let mut remaining_writes = vec![];
-        while write_iter.valid().unwrap() {
-            let write = WriteRef::parse(write_iter.value()).unwrap().to_owned();
-            let key = write_iter.key().to_vec();
-            write_iter.next().unwrap();
-            remaining_writes.push((key, write));
+        let mut iter = engine.iterator_opt(cf, readopts.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        let mut keys = vec![];
+        while iter.valid().unwrap() {
+            keys.push(iter.key().to_vec());
+            iter.next().unwrap();
         }
-        let mut default_iter = fake_engine
-            .iterator_opt(CF_DEFAULT, readopts.clone())
-            .unwrap();
-        default_iter.seek_to_first().unwrap();
-        let mut remaining_defaults = vec![];
-        while default_iter.valid().unwrap() {
-            let key = default_iter.key().to_vec();
-            let value = default_iter.value().to_vec();
-            default_iter.next().unwrap();
-            remaining_defaults.push((key, value));
-        }
-
-        let mut lock_iter = fake_engine.iterator_opt(CF_LOCK, readopts).unwrap();
-        lock_iter.seek_to_first().unwrap();
-        let mut remaining_locks = vec![];
-        while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
-            let key = lock_iter.key().to_vec();
-            lock_iter.next().unwrap();
-            remaining_locks.push((key, lock));
-        }
-
-        // Writes which start_ts >= 100 should be removed.
-        assert_eq!(remaining_writes.len(), 1);
-        let (key, _) = &remaining_writes[0];
-        // So the only write left is the one with start_ts = 99
-        assert_eq!(
-            Key::from_encoded(key.clone()).decode_ts().unwrap(),
-            99.into()
-        );
-        // Defaults corresponding to the removed writes should be removed.
-        assert_eq!(remaining_defaults.len(), 1);
-        let (key, _) = &remaining_defaults[0];
-        assert_eq!(
-            Key::from_encoded(key.clone()).decode_ts().unwrap(),
-            98.into()
-        );
-        // All locks should be removed.
-        assert!(remaining_locks.is_empty());
+        keys
     }
 }
