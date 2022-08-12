@@ -29,7 +29,7 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadMetrics, ReadProgress, ReadResponse,
+        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
         RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
