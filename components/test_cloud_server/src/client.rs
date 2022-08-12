@@ -235,12 +235,13 @@ impl ClusterClient {
         if let Some(x) = self.regions.remove(&region_id) {
             self.region_ranges.remove(&x.raw_end);
         }
-        let region: RawRegion = opt_region.unwrap_or_else(|| {
-            block_on(self.pd_client.get_region_by_id(region_id))
-                .unwrap()
-                .unwrap()
-                .into()
-        });
+        let region: RawRegion = if let Some(region) = opt_region {
+            region
+        } else if let Some(region) = block_on(self.pd_client.get_region_by_id(region_id)).unwrap() {
+            region.into()
+        } else {
+            return;
+        };
         self.region_ranges.insert(region.raw_end.clone(), region.id);
         self.regions.insert(region.id, region);
     }
