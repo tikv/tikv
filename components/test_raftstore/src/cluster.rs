@@ -359,7 +359,7 @@ impl<T: Simulator> Cluster<T> {
         let region_leaders = self
             .region_leaders_map
             .entry(node_id)
-            .or_insert(Arc::new(RwLock::new(HashSet::default())));
+            .or_insert_with(|| Arc::new(RwLock::new(HashSet::default())));
         let props = GroupProperties::default();
         self.group_props.insert(node_id, props.clone());
         tikv_util::thread_group::set_properties(Some(props));
