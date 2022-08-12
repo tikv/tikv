@@ -1280,12 +1280,18 @@ where
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
+
+        // region_id -> (suffix, tablet)
+        // `update` is called perodically which needs this map for recording the latest
+        // tablet for each region. `cached_latest_tablets` is passed to `update` to
+        // avoid memory allocation each time when calling `update`.
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                engines_info_clone.update(now);
+                engines_info_clone.update(now, &mut cached_latest_tablets);
             });
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
@@ -1846,11 +1852,6 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 pub struct EnginesResourceInfo {
     tablet_factory: Arc<KvEngineFactory>,
     raft_engine: Option<RocksEngine>,
-    // region_id -> (suffix, tablet)
-    // `update` is called perodically which needs this map for recording the latest tablet for each
-    // region and cached_latest_tablets is used to avoid memory allocation each time when
-    // calling `update`.
-    cached_latest_tablets: Arc<Mutex<HashMap<u64, (u64, RocksEngine)>>>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
@@ -1866,13 +1867,16 @@ impl EnginesResourceInfo {
         EnginesResourceInfo {
             tablet_factory,
             raft_engine,
-            cached_latest_tablets: Arc::default(),
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
     }
 
-    pub fn update(&self, _now: Instant) {
+    pub fn update(
+        &self,
+        _now: Instant,
+        cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
+    ) {
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1893,8 +1897,6 @@ impl EnginesResourceInfo {
         if let Some(raft_engine) = &self.raft_engine {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
-
-        let mut cached_latest_tablets = self.cached_latest_tablets.as_ref().lock().unwrap();
 
         self.tablet_factory
             .for_each_opened_tablet(
