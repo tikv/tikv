@@ -1150,17 +1150,19 @@ impl StreamTaskInfo {
     }
 
     pub async fn flush_meta(&self, metadata_info: MetadataInfoV2) -> Result<()> {
-        let meta_path = metadata_info.path_to_meta();
-        let meta_buff = metadata_info.marshal_to()?;
-        let buflen = meta_buff.len();
+        if metadata_info.file_groups.len() > 0 {
+            let meta_path = metadata_info.path_to_meta();
+            let meta_buff = metadata_info.marshal_to()?;
+            let buflen = meta_buff.len();
 
-        self.storage
-            .write(
-                &meta_path,
-                UnpinReader(Box::new(Cursor::new(meta_buff))),
-                buflen as _,
-            )
-            .await?;
+            self.storage
+                .write(
+                    &meta_path,
+                    UnpinReader(Box::new(Cursor::new(meta_buff))),
+                    buflen as _,
+                )
+                .await?;
+        }
         Ok(())
     }
 
@@ -1208,7 +1210,7 @@ impl StreamTaskInfo {
             let file_size_vec = metadata_info
                 .file_groups
                 .iter()
-                .map(|d| d.length)
+                .map(|d| (d.length, d.data_files_info.len()))
                 .collect::<Vec<_>>();
             // flush meta file to storage.
             self.flush_meta(metadata_info).await?;
@@ -1223,10 +1225,11 @@ impl StreamTaskInfo {
                 .observe(sw.lap().as_secs_f64());
             file_size_vec
                 .iter()
-                .for_each(|size| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
+                .for_each(|(size, _)| crate::metrics::FLUSH_FILE_SIZE.observe(*size as _));
             info!("log backup flush done";
-                "files" => %file_size_vec.len(),    // the number of the merged files
-                "total_size" => %file_size_vec.iter().sum::<u64>(), // the size of the merged files after compressed
+                "merged_files" => %file_size_vec.len(),    // the number of the merged files
+                "files" => %file_size_vec.iter().map(|(_, v)| v).sum::<usize>(),
+                "total_size" => %file_size_vec.iter().map(|(v, _)| v).sum::<u64>(), // the size of the merged files after compressed
                 "take" => ?begin.saturating_elapsed(),
             );
             Ok(rts)
