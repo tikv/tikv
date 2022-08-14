@@ -100,6 +100,12 @@ ENV TIKV_BUILD_GIT_TAG=${GIT_TAG}
 ENV TIKV_BUILD_GIT_BRANCH=${GIT_BRANCH}
 RUN source /opt/rh/devtoolset-8/enable && make build_dist_release
 
+# Target for debuginfo image
+FROM pingcap/alpine-glibc as debug
+COPY --from=builder /tikv/target/release/tikv-server.debug /tikv-server.debug
+COPY --from=builder /tikv/target/release/tikv-ctl.debug /tikv-ctl.debug
+
+# Default target
 # Export to a clean image
 FROM pingcap/alpine-glibc
 COPY --from=builder /tikv/target/release/tikv-server /tikv-server
