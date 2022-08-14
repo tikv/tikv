@@ -349,7 +349,6 @@ impl BackupRange {
             Default::default(),
             Default::default(),
             false,
-            false,
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();

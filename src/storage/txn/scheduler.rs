@@ -597,7 +597,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             "cid" => task.cid, "term" => ?term, "extra_op" => ?extra_op,
                             "trakcer" => ?task.tracker
                         );
-                        sched.process(snapshot, task).await;                     
+                        sched.process(snapshot, task).await;
                     }
                     Err(err) => {
                         SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();

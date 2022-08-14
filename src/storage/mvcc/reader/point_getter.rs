@@ -23,7 +23,6 @@ pub struct PointGetterBuilder<S: Snapshot> {
     bypass_locks: TsSet,
     access_locks: TsSet,
     check_has_newer_ts_data: bool,
-    is_external: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -38,7 +37,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
-            is_external: false,
         }
     }
 
@@ -95,11 +93,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
-    pub fn set_is_exteranl(mut self, is_external: bool) -> Self {
-        self.is_external = is_external;
-        self
-    }
-
     /// Check whether there is data with newer ts. The result of
     /// `met_newer_ts_data` is Unknown if this option is not set.
     ///
@@ -135,7 +128,6 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             statistics: Statistics::default(),
 
             write_cursor,
-            is_external: self.is_external,
         })
     }
 }
@@ -157,7 +149,6 @@ pub struct PointGetter<S: Snapshot> {
     statistics: Statistics,
 
     write_cursor: Cursor<S::Iter>,
-    is_external: bool,
 }
 
 impl<S: Snapshot> PointGetter<S> {
@@ -177,6 +168,7 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         fail_point!("point_getter_get");
+
         if need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
@@ -214,30 +206,13 @@ impl<S: Snapshot> PointGetter<S> {
             ) {
                 self.statistics.lock.processed_keys += 1;
                 if self.access_locks.contains(lock.ts) {
-                    if self.is_external {
-                        info!("thd_name {:?}, PointerGetter::load_and_check_lock find lock for key {:?},
-                         but has been committed",
-                        std::thread::current().name(), user_key);
-                    }
                     return Ok(Some(lock));
-                }
-                if self.is_external {
-                    info!("thd_name {:?}, PointerGetter::load_and_check_lock find lock for key {:?}, makes a conflict",
-                    std::thread::current().name(), user_key);
                 }
                 Err(e.into())
             } else {
-                if self.is_external {
-                    info!("thd_name {:?}, PointerGetter::load_and_check_lock find lock for key {:?}, but not conflict",
-                    std::thread::current().name(), user_key);
-                }
                 Ok(None)
             }
         } else {
-            if self.is_external {
-                info!("thd_name {:?}, PointerGetter::load_and_check_lock doesn't find lock for key {:?}",
-                std::thread::current().name(), user_key);
-            }
             Ok(None)
         }
     }
@@ -249,9 +224,7 @@ impl<S: Snapshot> PointGetter<S> {
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
-        if self.is_external {
-            info!("thd_name {:?} PonitGetter::load_data key {:?}",std::thread::current().name(), user_key);
-        }
+
         if self.met_newer_ts_data == NewerTsCheckState::NotMetYet
             || self.isolation_level == IsolationLevel::RcCheckTs
         {
@@ -362,10 +335,6 @@ impl<S: Snapshot> PointGetter<S> {
         write_start_ts: TimeStamp,
         user_key: &Key,
     ) -> Result<Value> {
-        if self.is_external {
-            info!("thd_name {:?} PointGetter::load_data_from_default_cf key {:?}",
-            std::thread::current().name(), user_key);
-        }
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
         let value = self
@@ -389,10 +358,6 @@ impl<S: Snapshot> PointGetter<S> {
     /// start_ts.
     fn load_data_from_lock(&mut self, user_key: &Key, lock: Lock) -> Result<Option<Value>> {
         debug_assert!(lock.ts < self.ts && lock.min_commit_ts <= self.ts);
-        if self.is_external {
-            info!("thd_name {:?} PointGetter::load_data_from_lock, key {:?}, lock {:?}",
-            std::thread::current().name(), user_key, lock);
-        }
         match lock.lock_type {
             LockType::Put => {
                 if self.omit_value {
@@ -771,7 +736,6 @@ mod tests {
             met_newer_ts_data: NewerTsCheckState::NotMetYet,
             statistics: Statistics::default(),
             write_cursor,
-            is_external: false,
         };
         must_get_value(&mut getter, b"foo", b"bar");
         let s = getter.take_statistics();

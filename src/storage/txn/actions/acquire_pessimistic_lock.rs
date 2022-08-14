@@ -37,17 +37,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     min_commit_ts: TimeStamp,
     need_old_value: bool,
     lock_if_exists: bool,
-    print_info: bool,
 ) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
-
-    if print_info {
-        info!("thd_name {:?} acquire_pessimistic_lock, key {:?}, primary {:?}, fuTS {:?}, \
-        need_value {:?} need_check_existence {:?} min_commit_ts {:?}, need_old_value {:?}",
-        std::thread::current().name(), key, primary, for_update_ts, need_value, need_check_existence, min_commit_ts, need_old_value);
-    }
 
     // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
@@ -101,10 +94,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     let mut val = None;
     if let Some(lock) = reader.load_lock(&key)? {
         if lock.ts != reader.start_ts {
-            if print_info {
-                info!("thd_name {:?} acquire_pessimistic_lock, key {:?}, KeyIsLocked",
-                std::thread::current().name(), key);
-            }            
             return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
         }
         if lock.lock_type != LockType::Pessimistic {
@@ -115,19 +104,11 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             }
             .into());
         }
-        if print_info {
-            info!("thd_name {:?} acquire_pessimistic_lock, current transaction already has the lock, key {:?}",
-            std::thread::current().name(), key);
-        } 
         if need_load_value {
             val = reader.get(&key, for_update_ts)?;
         } else if need_check_existence {
             val = reader.get_write(&key, for_update_ts)?.map(|_| vec![]);
         }
-        if print_info {
-            info!("thd_name {:?} acquire_pessimistic_lock, current transaction already has the lock, key {:?} val {:?}",
-            std::thread::current().name(), key, val);
-        } 
         // Pervious write is not loaded.
         let (prev_write_loaded, prev_write) = (false, None);
         let old_value = load_old_value(
@@ -143,10 +124,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 
         // Overwrite the lock with small for_update_ts
         if for_update_ts > lock.for_update_ts {
-            if print_info {
-                info!("thd_name {:?} acquire_pessimistic_lock, overwrite the old lock, key {:?}",
-                std::thread::current().name(), key);
-            } 
             let lock = PessimisticLock {
                 primary: primary.into(),
                 start_ts: reader.start_ts,
@@ -181,10 +158,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             MVCC_CONFLICT_COUNTER
                 .acquire_pessimistic_lock_conflict
                 .inc();
-            if print_info {
-                info!("thd_name {:?} acquire_pessimistic_lock, WriteConflict, key {:?}",
-                std::thread::current().name(), key);
-            } 
             return Err(ErrorInner::WriteConflict {
                 start_ts: reader.start_ts,
                 conflict_start_ts: write.start_ts,
@@ -202,10 +175,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
         {
             assert!(write.has_overlapped_rollback || write.start_ts == commit_ts);
-            if print_info {
-                info!("thd_name {:?} acquire_pessimistic_lock, PessimisticLockRolledBack, key {:?}",
-                std::thread::current().name(), key);
-            } 
             return Err(ErrorInner::PessimisticLockRolledBack {
                 start_ts: reader.start_ts,
                 key: key.into_raw()?,
@@ -222,10 +191,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                     && (older_write.write_type == WriteType::Rollback
                         || older_write.has_overlapped_rollback)
                 {
-                    if print_info {
-                        info!("thd_name {:?} acquire_pessimistic_lock, PessimisticLockRolledBack, key {:?}",
-                        std::thread::current().name(), key);
-                    }                     
                     return Err(ErrorInner::PessimisticLockRolledBack {
                         start_ts: reader.start_ts,
                         key: key.into_raw()?,
@@ -281,13 +246,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         for_update_ts,
         min_commit_ts,
     };
-
     if !lock_if_exists || key_exists {
         txn.put_pessimistic_lock(key, lock);
-    } 
-    if print_info {
-        info!("thd_name {:?} acquire_pessimistic_lock, make a lock {:?}",
-        std::thread::current().name(), lock);
     } 
     // TODO don't we need to commit the modifies in txn?
 
@@ -508,11 +468,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             false,
-<<<<<<< HEAD
             fasle,
-=======
-            false,
->>>>>>> 73d53b7dc (add log)
         )
         .unwrap_err()
     }

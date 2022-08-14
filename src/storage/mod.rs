@@ -206,7 +206,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             api_version: self.api_version,
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: Arc::clone(&self.quota_limiter),
-            _phantom: PhantomData,            
+            _phantom: PhantomData,
         }
     }
 }
@@ -285,7 +285,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             api_version: config.api_version(),
             resource_tag_factory,
             quota_limiter,
-            _phantom: PhantomData,            
+            _phantom: PhantomData,
         })
     }
 
@@ -592,10 +592,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let res = self.read_pool.spawn_handle(
             async move {
-                if ctx.get_request_source().contains("external_") {
-                    info!("thd_name {:?}, Storage::get task, before async snapshot, request {:?}", 
-                    std::thread::current().name(), ctx);
-                }
                 let stage_scheduled_ts = Instant::now();
                 tls_collect_query(
                     ctx.get_region_id(),
@@ -632,10 +628,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
 
                 {
-                    if ctx.get_request_source().contains("external_") {
-                        info!("thd_name {:?}, Storage::get task, before snap_store get, request {:?}", 
-                        std::thread::current().name(), ctx);
-                    }                    
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
@@ -650,7 +642,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
-                            ctx.get_request_source().contains("external_"),
                         );
                         snap_store
                         .get(&key, &mut statistics)
@@ -661,10 +652,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             r
                         })
                     });
-                    if ctx.get_request_source().contains("external_") {
-                        info!("thd_name {:?}, Storage::get task, after snap_store get, request {:?}", 
-                        std::thread::current().name(), ctx);
-                    }  
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
@@ -992,7 +979,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
-                            false,
                         );
                         let mut stats = Statistics::default();
                         let result = snap_store
@@ -1213,7 +1199,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         bypass_locks,
                         access_locks,
                         false,
-                        false,
                     );
 
                     let mut scanner =
@@ -1416,9 +1401,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         };
 
         let cmd: Command = cmd.into();
-        if cmd.ctx().get_request_source().contains("external_") {
-            info!("thd_name {:?} sched_txn_command command {:?}",std::thread::current().name(), cmd);
-        }
 
         match &cmd {
             Command::Prewrite(Prewrite { mutations, .. }) => {

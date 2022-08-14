@@ -98,14 +98,6 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             Ok(PessimisticLockRes::Empty)
         };
         let need_old_value = context.extra_op == ExtraOp::ReadOldValue;
-        let mut print_info = false;
-        if ctx.get_request_source().contains("external_") {
-            print_info = true;
-            info!("thd_name {:?} AcquirePessimisticLock::process_write, keys {:?}, return_values{:?} check_existence {:?}, need_old_value {:?}",
-            std::thread::current().name(), keys, self.return_values, self.check_existence, need_old_value);
-        }
-        reader.set_print_info(print_info);
-
         for (k, should_not_exist) in keys {
             match acquire_pessimistic_lock(
                 &mut txn,
@@ -120,13 +112,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.min_commit_ts,
                 need_old_value,
                 self.lock_if_exists,
-                print_info,
             ) {
                 Ok((val, old_value)) => {
-                    if ctx.get_request_source().contains("external_") {
-                        info!("thd_name {:?} AcquirePessimisticLock::process_write after acquire_pessimistic_lock return ok, ",
-                        std::thread::current().name());
-                    }                  
                     if self.return_values || self.check_existence {
                         res.as_mut().unwrap().push(val);
                     }
@@ -139,36 +126,18 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 }
                 Err(e @ MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                     res = Err(e).map_err(Error::from).map_err(StorageError::from);
-                    if ctx.get_request_source().contains("external_") {
-                        info!("thd_name {:?} AcquirePessimisticLock::process_write after acquire_pessimistic_lock return err {:?}",
-                        std::thread::current().name(), res);
-                    }  
                     break;
                 }
-                Err(e) => {
-                    if ctx.get_request_source().contains("external_") {
-                        info!("thd_name {:?} AcquirePessimisticLock::process_write after acquire_pessimistic_lock return err other",
-                        std::thread::current().name());
-                    }                     
-                    return Err(Error::from(e));
-                }
+                Err(e) => return Err(Error::from(e)),
             }
         }
 
         // Some values are read, update max_ts
         match &res {
             Ok(PessimisticLockRes::Values(values)) if !values.is_empty() => {
-                if ctx.get_request_source().contains("external_") {
-                    info!("thd_name {:?} AcquirePessimisticLock::process_write PessimisticLockRes::Values is not empty",
-                    std::thread::current().name());
-                }                   
                 txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
             Ok(PessimisticLockRes::Existence(values)) if !values.is_empty() => {
-                if ctx.get_request_source().contains("external_") {
-                    info!("thd_name {:?} AcquirePessimisticLock::process_write PessimisticLockRes::Existence is not empty",
-                    std::thread::current().name());
-                } 
                 txn.concurrency_manager.update_max_ts(self.for_update_ts);
             }
             _ => (),
@@ -183,17 +152,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 one_pc: false,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);
-            if ctx.get_request_source().contains("external_") {
-                info!("thd_name {:?} AcquirePessimisticLock::process_write txn_modifies {:?}",
-                std::thread::current().name(), write_data.modifies);
-            }             
             (pr, write_data, rows, ctx, None)
         } else {
             let lock_info_pb = extract_lock_info_from_result(&res);
-            if ctx.get_request_source().contains("external_") {
-                info!("thd_name {:?} AcquirePessimisticLock::process_write key is locked Lock {:?}, is_first {:?}",
-                std::thread::current().name(), lock_info_pb, self.is_first_lock);
-            }  
             let lock_info = WriteResultLockInfo::from_lock_info_pb(
                 lock_info_pb,
                 self.is_first_lock,

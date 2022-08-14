@@ -191,18 +191,9 @@ macro_rules! handle_request {
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
 
-            // let source = req.mut_context().take_request_source();
-            let source = String::from(req.mut_context().get_request_source());
-            if source.contains("external_") {
-                info!("thd_name {:?} handle_request request {:?} source_type {:?}",
-                std::thread::current().name(), req, source);
-            }	
-            
+            let source = req.mut_context().take_request_source();
             let resp = $future_name(&self.storage, req);
             let task = async move {
-                if source.contains("external_") {
-                    info!("thd_name {:?}, response for handle_request, request {:?}",std::thread::current().name(), source);
-                }
                 let resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
                 set_total_time!(resp, elapsed, $time_detail);
@@ -210,7 +201,7 @@ macro_rules! handle_request {
                 GRPC_MSG_HISTOGRAM_STATIC
                     .$fn_name
                     .observe(elapsed.as_secs_f64());
-                record_request_source_metrics(String::from(source), elapsed);
+                record_request_source_metrics(source, elapsed);
                 ServerResult::Ok(())
             }
             .map_err(|e| {
@@ -1236,9 +1227,6 @@ fn response_batch_commands_request<F, T>(
     F: Future<Output = Result<T, ()>> + Send + 'static,
 {
     let task = async move {
-        if source.contains("external_") {
-            info!("thd_name {:?} response_batch_commands_request request_source {:?}",std::thread::current().name(), source);
-        }
         if let Ok(resp) = resp.await {
             let measure = GrpcRequestDuration {
                 begin,
@@ -1290,16 +1278,11 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         batcher.as_mut().unwrap().add_get_request(req, id);
                     } else {
                        let begin_instant = Instant::now();
-                       // let source = req.mut_context().take_request_source();
-                       let source = String::from(req.mut_context().get_request_source());
-                       if source.contains("external_") {
-                            info!("thd_name {:?} handle_cmd request_source {:?}",std::thread::current().name(), source);
-                       }
-                       // storage.set_request_source(&source);
+                       let source = req.mut_context().take_request_source();
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, String::from(source));
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(mut req)) => {
@@ -1345,11 +1328,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
                     let begin_instant = Instant::now();
-                    // let source = req.mut_context().take_request_source();
-                    let source = String::from(req.mut_context().get_request_source());
-                    if source.contains("external_") {
-                         info!("thd_name {:?} handle_cmd request_source {:?}",std::thread::current().name(), source);
-                    }
+                    let source = req.mut_context().take_request_source();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
@@ -1451,10 +1430,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    if req.mut_context().get_request_source().contains("external_") {
-        info!("thd_name {:?} future_get request {:?}",std::thread::current().name(), req);
-    }
-    let request_source = String::from(req.mut_context().get_request_source());
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
@@ -1467,9 +1442,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
         Key::from_raw(req.get_key()),
         req.get_version().into(),
     );
-    if request_source.contains("external_") {
-        info!("thd_name {:?} future_get after storage.get {:?}",std::thread::current().name(), req);
-    }
+
     async move {
         let v = v.await;
         let duration_ms = duration_to_ms(start.saturating_elapsed());
@@ -1498,7 +1471,6 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
             }
         }
         GLOBAL_TRACKERS.remove(tracker);
-
         Ok(resp)
     }
 }
