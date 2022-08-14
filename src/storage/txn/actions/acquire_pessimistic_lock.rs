@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::lock;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
@@ -43,11 +42,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
 
-    if lock_if_exists {
-        assert!(need_value, "when acquire pessimistic lock, lock_if_exists is used, but return_value is not");
-    }
-	
-    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    // Update max_ts for Insert operation to guarantee linearizability and snapshot
+    // isolation
     if should_not_exist {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
@@ -147,7 +143,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // Following seek_write read the previous write.
     let mut key_exists = false;
     let (prev_write_loaded, mut prev_write) = (true, None);
-    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {        
+    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
+        key_exists = true;
         // Find a previous write.
         if need_old_value {
             prev_write = Some(write.clone());
@@ -230,8 +227,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
             };
         }
-        // this flag is used for lock_if_exists is true
-        key_exists = lock_if_exists && val.is_some();
     }
 
     let old_value = load_old_value(
@@ -251,12 +246,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         for_update_ts,
         min_commit_ts,
     };
-<<<<<<< HEAD
-=======
-
-    // when lock_if_exists is false, always accquire pessimitic lock,
-    // otherwise do it when key_exists is trye
->>>>>>> 3a65f729f (modify lock_if_exists)
     if !lock_if_exists || key_exists {
         txn.put_pessimistic_lock(key, lock);
     } 
