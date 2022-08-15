@@ -4992,7 +4992,7 @@ mod tests {
         filter_consistency_check: Arc<AtomicBool>,
         delay_remove_ssts: Arc<AtomicBool>,
         last_delete_sst_count: Arc<AtomicU64>,
-        last_pending_clean_sst_count: Arc<AtomicU64>,
+        last_pending_delete_sst_count: Arc<AtomicU64>,
         last_pending_handle_sst_count: Arc<AtomicU64>,
     }
 
@@ -5030,7 +5030,7 @@ mod tests {
             }
             self.last_delete_sst_count
                 .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
-            self.last_pending_clean_sst_count.store(
+            self.last_pending_delete_sst_count.store(
                 apply_info.pending_delete_ssts.len() as u64,
                 Ordering::SeqCst,
             );
@@ -5908,7 +5908,7 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
         assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
-        assert_eq!(obs.last_pending_clean_sst_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
 
         index_id += 1;
         let ingestsst = EntryBuilder::new(index_id, 1)
@@ -5921,7 +5921,7 @@ mod tests {
         assert_eq!(apply_res.exec_res.len(), 1);
         assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
         assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 1);
-        assert_eq!(obs.last_pending_clean_sst_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
 
         system.shutdown();
     }
