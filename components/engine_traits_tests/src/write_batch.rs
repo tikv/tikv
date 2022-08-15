@@ -20,11 +20,11 @@ fn write_batch_none_no_commit() {
 #[test]
 fn write_batch_none() {
     let db = default_engine();
-    let wb = db.engine.write_batch();
+    let mut wb = db.engine.write_batch();
     wb.write().unwrap();
 
     let db = multi_batch_write_engine();
-    let wb = db.engine.write_batch_with_cap(1024);
+    let mut wb = db.engine.write_batch_with_cap(1024);
     wb.write().unwrap();
 }
 

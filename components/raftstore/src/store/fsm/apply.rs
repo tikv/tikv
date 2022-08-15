@@ -540,7 +540,7 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             let trackers: Vec<_> = self
@@ -3619,19 +3619,21 @@ where
         }
     }
 
-    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
-        let mut need_sync = apply_ctx
+        let need_sync = apply_ctx
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
-        if need_sync {
+        let force_sync_fp = || {
+            fail_point!("apply_on_handle_snapshot_sync", |_| true);
+            false
+        };
+        if need_sync || force_sync_fp() {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
