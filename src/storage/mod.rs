@@ -1452,13 +1452,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     where
         T: Future + Send + 'static,
     {
-        if let Err(_) = self
+        if self
             .sched
             .get_sched_pool(CommandPri::Normal)
             .pool
             .spawn(future)
+            .is_err()
         {
-            return Err(box_err!("schedule raw cmd fails"));
+            return Err(Error::from(ErrorInner::SchedTooBusy));
         }
         Ok(())
     }
@@ -1878,7 +1879,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
     ) -> Vec<Modify> {
-        let modifies = pairs
+        pairs
             .into_iter()
             .zip(ttls)
             .map(|((k, v), ttl)| {
@@ -1893,8 +1894,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     F::encode_raw_value_owned(raw_value),
                 )
             })
-            .collect();
-        modifies
+            .collect()
     }
 
     /// Write some keys to the storage in a batch.
