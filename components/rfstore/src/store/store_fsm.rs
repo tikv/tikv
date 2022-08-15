@@ -26,11 +26,7 @@ use raftstore::{
         split_observer::SplitObserver, BoxAdminObserver, CoprocessorHost, RegionChangeEvent,
         RegionChangeReason,
     },
-    store::{
-        local_metrics::RaftMetrics,
-        util,
-        util::{is_initial_msg, is_region_initialized},
-    },
+    store::{local_metrics::RaftMetrics, util, util::is_initial_msg},
 };
 use sst_importer::SstImporter;
 use tikv_util::{
@@ -1033,17 +1029,25 @@ impl<'a> StoreMsgHandler<'a> {
                 assert!(not_exist, "[region {}] should not exist", new_region_id);
                 continue;
             }
-            if let Some(r) = self.ctx.store_meta.regions.get(&new_region_id) {
-                if is_region_initialized(r) {
-                    // The region is created by raft message.
-                    info!("initialized region already exists, must be created by raft message.");
+            if let Some(existing) = self.ctx.peers.get(&new_region_id) {
+                let peer_fsm = existing.peer_fsm.lock().unwrap();
+                let tag = peer_fsm.peer.tag();
+                let pending_snap = peer_fsm.peer.has_pending_snapshot();
+                let initialized = peer_fsm.peer.is_initialized();
+                if pending_snap || initialized {
+                    // We already received the snapshot, the snapshot must be newer than the newly
+                    // split one, we should keep the newer peer.
+                    info!(
+                        "{} peer avoid replace by split, has pending snap {}, initialized {}",
+                        tag, pending_snap, initialized
+                    );
                     continue;
                 }
             }
             // Now all checking passed.
             // Insert new regions and validation
             info!(
-                "insert new region";
+                "split insert new region";
                 "tag" => peer_fsm.peer.tag(),
                 "region_id" => new_region_id,
                 "region" => ?new_region,

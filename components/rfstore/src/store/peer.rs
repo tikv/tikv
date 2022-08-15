@@ -476,7 +476,7 @@ impl Peer {
         let commit = ps.commit_index();
 
         let applied_index = ps.applied_index();
-        debug!(
+        info!(
             "new peer storage first:{:?} truncated:{:?} t_term:{:?} last:{:?}, applied: {:?}, commit: {:?}",
             first, truncated, truncated_term, last, applied_index, commit,
         );

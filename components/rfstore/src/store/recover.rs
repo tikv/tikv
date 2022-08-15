@@ -127,13 +127,18 @@ impl kvengine::RecoverHandler for RecoverHandler {
         meta: &ShardMeta,
     ) -> kvengine::Result<()> {
         let applied_index = shard.get_write_sequence();
-        info!("{} recover from index {}", shard.tag(), applied_index);
         let mut ctx = ApplyContext::new(engine.clone(), None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
         let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;
         let low_idx = applied_index + 1;
         let high_idx = commit_idx + 1;
+        info!(
+            "{} recover from applied {} to committed {}",
+            shard.tag(),
+            applied_index,
+            commit_idx
+        );
         let mut entries = Vec::with_capacity((high_idx.saturating_sub(low_idx)) as usize);
         self.rf_engine
             .fetch_entries_to(shard.id, low_idx, high_idx, None, &mut entries)

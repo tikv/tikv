@@ -264,13 +264,22 @@ impl EngineCore {
                 let mut old_mem_tbls = old.get_data().mem_tbls.clone();
                 let old_total_seq = old.get_write_sequence() + old.get_meta_sequence();
                 let new_total_seq = shard.get_write_sequence() + shard.get_meta_sequence();
-                if new_total_seq > old_total_seq {
+                // It's possible that the new version shard has the same write_sequence and meta
+                // sequence, so we need to compare shard version first.
+                if shard.ver > old.ver || new_total_seq > old_total_seq {
                     entry.replace_entry(Arc::new(shard));
                     for mem_tbl in old_mem_tbls.drain(..) {
                         self.free_tx.send(mem_tbl).unwrap();
                     }
                 } else {
-                    info!("ingest found shard already exists with higher sequence, skip insert");
+                    info!(
+                        "ingest shard {} found old shard {} already exists with higher or equal sequence, skip insert",
+                        shard.tag(), old.tag();
+                        "new_write_seq" => shard.get_write_sequence(),
+                        "new_meta_seq" => shard.get_meta_sequence(),
+                        "old_write_seq" => old.get_write_sequence(),
+                        "old_meta_seq" => old.get_meta_sequence(),
+                    );
                     return Ok(());
                 }
             }
