@@ -51,6 +51,8 @@ pub struct ResetToVersionWorker {
     write_iter: RocksEngineIterator,
     /// `lock_iter` is the iterator to scan through the LOCK cf
     lock_iter: RocksEngineIterator,
+    /// Total number of keys scanned
+    total_scanned: usize,
     /// `state` is current state of this task
     state: Arc<Mutex<ResetToVersionState>>,
 }
@@ -74,9 +76,10 @@ impl ResetToVersionWorker {
         write_iter.seek_to_first().unwrap();
         lock_iter.seek_to_first().unwrap();
         Self {
+            ts,
             write_iter,
             lock_iter,
-            ts,
+            total_scanned: 0,
             state,
         }
     }
@@ -89,6 +92,7 @@ impl ResetToVersionWorker {
                 ResetToVersionState::RemovingWrite { scanned: _ }
             ));
             *state.scanned() += 1;
+            self.total_scanned += 1;
             drop(state);
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let key = self.write_iter.key().to_vec();
@@ -133,6 +137,10 @@ impl ResetToVersionWorker {
             wb.write().unwrap();
             wb.clear();
         }
+        // Step into the next step.
+        if !has_more {
+            *self.state.lock().unwrap() = ResetToVersionState::RemovingLock { scanned: 0 };
+        }
         Ok(has_more)
     }
 
@@ -150,6 +158,7 @@ impl ResetToVersionWorker {
                     ResetToVersionState::RemovingLock { scanned: _ }
                 ));
                 *state.scanned() += 1;
+                self.total_scanned += 1;
                 drop(state);
 
                 box_try!(wb.delete_cf(CF_LOCK, self.lock_iter.key()));
@@ -162,6 +171,11 @@ impl ResetToVersionWorker {
         if !wb.is_empty() {
             wb.write().unwrap();
             wb.clear();
+        }
+        if !has_more {
+            *self.state.lock().unwrap() = ResetToVersionState::Done {
+                total_scanned: self.total_scanned,
+            };
         }
         Ok(has_more)
     }
@@ -232,7 +246,6 @@ impl ResetToVersionManager {
                     tikv_util::thread_group::set_properties(props);
                     tikv_alloc::add_thread_memory_accessor();
 
-                    let mut total_scanned = 0;
                     while worker
                         .process_next_batch(BATCH_SIZE, &mut wb)
                         .map_err(|err| {
@@ -243,11 +256,6 @@ impl ResetToVersionManager {
                         })
                         .unwrap()
                     {}
-                    {
-                        let mut state = worker.state.lock().unwrap();
-                        total_scanned += *state.scanned();
-                        *state = ResetToVersionState::RemovingLock { scanned: 0 };
-                    }
                     while worker
                         .process_next_batch_lock(BATCH_SIZE, &mut wb)
                         .map_err(|err| {
@@ -258,11 +266,6 @@ impl ResetToVersionManager {
                         })
                         .unwrap()
                     {}
-                    {
-                        let mut state = worker.state.lock().unwrap();
-                        total_scanned += *state.scanned();
-                        *state = ResetToVersionState::Done { total_scanned };
-                    }
                     info!("Reset to version done!");
                     tikv_alloc::remove_thread_memory_accessor();
                 })
