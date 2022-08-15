@@ -18,6 +18,8 @@ pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
+pub const KEYSPACE_ID_LEN: usize = DEFAULT_KEY_SPACE_ID.len();
+pub const KEYSPACE_PREFIX_LEN: usize = KEYSPACE_ID_LEN + 1;
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -35,6 +37,8 @@ bitflags::bitflags! {
         const DELETE_FLAG = 0b0000_0010;
     }
 }
+
+pub type KeyspaceId = [u8; KEYSPACE_ID_LEN];
 
 impl KvFormat for ApiV2 {
     const TAG: ApiVersion = ApiVersion::V2;
@@ -209,6 +213,14 @@ impl KvFormat for ApiV2 {
             ApiVersion::V2 => Ok((start_key, end_key)),
         }
     }
+
+    fn strip_keyspace(key: &[u8]) -> Result<(Option<KeyspaceId>, &[u8])> {
+        if key.len() < KEYSPACE_PREFIX_LEN {
+            return Err(Error::KeyLength.into());
+        }
+        let id = Self::get_keyspace_id(key);
+        Ok((Some(id), &key[KEYSPACE_PREFIX_LEN..]))
+    }
 }
 
 impl ApiV2 {
@@ -242,6 +254,11 @@ impl ApiV2 {
         apiv2_key.extend(key_space); // Reserved 3 bytes for key space id.
         apiv2_key.extend(key);
         apiv2_key
+    }
+
+    pub fn get_keyspace_id(key: &[u8]) -> [u8; KEYSPACE_ID_LEN] {
+        assert!(key.len() >= KEYSPACE_PREFIX_LEN);
+        [key[1], key[2], key[3]]
     }
 
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];

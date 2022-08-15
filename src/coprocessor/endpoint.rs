@@ -2,6 +2,7 @@
 
 use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
+use api_version::dispatch_api_version;
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
@@ -169,152 +170,156 @@ impl<E: Engine> Endpoint<E> {
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
-        match req.get_tp() {
-            REQ_TYPE_DAG => {
-                let mut dag = DagRequest::default();
-                box_try!(dag.merge_from(&mut input));
-                let mut table_scan = false;
-                let mut is_desc_scan = false;
-                if let Some(scan) = dag.get_executors().iter().next() {
-                    table_scan = scan.get_tp() == ExecType::TypeTableScan;
-                    if table_scan {
-                        is_desc_scan = scan.get_tbl_scan().get_desc();
-                    } else {
-                        is_desc_scan = scan.get_idx_scan().get_desc();
+        dispatch_api_version!(context.get_api_version(), {
+            match req.get_tp() {
+                REQ_TYPE_DAG => {
+                    let mut dag = DagRequest::default();
+                    box_try!(dag.merge_from(&mut input));
+                    let mut table_scan = false;
+                    let mut is_desc_scan = false;
+                    if let Some(scan) = dag.get_executors().iter().next() {
+                        table_scan = scan.get_tp() == ExecType::TypeTableScan;
+                        if table_scan {
+                            is_desc_scan = scan.get_tbl_scan().get_desc();
+                        } else {
+                            is_desc_scan = scan.get_idx_scan().get_desc();
+                        }
                     }
-                }
-                if start_ts == 0 {
-                    start_ts = dag.get_start_ts_fallback();
-                }
-                let tag = if table_scan {
-                    ReqTag::select
-                } else {
-                    ReqTag::index
-                };
-
-                req_ctx = ReqContext::new(
-                    tag,
-                    context,
-                    ranges,
-                    self.max_handle_duration,
-                    peer,
-                    Some(is_desc_scan),
-                    start_ts.into(),
-                    cache_match_version,
-                    self.perf_level,
-                );
-
-                self.check_memory_locks(&req_ctx)?;
-
-                let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                let quota_limiter = self.quota_limiter.clone();
-                builder = Box::new(move |snap, req_ctx| {
-                    let data_version = snap.ext().get_data_version();
-                    let store = CloudStore::new(
-                        snap,
-                        start_ts,
-                        req_ctx.bypass_locks.clone(),
-                        !req_ctx.context.get_not_fill_cache(),
-                    );
-                    let paging_size = match req.get_paging_size() {
-                        0 => None,
-                        i => Some(i),
+                    if start_ts == 0 {
+                        start_ts = dag.get_start_ts_fallback();
+                    }
+                    let tag = if table_scan {
+                        ReqTag::select
+                    } else {
+                        ReqTag::index
                     };
-                    dag::DagHandlerBuilder::new(
-                        dag,
-                        req_ctx.ranges.clone(),
-                        store,
-                        req_ctx.deadline,
-                        batch_row_limit,
-                        is_streaming,
-                        req.get_is_cache_enabled(),
-                        paging_size,
-                        quota_limiter,
-                    )
-                    .data_version(data_version)
-                    .build()
-                });
-            }
-            REQ_TYPE_ANALYZE => {
-                let mut analyze = AnalyzeReq::default();
-                box_try!(analyze.merge_from(&mut input));
-                if start_ts == 0 {
-                    start_ts = analyze.get_start_ts_fallback();
+
+                    req_ctx = ReqContext::new(
+                        tag,
+                        context,
+                        ranges,
+                        self.max_handle_duration,
+                        peer,
+                        Some(is_desc_scan),
+                        start_ts.into(),
+                        cache_match_version,
+                        self.perf_level,
+                    );
+
+                    self.check_memory_locks(&req_ctx)?;
+
+                    let batch_row_limit = self.get_batch_row_limit(is_streaming);
+                    let quota_limiter = self.quota_limiter.clone();
+                    builder = Box::new(move |snap, req_ctx| {
+                        let data_version = snap.ext().get_data_version();
+                        let store = CloudStore::new(
+                            snap,
+                            start_ts,
+                            req_ctx.bypass_locks.clone(),
+                            !req_ctx.context.get_not_fill_cache(),
+                        );
+                        let paging_size = match req.get_paging_size() {
+                            0 => None,
+                            i => Some(i),
+                        };
+                        dag::DagHandlerBuilder::new(
+                            dag,
+                            req_ctx.ranges.clone(),
+                            store,
+                            req_ctx.deadline,
+                            batch_row_limit,
+                            is_streaming,
+                            req.get_is_cache_enabled(),
+                            paging_size,
+                            quota_limiter,
+                        )
+                        .data_version(data_version)
+                        .build::<API>()
+                    });
                 }
+                REQ_TYPE_ANALYZE => {
+                    let mut analyze = AnalyzeReq::default();
+                    box_try!(analyze.merge_from(&mut input));
+                    if start_ts == 0 {
+                        start_ts = analyze.get_start_ts_fallback();
+                    }
 
-                let tag = match analyze.get_tp() {
-                    AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => ReqTag::analyze_index,
-                    AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
-                    AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
-                    AnalyzeType::TypeSampleIndex => unimplemented!(),
-                };
-                req_ctx = ReqContext::new(
-                    tag,
-                    context,
-                    ranges,
-                    self.max_handle_duration,
-                    peer,
-                    None,
-                    start_ts.into(),
-                    cache_match_version,
-                    self.perf_level,
-                );
+                    let tag = match analyze.get_tp() {
+                        AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
+                            ReqTag::analyze_index
+                        }
+                        AnalyzeType::TypeColumn | AnalyzeType::TypeMixed => ReqTag::analyze_table,
+                        AnalyzeType::TypeFullSampling => ReqTag::analyze_full_sampling,
+                        AnalyzeType::TypeSampleIndex => unimplemented!(),
+                    };
+                    req_ctx = ReqContext::new(
+                        tag,
+                        context,
+                        ranges,
+                        self.max_handle_duration,
+                        peer,
+                        None,
+                        start_ts.into(),
+                        cache_match_version,
+                        self.perf_level,
+                    );
 
-                self.check_memory_locks(&req_ctx)?;
-                let quota_limiter = self.quota_limiter.clone();
+                    self.check_memory_locks(&req_ctx)?;
+                    let quota_limiter = self.quota_limiter.clone();
 
-                builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::new(
-                        analyze,
-                        req_ctx.ranges.clone(),
-                        start_ts,
-                        snap,
-                        req_ctx,
-                        quota_limiter,
-                    )
-                    .map(|h| h.into_boxed())
-                });
-            }
-            REQ_TYPE_CHECKSUM => {
-                let mut checksum = ChecksumRequest::default();
-                box_try!(checksum.merge_from(&mut input));
-                let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
-                if start_ts == 0 {
-                    start_ts = checksum.get_start_ts_fallback();
+                    builder = Box::new(move |snap, req_ctx| {
+                        statistics::analyze::AnalyzeContext::<_, API>::new(
+                            analyze,
+                            req_ctx.ranges.clone(),
+                            start_ts,
+                            snap,
+                            req_ctx,
+                            quota_limiter,
+                        )
+                        .map(|h| h.into_boxed())
+                    });
                 }
+                REQ_TYPE_CHECKSUM => {
+                    let mut checksum = ChecksumRequest::default();
+                    box_try!(checksum.merge_from(&mut input));
+                    let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                    if start_ts == 0 {
+                        start_ts = checksum.get_start_ts_fallback();
+                    }
 
-                let tag = if table_scan {
-                    ReqTag::checksum_table
-                } else {
-                    ReqTag::checksum_index
-                };
-                req_ctx = ReqContext::new(
-                    tag,
-                    context,
-                    ranges,
-                    self.max_handle_duration,
-                    peer,
-                    None,
-                    start_ts.into(),
-                    cache_match_version,
-                    self.perf_level,
-                );
+                    let tag = if table_scan {
+                        ReqTag::checksum_table
+                    } else {
+                        ReqTag::checksum_index
+                    };
+                    req_ctx = ReqContext::new(
+                        tag,
+                        context,
+                        ranges,
+                        self.max_handle_duration,
+                        peer,
+                        None,
+                        start_ts.into(),
+                        cache_match_version,
+                        self.perf_level,
+                    );
 
-                self.check_memory_locks(&req_ctx)?;
+                    self.check_memory_locks(&req_ctx)?;
 
-                builder = Box::new(move |snap, req_ctx| {
-                    checksum::ChecksumContext::new(
-                        checksum,
-                        req_ctx.ranges.clone(),
-                        start_ts,
-                        snap,
-                        req_ctx,
-                    )
-                    .map(|h| h.into_boxed())
-                });
-            }
-            tp => return Err(box_err!("unsupported tp {}", tp)),
-        };
+                    builder = Box::new(move |snap, req_ctx| {
+                        checksum::ChecksumContext::<_, API>::new(
+                            checksum,
+                            req_ctx.ranges.clone(),
+                            start_ts,
+                            snap,
+                            req_ctx,
+                        )
+                        .map(|h| h.into_boxed())
+                    });
+                }
+                tp => return Err(box_err!("unsupported tp {}", tp)),
+            };
+        });
         Ok((builder, req_ctx))
     }
 

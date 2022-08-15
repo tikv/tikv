@@ -6345,6 +6345,7 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "byteorder",
  "derive_more",
  "error_code",
@@ -6363,6 +6364,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "bitfield",
  "bitflags",
  "boolinator",
@@ -6402,6 +6404,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "api_version",
  "codec",
  "collections",
  "fail 0.5.0",

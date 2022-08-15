@@ -11,6 +11,8 @@ use kvproto::kvrpcpb::ApiVersion;
 pub use match_template::match_template;
 use txn_types::{Key, TimeStamp};
 
+use crate::api_v2::KeyspaceId;
+
 pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     const TAG: ApiVersion;
     /// Corresponding TAG of client requests. For test only.
@@ -94,6 +96,10 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
             let raw_value = API::decode_raw_value(value)?;
             Ok(Self::encode_raw_value(raw_value))
         })
+    }
+
+    fn strip_keyspace(key: &[u8]) -> Result<(Option<KeyspaceId>, &[u8])> {
+        Ok((None, key))
     }
 }
 

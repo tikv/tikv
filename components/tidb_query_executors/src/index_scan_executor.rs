@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use api_version::KvFormat;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
@@ -29,11 +30,11 @@ use DecodeHandleStrategy::*;
 use super::util::scan_executor::*;
 use crate::interface::*;
 
-pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
+pub struct BatchIndexScanExecutor<S: Storage, F>(ScanExecutor<S, IndexScanExecutorImpl, F>);
 
 // We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
 // when calling `check_supported`.
-impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
+impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>, ()> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -41,7 +42,7 @@ impl BatchIndexScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     }
 }
 
-impl<S: Storage> BatchIndexScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchIndexScanExecutor<S, F> {
     pub fn new(
         storage: S,
         config: Arc<EvalConfig>,
@@ -151,7 +152,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
     }
 }
 
-impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<S: Storage, F: KvFormat> BatchExecutor for BatchIndexScanExecutor<S, F> {
     type StorageStats = S::Statistics;
 
     #[inline]
@@ -856,6 +857,7 @@ impl IndexScanExecutorImpl {
 mod tests {
     use std::sync::Arc;
 
+    use api_version::ApiV1;
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
@@ -954,7 +956,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -1007,7 +1009,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1071,7 +1073,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[1].clone(), columns_info[0].clone()],
@@ -1116,7 +1118,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1172,7 +1174,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1249,7 +1251,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1306,7 +1308,7 @@ mod tests {
                 range
             }];
 
-            let mut executor = BatchIndexScanExecutor::new(
+            let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
                 store,
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -1420,7 +1422,7 @@ mod tests {
         let mut value = value_prefix.clone();
         value.extend(restore_data);
         let store = FixtureStorage::from(vec![(key.clone(), value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -1463,7 +1465,7 @@ mod tests {
 
         let value = value_prefix;
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1559,7 +1561,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, vec![])]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1659,7 +1661,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1753,7 +1755,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1846,7 +1848,7 @@ mod tests {
         }];
 
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,
@@ -1972,7 +1974,7 @@ mod tests {
         let mut value = value_prefix;
         value.extend(restore_data);
         let store = FixtureStorage::from(vec![(key, value)]);
-        let mut executor = BatchIndexScanExecutor::new(
+        let mut executor = BatchIndexScanExecutor::<_, ApiV1>::new(
             store,
             Arc::new(EvalConfig::default()),
             columns_info,

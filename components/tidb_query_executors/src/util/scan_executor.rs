@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use api_version::KvFormat;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     storage::{
@@ -37,12 +38,12 @@ pub trait ScanExecutorImpl: Send {
 
 /// A shared executor implementation for both table scan and index scan. Implementation differences
 /// between table scan and index scan are further given via `ScanExecutorImpl`.
-pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl> {
+pub struct ScanExecutor<S: Storage, I: ScanExecutorImpl, F> {
     /// The internal scanning implementation.
     imp: I,
 
     /// The scanner that scans over ranges.
-    scanner: RangesScanner<S>,
+    scanner: RangesScanner<S, F>,
 
     /// A flag indicating whether this executor is ended. When table is drained or there was an
     /// error scanning the table, this flag will be set to `true` and `next_batch` should be never
@@ -60,7 +61,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_scanned_range_aware: bool,
 }
 
-impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
+impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> ScanExecutor<S, I, F> {
     pub fn new(
         ScanExecutorOptions {
             imp,
@@ -72,7 +73,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
             is_scanned_range_aware,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
-        tidb_query_datatype::codec::table::check_table_ranges(&key_ranges)?;
+        tidb_query_datatype::codec::table::check_table_ranges::<F>(&key_ranges)?;
         if is_backward {
             key_ranges.reverse();
         }
@@ -104,10 +105,10 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
 
         for _ in 0..scan_rows {
             let some_row = self.scanner.next()?;
-            if let Some((key, value)) = some_row {
+            if let Some(row) = some_row {
                 // Retrieved one row from point range or non-point range.
 
-                if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
+                if let Err(e) = self.imp.process_kv_pair(row.key(), row.value(), columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do
@@ -156,7 +157,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
-impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
+impl<S: Storage, I: ScanExecutorImpl, F: KvFormat> BatchExecutor for ScanExecutor<S, I, F> {
     type StorageStats = S::Statistics;
 
     #[inline]
