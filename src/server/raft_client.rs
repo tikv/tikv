@@ -1012,7 +1012,6 @@ where
             self.last_hash.1 as usize
         };
 
-        #[allow(unused_mut)]
         let mut transport_on_send_store_fp = || {
             fail_point!(
                 "transport_on_send_snapshot",

@@ -22518,7 +22518,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 0,
-          "description": "SafePoint used for TiKV's Auto GC",
+          "description": "Keys handled in GC compaction filter",
           "fill": 0,
           "gridPos": {
             "h": 7,
@@ -22569,14 +22569,14 @@
               "expr": "sum(rate(tikv_gc_compaction_filter_skip{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "skip",
+              "legendFormat": "skipped",
               "refId": "B"
             },
             {
               "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "rollback/lock",
+              "legendFormat": "mvcc-rollback/mvcc-lock",
               "refId": "C"
             },
             {
@@ -22590,7 +22590,7 @@
               "expr": "sum(rate(tikv_gc_compaction_filter_perform{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "perform",
+              "legendFormat": "performed-times",
               "refId": "E"
             },
             {

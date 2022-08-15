@@ -76,7 +76,7 @@ impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
         self.is_stopped
     }
 
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
+    /// Set a mailbox to FSM, which should be used to send message to itself.
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
@@ -84,7 +84,7 @@ impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
         self.mailbox = Some(mailbox.into_owned());
     }
 
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
+    /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
