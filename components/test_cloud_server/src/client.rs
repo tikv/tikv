@@ -24,6 +24,8 @@ use test_raftstore::TestPdClient;
 use tikv::storage::mvcc::TimeStamp;
 use tikv_util::codec::bytes::{decode_bytes, encode_bytes};
 
+use crate::must_wait;
+
 pub struct ClusterClient {
     pub pd_client: Arc<TestPdClient>,
     pub channels: HashMap<u64, Channel>,
@@ -327,7 +329,17 @@ impl ClusterClient {
         self.channels.keys().copied().collect()
     }
 
-    pub fn new_rpc_ctx(&self, region_id: u64) -> Context {
+    pub fn new_rpc_ctx(&mut self, region_id: u64) -> Context {
+        if !self.regions.contains_key(&region_id) {
+            must_wait(
+                || {
+                    self.update_cache_by_id(region_id, None);
+                    self.regions.contains_key(&region_id)
+                },
+                3,
+                "region not found",
+            );
+        }
         let region = self.regions.get(&region_id).unwrap();
         let mut ctx = Context::new();
         ctx.set_region_id(region_id);

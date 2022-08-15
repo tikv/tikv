@@ -275,9 +275,9 @@ pub fn put_mut(key: &str, val: &str) -> Mutation {
     mutation
 }
 
-pub fn must_wait<F>(f: F, seconds: usize, fail_msg: &str)
+pub fn must_wait<F>(mut f: F, seconds: usize, fail_msg: &str)
 where
-    F: Fn() -> bool,
+    F: FnMut() -> bool,
 {
     let begin = Instant::now_coarse();
     let timeout = Duration::from_secs(seconds as u64);
