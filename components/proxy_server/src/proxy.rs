@@ -8,7 +8,7 @@ use std::{
     process,
 };
 
-use clap::{App, Arg};
+use clap::{App, Arg, ArgMatches};
 use tikv::config::TiKvConfig;
 
 use crate::{
@@ -17,6 +17,49 @@ use crate::{
         ensure_no_unrecognized_config, overwrite_config_with_cmd_args, validate_and_persist_config,
     },
 };
+
+// Not the same as TiKV
+pub const TIFLASH_DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20170";
+pub const TIFLASH_DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20292";
+
+fn make_tikv_config() -> TiKvConfig {
+    let mut default = TiKvConfig::default();
+    setup_default_tikv_config(&mut default);
+    default
+}
+
+pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
+    default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
+    default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
+    default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
+}
+
+pub fn gen_tikv_config(
+    matches: &ArgMatches,
+    is_config_check: bool,
+    unrecognized_keys: &mut Vec<String>,
+) -> TiKvConfig {
+    matches
+        .value_of_os("config")
+        .map_or_else(make_tikv_config, |path| {
+            let path = Path::new(path);
+            TiKvConfig::from_file(
+                path,
+                if is_config_check {
+                    Some(unrecognized_keys)
+                } else {
+                    None
+                },
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    path.display(),
+                    e
+                );
+            })
+        })
+}
 
 pub unsafe fn run_proxy(
     argc: c_int,
@@ -223,34 +266,11 @@ pub unsafe fn run_proxy(
     let mut unrecognized_keys = Vec::new();
     let is_config_check = matches.is_present("config-check");
 
-    let mut config = matches
-        .value_of_os("config")
-        .map_or_else(TiKvConfig::default, |path| {
-            let path = Path::new(path);
-            TiKvConfig::from_file(
-                path,
-                if is_config_check {
-                    Some(&mut unrecognized_keys)
-                } else {
-                    None
-                },
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {}, err {}",
-                    path.display(),
-                    e
-                );
-            })
-        });
-
-    check_engine_label(&matches);
-    overwrite_config_with_cmd_args(&mut config, &matches);
-    config.logger_compatible_adjust();
+    let mut config = gen_tikv_config(&matches, is_config_check, &mut unrecognized_keys);
 
     let mut proxy_unrecognized_keys = Vec::new();
     // Double read the same file for proxy-specific arguments.
-    let proxy_config =
+    let mut proxy_config =
         matches
             .value_of_os("config")
             .map_or_else(crate::config::ProxyConfig::default, |path| {
@@ -271,6 +291,9 @@ pub unsafe fn run_proxy(
                     );
                 })
             });
+    check_engine_label(&matches);
+    overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+    config.logger_compatible_adjust();
 
     // TODO(tiflash) We should later use ProxyConfig for proxy's own settings like `snap_handle_pool_size`
     if is_config_check {

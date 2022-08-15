@@ -244,6 +244,7 @@ impl Simulator for NodeCluster {
             Arc::default(),
             bg_worker.clone(),
             None,
+            None,
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0

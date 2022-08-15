@@ -107,6 +107,7 @@ byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
 causal_ts = { path = "../components/causal_ts" }
+clap = "2.32"
 concurrency_manager = { path = "../components/concurrency_manager", default-features = false }
 criterion = "0.3"
 criterion-cpu-time = "0.1"

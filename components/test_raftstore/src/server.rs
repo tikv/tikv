@@ -57,7 +57,7 @@ use tikv::{
         create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
-        lock_manager::HackedLockManager as LockManager,
+        lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
@@ -373,7 +373,7 @@ impl ServerCluster {
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        let mut lock_mgr = LockManager::new();
+        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let quota_limiter = Arc::new(QuotaLimiter::new(
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
@@ -386,7 +386,7 @@ impl ServerCluster {
             pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(true)),
         };
-        let store = create_raft_storage::<_, _, _, F>(
+        let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
@@ -481,6 +481,7 @@ impl ServerCluster {
             state,
             bg_worker.clone(),
             Some(health_service.clone()),
+            None,
         );
         node.try_bootstrap_store(engines.clone())?;
         let node_id = node.id();

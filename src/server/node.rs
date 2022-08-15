@@ -35,10 +35,11 @@ use super::{RaftKv, Result};
 use crate::{
     import::SstImporter,
     read_pool::ReadPoolHandle,
-    server::{lock_manager::HackedLockManager as LockManager, Config as ServerConfig},
+    server::Config as ServerConfig,
     storage::{
         config::Config as StorageConfig, kv::FlowStatsReporter,
-        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
+        lock_manager::LockManager as LockManagerTrait, txn::flow_controller::FlowController,
+        DynamicConfigs as StorageDynamicConfigs, Storage,
     },
 };
 
@@ -47,11 +48,11 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat, LM: LockManagerTrait>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
-    lock_mgr: LockManager,
+    lock_mgr: LM,
     concurrency_manager: ConcurrencyManager,
     dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
@@ -59,7 +60,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
+) -> Result<Storage<RaftKv<EK, S>, LM, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
@@ -112,32 +113,30 @@ where
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         health_service: Option<HealthService>,
+        default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
-        let mut store = metapb::Store::default();
+        let mut store = match default_store {
+            None => metapb::Store::default(),
+            Some(s) => s,
+        };
         store.set_id(INVALID_ID);
-        if cfg.advertise_addr.is_empty() {
-            store.set_peer_address(cfg.addr.clone());
-        } else {
-            store.set_peer_address(cfg.advertise_addr.clone())
+        if store.get_address() == "" {
+            if cfg.advertise_addr.is_empty() {
+                store.set_address(cfg.addr.clone());
+            } else {
+                store.set_address(cfg.advertise_addr.clone())
+            }
+        }
+        if store.get_status_address() == "" {
+            if cfg.advertise_status_addr.is_empty() {
+                store.set_status_address(cfg.status_addr.clone());
+            } else {
+                store.set_status_address(cfg.advertise_status_addr.clone())
+            }
         }
 
-        if !cfg.engine_addr.is_empty() {
-            store.set_address(cfg.engine_addr.clone());
-        } else {
-            panic!("engine address is empty");
-        }
-
-        if !cfg.engine_store_version.is_empty() {
-            store.set_version(cfg.engine_store_version.clone());
-        }
-        if !cfg.engine_store_git_hash.is_empty() {
-            store.set_git_hash(cfg.engine_store_git_hash.clone());
-        }
-
-        if cfg.advertise_status_addr.is_empty() {
-            store.set_status_address(cfg.status_addr.clone());
-        } else {
-            store.set_status_address(cfg.advertise_status_addr.clone())
+        if store.get_version() == "" {
+            store.set_version(env!("CARGO_PKG_VERSION").to_string());
         }
 
         if let Ok(path) = std::env::current_exe() {
@@ -147,6 +146,13 @@ where
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
+        if store.get_git_hash() == "" {
+            store.set_git_hash(
+                option_env!("TIKV_BUILD_GIT_HASH")
+                    .unwrap_or("Unknown git hash")
+                    .to_string(),
+            );
+        }
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {

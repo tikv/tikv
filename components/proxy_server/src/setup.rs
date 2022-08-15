@@ -16,10 +16,15 @@ pub use server::setup::{
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TiKvConfig};
 use tikv_util::{self, config, logger};
 
+use crate::config::ProxyConfig;
 pub use crate::fatal;
 
 #[allow(dead_code)]
-pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
+pub fn overwrite_config_with_cmd_args(
+    config: &mut TiKvConfig,
+    proxy_config: &mut ProxyConfig,
+    matches: &ArgMatches<'_>,
+) {
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap();
         config.log_level = slog::Level::Info;
@@ -47,21 +52,21 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(engine_store_version) = matches.value_of("engine-version") {
-        config.server.engine_store_version = engine_store_version.to_owned();
+        proxy_config.engine_store_version = engine_store_version.to_owned();
     }
 
     if let Some(engine_store_git_hash) = matches.value_of("engine-git-hash") {
-        config.server.engine_store_git_hash = engine_store_git_hash.to_owned();
+        proxy_config.engine_store_git_hash = engine_store_git_hash.to_owned();
     }
 
-    if config.server.engine_addr.is_empty() {
+    if proxy_config.engine_addr.is_empty() {
         if let Some(engine_addr) = matches.value_of("engine-addr") {
-            config.server.engine_addr = engine_addr.to_owned();
+            proxy_config.engine_addr = engine_addr.to_owned();
         }
     }
 
     if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
-        config.server.engine_addr = engine_addr.to_owned();
+        proxy_config.engine_addr = engine_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {

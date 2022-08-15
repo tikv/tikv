@@ -88,7 +88,7 @@ use tikv::{
         config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
-        lock_manager::HackedLockManager as LockManager,
+        lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -519,13 +519,14 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        // let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
-        let lock_mgr = LockManager::new();
-        // cfg_controller.register(
-        //     tikv::config::Module::PessimisticTxn,
-        //     Box::new(lock_mgr.config_manager()),
-        // );
-        // lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
+        // Recover TiKV's lock manager, since we don't use this crate now.
+        let lock_mgr = LockManager::new(&self.config.pessimistic_txn);
+        // let lock_mgr = LockManager::new();
+        cfg_controller.register(
+            tikv::config::Module::PessimisticTxn,
+            Box::new(lock_mgr.config_manager()),
+        );
+        lock_mgr.register_detector_role_change_observer(self.coprocessor_host.as_mut().unwrap());
 
         let engines = self.engines.as_ref().unwrap();
 
@@ -613,7 +614,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             in_memory_pessimistic_lock: Arc::new(AtomicBool::new(true)),
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let storage = create_raft_storage::<_, _, _, F, _>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -751,6 +752,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.state.clone(),
             self.background_worker.clone(),
             Some(health_service.clone()),
+            None,
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));

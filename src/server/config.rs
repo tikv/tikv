@@ -18,15 +18,10 @@ use super::{snap::Task as SnapTask, Result};
 pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
-pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20170";
-pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
-    "127.0.0.1:20206"
-} else {
-    ""
-};
+pub const DEFAULT_LISTENING_ADDR: &str = "";
 
 const DEFAULT_ADVERTISE_LISTENING_ADDR: &str = "";
-const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20292";
+const DEFAULT_STATUS_ADDR: &str = "";
 const DEFAULT_GRPC_CONCURRENCY: usize = 5;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
@@ -76,10 +71,6 @@ pub struct Config {
     // If not set, we will use listening address instead.
     #[online_config(skip)]
     pub advertise_addr: String,
-
-    pub engine_addr: String,
-    pub engine_store_version: String,
-    pub engine_store_git_hash: String,
 
     // These are related to TiKV status.
     #[online_config(skip)]
@@ -211,9 +202,6 @@ impl Default for Config {
             addr: DEFAULT_LISTENING_ADDR.to_owned(),
             labels: HashMap::default(),
             advertise_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
-            engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
-            engine_store_version: "".to_string(),
-            engine_store_git_hash: "".to_string(),
             status_addr: DEFAULT_STATUS_ADDR.to_owned(),
             advertise_status_addr: DEFAULT_ADVERTISE_LISTENING_ADDR.to_owned(),
             status_thread_pool_size: 1,

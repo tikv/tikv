@@ -5782,6 +5782,7 @@ dependencies = [
  "byteorder",
  "causal_ts",
  "cdc",
+ "clap",
  "collections",
  "concurrency_manager",
  "crc64fast",

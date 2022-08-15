@@ -7,6 +7,7 @@ extern crate tikv_util;
 
 #[macro_use]
 pub mod config;
+pub mod hacked_lock_mgr;
 pub mod proxy;
 pub mod run;
 pub mod setup;

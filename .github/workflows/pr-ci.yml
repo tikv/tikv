@@ -58,6 +58,8 @@ jobs:
           export ENGINE_LABEL_VALUE=tiflash
           export RUST_BACKTRACE=full
           cargo check
+          cargo test --features compat_new_proxy --package tests --test proxy normal
+          cargo test --package tests --test proxy proxy
           cargo test --package tests --test failpoints cases::test_normal
           cargo test --package tests --test failpoints cases::test_bootstrap
           cargo test --package tests --test failpoints cases::test_compact_log
@@ -72,5 +74,3 @@ jobs:
           cargo test --package tests --test failpoints cases::test_merge
           cargo test --package tests --test failpoints cases::test_import_service
           cargo test --package tests --test failpoints cases::test_proxy_replica_read
-          cargo test --features compat_new_proxy --package tests --test proxy normal
-          cargo test --package tests --test proxy proxy

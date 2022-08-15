@@ -68,6 +68,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::default(),
         bg_worker,
         None,
+        None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = LazyWorker::new("test-pd-worker");

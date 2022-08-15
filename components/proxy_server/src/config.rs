@@ -19,12 +19,24 @@ use crate::fatal;
 #[serde(rename_all = "kebab-case")]
 pub struct ProxyConfig {
     pub snap_handle_pool_size: usize,
+    pub engine_addr: String,
+    pub engine_store_version: String,
+    pub engine_store_git_hash: String,
 }
+
+pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
+    "127.0.0.1:20206"
+} else {
+    ""
+};
 
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
             snap_handle_pool_size: 2,
+            engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
+            engine_store_version: String::default(),
+            engine_store_git_hash: String::default(),
         }
     }
 }
