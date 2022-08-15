@@ -1360,7 +1360,10 @@ where
             None => (),
             Some(mut v) => {
                 if !v.is_empty() {
-                    // The sst is not handled by any of the `pre_post` observers.
+                    // All elements in `pending_handle_ssts` should be moved into either
+                    // `delete_ssts` or `pending_delete_ssts`, once handled by by any of the
+                    // `post_exec` observers. So a non-empty
+                    // `pending_handle_ssts` here indicates no `post_exec` handled.
                     ctx.delete_ssts.append(&mut v);
                 }
             }
