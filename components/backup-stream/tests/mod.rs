@@ -159,10 +159,10 @@ impl SuiteBuilder {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, use_v3);
         }
-        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
-        //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
-        //       Either make Endpoint::with_client wait until watch did start or make slash_etc support multi-version,
-        //       then we can get rid of this sleep.
+        // We must wait until the endpoints get ready to watching the metastore, or some
+        // modifies may be lost. Either make Endpoint::with_client wait until watch did
+        // start or make slash_etc support multi-version, then we can get rid of this
+        // sleep.
         std::thread::sleep(Duration::from_secs(1));
         suite
     }
@@ -666,7 +666,8 @@ mod test {
         suite.cluster.shutdown();
     }
 
-    /// This test tests whether we can handle some weird transactions and their race with initial scanning.
+    /// This test tests whether we can handle some weird transactions and their
+    /// race with initial scanning.
     #[test]
     fn with_split_txn() {
         let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
