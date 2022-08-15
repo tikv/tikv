@@ -450,6 +450,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .pool
             .spawn(async move {
                 let mut tctx = sched.inner.dequeue_task_context(cid);
+                // The task is not executed, so the task and cb should not be none.
                 let task = tctx.task.take().unwrap();
                 let cb = tctx.cb.take().unwrap();
                 let tag = task.cmd.tag();
@@ -461,7 +462,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         let pr = ProcessResult::Failed {
                             err: StorageError::from(e),
                         };
-                        // The task is not scheduled, so the cb must not be none.
                         Self::early_response(
                             cid,
                             cb,
@@ -480,6 +480,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .unwrap();
     }
 
+    /// Try to acquire all latches for the command and execute it.
+    /// Otherwise do some prechecking and then put it on the waiting queue.
     fn schedule_command(&self, cmd: Command, callback: StorageCallback, fail_fast: bool) {
         let cid = self.inner.gen_id();
         let tracker = get_tls_tracker_token();
