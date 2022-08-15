@@ -3,7 +3,7 @@
 use std::{
     cell::RefCell,
     sync::{Arc, Mutex},
-    thread::JoinHandle,
+    thread::{self, JoinHandle},
 };
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
@@ -12,31 +12,61 @@ use engine_traits::{
     CF_WRITE,
 };
 use tikv_util::sys::thread::StdThreadBuildWrapper;
-use txn_types::{Key, TimeStamp, Write, WriteRef};
+use txn_types::{Key, Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
 use super::Result;
 
+// TODO: make this as a configurable parameter.
 const BATCH_SIZE: usize = 256;
 
 /// `ResetToVersionState` is the current state of the reset-to-version process.
-/// todo: Report this to the user.
+/// TODO: report the progress to the user.
 #[derive(Debug, Clone)]
 pub enum ResetToVersionState {
     /// `RemovingWrite` means we are removing stale data in the `WRITE` and
     /// `DEFAULT` cf
-    RemovingWrite { scanned: usize },
+    RemovingWrite { scanned: usize, deleted: usize },
     /// `RemovingWrite` means we are removing stale data in the `LOCK` cf
-    RemovingLock { scanned: usize },
-    /// `Done` means we have finshed the task
-    Done,
+    RemovingLock { scanned: usize, deleted: usize },
+    /// `Done` means we have finished the task
+    Done {
+        total_scanned: usize,
+        total_deleted: usize,
+    },
 }
 
 impl ResetToVersionState {
     pub fn scanned(&mut self) -> &mut usize {
         match self {
-            ResetToVersionState::RemovingWrite { scanned } => scanned,
-            ResetToVersionState::RemovingLock { scanned } => scanned,
-            _ => unreachable!(),
+            ResetToVersionState::RemovingWrite {
+                scanned,
+                deleted: _,
+            } => scanned,
+            ResetToVersionState::RemovingLock {
+                scanned,
+                deleted: _,
+            } => scanned,
+            ResetToVersionState::Done {
+                total_scanned,
+                total_deleted: _,
+            } => total_scanned,
+        }
+    }
+
+    pub fn deleted(&mut self) -> &mut usize {
+        match self {
+            ResetToVersionState::RemovingWrite {
+                scanned: _,
+                deleted,
+            } => deleted,
+            ResetToVersionState::RemovingLock {
+                scanned: _,
+                deleted,
+            } => deleted,
+            ResetToVersionState::Done {
+                total_scanned: _,
+                total_deleted,
+            } => total_deleted,
         }
     }
 }
@@ -50,6 +80,12 @@ pub struct ResetToVersionWorker {
     write_iter: RocksEngineIterator,
     /// `lock_iter` is the iterator to scan through the LOCK cf
     lock_iter: RocksEngineIterator,
+    /// `write_batch` is the write batch to write the data to the engine
+    write_batch: RocksWriteBatchVec,
+    /// `total_scanned` is the total number of keys scanned
+    total_scanned: usize,
+    /// `total_deleted` is the total number of keys deleted
+    total_deleted: usize,
     /// `state` is current state of this task
     state: Arc<Mutex<ResetToVersionState>>,
 }
@@ -64,51 +100,57 @@ struct Batch {
 #[allow(dead_code)]
 impl ResetToVersionWorker {
     pub fn new(
+        ts: TimeStamp,
         mut write_iter: RocksEngineIterator,
         mut lock_iter: RocksEngineIterator,
-        ts: TimeStamp,
+        write_batch: RocksWriteBatchVec,
         state: Arc<Mutex<ResetToVersionState>>,
     ) -> Self {
-        *state
-            .lock()
-            .expect("failed to lock `state` in `ResetToVersionWorker::new`") =
-            ResetToVersionState::RemovingWrite { scanned: 0 };
+        *state.lock().unwrap() = ResetToVersionState::RemovingWrite {
+            scanned: 0,
+            deleted: 0,
+        };
         write_iter.seek_to_first().unwrap();
         lock_iter.seek_to_first().unwrap();
         Self {
+            ts,
             write_iter,
             lock_iter,
-            ts,
+            write_batch,
+            total_scanned: 0,
+            total_deleted: 0,
             state,
         }
     }
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
-        if self.write_iter.valid().unwrap() {
-            let mut state = self
-                .state
-                .lock()
-                .expect("failed to lock ResetToVersionWorker::state");
-            debug_assert!(matches!(
-                *state,
-                ResetToVersionState::RemovingWrite { scanned: _ }
-            ));
-            *state.scanned() += 1;
-            drop(state);
+        if self.write_iter.valid()? {
+            {
+                let mut state = self.state.lock().unwrap();
+                debug_assert!(matches!(
+                    *state,
+                    ResetToVersionState::RemovingWrite {
+                        scanned: _,
+                        deleted: _
+                    }
+                ));
+                *state.scanned() += 1;
+                self.total_scanned += 1;
+            }
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let key = self.write_iter.key().to_vec();
-            self.write_iter.next().unwrap();
+            self.write_iter.next()?;
             return Ok(Some((key, write)));
         }
         Ok(None)
     }
 
-    fn scan_next_batch(&mut self, batch_size: usize) -> Result<Batch> {
-        let mut writes = Vec::with_capacity(batch_size);
+    fn scan_next_batch(&mut self) -> Result<Batch> {
+        let mut writes = Vec::with_capacity(BATCH_SIZE);
         let mut has_more = true;
-        for _ in 0..batch_size {
+        for _ in 0..BATCH_SIZE {
             if let Some((key, write)) = self.next_write()? {
-                let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
+                let commit_ts = Key::decode_ts_from(keys::origin_key(&key))?;
                 if commit_ts > self.ts {
                     writes.push((key, write));
                 }
@@ -120,56 +162,89 @@ impl ResetToVersionWorker {
         Ok(Batch { writes, has_more })
     }
 
-    pub fn process_next_batch(
-        &mut self,
-        batch_size: usize,
-        wb: &mut RocksWriteBatchVec,
-    ) -> Result<bool> {
-        let Batch { writes, has_more } = self.scan_next_batch(batch_size)?;
+    pub fn process_next_batch(&mut self) -> Result<bool> {
+        let Batch { writes, has_more } = self.scan_next_batch()?;
+        let mut deleted = 0;
         for (key, write) in writes {
-            let default_key = Key::from_encoded_slice(&key)
-                .truncate_ts()
-                .unwrap()
-                .append_ts(write.start_ts);
-            box_try!(wb.delete_cf(CF_WRITE, &key));
-            box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
+            self.write_batch.delete_cf(CF_WRITE, &key)?;
+            deleted += 1;
+            // If it's not a deletion short value, we need to delete it from the
+            // `CF_DEFAULT` as well.
+            if write.short_value.is_none() && write.write_type != WriteType::Delete {
+                self.write_batch.delete_cf(
+                    CF_DEFAULT,
+                    Key::from_encoded_slice(&key)
+                        .truncate_ts()
+                        .unwrap()
+                        .append_ts(write.start_ts)
+                        .as_encoded(),
+                )?;
+                deleted += 1;
+            }
         }
-        if !wb.is_empty() {
-            wb.write().unwrap();
-            wb.clear();
+        if !self.write_batch.is_empty() {
+            self.write_batch.write()?;
+            self.write_batch.clear();
+        }
+        // Update the counter.
+        *self.state.lock().unwrap().deleted() += deleted;
+        self.total_deleted += deleted;
+        // Step into the next phase.
+        if !has_more {
+            *self.state.lock().unwrap() = ResetToVersionState::RemovingLock {
+                scanned: 0,
+                deleted: 0,
+            };
         }
         Ok(has_more)
     }
 
-    pub fn process_next_batch_lock(
-        &mut self,
-        batch_size: usize,
-        wb: &mut RocksWriteBatchVec,
-    ) -> Result<bool> {
+    pub fn process_next_batch_lock(&mut self) -> Result<bool> {
         let mut has_more = true;
-        for _ in 0..batch_size {
-            if self.lock_iter.valid().unwrap() {
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("failed to lock ResetToVersionWorker::state");
-                debug_assert!(matches!(
-                    *state,
-                    ResetToVersionState::RemovingLock { scanned: _ }
-                ));
-                *state.scanned() += 1;
-                drop(state);
-
-                box_try!(wb.delete_cf(CF_LOCK, self.lock_iter.key()));
-                self.lock_iter.next().unwrap();
+        let mut deleted = 0;
+        for _ in 0..BATCH_SIZE {
+            if self.lock_iter.valid()? {
+                {
+                    let mut state = self.state.lock().unwrap();
+                    debug_assert!(matches!(
+                        *state,
+                        ResetToVersionState::RemovingLock {
+                            scanned: _,
+                            deleted: _
+                        }
+                    ));
+                    *state.scanned() += 1;
+                    self.total_scanned += 1;
+                }
+                let key = self.lock_iter.key();
+                self.write_batch.delete_cf(CF_LOCK, key)?;
+                deleted += 1;
+                let lock = box_try!(Lock::parse(self.lock_iter.value()));
+                // If it's not a deletion short value, we need to delete it from the
+                // `CF_DEFAULT` as well.
+                if lock.short_value.is_none() && lock.lock_type != LockType::Delete {
+                    self.write_batch.delete_cf(CF_DEFAULT, key)?;
+                    deleted += 1;
+                }
+                // TODO: handle the case that the TS to reset is greater than the resolved TS.
+                self.lock_iter.next()?;
             } else {
                 has_more = false;
                 break;
             }
         }
-        if !wb.is_empty() {
-            wb.write().unwrap();
-            wb.clear();
+        if !self.write_batch.is_empty() {
+            self.write_batch.write()?;
+            self.write_batch.clear();
+        }
+        // Update the counter.
+        *self.state.lock().unwrap().deleted() += deleted;
+        self.total_deleted += deleted;
+        if !has_more {
+            *self.state.lock().unwrap() = ResetToVersionState::Done {
+                total_scanned: self.total_scanned,
+                total_deleted: self.total_deleted,
+            };
         }
         Ok(has_more)
     }
@@ -202,6 +277,7 @@ impl ResetToVersionManager {
     pub fn new(engine: RocksEngine) -> Self {
         let state = Arc::new(Mutex::new(ResetToVersionState::RemovingWrite {
             scanned: 0,
+            deleted: 0,
         }));
         ResetToVersionManager {
             state,
@@ -218,41 +294,60 @@ impl ResetToVersionManager {
             .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
         let lock_iter = self.engine.iterator_opt(CF_LOCK, readopts).unwrap();
-        let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
-        let mut wb = self.engine.write_batch();
+        let mut worker = ResetToVersionWorker::new(
+            ts,
+            write_iter,
+            lock_iter,
+            self.engine.write_batch(),
+            self.state.clone(),
+        );
         let props = tikv_util::thread_group::current_properties();
         if self.worker_handle.borrow().is_some() {
             warn!("A reset-to-version process is already in progress! Wait until it finish first.");
             self.wait();
         }
-        *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
-            .name("reset_to_version".to_string())
-            .spawn_wrapper(move || {
-                tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+        *self.worker_handle.borrow_mut() = Some(
+            thread::Builder::new()
+                .name("reset_to_version".to_string())
+                .spawn_wrapper(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
 
-                while worker.process_next_batch(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid writes") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`")
-                    = ResetToVersionState::RemovingLock { scanned: 0 };
-                while worker.process_next_batch_lock(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid locks") {
-                }
-                *worker.state.lock()
-                        .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
-                    = ResetToVersionState::Done;
-                info!("Reset to version done!");
-                tikv_alloc::remove_thread_memory_accessor();
-            })
-            .expect("failed to spawn reset_to_version thread"));
+                    loop {
+                        match worker.process_next_batch() {
+                            Ok(has_more) => {
+                                if !has_more {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Reset to version failed when resetting write/default cfs"; "error" => ?e);
+                                break;
+                            }
+                        }
+                    }
+                    loop {
+                        match worker.process_next_batch_lock() {
+                            Ok(has_more) => {
+                                if !has_more {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Reset to version failed when resetting lock cf"; "error" => ?e);
+                                break;
+                            }
+                        }
+                    }
+                    info!("Reset to version done!"; "total_scanned" => worker.total_scanned);
+                    tikv_alloc::remove_thread_memory_accessor();
+                }).unwrap(),
+        );
     }
 
     /// Current process state.
     pub fn state(&self) -> ResetToVersionState {
-        self.state
-            .lock()
-            .expect("failed to lock `state` in `ResetToVersionManager::state`")
-            .clone()
+        self.state.lock().unwrap().clone()
     }
 
     /// Wait until the process finished.
@@ -263,133 +358,283 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_LOCK};
     use tempfile::Builder;
-    use txn_types::{Lock, LockType, WriteType};
 
     use super::*;
+
+    struct CFData<'a> {
+        // key, start_ts, commit_ts, write_type, is_short_value
+        write: Vec<(&'a [u8], u64, u64, WriteType, bool)>,
+        // key, start_ts
+        default: Vec<(&'a [u8], u64)>,
+        // key, start_ts, lock_type, is_short_value
+        lock: Vec<(&'a [u8], u64, LockType, bool)>,
+    }
 
     #[test]
     fn test_basic() {
         let tmp = Builder::new().prefix("test_basic").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let fake_engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
+        let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
-        let write = vec![
-            // key, start_ts, commit_ts
-            (b"k", 104, 105),
-            (b"k", 102, 103),
-            (b"k", 100, 101),
-            (b"k", 98, 99),
+        let cf_data = CFData {
+            write: vec![
+                (b"k".as_slice(), 106, 107, WriteType::Put, false),
+                (b"k".as_slice(), 104, 105, WriteType::Put, false),
+                (b"k".as_slice(), 102, 103, WriteType::Put, false),
+                (b"k".as_slice(), 100, 101, WriteType::Put, false),
+                (b"k".as_slice(), 98, 99, WriteType::Put, false),
+                (b"k".as_slice(), 96, 97, WriteType::Put, true), // Committed with a short value.
+                (b"k".as_slice(), 94, 95, WriteType::Put, false),
+                (b"k".as_slice(), 92, 93, WriteType::Put, false),
+                (b"k".as_slice(), 90, 91, WriteType::Delete, false),
+                (b"k".as_slice(), 88, 89, WriteType::Put, false),
+            ],
+            default: vec![
+                (b"k".as_slice(), 108), // Prewritten `Put` with an non-short value.
+                (b"k".as_slice(), 106),
+                (b"k".as_slice(), 104),
+                (b"k".as_slice(), 102),
+                (b"k".as_slice(), 100),
+                (b"k".as_slice(), 98),
+                (b"k".as_slice(), 94),
+                (b"k".as_slice(), 92),
+                (b"k".as_slice(), 88),
+            ],
+            lock: vec![
+                (b"k".as_slice(), 110, LockType::Delete, false),
+                (b"k".as_slice(), 109, LockType::Put, true),
+                (b"k".as_slice(), 108, LockType::Put, false),
+            ],
+        };
+        prepare_data_for_cfs(&engine, &cf_data);
+
+        // (ts_to_reset, expected_cf_data, expected_scanned, expected_deleted)
+        let test_cases: Vec<(TimeStamp, CFData, usize, usize)> = vec![
+            (
+                107.into(),
+                CFData {
+                    write: vec![
+                        (b"k".as_slice(), 106, 107, WriteType::Put, false),
+                        (b"k".as_slice(), 104, 105, WriteType::Put, false),
+                        (b"k".as_slice(), 102, 103, WriteType::Put, false),
+                        (b"k".as_slice(), 100, 101, WriteType::Put, false),
+                        (b"k".as_slice(), 98, 99, WriteType::Put, false),
+                        (b"k".as_slice(), 96, 97, WriteType::Put, true),
+                        (b"k".as_slice(), 94, 95, WriteType::Put, false),
+                        (b"k".as_slice(), 92, 93, WriteType::Put, false),
+                        (b"k".as_slice(), 90, 91, WriteType::Delete, false),
+                        (b"k".as_slice(), 88, 89, WriteType::Put, false),
+                    ],
+                    default: vec![
+                        (b"k".as_slice(), 106),
+                        (b"k".as_slice(), 104),
+                        (b"k".as_slice(), 102),
+                        (b"k".as_slice(), 100),
+                        (b"k".as_slice(), 98),
+                        (b"k".as_slice(), 94),
+                        (b"k".as_slice(), 92),
+                        (b"k".as_slice(), 88),
+                    ],
+                    lock: vec![],
+                },
+                13, // 10 keys in `CF_WRITE` + 3 keys in `CF_LOCK`
+                4,  // 3 keys in `CF_LOCK` + 1 key in `CF_DEFAULT`
+            ),
+            (
+                104.into(),
+                CFData {
+                    write: vec![
+                        (b"k".as_slice(), 102, 103, WriteType::Put, false),
+                        (b"k".as_slice(), 100, 101, WriteType::Put, false),
+                        (b"k".as_slice(), 98, 99, WriteType::Put, false),
+                        (b"k".as_slice(), 96, 97, WriteType::Put, true),
+                        (b"k".as_slice(), 94, 95, WriteType::Put, false),
+                        (b"k".as_slice(), 92, 93, WriteType::Put, false),
+                        (b"k".as_slice(), 90, 91, WriteType::Delete, false),
+                        (b"k".as_slice(), 88, 89, WriteType::Put, false),
+                    ],
+                    default: vec![
+                        (b"k".as_slice(), 102),
+                        (b"k".as_slice(), 100),
+                        (b"k".as_slice(), 98),
+                        (b"k".as_slice(), 94),
+                        (b"k".as_slice(), 92),
+                        (b"k".as_slice(), 88),
+                    ],
+                    lock: vec![],
+                },
+                10, // 10 keys in `CF_WRITE`
+                4,  // 2 keys in `CF_WRITE` + 2 keys in `CF_DEFAULT`
+            ),
+            (
+                96.into(),
+                CFData {
+                    write: vec![
+                        (b"k".as_slice(), 94, 95, WriteType::Put, false),
+                        (b"k".as_slice(), 92, 93, WriteType::Put, false),
+                        (b"k".as_slice(), 90, 91, WriteType::Delete, false),
+                        (b"k".as_slice(), 88, 89, WriteType::Put, false),
+                    ],
+                    default: vec![
+                        (b"k".as_slice(), 94),
+                        (b"k".as_slice(), 92),
+                        (b"k".as_slice(), 88),
+                    ],
+                    lock: vec![],
+                },
+                8, // 8 keys in `CF_WRITE`
+                7, // 4 keys in `CF_WRITE` + 3 keys in `CF_DEFAULT`
+            ),
+            (
+                91.into(),
+                CFData {
+                    write: vec![
+                        (b"k".as_slice(), 90, 91, WriteType::Delete, false),
+                        (b"k".as_slice(), 88, 89, WriteType::Put, false),
+                    ],
+                    default: vec![(b"k".as_slice(), 88)],
+                    lock: vec![],
+                },
+                4, // 4 keys in `CF_WRITE`
+                4, // 2 keys in `CF_WRITE` + 2 keys in `CF_DEFAULT`
+            ),
+            (
+                89.into(),
+                CFData {
+                    write: vec![(b"k".as_slice(), 88, 89, WriteType::Put, false)],
+                    default: vec![(b"k".as_slice(), 88)],
+                    lock: vec![],
+                },
+                2, // 2 keys in `CF_WRITE`
+                1, // 1 key in `CF_WRITE`
+            ),
         ];
-        let default = vec![
-            // key, start_ts
-            (b"k", 104),
-            (b"k", 102),
-            (b"k", 100),
-            (b"k", 98),
-        ];
-        let lock = vec![
-            // key, start_ts, for_update_ts, lock_type, short_value, check
-            (b"k", 100, 0, LockType::Put, false),
-            (b"k", 100, 0, LockType::Delete, false),
-            (b"k", 100, 0, LockType::Put, true),
-            (b"k", 100, 0, LockType::Delete, true),
-        ];
+
+        for (idx, test_case) in test_cases.iter().enumerate() {
+            let manager = ResetToVersionManager::new(engine.clone());
+            manager.start(test_case.0);
+            manager.wait();
+            // Check the remaining data.
+            let remaining_writes = get_all_keys(&engine, CF_WRITE);
+            let remaining_defaults = get_all_keys(&engine, CF_DEFAULT);
+            let remaining_locks = get_all_keys(&engine, CF_LOCK);
+            assert_eq!(
+                remaining_writes.len(),
+                test_case.1.write.len(),
+                "test case {}",
+                idx
+            );
+            if test_case.1.write.len() > 0 {
+                assert_eq!(
+                    Key::from_encoded_slice(&remaining_writes[0])
+                        .decode_ts()
+                        .unwrap(),
+                    test_case.1.write[0].2.into(),
+                    "{}",
+                    idx
+                );
+            }
+            assert_eq!(
+                remaining_defaults.len(),
+                test_case.1.default.len(),
+                "{}",
+                idx
+            );
+            if test_case.1.default.len() > 0 {
+                assert_eq!(
+                    Key::from_encoded_slice(&remaining_defaults[0])
+                        .decode_ts()
+                        .unwrap(),
+                    test_case.1.default[0].1.into(),
+                    "{}",
+                    idx
+                );
+            }
+            assert_eq!(
+                remaining_locks.len(),
+                test_case.1.lock.len(),
+                "test case {}",
+                idx
+            );
+            assert_eq!(*manager.state().scanned(), test_case.2, "test case {}", idx);
+            assert_eq!(*manager.state().deleted(), test_case.3, "test case {}", idx);
+        }
+    }
+
+    fn prepare_data_for_cfs(engine: &RocksEngine, cf_data: &CFData) {
+        let value = b"v".to_vec();
         let mut kv = vec![];
-        for (key, start_ts, commit_ts) in write {
-            let write = Write::new(WriteType::Put, start_ts.into(), None);
+        // Write CF.
+        for (key, start_ts, commit_ts, write_type, is_short_value) in cf_data.write.iter() {
+            let write = Write::new(
+                *write_type,
+                start_ts.into(),
+                if *is_short_value {
+                    Some(value.clone())
+                } else {
+                    None
+                },
+            );
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts.into()),
                 write.as_ref().to_bytes(),
             ));
         }
-        for (key, ts) in default {
+        // Default CF.
+        for (key, start_ts) in cf_data.default.iter() {
             kv.push((
                 CF_DEFAULT,
-                Key::from_raw(key).append_ts(ts.into()),
-                b"v".to_vec(),
+                Key::from_raw(key).append_ts(start_ts.into()),
+                value.clone(),
             ));
         }
-        for (key, ts, for_update_ts, tp, short_value) in lock {
-            let v = if short_value {
-                Some(b"v".to_vec())
-            } else {
-                None
-            };
+        // Lock CF.
+        for (key, start_ts, tp, is_short_value) in cf_data.lock.iter() {
             let lock = Lock::new(
-                tp,
+                *tp,
                 vec![],
-                ts.into(),
+                start_ts.into(),
                 0,
-                v,
-                for_update_ts.into(),
+                if *is_short_value && *tp == LockType::Put {
+                    Some(value.clone())
+                } else {
+                    None
+                },
+                0.into(),
                 0,
                 TimeStamp::zero(),
             );
-            kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
+            kv.push((
+                CF_LOCK,
+                Key::from_raw(key).append_ts(start_ts.into()),
+                lock.to_bytes(),
+            ));
         }
-        let mut wb = fake_engine.write_batch();
+        // Write all keys to the engine.
         for &(cf, ref k, ref v) in &kv {
-            wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
+            engine
+                .put_cf(cf, &keys::data_key(k.as_encoded()), v)
+                .unwrap();
         }
-        wb.write().unwrap();
+        // Flush all.
+        engine.flush_cf(CF_WRITE, true).unwrap();
+        engine.flush_cf(CF_DEFAULT, true).unwrap();
+        engine.flush_cf(CF_LOCK, true).unwrap();
+    }
 
-        let manager = ResetToVersionManager::new(fake_engine.clone());
-        manager.start(100.into());
-        manager.wait();
-
-        let readopts = IterOptions::new(None, None, false);
-        let mut write_iter = fake_engine
-            .iterator_opt(CF_WRITE, readopts.clone())
+    fn get_all_keys(engine: &RocksEngine, cf: &str) -> Vec<Vec<u8>> {
+        let mut iter = engine
+            .iterator_opt(cf, IterOptions::new(None, None, false))
             .unwrap();
-        write_iter.seek_to_first().unwrap();
-        let mut remaining_writes = vec![];
-        while write_iter.valid().unwrap() {
-            let write = WriteRef::parse(write_iter.value()).unwrap().to_owned();
-            let key = write_iter.key().to_vec();
-            write_iter.next().unwrap();
-            remaining_writes.push((key, write));
+        iter.seek_to_first().unwrap();
+        let mut keys = vec![];
+        while iter.valid().unwrap() {
+            keys.push(iter.key().to_vec());
+            iter.next().unwrap();
         }
-        let mut default_iter = fake_engine
-            .iterator_opt(CF_DEFAULT, readopts.clone())
-            .unwrap();
-        default_iter.seek_to_first().unwrap();
-        let mut remaining_defaults = vec![];
-        while default_iter.valid().unwrap() {
-            let key = default_iter.key().to_vec();
-            let value = default_iter.value().to_vec();
-            default_iter.next().unwrap();
-            remaining_defaults.push((key, value));
-        }
-
-        let mut lock_iter = fake_engine.iterator_opt(CF_LOCK, readopts).unwrap();
-        lock_iter.seek_to_first().unwrap();
-        let mut remaining_locks = vec![];
-        while lock_iter.valid().unwrap() {
-            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
-            let key = lock_iter.key().to_vec();
-            lock_iter.next().unwrap();
-            remaining_locks.push((key, lock));
-        }
-
-        // Writes which start_ts >= 100 should be removed.
-        assert_eq!(remaining_writes.len(), 1);
-        let (key, _) = &remaining_writes[0];
-        // So the only write left is the one with start_ts = 99
-        assert_eq!(
-            Key::from_encoded(key.clone()).decode_ts().unwrap(),
-            99.into()
-        );
-        // Defaults corresponding to the removed writes should be removed.
-        assert_eq!(remaining_defaults.len(), 1);
-        let (key, _) = &remaining_defaults[0];
-        assert_eq!(
-            Key::from_encoded(key.clone()).decode_ts().unwrap(),
-            98.into()
-        );
-        // All locks should be removed.
-        assert!(remaining_locks.is_empty());
+        keys
     }
 }
