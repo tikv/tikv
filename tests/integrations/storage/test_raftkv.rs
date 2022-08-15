@@ -330,6 +330,8 @@ fn test_invalid_read_index_when_no_leader() {
     );
 }
 
+/// RaftKV precheck_write_with_ctx checks if the current role is leader.
+/// When it is not, it should return NotLeader error during prechecking.
 #[test]
 fn test_raftkv_precheck_write_with_ctx() {
     let mut cluster = new_server_cluster(0, 3);

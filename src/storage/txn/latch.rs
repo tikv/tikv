@@ -264,6 +264,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_acquire_all_or_none() {
+        let latches = Latches::new(256);
+
+        let keys_a = vec!["k1", "k3", "k5"];
+        let keys_b = vec!["k4", "k5", "k6"];
+        let keys_c = vec!["k5", "k7"];
+        let mut lock_a = Lock::new(keys_a.iter());
+        let mut lock_b = Lock::new(keys_b.iter());
+        let mut lock_c = Lock::new(keys_c.iter());
+        let cid_a: u64 = 1;
+        let cid_b: u64 = 2;
+        let cid_c: u64 = 3;
+
+        // Case1: when any lock is acquired, then acquire_all_or_none should fail
+        // and B should not stay in the waiting queue.
+        assert_eq!(latches.acquire_all_or_none(&mut lock_a, cid_a), true);
+        assert_eq!(latches.acquire_all_or_none(&mut lock_b, cid_b), false);
+        assert!(latches.release(&lock_a, cid_a).is_empty());
+
+        // Case2: when B has already acquired some locks, then acquire_all_or_none
+        // should fail, and it should not rollback those old acquired locks.
+        assert_eq!(latches.acquire_all_or_none(&mut lock_c, cid_c), true);
+        // Let B acquire part of the locks.
+        latches.acquire(&mut lock_b, cid_b);
+        let old_owned_count = lock_b.owned_count;
+        // B should fail to acquire remain locks since A does not release them,
+        // and B should be still in the waiting queue.
+        latches.acquire_all_or_none(&mut lock_b, cid_b);
+        assert_eq!(old_owned_count, lock_b.owned_count);
+        let wakeup_list = latches.release(&lock_c, cid_c);
+        assert_eq!(wakeup_list[0], cid_b);
+    }
+
+    #[test]
     fn test_wakeup() {
         let latches = Latches::new(256);
 

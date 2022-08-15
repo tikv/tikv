@@ -667,7 +667,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap(), false);
+            self.schedule_command(cmd, tctx.cb.unwrap(), true);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -718,7 +718,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb, false);
+                self.schedule_command(cmd, cb, true);
             } else {
                 cb.execute(pr);
             }
@@ -1276,6 +1276,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
@@ -1285,7 +1286,7 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        TestEngineBuilder, TxnStatus,
+        RocksEngine, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]
@@ -1294,6 +1295,36 @@ mod tests {
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
         fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    // TODO(cosven): use this in the following test cases to reduce duplicate code.
+    fn new_test_scheduler() -> (Scheduler<RocksEngine, DummyLockManager>, RocksEngine) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        (
+            Scheduler::new(
+                engine.clone(),
+                DummyLockManager,
+                ConcurrencyManager::new(1.into()),
+                &config,
+                DynamicConfigs {
+                    pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                    in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                },
+                Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                DummyReporter,
+                ResourceTagFactory::new_for_test(),
+                Arc::new(QuotaLimiter::default()),
+                latest_feature_gate(),
+            ),
+            engine,
+        )
     }
 
     #[test]
@@ -1468,6 +1499,46 @@ mod tests {
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
         block_on(f).unwrap().unwrap();
+    }
+
+    /// When all latches are acquired, the command should be executed directly.
+    /// When any latch is not acquired, the command should be prechecked.
+    #[test]
+    fn test_schedule_command_with_fail_fast_mode() {
+        let (scheduler, engine) = new_test_scheduler();
+
+        // req can acquire all latches, so it should be executed directly.
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 10000;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        // It must be executed (and succeed).
+        block_on(f).unwrap().unwrap();
+
+        // Acquire the latch, so that next command(req2) can't require all latches.
+        let mut lock = Lock::new(&[Key::from_raw(b"d")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        engine.trigger_not_leader();
+
+        // req2 can't acquire all latches, req2 will be prechecked.
+        let mut req2 = BatchRollbackRequest::default();
+        req2.mut_context().max_execution_duration_ms = 10000;
+        req2.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"d".to_vec()].into());
+        let cmd2: TypedCommand<()> = req2.into();
+        let (cb2, f2) = paired_future_callback();
+        scheduler.run_cmd(cmd2.cmd, StorageCallback::Boolean(cb2));
+
+        // Precheck should return NotLeader error.
+        assert!(matches!(
+            block_on(f2).unwrap(),
+            Err(StorageError(box StorageErrorInner::Kv(KvError(
+                box KvErrorInner::Request(ref e),
+            )))) if e.has_not_leader(),
+        ))
     }
 
     #[test]

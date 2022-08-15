@@ -209,6 +209,18 @@ impl Engine for RocksEngine {
         write_modifies(&self.engines.kv, modifies)
     }
 
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        if self.not_leader.load(Ordering::SeqCst) {
+            let not_leader = {
+                let mut header = kvproto::errorpb::Error::default();
+                header.mut_not_leader().set_region_id(100);
+                header
+            };
+            return Err(Error::from(ErrorInner::Request(not_leader)));
+        }
+        Ok(())
+    }
+
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
         self.async_write_ext(ctx, batch, cb, None, None)
     }
