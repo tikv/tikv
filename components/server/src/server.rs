@@ -2051,11 +2051,13 @@ mod test {
 
         // The memory allocation should be reserved
         assert!(cached_latest_tablets.capacity() >= 5);
-        // The tablet cache should be clear
+        // The tablet cache should be cleared
         for i in 1..6 {
             assert!(cached_latest_tablets.get(&i).is_none());
         }
 
+        // The latest_normalized_pending_bytes should be equal to the pending compaction
+        // bytes of tablet_1_20
         assert_eq!(
             (new_pending_compaction_bytes * 100) as u32,
             engines_info
