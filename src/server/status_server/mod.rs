@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod profile;
+/// Provides profilers for TiKV.
+pub mod profile;
 pub mod region_meta;
 use std::{
     error::Error as StdError,
