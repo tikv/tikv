@@ -97,7 +97,6 @@ command! {
         display => "kv::command::acquirepessimisticlock {}", (inner),
         content => {
             inner: PessimisticLockCmdInner,
-            is_first_lock: bool,
         }
 }
 
@@ -284,6 +283,8 @@ impl AcquirePessimisticLock {
                     );
                     if !allow_lock_with_conflict {
                         // The request is in legacy behavior. Do not lock previously succeeded keys.
+                        // For multiple keys, is_first_lock should be unset if some of the keys
+                        // can be successfully locked.
                         txn.clear();
                         res.0.clear();
                         new_locked_keys.clear();
@@ -489,13 +490,14 @@ impl AcquirePessimisticLock {
             return_values,
             min_commit_ts,
             check_existence,
+            is_first_lock,
         };
         let inner = PessimisticLockCmdInner::SingleRequest {
             params,
             keys,
             allow_lock_with_conflict,
         };
-        Self::new(inner, is_first_lock, ctx)
+        Self::new(inner, ctx)
     }
 
     pub fn new_disallow_lock_with_conflict(
@@ -522,13 +524,14 @@ impl AcquirePessimisticLock {
             return_values,
             min_commit_ts,
             check_existence,
+            is_first_lock,
         };
         let inner = PessimisticLockCmdInner::SingleRequest {
             params,
             keys,
             allow_lock_with_conflict: false,
         };
-        Self::new(inner, is_first_lock, ctx)
+        Self::new(inner, ctx)
     }
 
     pub fn new_resumed_from_lock_info(
@@ -561,7 +564,7 @@ impl AcquirePessimisticLock {
         assert!(!items.is_empty());
         let ctx = items[0].params.pb_ctx.clone();
         let inner = PessimisticLockCmdInner::BatchResumedRequests { items };
-        Self::new(inner, false, ctx)
+        Self::new(inner, ctx)
     }
 
     pub fn is_resumed_after_waiting(&self) -> bool {
@@ -581,7 +584,7 @@ impl AcquirePessimisticLock {
                 start_ts: params.start_ts,
                 for_update_ts: params.for_update_ts,
                 keys_count: keys.len(),
-                is_first_lock: self.is_first_lock,
+                is_first_lock: params.is_first_lock,
                 allow_lock_with_conflict: *allow_lock_with_conflict,
             }),
             PessimisticLockCmdInner::BatchResumedRequests { .. } => None,

@@ -398,6 +398,7 @@ pub struct PessimisticLockParameters {
     pub return_values: bool,
     pub min_commit_ts: TimeStamp,
     pub check_existence: bool,
+    pub is_first_lock: bool,
 }
 
 pub type CallbackWithArcError<T> =

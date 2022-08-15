@@ -935,7 +935,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 events.push(lock_manager::UpdateWaitForEvent {
                     token: item.0.lock_wait_token,
                     start_ts: item.0.parameters.start_ts,
-                    is_first_lock: false, // TODO: Pass is_first_lock here.
+                    is_first_lock: item.0.parameters.is_first_lock,
                     wait_info: lock_manager::KeyLockWaitInfo {
                         key: key.clone(),
                         lock_digest: LockDigest {
@@ -960,7 +960,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .map(|item| lock_manager::UpdateWaitForEvent {
                 token: item.lock_wait_token,
                 start_ts: item.parameters.start_ts,
-                is_first_lock: false, // TODO: Pass is_first_lock here.
+                is_first_lock: item.parameters.is_first_lock,
                 wait_info: lock_manager::KeyLockWaitInfo {
                     key: item.key.clone(),
                     lock_digest: LockDigest {
