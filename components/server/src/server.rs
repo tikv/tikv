@@ -1985,8 +1985,9 @@ mod test {
     use engine_traits::{
         FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
     };
+    use tempfile::Builder;
     use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
-    use tikv_util::time::Instant;
+    use tikv_util::{config::ReadableSize, time::Instant};
 
     use super::EnginesResourceInfo;
 
@@ -1994,10 +1995,13 @@ mod test {
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
-        let path = std::env::temp_dir().join("test-update");
+        let path = Builder::new().prefix("test-update").tempdir().unwrap();
 
-        let builder = KvEngineFactoryBuilder::new(env, &config, path);
+        let builder = KvEngineFactoryBuilder::new(env, &config, path.path());
         let factory = builder.build_v2();
 
         let mut old_pending_compaction_bytes = 0;
@@ -2053,7 +2057,7 @@ mod test {
         }
 
         assert_eq!(
-            new_pending_compaction_bytes as u32,
+            (new_pending_compaction_bytes * 100) as u32,
             engines_info
                 .latest_normalized_pending_bytes
                 .load(Ordering::Relaxed)
