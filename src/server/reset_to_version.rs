@@ -70,10 +70,7 @@ impl ResetToVersionWorker {
         ts: TimeStamp,
         state: Arc<Mutex<ResetToVersionState>>,
     ) -> Self {
-        *state
-            .lock()
-            .expect("failed to lock `state` in `ResetToVersionWorker::new`") =
-            ResetToVersionState::RemovingWrite { scanned: 0 };
+        *state.lock().unwrap() = ResetToVersionState::RemovingWrite { scanned: 0 };
         write_iter.seek_to_first().unwrap();
         lock_iter.seek_to_first().unwrap();
         Self {
@@ -86,10 +83,7 @@ impl ResetToVersionWorker {
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
         if self.write_iter.valid().unwrap() {
-            let mut state = self
-                .state
-                .lock()
-                .expect("failed to lock ResetToVersionWorker::state");
+            let mut state = self.state.lock().unwrap();
             debug_assert!(matches!(
                 *state,
                 ResetToVersionState::RemovingWrite { scanned: _ }
@@ -150,10 +144,7 @@ impl ResetToVersionWorker {
         let mut has_more = true;
         for _ in 0..batch_size {
             if self.lock_iter.valid().unwrap() {
-                let mut state = self
-                    .state
-                    .lock()
-                    .expect("failed to lock ResetToVersionWorker::state");
+                let mut state = self.state.lock().unwrap();
                 debug_assert!(matches!(
                     *state,
                     ResetToVersionState::RemovingLock { scanned: _ }
@@ -244,9 +235,14 @@ impl ResetToVersionManager {
                     let mut total_scanned = 0;
                     while worker
                         .process_next_batch(BATCH_SIZE, &mut wb)
-                        .expect("reset_to_version failed when removing invalid writes")
-                    {
-                    }
+                        .map_err(|err| {
+                            format!(
+                                "reset_to_version failed when removing invalid writes: {}",
+                                err,
+                            )
+                        })
+                        .unwrap()
+                    {}
                     {
                         let mut state = worker.state.lock().unwrap();
                         total_scanned += *state.scanned();
@@ -254,9 +250,14 @@ impl ResetToVersionManager {
                     }
                     while worker
                         .process_next_batch_lock(BATCH_SIZE, &mut wb)
-                        .expect("reset_to_version failed when removing invalid locks")
-                    {
-                    }
+                        .map_err(|err| {
+                            format!(
+                                "reset_to_version failed when removing invalid locks: {}",
+                                err,
+                            )
+                        })
+                        .unwrap()
+                    {}
                     {
                         let mut state = worker.state.lock().unwrap();
                         total_scanned += *state.scanned();
@@ -265,16 +266,13 @@ impl ResetToVersionManager {
                     info!("Reset to version done!");
                     tikv_alloc::remove_thread_memory_accessor();
                 })
-                .expect("failed to spawn reset_to_version thread"),
+                .unwrap(),
         );
     }
 
     /// Current process state.
     pub fn state(&self) -> ResetToVersionState {
-        self.state
-            .lock()
-            .expect("failed to lock `state` in `ResetToVersionManager::state`")
-            .clone()
+        self.state.lock().unwrap().clone()
     }
 
     /// Wait until the process finished.
