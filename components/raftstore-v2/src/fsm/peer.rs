@@ -164,7 +164,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_start(&mut self) {
-        self.schedule_raft_tick();
+        self.schedule_tick(PeerTick::Raft);
     }
 
     fn on_tick(&mut self, tick: PeerTick) {

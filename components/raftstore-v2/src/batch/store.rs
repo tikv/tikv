@@ -67,12 +67,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         Self {
             logger,
             trans,
-            router,
-            tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
-            timer: SteadyTimer::default(),
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,
+            router,
+            tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
+            timer: SteadyTimer::default(),
             write_senders,
         }
     }

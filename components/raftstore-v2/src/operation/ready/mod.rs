@@ -42,10 +42,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         if self.fsm.peer_mut().tick() {
             self.fsm.peer_mut().set_has_ready();
         }
-        self.schedule_raft_tick();
-    }
-
-    pub fn schedule_raft_tick(&mut self) {
         self.schedule_tick(PeerTick::Raft);
     }
 }
@@ -76,7 +72,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_ready();
     }
 
-    /// Partially filled a raft message that will be sent to otheer peer.
+    /// Partially filled a raft message that will be sent to other peer.
     fn prepare_raft_message(&mut self) -> RaftMessage {
         let mut raft_msg = RaftMessage::new();
         raft_msg.set_region_id(self.region().id);
