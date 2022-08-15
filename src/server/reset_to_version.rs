@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     ops::Bound,
     sync::{Arc, Mutex},
-    thread::JoinHandle,
+    thread::{self, JoinHandle},
 };
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
@@ -234,33 +234,39 @@ impl ResetToVersionManager {
             warn!("A reset-to-version process is already in progress! Wait until it finish first.");
             self.wait();
         }
-        *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
-            .name("reset_to_version".to_string())
-            .spawn_wrapper(move || {
-                tikv_util::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+        *self.worker_handle.borrow_mut() = Some(
+            thread::Builder::new()
+                .name("reset_to_version".to_string())
+                .spawn_wrapper(move || {
+                    tikv_util::thread_group::set_properties(props);
+                    tikv_alloc::add_thread_memory_accessor();
 
-                let mut total_scanned = 0;
-                while worker.process_next_batch(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid writes") {
-                }
-                {
-                    let mut state = worker.state.lock()
-                            .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch`");
-                    total_scanned += *state.scanned();
-                    *state = ResetToVersionState::RemovingLock { scanned: 0 };
-                }
-                while worker.process_next_batch_lock(BATCH_SIZE, &mut wb).expect("reset_to_version failed when removing invalid locks") {
-                }
-                {
-                    let mut state = worker.state.lock()
-                            .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`");
-                    total_scanned += *state.scanned();
-                    *state = ResetToVersionState::Done { total_scanned };
-                }
-                info!("Reset to version done!");
-                tikv_alloc::remove_thread_memory_accessor();
-            })
-            .expect("failed to spawn reset_to_version thread"));
+                    let mut total_scanned = 0;
+                    while worker
+                        .process_next_batch(BATCH_SIZE, &mut wb)
+                        .expect("reset_to_version failed when removing invalid writes")
+                    {
+                    }
+                    {
+                        let mut state = worker.state.lock().unwrap();
+                        total_scanned += *state.scanned();
+                        *state = ResetToVersionState::RemovingLock { scanned: 0 };
+                    }
+                    while worker
+                        .process_next_batch_lock(BATCH_SIZE, &mut wb)
+                        .expect("reset_to_version failed when removing invalid locks")
+                    {
+                    }
+                    {
+                        let mut state = worker.state.lock().unwrap();
+                        total_scanned += *state.scanned();
+                        *state = ResetToVersionState::Done { total_scanned };
+                    }
+                    info!("Reset to version done!");
+                    tikv_alloc::remove_thread_memory_accessor();
+                })
+                .expect("failed to spawn reset_to_version thread"),
+        );
     }
 
     /// Current process state.
