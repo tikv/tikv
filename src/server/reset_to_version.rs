@@ -17,10 +17,11 @@ use txn_types::{Key, TimeStamp, Write, WriteRef};
 
 use super::Result;
 
+// TODO: make this as a configurable parameter.
 const BATCH_SIZE: usize = 256;
 
 /// `ResetToVersionState` is the current state of the reset-to-version process.
-/// todo: Report this to the user.
+/// TODO: report this to the user.
 #[derive(Debug, Clone)]
 pub enum ResetToVersionState {
     /// `RemovingWrite` means we are removing stale data in the `WRITE` and
@@ -85,7 +86,7 @@ impl ResetToVersionWorker {
     }
 
     fn next_write(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
-        if self.write_iter.valid().unwrap() {
+        if self.write_iter.valid()? {
             let mut state = self.state.lock().unwrap();
             debug_assert!(matches!(
                 *state,
@@ -96,7 +97,7 @@ impl ResetToVersionWorker {
             drop(state);
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let key = self.write_iter.key().to_vec();
-            self.write_iter.next().unwrap();
+            self.write_iter.next()?;
             return Ok(Some((key, write)));
         }
         Ok(None)
@@ -119,22 +120,17 @@ impl ResetToVersionWorker {
         Ok(Batch { writes, has_more })
     }
 
-    pub fn process_next_batch(
-        &mut self,
-        batch_size: usize,
-        wb: &mut RocksWriteBatchVec,
-    ) -> Result<bool> {
-        let Batch { writes, has_more } = self.scan_next_batch(batch_size)?;
+    pub fn process_next_batch(&mut self, wb: &mut RocksWriteBatchVec) -> Result<bool> {
+        let Batch { writes, has_more } = self.scan_next_batch(BATCH_SIZE)?;
         for (key, write) in writes {
             let default_key = Key::from_encoded_slice(&key)
-                .truncate_ts()
-                .unwrap()
+                .truncate_ts()?
                 .append_ts(write.start_ts);
             box_try!(wb.delete_cf(CF_WRITE, &key));
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
         }
         if !wb.is_empty() {
-            wb.write().unwrap();
+            wb.write()?;
             wb.clear();
         }
         // Step into the next step.
@@ -144,14 +140,10 @@ impl ResetToVersionWorker {
         Ok(has_more)
     }
 
-    pub fn process_next_batch_lock(
-        &mut self,
-        batch_size: usize,
-        wb: &mut RocksWriteBatchVec,
-    ) -> Result<bool> {
+    pub fn process_next_batch_lock(&mut self, wb: &mut RocksWriteBatchVec) -> Result<bool> {
         let mut has_more = true;
-        for _ in 0..batch_size {
-            if self.lock_iter.valid().unwrap() {
+        for _ in 0..BATCH_SIZE {
+            if self.lock_iter.valid()? {
                 let mut state = self.state.lock().unwrap();
                 debug_assert!(matches!(
                     *state,
@@ -162,14 +154,14 @@ impl ResetToVersionWorker {
                 drop(state);
 
                 box_try!(wb.delete_cf(CF_LOCK, self.lock_iter.key()));
-                self.lock_iter.next().unwrap();
+                self.lock_iter.next()?;
             } else {
                 has_more = false;
                 break;
             }
         }
         if !wb.is_empty() {
-            wb.write().unwrap();
+            wb.write()?;
             wb.clear();
         }
         if !has_more {
@@ -245,27 +237,34 @@ impl ResetToVersionManager {
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
                     tikv_alloc::add_thread_memory_accessor();
-
-                    while worker
-                        .process_next_batch(BATCH_SIZE, &mut wb)
-                        .map_err(|err| {
-                            format!(
-                                "reset_to_version failed when removing invalid writes: {}",
-                                err,
-                            )
-                        })
-                        .unwrap()
-                    {}
-                    while worker
-                        .process_next_batch_lock(BATCH_SIZE, &mut wb)
-                        .map_err(|err| {
-                            format!(
-                                "reset_to_version failed when removing invalid locks: {}",
-                                err,
-                            )
-                        })
-                        .unwrap()
-                    {}
+                    // Delete the write/default data in batch first.
+                    loop {
+                        match worker.process_next_batch(&mut wb) {
+                            Ok(has_more) => {
+                                if !has_more {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("reset_to_version failed when removing from write/default cfs"; "error" => ?e);
+                                break;
+                            }
+                        }
+                    }
+                    // Delete the lock data in batch then.
+                    loop {
+                        match worker.process_next_batch_lock(&mut wb) {
+                            Ok(has_more) => {
+                                if !has_more {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("reset_to_version failed when removing from lock cf"; "error" => ?e);
+                                break;
+                            }
+                        }
+                    }
                     info!("Reset to version done!");
                     tikv_alloc::remove_thread_memory_accessor();
                 })
