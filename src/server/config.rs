@@ -1,11 +1,18 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, i32, isize, sync::Arc, time::Duration};
+use std::{
+    cmp, i32, isize,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use collections::HashMap;
 use engine_traits::{perf_level_serde, PerfLevel};
 use grpcio::{CompressionAlgorithms, ResourceQuota};
-use online_config::{ConfigChange, ConfigManager, OnlineConfig};
+use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig};
 pub use raftstore::store::Config as RaftStoreConfig;
 use regex::Regex;
 use tikv_util::{
@@ -180,6 +187,9 @@ pub struct Config {
     #[doc(hidden)]
     pub simplify_metrics: bool,
 
+    // Whether to use tracker to record and return metrics of each request to the client.
+    pub track_request: bool,
+
     // Server labels to specify some attributes about this server.
     #[online_config(skip)]
     pub labels: HashMap<String, String>,
@@ -261,6 +271,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
+            track_request: false,
         }
     }
 }
@@ -403,9 +414,58 @@ impl Config {
     }
 }
 
+/// Configs that can be changed dynamically in runtime.
+/// Go `server::Config` to get more details.
+pub struct AtomicConfigs {
+    enable_req_batch: AtomicBool,
+    track_request: AtomicBool,
+    reject_messages_on_memory_ratio: AtomicU64, // f64 actually
+}
+
+impl AtomicConfigs {
+    pub fn set_enable_req_batch(&self, enable_req_batch: bool) {
+        self.enable_req_batch
+            .store(enable_req_batch, Ordering::Relaxed);
+    }
+
+    pub fn set_track_request(&self, track_request: bool) {
+        self.track_request.store(track_request, Ordering::Relaxed);
+    }
+
+    pub fn set_reject_messages_on_memory_ratio(&self, reject_messages_on_memory_ratio: f64) {
+        self.reject_messages_on_memory_ratio
+            .store(reject_messages_on_memory_ratio.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn get_enable_req_batch(&self) -> bool {
+        self.enable_req_batch.load(Ordering::Relaxed)
+    }
+
+    pub fn get_track_request(&self) -> bool {
+        self.track_request.load(Ordering::Relaxed)
+    }
+
+    pub fn get_reject_messages_on_memory_ratio(&self) -> f64 {
+        f64::from_bits(self.reject_messages_on_memory_ratio.load(Ordering::Relaxed))
+    }
+}
+
+impl<'a> From<&'a Config> for AtomicConfigs {
+    fn from(config: &Config) -> AtomicConfigs {
+        AtomicConfigs {
+            enable_req_batch: AtomicBool::new(config.enable_request_batch),
+            track_request: AtomicBool::new(config.track_request),
+            reject_messages_on_memory_ratio: AtomicU64::new(
+                config.reject_messages_on_memory_ratio.to_bits(),
+            ),
+        }
+    }
+}
+
 pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
+    atomic_cfg: Arc<AtomicConfigs>,
     grpc_mem_quota: ResourceQuota,
 }
 
@@ -416,11 +476,13 @@ impl ServerConfigManager {
     pub fn new(
         tx: Scheduler<SnapTask>,
         config: Arc<VersionTrack<Config>>,
+        atomic_cfg: Arc<AtomicConfigs>,
         grpc_mem_quota: ResourceQuota,
     ) -> ServerConfigManager {
         ServerConfigManager {
             tx,
             config,
+            atomic_cfg,
             grpc_mem_quota,
         }
     }
@@ -441,6 +503,33 @@ impl ConfigManager for ServerConfigManager {
             }
             if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
                 error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
+            }
+            if let Some(value) = c.get("enable_request_batch") {
+                if let ConfigValue::Bool(value) = value {
+                    self.atomic_cfg.set_enable_req_batch(*value);
+                } else {
+                    error!(
+                        "server.enable-request-batch must be a bool, but got {:?}.",
+                        value
+                    );
+                }
+            }
+            if let Some(value) = c.get("track_request") {
+                if let ConfigValue::Bool(value) = value {
+                    self.atomic_cfg.set_track_request(*value);
+                } else {
+                    error!("server.track-request must be a bool, but got {:?}.", value);
+                }
+            }
+            if let Some(value) = c.get("reject_messages_on_memory_ratio") {
+                if let ConfigValue::F64(value) = value {
+                    self.atomic_cfg.set_reject_messages_on_memory_ratio(*value);
+                } else {
+                    error!(
+                        "server.reject-messages-on-memory-ratio must be a float, but got {:?}.",
+                        value
+                    );
+                }
             }
         }
         info!("server configuration changed"; "change" => ?c);

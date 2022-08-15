@@ -48,12 +48,14 @@ fn start_server(
     let mut snap_worker = Worker::new("snap-handler").lazy_build("snap-handler");
     let snap_worker_scheduler = snap_worker.scheduler();
     let server_config = Arc::new(VersionTrack::new(cfg.server.clone()));
+    let atomic_server_cfg = Arc::new((&cfg.server).into());
     let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(
         tikv::config::Module::Server,
         Box::new(ServerConfigManager::new(
             snap_worker_scheduler,
             server_config.clone(),
+            atomic_server_cfg,
             ResourceQuota::new(None),
         )),
     );

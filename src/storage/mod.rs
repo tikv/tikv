@@ -92,6 +92,7 @@ use tikv_util::{
 };
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
+    INVALID_TRACKER_TOKEN,
 };
 use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
 
@@ -756,6 +757,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let mut statistics = Statistics::default();
                 let mut req_snaps = vec![];
 
+                let trackers = trackers
+                    .into_iter()
+                    .chain(iter::repeat(INVALID_TRACKER_TOKEN));
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();

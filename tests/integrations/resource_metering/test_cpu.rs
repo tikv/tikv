@@ -223,12 +223,14 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
+    let cfg = Default::default();
     let endpoint = Endpoint::new(
-        &Default::default(),
+        &cfg,
         pool.handle(),
         cm,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
+        Arc::new((&cfg).into()),
     );
     (test_suite, store, endpoint)
 }

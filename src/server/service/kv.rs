@@ -43,7 +43,10 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
 };
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
+use tracker::{
+    set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS,
+    INVALID_TRACKER_TOKEN,
+};
 use txn_types::{self, Key};
 
 use super::batch::{BatcherBuilder, ReqBatcher};
@@ -51,8 +54,8 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2, forward_duplex, forward_unary, log_net_error,
     server::{
-        gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, Proxy, Result as ServerResult,
+        config::AtomicConfigs, gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*,
+        snap::Task as SnapTask, Error, Proxy, Result as ServerResult,
     },
     storage::{
         errors::{
@@ -86,14 +89,11 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
     // For handling `CheckLeader` request.
     check_leader_scheduler: Scheduler<CheckLeaderTask>,
 
-    enable_req_batch: bool,
-
     grpc_thread_load: Arc<ThreadLoadPool>,
 
     proxy: Proxy,
 
-    // Go `server::Config` to get more details.
-    reject_messages_on_memory_ratio: f64,
+    configs: Arc<AtomicConfigs>,
 }
 
 impl<
@@ -113,10 +113,9 @@ impl<
             ch: self.ch.clone(),
             snap_scheduler: self.snap_scheduler.clone(),
             check_leader_scheduler: self.check_leader_scheduler.clone(),
-            enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
-            reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
+            configs: self.configs.clone(),
         }
     }
 }
@@ -135,9 +134,8 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         snap_scheduler: Scheduler<SnapTask>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
-        enable_req_batch: bool,
         proxy: Proxy,
-        reject_messages_on_memory_ratio: f64,
+        configs: Arc<AtomicConfigs>,
     ) -> Self {
         Service {
             store_id,
@@ -148,10 +146,9 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             ch,
             snap_scheduler,
             check_leader_scheduler,
-            enable_req_batch,
             grpc_thread_load,
             proxy,
-            reject_messages_on_memory_ratio,
+            configs,
         }
     }
 
@@ -192,7 +189,7 @@ macro_rules! handle_request {
             let begin_instant = Instant::now();
 
             let source = req.mut_context().take_request_source();
-            let resp = $future_name(&self.storage, req);
+            let resp = $future_name(&self.storage, req, &self.configs);
             let task = async move {
                 let resp = resp.await?;
                 let elapsed = begin_instant.saturating_elapsed();
@@ -434,7 +431,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         let source = req.mut_context().take_request_source();
         let begin_instant = Instant::now();
-        let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
+        let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req, &self.configs);
         let task = async move {
             let resp = future.await?;
             sink.success(resp).await?;
@@ -716,7 +713,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
     ) {
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let reject_messages_on_memory_ratio = self.configs.get_reject_messages_on_memory_ratio();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -759,7 +756,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         info!("batch_raft RPC is called, new gRPC stream established");
         let store_id = self.store_id;
         let ch = self.ch.clone();
-        let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let reject_messages_on_memory_ratio = self.configs.get_reject_messages_on_memory_ratio();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -1025,7 +1022,12 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
-        let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let batch_builder = BatcherBuilder::new(
+            self.configs.get_enable_req_batch(),
+            pool_size,
+            self.configs.get_track_request(),
+        );
+        let configs = self.configs.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -1042,6 +1044,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
                     id,
                     req,
                     &tx,
+                    &configs,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1251,6 +1254,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
+    configs: &AtomicConfigs,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1279,7 +1283,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.mut_context().take_request_source();
-                       let resp = future_get(storage, req)
+                       let resp = future_get(storage, req, configs)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source);
@@ -1293,7 +1297,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     } else {
                        let begin_instant = Instant::now();
                        let source = req.mut_context().take_request_source();
-                       let resp = future_raw_get(storage, req)
+                       let resp = future_raw_get(storage, req, configs)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source);
@@ -1329,7 +1333,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                 $(Some(batch_commands_request::request::Cmd::$cmd(mut req)) => {
                     let begin_instant = Instant::now();
                     let source = req.mut_context().take_request_source();
-                    let resp = $future_fn($($arg,)* req)
+                    let resp = $future_fn($($arg,)* req, configs)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source);
@@ -1429,12 +1433,17 @@ async fn future_handle_empty(
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
+    configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvGet,
-        req.get_version(),
-    )));
+    let tracker = if configs.get_track_request() {
+        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::KvGet,
+            req.get_version(),
+        )))
+    } else {
+        INVALID_TRACKER_TOKEN
+    };
     set_tls_tracker_token(tracker);
     let start = Instant::now();
     let v = storage.get(
@@ -1478,12 +1487,17 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanRequest,
+    configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvScan,
-        req.get_version(),
-    )));
+    let tracker = if configs.get_track_request() {
+        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::KvScan,
+            req.get_version(),
+        )))
+    } else {
+        INVALID_TRACKER_TOKEN
+    };
     set_tls_tracker_token(tracker);
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -1526,12 +1540,17 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: BatchGetRequest,
+    configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvBatchGet,
-        req.get_version(),
-    )));
+    let tracker = if configs.get_track_request() {
+        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::KvBatchGet,
+            req.get_version(),
+        )))
+    } else {
+        INVALID_TRACKER_TOKEN
+    };
     set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1577,12 +1596,17 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: ScanLockRequest,
+    configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-        req.get_context(),
-        RequestType::KvScanLock,
-        req.get_max_version(),
-    )));
+    let tracker = if configs.get_track_request() {
+        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            req.get_context(),
+            RequestType::KvScanLock,
+            req.get_max_version(),
+        )))
+    } else {
+        INVALID_TRACKER_TOKEN
+    };
     set_tls_tracker_token(tracker);
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
@@ -1611,15 +1635,21 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
-async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
-        RpcStatusCode::UNIMPLEMENTED,
-    ))))
+fn future_gc(
+    _: GcRequest,
+    _configs: &AtomicConfigs,
+) -> impl Future<Output = ServerResult<GcResponse>> {
+    async {
+        Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
+            RpcStatusCode::UNIMPLEMENTED,
+        ))))
+    }
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: DeleteRangeRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
     let res = storage.delete_range(
@@ -1648,6 +1678,7 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {
     let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
 
@@ -1670,6 +1701,7 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchGetRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
     let keys = req.take_keys().into();
     let v = storage.raw_batch_get(req.take_context(), req.take_cf(), keys);
@@ -1689,6 +1721,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawPutRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
@@ -1729,6 +1762,7 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchPutRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
     let pairs_len = req.get_pairs().len();
@@ -1778,6 +1812,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
     let for_atomic = req.get_for_cas();
@@ -1805,6 +1840,7 @@ fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchDeleteRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
     let cf = req.take_cf();
     let keys = req.take_keys().into();
@@ -1834,6 +1870,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawScanRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
     let end_key = if req.get_end_key().is_empty() {
         None
@@ -1865,6 +1902,7 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawBatchScanRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
     let v = storage.raw_batch_scan(
         req.take_context(),
@@ -1890,6 +1928,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawDeleteRangeRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
     let res = storage.raw_delete_range(
@@ -1918,6 +1957,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawGetKeyTtlRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
     let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
 
@@ -1940,6 +1980,7 @@ fn future_raw_get_key_ttl<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawCasRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
     let (cb, f) = paired_future_callback();
     let previous_value = if req.get_previous_not_exist() {
@@ -1984,6 +2025,7 @@ fn future_raw_compare_and_swap<E: Engine, L: LockManager, F: KvFormat>(
 fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: RawChecksumRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
     let f = storage.raw_checksum(
         req.take_context(),
@@ -2022,6 +2064,7 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
     copr_v2: &coprocessor_v2::Endpoint,
     storage: &Storage<E, L, F>,
     req: RawCoprocessorRequest,
+    _configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = copr_v2.handle_request(storage, req);
     async move { Ok(ret.await) }
@@ -2032,13 +2075,18 @@ macro_rules! txn_command_future {
         fn $fn_name<E: Engine, L: LockManager, F: KvFormat>(
             storage: &Storage<E, L, F>,
             $req: $req_ty,
+            configs: &AtomicConfigs,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
-            let $tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-                $req.get_context(),
-                RequestType::Unknown,
-                0,
-            )));
+            let $tracker = if configs.get_track_request() {
+                GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                    $req.get_context(),
+                    RequestType::Unknown,
+                    0,
+                )))
+            } else {
+                INVALID_TRACKER_TOKEN
+            };
             set_tls_tracker_token($tracker);
             let (cb, f) = paired_future_callback();
             let res = storage.sched_txn_command($req.into(), cb);

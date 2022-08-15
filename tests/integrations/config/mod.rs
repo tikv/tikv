@@ -122,6 +122,7 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
+        track_request: true,
     };
     value.readpool = ReadPoolConfig {
         unified: UnifiedReadPoolConfig {

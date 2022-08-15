@@ -4,6 +4,7 @@ use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Dur
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
+    INVALID_TRACKER_TOKEN,
 };
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
@@ -23,7 +24,7 @@ use txn_types::Lock;
 use crate::{
     coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
     read_pool::ReadPoolHandle,
-    server::Config,
+    server::{config::AtomicConfigs, Config},
     storage::{
         self,
         kv::{self, with_tls_engine, SnapContext},
@@ -68,6 +69,8 @@ pub struct Endpoint<E: Engine> {
     _phantom: PhantomData<E>,
 
     quota_limiter: Arc<QuotaLimiter>,
+
+    server_configs: Arc<AtomicConfigs>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
@@ -79,6 +82,7 @@ impl<E: Engine> Endpoint<E> {
         concurrency_manager: ConcurrencyManager,
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
+        server_configs: Arc<AtomicConfigs>,
     ) -> Self {
         // FIXME: When yatp is used, we need to limit coprocessor requests in progress
         // to avoid using too much memory. However, if there are a number of large
@@ -103,6 +107,7 @@ impl<E: Engine> Endpoint<E> {
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
             quota_limiter,
+            server_configs,
         }
     }
 
@@ -488,11 +493,15 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
-        let tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::Unknown,
-            req.start_ts,
-        )));
+        let tracker = if self.server_configs.get_track_request() {
+            GLOBAL_TRACKERS.insert(::tracker::Tracker::new(RequestInfo::new(
+                req.get_context(),
+                RequestType::Unknown,
+                req.start_ts,
+            )))
+        } else {
+            INVALID_TRACKER_TOKEN
+        };
         set_tls_tracker_token(tracker);
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
@@ -857,12 +866,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         // a normal request
@@ -898,12 +909,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let mut copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
         copr.recursion_limit = 100;
 
@@ -936,12 +949,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let mut req = coppb::Request::default();
@@ -959,12 +974,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let mut req = coppb::Request::default();
@@ -1007,12 +1024,14 @@ mod tests {
         );
 
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let (tx, rx) = mpsc::channel();
@@ -1055,12 +1074,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let handler_builder =
@@ -1080,12 +1101,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         // Fail immediately
@@ -1133,12 +1156,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -1161,12 +1186,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         // handler returns `finished == true` should not be called again.
@@ -1257,15 +1284,17 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config {
+            end_point_stream_channel_size: 3,
+            ..Config::default()
+        };
         let copr = Endpoint::<RocksEngine>::new(
-            &Config {
-                end_point_stream_channel_size: 3,
-                ..Config::default()
-            },
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1335,6 +1364,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&config).into()),
         );
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1659,12 +1689,14 @@ mod tests {
             engine,
         ));
         let cm = ConcurrencyManager::new(1.into());
+        let cfg = Config::default();
         let copr = Endpoint::<RocksEngine>::new(
-            &Config::default(),
+            &cfg,
             read_pool.handle(),
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&cfg).into()),
         );
 
         {
@@ -1728,6 +1760,7 @@ mod tests {
             cm,
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            Arc::new((&config).into()),
         );
         let mut req = coppb::Request::default();
         req.mut_context().set_isolation_level(IsolationLevel::Si);

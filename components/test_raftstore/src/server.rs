@@ -51,6 +51,7 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
+        config::AtomicConfigs,
         create_raft_storage,
         gc_worker::GcWorker,
         load_statistics::ThreadLoadPool,
@@ -446,6 +447,7 @@ impl ServerCluster {
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
+        let atomic_cfg = Arc::new(AtomicConfigs::from(&cfg.server));
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = ReadPool::from(coprocessor::readpool_impl::build_read_pool_for_test(
@@ -458,6 +460,7 @@ impl ServerCluster {
             concurrency_manager.clone(),
             res_tag_factory,
             quota_limiter,
+            atomic_cfg,
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&cfg.coprocessor_v2);
         let mut server = None;
@@ -507,8 +510,9 @@ impl ServerCluster {
         for _ in 0..100 {
             let mut svr = Server::new(
                 node_id,
-                &server_cfg,
-                &security_mgr,
+                server_cfg.clone(),
+                Arc::new((&cfg.server).into()),
+                security_mgr.clone(),
                 store.clone(),
                 copr.clone(),
                 copr_v2.clone(),

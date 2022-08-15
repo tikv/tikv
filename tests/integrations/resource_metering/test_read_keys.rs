@@ -247,12 +247,14 @@ fn init_coprocessor_with_data(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
+    let cfg = Default::default();
     Endpoint::new(
-        &tikv::server::Config::default(),
+        &cfg,
         pool.handle(),
         cm,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
+        Arc::new((&cfg).into()),
     )
 }
 

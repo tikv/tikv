@@ -2024,6 +2024,7 @@ fn test_storage_with_quota_limiter_disable() {
 #[test]
 fn test_commands_write_detail() {
     let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.server.track_request = true;
         cluster.cfg.pessimistic_txn.pipelined = false;
         cluster.cfg.pessimistic_txn.in_memory = false;
     });

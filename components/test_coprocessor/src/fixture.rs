@@ -109,6 +109,7 @@ pub fn init_data_with_details<E: Engine>(
         cm,
         ResourceTagFactory::new_for_test(),
         Arc::new(QuotaLimiter::default()),
+        Arc::new(cfg.into()),
     );
     (store, copr)
 }

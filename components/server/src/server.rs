@@ -89,7 +89,7 @@ use tikv::{
     import::{ImportSstService, SstImporter},
     read_pool::{build_yatp_read_pool, ReadPool, ReadPoolConfigManager},
     server::{
-        config::{Config as ServerConfig, ServerConfigManager},
+        config::{AtomicConfigs, Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
         gc_worker::{AutoGcConfig, GcWorker},
         lock_manager::LockManager,
@@ -877,10 +877,12 @@ where
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
+        let atomic_cfg = Arc::new(AtomicConfigs::from(&*server_config.value()));
         let server = Server::new(
             node.id(),
-            &server_config,
-            &self.security_mgr,
+            server_config.clone(),
+            atomic_cfg.clone(),
+            self.security_mgr.clone(),
             storage,
             coprocessor::Endpoint::new(
                 &server_config.value(),
@@ -888,6 +890,7 @@ where
                 self.concurrency_manager.clone(),
                 resource_tag_factory,
                 Arc::clone(&self.quota_limiter),
+                atomic_cfg.clone(),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
             self.router.clone(),
@@ -906,6 +909,7 @@ where
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
+                atomic_cfg,
                 server.get_grpc_mem_quota().clone(),
             )),
         );

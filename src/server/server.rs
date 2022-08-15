@@ -29,6 +29,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 
 use super::{
+    config::AtomicConfigs,
     load_statistics::*,
     metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
     raft_client::{ConnectionBuilder, RaftClient},
@@ -89,8 +90,9 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     #[allow(clippy::too_many_arguments)]
     pub fn new<L: LockManager, F: KvFormat>(
         store_id: u64,
-        cfg: &Arc<VersionTrack<Config>>,
-        security_mgr: &Arc<SecurityManager>,
+        cfg: Arc<VersionTrack<Config>>,
+        atomic_cfg: Arc<AtomicConfigs>,
+        security_mgr: Arc<SecurityManager>,
         storage: Storage<E, L, F>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
@@ -136,9 +138,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
             lazy_worker.scheduler(),
             check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
-            cfg.value().enable_request_batch,
             proxy,
-            cfg.value().reject_messages_on_memory_ratio,
+            atomic_cfg,
         );
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -167,8 +168,8 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let conn_builder = ConnectionBuilder::new(
             env.clone(),
-            Arc::clone(cfg),
-            security_mgr.clone(),
+            Arc::clone(&cfg),
+            security_mgr,
             resolver,
             raft_router.clone(),
             lazy_worker.scheduler(),
@@ -511,6 +512,7 @@ mod tests {
         gc_worker.start().unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
+        let atomic_cfg = Arc::new(AtomicConfigs::from(&cfg));
         let cfg = Arc::new(VersionTrack::new(cfg));
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
@@ -524,6 +526,7 @@ mod tests {
             storage.get_concurrency_manager(),
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
+            atomic_cfg.clone(),
         );
         let copr_v2 = coprocessor_v2::Endpoint::new(&coprocessor_v2::Config::default());
         let debug_thread_pool = Arc::new(
@@ -540,8 +543,9 @@ mod tests {
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
             mock_store_id,
-            &cfg,
-            &security_mgr,
+            cfg.clone(),
+            atomic_cfg,
+            security_mgr.clone(),
             storage,
             copr,
             copr_v2,

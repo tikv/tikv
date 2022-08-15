@@ -5018,6 +5018,7 @@ mod tests {
             Box::new(ServerConfigManager::new(
                 scheduler,
                 version_tracker.clone(),
+                Arc::new((&cfg.server).into()),
                 ResourceQuota::new(None),
             )),
         );

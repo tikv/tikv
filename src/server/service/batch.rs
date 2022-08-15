@@ -31,10 +31,11 @@ pub struct ReqBatcher {
     raw_get_ids: Vec<u64>,
     begin_instant: Instant,
     batch_size: usize,
+    track_request: bool,
 }
 
 impl ReqBatcher {
-    pub fn new(batch_size: usize) -> ReqBatcher {
+    pub fn new(batch_size: usize, track_request: bool) -> ReqBatcher {
         let begin_instant = Instant::now();
         ReqBatcher {
             gets: vec![],
@@ -44,6 +45,7 @@ impl ReqBatcher {
             raw_get_ids: vec![],
             begin_instant,
             batch_size: std::cmp::min(batch_size, MAX_BATCH_GET_REQUEST_COUNT),
+            track_request,
         }
     }
 
@@ -56,14 +58,16 @@ impl ReqBatcher {
     }
 
     pub fn add_get_request(&mut self, req: GetRequest, id: u64) {
-        let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvBatchGetCommand,
-            req.get_version(),
-        )));
+        if self.track_request {
+            let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+                req.get_context(),
+                RequestType::KvBatchGetCommand,
+                req.get_version(),
+            )));
+            self.get_trackers.push(tracker);
+        };
         self.gets.push(req);
         self.get_ids.push(id);
-        self.get_trackers.push(tracker);
     }
 
     pub fn add_raw_get_request(&mut self, req: RawGetRequest, id: u64) {
@@ -120,13 +124,15 @@ impl ReqBatcher {
 pub struct BatcherBuilder {
     pool_size: usize,
     enable_batch: bool,
+    track_request: bool,
 }
 
 impl BatcherBuilder {
-    pub fn new(enable_batch: bool, pool_size: usize) -> Self {
+    pub fn new(enable_batch: bool, pool_size: usize, track_request: bool) -> Self {
         BatcherBuilder {
             enable_batch,
             pool_size,
+            track_request,
         }
     }
     pub fn build(&self, queue_per_worker: usize, req_batch_size: usize) -> Option<ReqBatcher> {
@@ -136,12 +142,15 @@ impl BatcherBuilder {
         if req_batch_size > self.pool_size * MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MIN_BATCH_GET_REQUEST_COUNT
         {
-            return Some(ReqBatcher::new(req_batch_size / self.pool_size));
+            return Some(ReqBatcher::new(
+                req_batch_size / self.pool_size,
+                self.track_request,
+            ));
         }
         if req_batch_size >= MIN_BATCH_GET_REQUEST_COUNT
             && queue_per_worker >= MAX_QUEUE_SIZE_PER_WORKER
         {
-            return Some(ReqBatcher::new(req_batch_size));
+            return Some(ReqBatcher::new(req_batch_size, self.track_request));
         }
         None
     }
