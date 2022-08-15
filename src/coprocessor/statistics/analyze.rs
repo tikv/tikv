@@ -1,7 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
+use std::{cmp::Reverse, collections::BinaryHeap, marker::PhantomData, mem, sync::Arc};
 
+use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
@@ -45,16 +46,17 @@ const ANALYZE_VERSION_V1: i32 = 1;
 const ANALYZE_VERSION_V2: i32 = 2;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
-pub struct AnalyzeContext<S: Snapshot> {
+pub struct AnalyzeContext<S: Snapshot, F: KvFormat> {
     req: AnalyzeReq,
     storage: Option<TikvStorage<SnapshotStore<S>>>,
     ranges: Vec<KeyRange>,
     storage_stats: Statistics,
     quota_limiter: Arc<QuotaLimiter>,
     is_auto_analyze: bool,
+    _phantom: PhantomData<F>,
 }
 
-impl<S: Snapshot> AnalyzeContext<S> {
+impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
@@ -81,13 +83,14 @@ impl<S: Snapshot> AnalyzeContext<S> {
             storage_stats: Statistics::default(),
             quota_limiter,
             is_auto_analyze,
+            _phantom: PhantomData
         })
     }
 
     // handle_column is used to process `AnalyzeColumnsReq`
     // it would build a histogram for the primary key(if needed) and
     // collectors for each column value.
-    async fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
+    async fn handle_column(builder: &mut SampleBuilder<S, F>) -> Result<Vec<u8>> {
         let (col_res, _) = builder.collect_columns_stats().await?;
 
         let res_data = {
@@ -97,7 +100,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    async fn handle_mixed(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
+    async fn handle_mixed(builder: &mut SampleBuilder<S, F>) -> Result<Vec<u8>> {
         let (col_res, idx_res) = builder.collect_columns_stats().await?;
 
         let res_data = {
@@ -113,7 +116,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         Ok(res_data)
     }
 
-    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S>) -> Result<Vec<u8>> {
+    async fn handle_full_sampling(builder: &mut RowSampleBuilder<S, F>) -> Result<Vec<u8>> {
         let sample_res = builder.collect_column_stats().await?;
         let res_data = {
             let res = sample_res.into_proto();
@@ -126,7 +129,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     async fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut RangesScanner<TikvStorage<SnapshotStore<S>>>,
+        scanner: &mut RangesScanner<TikvStorage<SnapshotStore<S>>, F>,
         is_common_handle: bool,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
@@ -148,7 +151,8 @@ impl<S: Snapshot> AnalyzeContext<S> {
         } else {
             ANALYZE_VERSION_V1
         };
-        while let Some((key, _)) = scanner.next()? {
+        while let Some(row) = scanner.next()? {
+            let mut key = row.key();
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -157,7 +161,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
                 row_count = 0;
             }
-            let mut key = &key[..];
+
             if is_common_handle {
                 table::check_record_key(key)?;
                 key = &key[table::PREFIX_LEN..];
@@ -223,13 +227,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
 }
 
 #[async_trait]
-impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
+impl<S: Snapshot, F: KvFormat> RequestHandler for AnalyzeContext<S, F> {
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex | AnalyzeType::TypeCommonHandle => {
                 let req = self.req.take_idx_req();
                 let ranges = std::mem::take(&mut self.ranges);
-                table::check_table_ranges(&ranges)?;
+                table::check_table_ranges::<F>(&ranges)?;
                 let mut scanner = RangesScanner::new(RangesScannerOptions {
                     storage: self.storage.take().unwrap(),
                     ranges: ranges
@@ -240,7 +244,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                     is_key_only: true,
                     is_scanned_range_aware: false,
                 });
-                let res = AnalyzeContext::handle_index(
+                let res = AnalyzeContext::<_, F>::handle_index(
                     req,
                     &mut scanner,
                     self.req.get_tp() == AnalyzeType::TypeCommonHandle,
@@ -255,7 +259,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
                 let mut builder = SampleBuilder::new(col_req, None, storage, ranges)?;
-                let res = AnalyzeContext::handle_column(&mut builder).await;
+                let res = AnalyzeContext::<_, F>::handle_column(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
             }
@@ -266,7 +270,8 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let idx_req = self.req.take_idx_req();
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
-                let mut builder = SampleBuilder::new(col_req, Some(idx_req), storage, ranges)?;
+                let mut builder =
+                    SampleBuilder::<_, F>::new(col_req, Some(idx_req), storage, ranges)?;
                 let res = AnalyzeContext::handle_mixed(&mut builder).await;
                 builder.data.collect_storage_stats(&mut self.storage_stats);
                 res
@@ -277,7 +282,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
                 let storage = self.storage.take().unwrap();
                 let ranges = std::mem::take(&mut self.ranges);
 
-                let mut builder = RowSampleBuilder::new(
+                let mut builder = RowSampleBuilder::<_, F>::new(
                     col_req,
                     storage,
                     ranges,
@@ -316,8 +321,8 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
     }
 }
 
-struct RowSampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>>,
+struct RowSampleBuilder<S: Snapshot, F: KvFormat> {
+    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
 
     max_sample_size: usize,
     max_fm_sketch_size: usize,
@@ -328,7 +333,7 @@ struct RowSampleBuilder<S: Snapshot> {
     is_auto_analyze: bool,
 }
 
-impl<S: Snapshot> RowSampleBuilder<S> {
+impl<S: Snapshot, F: KvFormat> RowSampleBuilder<S, F> {
     fn new(
         mut req: AnalyzeColumnsReq,
         storage: TikvStorage<SnapshotStore<S>>,
@@ -796,8 +801,8 @@ impl Drop for BaseRowSampleCollector {
     }
 }
 
-struct SampleBuilder<S: Snapshot> {
-    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>>,
+struct SampleBuilder<S: Snapshot, F: KvFormat> {
+    data: BatchTableScanExecutor<TikvStorage<SnapshotStore<S>>, F>,
 
     max_bucket_size: usize,
     max_sample_size: usize,
@@ -814,7 +819,7 @@ struct SampleBuilder<S: Snapshot> {
 /// `SampleBuilder` is used to analyze columns. It collects sample from
 /// the result set using Reservoir Sampling algorithm, estimates NDVs
 /// using FM Sketch during the collecting process, and builds count-min sketch.
-impl<S: Snapshot> SampleBuilder<S> {
+impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
     fn new(
         mut req: AnalyzeColumnsReq,
         common_handle_req: Option<tipb::AnalyzeIndexReq>,

@@ -7,6 +7,7 @@ description = "Common utility of a query engine to run TiDB pushed down executor
 
 [dependencies]
 anyhow = "1.0"
+api_version = { path = "../api_version", default-features = false }
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }

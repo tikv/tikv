@@ -2,33 +2,35 @@
 
 use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc, time::Duration};
 
-use ::tracker::{
-    set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
-};
 use async_stream::try_stream;
-use concurrency_manager::ConcurrencyManager;
-use engine_traits::PerfLevel;
 use futures::{channel::mpsc, prelude::*};
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 use protobuf::{CodedInputStream, Message};
+use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
+use tokio::sync::Semaphore;
+
+use ::tracker::{
+    GLOBAL_TRACKERS, RequestInfo, RequestType, set_tls_tracker_token, with_tls_tracker,
+};
+use api_version::{dispatch_api_version, KvFormat};
+use concurrency_manager::ConcurrencyManager;
+use engine_traits::PerfLevel;
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant};
-use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
-use tokio::sync::Semaphore;
 use txn_types::Lock;
 
 use crate::{
-    coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    coprocessor::{*, cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker},
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
         self,
-        kv::{self, with_tls_engine, SnapContext},
-        mvcc::Error as MvccError,
-        need_check_locks, need_check_locks_in_replica_read, Engine, Snapshot, SnapshotStore,
+        Engine,
+        kv::{self, SnapContext, with_tls_engine},
+        mvcc::Error as MvccError, need_check_locks, need_check_locks_in_replica_read, Snapshot, SnapshotStore,
     },
 };
 
@@ -140,11 +142,25 @@ impl<E: Engine> Endpoint<E> {
         Ok(())
     }
 
+    fn dispatch_api_version(
+        &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        let api_version = req.get_context().get_api_version();
+        dispatch_api_version!(api_version, {
+            self.parse_request_and_check_memory_locks::<API>(
+                req,peer,is_streaming
+            )
+        })
+    }
+
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and
     /// `ReqContext`. Returns `Err` if fails.
     ///
     /// It also checks if there are locks in memory blocking this read request.
-    fn parse_request_and_check_memory_locks(
+    fn parse_request_and_check_memory_locks<F: KvFormat>(
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
@@ -242,7 +258,7 @@ impl<E: Engine> Endpoint<E> {
                         quota_limiter,
                     )
                     .data_version(data_version)
-                    .build()
+                    .build::<F>()
                 });
             }
             REQ_TYPE_ANALYZE => {
@@ -279,7 +295,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::new(
+                    statistics::analyze::AnalyzeContext::<_,F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
@@ -322,7 +338,7 @@ impl<E: Engine> Endpoint<E> {
                 self.check_memory_locks(&req_ctx)?;
 
                 builder = Box::new(move |snap, req_ctx| {
-                    checksum::ChecksumContext::new(
+                    checksum::ChecksumContext::<_,F>::new(
                         checksum,
                         req_ctx.ranges.clone(),
                         start_ts,
@@ -495,7 +511,7 @@ impl<E: Engine> Endpoint<E> {
         )));
         set_tls_tracker_token(tracker);
         let result_of_future = self
-            .parse_request_and_check_memory_locks(req, peer, false)
+            .dispatch_api_version(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
@@ -635,7 +651,7 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
     ) -> impl futures::stream::Stream<Item = coppb::Response> {
         let result_of_stream = self
-            .parse_request_and_check_memory_locks(req, peer, true)
+            .dispatch_api_version(req, peer, true)
             .and_then(|(handler_builder, req_ctx)| {
                 self.handle_stream_request(req_ctx, handler_builder)
             }); // Result<Stream<Resp, Error>, Error>
@@ -696,15 +712,17 @@ mod tests {
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::Message;
     use tipb::{Executor, Expr};
+
     use txn_types::{Key, LockType};
 
-    use super::*;
     use crate::{
         config::CoprReadPoolConfig,
         coprocessor::readpool_impl::build_read_pool_for_test,
         read_pool::ReadPool,
         storage::{kv::RocksEngine, TestEngineBuilder},
     };
+
+    use super::*;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
