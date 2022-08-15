@@ -393,7 +393,7 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let store = create_raft_storage::<_, _, _, F>(
+        let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),

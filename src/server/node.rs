@@ -35,10 +35,11 @@ use super::{RaftKv, Result};
 use crate::{
     import::SstImporter,
     read_pool::ReadPoolHandle,
-    server::{lock_manager::LockManager, Config as ServerConfig},
+    server::Config as ServerConfig,
     storage::{
         config::Config as StorageConfig, kv::FlowStatsReporter,
-        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
+        lock_manager::LockManager as LockManagerTrait, txn::flow_controller::FlowController,
+        DynamicConfigs as StorageDynamicConfigs, Storage,
     },
 };
 
@@ -47,11 +48,11 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat, LM: LockManagerTrait>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
-    lock_mgr: LockManager,
+    lock_mgr: LM,
     concurrency_manager: ConcurrencyManager,
     dynamic_configs: StorageDynamicConfigs,
     flow_controller: Arc<FlowController>,
@@ -59,7 +60,7 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
+) -> Result<Storage<RaftKv<EK, S>, LM, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
