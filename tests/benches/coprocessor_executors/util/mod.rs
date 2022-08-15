@@ -8,6 +8,7 @@ pub mod store;
 
 use std::{marker::PhantomData, sync::Arc};
 
+use api_version::ApiV1;
 use criterion::{black_box, measurement::Measurement};
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
@@ -52,7 +53,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         None,
         Arc::new(QuotaLimiter::default()),
     )
-    .build()
+    .build::<ApiV1>()
     .unwrap()
 }
 

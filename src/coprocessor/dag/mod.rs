@@ -4,6 +4,7 @@ mod storage_impl;
 
 use std::sync::Arc;
 
+use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
@@ -63,9 +64,9 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
         self
     }
 
-    pub fn build(self) -> Result<Box<dyn RequestHandler>> {
+    pub fn build<F: KvFormat>(self) -> Result<Box<dyn RequestHandler>> {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDagHandler::new(
+        Ok(BatchDagHandler::new::<_, F>(
             self.req,
             self.ranges,
             self.store,
@@ -87,7 +88,7 @@ pub struct BatchDagHandler {
 }
 
 impl BatchDagHandler {
-    pub fn new<S: Store + 'static>(
+    pub fn new<S: Store + 'static, F: KvFormat>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
@@ -100,7 +101,7 @@ impl BatchDagHandler {
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
         Ok(Self {
-            runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request(
+            runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
                 ranges,
                 TikvStorage::new(store, is_cache_enabled),
