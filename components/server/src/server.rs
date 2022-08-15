@@ -1273,7 +1273,7 @@ where
     fn init_metrics_flusher(
         &mut self,
         fetcher: BytesFetcher,
-        engines_info: Arc<EnginesResourceInfo>,
+        engines_info: Arc<EnginesResourceInfo<KvEngineFactory>>,
     ) {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.engines.as_ref().unwrap().engines.clone(),
@@ -1652,7 +1652,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (
+        Engines<RocksEngine, CER>,
+        Arc<EnginesResourceInfo<KvEngineFactory>>,
+    ) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1850,18 +1853,24 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
     }
 }
 
-pub struct EnginesResourceInfo {
-    tablet_factory: Arc<KvEngineFactory>,
+pub struct EnginesResourceInfo<T>
+where
+    T: TabletFactory<RocksEngine> + TabletAccessor<RocksEngine> + Sync + Send,
+{
+    tablet_factory: Arc<T>,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
 
-impl EnginesResourceInfo {
+impl<T> EnginesResourceInfo<T>
+where
+    T: TabletFactory<RocksEngine> + TabletAccessor<RocksEngine> + Sync + Send,
+{
     const SCALE_FACTOR: u64 = 100;
 
     fn new(
-        tablet_factory: Arc<KvEngineFactory>,
+        tablet_factory: Arc<T>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
@@ -1880,13 +1889,16 @@ impl EnginesResourceInfo {
     ) {
         let mut normalized_pending_bytes = 0;
 
-        fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
+        fn fetch_engine_cf<T>(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32)
+        where
+            T: TabletFactory<RocksEngine> + TabletAccessor<RocksEngine> + Sync + Send,
+        {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
+                            (b * EnginesResourceInfo::<T>::SCALE_FACTOR
                                 / cf_opts.get_soft_pending_compaction_bytes_limit())
                                 as u32,
                         );
@@ -1896,7 +1908,7 @@ impl EnginesResourceInfo {
         }
 
         if let Some(raft_engine) = &self.raft_engine {
-            fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
+            fetch_engine_cf::<T>(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
 
         self.tablet_factory
@@ -1924,7 +1936,7 @@ impl EnginesResourceInfo {
 
         for (_, (_, tablet)) in cached_latest_tablets.iter() {
             for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-                fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
+                fetch_engine_cf::<T>(tablet, cf, &mut normalized_pending_bytes);
             }
         }
 
@@ -1941,7 +1953,10 @@ impl EnginesResourceInfo {
     }
 }
 
-impl IoBudgetAdjustor for EnginesResourceInfo {
+impl<T> IoBudgetAdjustor for EnginesResourceInfo<T>
+where
+    T: TabletFactory<RocksEngine> + TabletAccessor<RocksEngine> + Sync + Send,
+{
     fn adjust(&self, total_budgets: usize) -> usize {
         let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
             / Self::SCALE_FACTOR as f32;
@@ -1956,5 +1971,92 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        collections::HashMap,
+        sync::{atomic::Ordering, Arc},
+    };
+
+    use engine_rocks::{raw::Env, RocksEngine};
+    use engine_traits::{
+        FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
+    };
+    use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
+    use tikv_util::time::Instant;
+
+    use super::EnginesResourceInfo;
+
+    #[test]
+    fn test_engines_resource_info_update() {
+        let mut config = TikvConfig::default();
+        config.rocksdb.defaultcf.disable_auto_compactions = true;
+        let env = Arc::new(Env::default());
+        let path = std::env::temp_dir().join("test-update");
+
+        let builder = KvEngineFactoryBuilder::new(env, &config, path);
+        let factory = builder.build_v2();
+
+        let mut old_pending_compaction_bytes = 0;
+        let mut new_pending_compaction_bytes = 0;
+        for i in 1..6 {
+            let tablet = factory
+                .open_tablet(i, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+
+            // Prepare some data for two tablets of the same region. So we can test whether
+            // we fetch the bytes from the latest one.
+            if i == 1 {
+                for i in 1..21 {
+                    tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+                    if i % 2 == 0 {
+                        tablet.flush_cf(CF_DEFAULT, true).unwrap();
+                    }
+                }
+                old_pending_compaction_bytes = tablet
+                    .get_cf_pending_compaction_bytes(CF_DEFAULT)
+                    .unwrap()
+                    .unwrap();
+
+                let tablet = factory
+                    .open_tablet(i, Some(20), OpenOptions::default().set_create_new(true))
+                    .unwrap();
+
+                for i in 1..11 {
+                    tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+                    if i % 2 == 0 {
+                        tablet.flush_cf(CF_DEFAULT, true).unwrap();
+                    }
+                }
+                new_pending_compaction_bytes = tablet
+                    .get_cf_pending_compaction_bytes(CF_DEFAULT)
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+
+        assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
+
+        let engines_info = Arc::new(EnginesResourceInfo::new(Arc::new(factory), None, 10));
+
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
+        engines_info.update(Instant::now(), &mut cached_latest_tablets);
+
+        // The memory allocation should be reserved
+        assert!(cached_latest_tablets.capacity() >= 5);
+        // The tablet cache should be clear
+        for i in 1..6 {
+            assert!(cached_latest_tablets.get(&i).is_none());
+        }
+
+        assert_eq!(
+            new_pending_compaction_bytes as u32,
+            engines_info
+                .latest_normalized_pending_bytes
+                .load(Ordering::Relaxed)
+        );
     }
 }
