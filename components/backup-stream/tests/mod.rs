@@ -667,6 +667,14 @@ mod test {
 
     /// This test tests whether we can handle some weird transactions and their
     /// race with initial scanning.
+    /// Generally, those transactions:
+    /// - Has N mutations, which's values are all short enough to be inlined in
+    ///   the `Write` CF. (N > 1024)
+    /// - Commit the latest M mutations first.
+    /// - Before committing remaining mutations, PiTR triggered initial
+    ///   scanning.
+    /// - The remaining mutations are committed before the instant when initial
+    ///   scanning get the snapshot.
     #[test]
     fn with_split_txn() {
         let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
@@ -679,7 +687,7 @@ mod test {
                     .into_iter()
                     .map(|k| mutation(k, b"hello, world".to_vec()))
                     .collect(),
-                make_record_key(1, 29),
+                make_record_key(1, 1913),
                 start_ts,
             );
             let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
