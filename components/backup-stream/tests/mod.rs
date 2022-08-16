@@ -158,17 +158,11 @@ impl SuiteBuilder {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, use_v3);
         }
-<<<<<<< HEAD
-        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
-        //       We must wait until the endpoints get ready to watching the metastore, or some modifies may be lost.
-        //       Either make Endpoint::with_client wait until watch did start or make slash_etc support multi-version,
-        //       then we can get rid of this sleep.
-=======
+
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
         // start or make slash_etc support multi-version, then we can get rid of this
         // sleep.
->>>>>>> 73c0bacf2... log-backup: fix early return (#13288)
         std::thread::sleep(Duration::from_secs(1));
         suite
     }
