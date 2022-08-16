@@ -361,6 +361,14 @@ fn test_raftkv_precheck_write_with_ctx() {
     leader_storage.precheck_write_with_ctx(&ctx).unwrap();
     // The (write) request should not be send to a follower.
     follower_storage.precheck_write_with_ctx(&ctx).unwrap_err();
+
+    // Leader has network partition and it must be not leader any more.
+    let filter =
+        Box::new(RegionPacketFilter::new(region.get_id(), leader.get_store_id()));
+    cluster.sim.wl().add_recv_filter(leader.get_store_id(), filter.clone());
+    cluster.sim.wl().add_send_filter(leader.get_store_id(), filter);
+    sleep_until_election_triggered(&cluster.cfg);
+    leader_storage.precheck_write_with_ctx(&ctx).unwrap_err();
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
