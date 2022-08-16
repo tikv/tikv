@@ -2,11 +2,10 @@
 
 use std::{
     iter::FromIterator,
-    sync::{mpsc, Arc, Mutex, RwLock},
+    sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
 
-use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
@@ -103,7 +102,6 @@ fn start_raftstore(
             snap_mgr,
             pd_worker,
             store_meta,
-            Arc::new(RwLock::new(HashSet::default())),
             host,
             importer,
             split_check_scheduler,

@@ -2111,7 +2111,7 @@ where
                 }
                 _ => {}
             }
-            self.on_leader_changed(ctx, ss.leader_id, self.term());
+            self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(
                 self.region(),
                 RoleChange {
@@ -2124,7 +2124,7 @@ where
             self.cmd_epoch_checker.maybe_update_term(self.term());
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
-                self.on_leader_changed(ctx, self.leader_id(), hs.get_term());
+                self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
         self.lead_transferee = self.raft_group.raft.lead_transferee.unwrap_or_default();
@@ -2191,12 +2191,7 @@ where
         }
     }
 
-    fn on_leader_changed<T>(
-        &mut self,
-        ctx: &mut PollContext<EK, ER, T>,
-        leader_id: u64,
-        term: u64,
-    ) {
+    fn on_leader_changed(&mut self, leader_id: u64, term: u64) {
         debug!(
             "update leader info";
             "region_id" => self.region_id,
@@ -2207,16 +2202,6 @@ where
 
         self.read_progress
             .update_leader_info(leader_id, term, self.region());
-
-        // Update region leader info stored in poll context.
-        {
-            let mut region_leaders = ctx.region_leaders.write().unwrap();
-            if self.peer_id() == leader_id {
-                region_leaders.insert(self.region_id);
-            } else {
-                region_leaders.remove(&self.region_id);
-            }
-        }
     }
 
     #[inline]

@@ -74,7 +74,6 @@ pub trait Simulator {
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
@@ -160,7 +159,6 @@ pub struct Cluster<T: Simulator> {
     pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines<RocksEngine, RaftTestEngine>>,
     pub store_metas: HashMap<u64, Arc<Mutex<StoreMeta>>>,
-    pub region_leaders_map: HashMap<u64, Arc<RwLock<HashSet<u64>>>>,
     key_managers: Vec<Option<Arc<DataKeyManager>>>,
     pub io_rate_limiter: Option<Arc<IoRateLimiter>>,
     pub engines: HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
@@ -194,7 +192,6 @@ impl<T: Simulator> Cluster<T> {
             paths: vec![],
             dbs: vec![],
             store_metas: HashMap::default(),
-            region_leaders_map: HashMap::default(),
             key_managers: vec![],
             io_rate_limiter: None,
             engines: HashMap::default(),
@@ -275,7 +272,6 @@ impl<T: Simulator> Cluster<T> {
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-            let region_leaders = Arc::new(RwLock::new(HashSet::default()));
 
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
@@ -286,7 +282,6 @@ impl<T: Simulator> Cluster<T> {
                 self.cfg.clone(),
                 engines.clone(),
                 store_meta.clone(),
-                region_leaders.clone(),
                 key_mgr.clone(),
                 router,
                 system,
@@ -294,7 +289,6 @@ impl<T: Simulator> Cluster<T> {
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
-            self.region_leaders_map.insert(node_id, region_leaders);
             self.key_managers_map.insert(node_id, key_mgr);
             self.sst_workers_map
                 .insert(node_id, self.sst_workers.len() - 1);
@@ -356,10 +350,6 @@ impl<T: Simulator> Cluster<T> {
                 .insert(Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP))))
                 .clone(),
         };
-        let region_leaders = self
-            .region_leaders_map
-            .entry(node_id)
-            .or_insert_with(|| Arc::new(RwLock::new(HashSet::default())));
         let props = GroupProperties::default();
         self.group_props.insert(node_id, props.clone());
         tikv_util::thread_group::set_properties(Some(props));
@@ -370,7 +360,6 @@ impl<T: Simulator> Cluster<T> {
             cfg,
             engines,
             store_meta,
-            region_leaders.clone(),
             key_mgr,
             router,
             system,

@@ -8,7 +8,6 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
-use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -980,7 +979,6 @@ fn test_double_run_node() {
             snap_mgr,
             pd_worker,
             store_meta,
-            Arc::new(RwLock::new(HashSet::default())),
             coprocessor_host,
             importer,
             split_check_scheduler,

@@ -260,7 +260,6 @@ impl ServerCluster {
         mut cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
@@ -290,15 +289,18 @@ impl ServerCluster {
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
         );
-        let raft_router =
-            ServerRaftStoreRouter::new(router.clone(), local_reader, region_leaders.clone());
-        let sim_router = SimulateTransport::new(raft_router.clone());
-
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let raft_router = ServerRaftStoreRouter::new(
+            router.clone(),
+            local_reader,
+            region_info_accessor.region_leaders.clone(),
+        );
+        let sim_router = SimulateTransport::new(raft_router.clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -575,7 +577,6 @@ impl ServerCluster {
             snap_mgr,
             pd_worker,
             store_meta,
-            region_leaders,
             coprocessor_host,
             importer.clone(),
             split_check_scheduler,
@@ -634,7 +635,6 @@ impl Simulator for ServerCluster {
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
@@ -646,7 +646,6 @@ impl Simulator for ServerCluster {
                 cfg,
                 engines,
                 store_meta,
-                region_leaders,
                 key_manager,
                 router,
                 system,

@@ -19,7 +19,7 @@ use kvproto::{
 };
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
@@ -152,6 +152,7 @@ pub struct NodeCluster {
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    region_info_accessor: Option<RegionInfoAccessor>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
@@ -166,6 +167,7 @@ impl NodeCluster {
             cfg_controller: None,
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
+            region_info_accessor: None,
             post_create_coprocessor_host: None,
         }
     }
@@ -221,7 +223,6 @@ impl Simulator for NodeCluster {
         cfg: Config,
         engines: Engines<RocksEngine, RaftTestEngine>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
@@ -282,6 +283,8 @@ impl Simulator for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
+        self.region_info_accessor = Some(RegionInfoAccessor::new(&mut coprocessor_host));
+
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
@@ -313,7 +316,6 @@ impl Simulator for NodeCluster {
             snap_mgr.clone(),
             pd_worker,
             store_meta,
-            region_leaders.clone(),
             coprocessor_host,
             importer,
             split_scheduler,
@@ -364,7 +366,11 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router, local_reader, region_leaders);
+        let router = ServerRaftStoreRouter::new(
+            router,
+            local_reader,
+            self.region_info_accessor.as_ref().unwrap().region_leaders.clone(),
+        );
         self.trans
             .core
             .lock()
