@@ -173,6 +173,11 @@ lazy_static! {
         "Total number of written seqno relations."
     )
     .unwrap();
+    pub static ref SEQNO_UNCOMMITTED_COUNT: IntGauge = register_int_gauge!(
+        "tikv_raftstore_seqno_uncommitted_count",
+        "Count of uncommitted seqno"
+    )
+    .unwrap();
     pub static ref LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_renew_lease_advance_count",
         "Total number of renewing lease in advance from local reader."

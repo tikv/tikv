@@ -425,6 +425,8 @@ where
     apply_time: LocalHistogram,
 
     key_buffer: Vec<u8>,
+
+    uncommitted_res_count: usize,
 }
 
 impl<EK> ApplyContext<EK>
@@ -478,6 +480,7 @@ where
             apply_time: APPLY_TIME_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
             disable_wal: cfg.disable_kv_wal,
+            uncommitted_res_count: 0,
         }
     }
 
@@ -506,9 +509,19 @@ where
         delegate.update_metrics(self);
         if persistent {
             let (_, seqno) = self.write_to_db();
-            if seqno.is_some() {
-                delegate.last_write_seqno = seqno;
+            info!("write seqno at commit"; "seqno" => ?seqno);
+            if let Some(seqno) = seqno {
+                delegate.last_write_seqno.push(seqno);
+                for res in self
+                    .apply_res
+                    .iter_mut()
+                    .rev()
+                    .take(self.uncommitted_res_count)
+                {
+                    res.write_seqno.push(seqno);
+                }
             }
+            self.uncommitted_res_count = 0;
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
@@ -631,13 +644,17 @@ where
         self.apply_res.push(Box::new(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
-            last_seqno: delegate.last_write_seqno.take(),
+            write_seqno: mem::take(&mut delegate.last_write_seqno),
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
             bucket_stat: delegate.buckets.clone(),
             region_local_state,
         }));
+        if !self.kv_wb().is_empty() {
+            // Pending writes not flushed, need to set seqno to following ApplyRes later after flushing
+            self.uncommitted_res_count += 1;
+        }
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -673,14 +690,17 @@ where
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
         let (is_synced, seqno) = self.write_to_db();
+        info!("write seqno at flush"; "seqno" => ?seqno);
 
         if !self.apply_res.is_empty() {
             let mut apply_res = mem::take(&mut self.apply_res);
-            for res in &mut apply_res {
-                if res.as_ref().last_seqno.is_none() {
-                    res.as_mut().last_seqno = seqno;
+            if let Some(seqno) = seqno {
+                for res in apply_res.iter_mut().rev().take(self.uncommitted_res_count) {
+                    res.write_seqno.push(seqno);
+                    info!("set seqno for res"; "res"=> ?res);
                 }
             }
+            self.uncommitted_res_count = 0;
             if self.disable_wal {
                 self.notifier.notify_store(apply_res);
             } else {
@@ -958,7 +978,7 @@ where
 
     buckets: Option<BucketStat>,
 
-    last_write_seqno: Option<SequenceNumber>,
+    last_write_seqno: Vec<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -991,7 +1011,7 @@ where
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
-            last_write_seqno: None,
+            last_write_seqno: vec![],
         }
     }
 
@@ -3335,7 +3355,9 @@ where
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<BucketStat>,
-    pub last_seqno: Option<SequenceNumber>,
+    // write_senqo should be a vector because there may be multiple `commit` before a ApplyRes created.
+    // See more details in the comment of `prepare_for`.
+    pub write_seqno: Vec<SequenceNumber>,
     pub region_local_state: Option<RegionLocalState>,
 }
 
@@ -3708,9 +3730,7 @@ where
             Ok(()) => {
                 // Commit the writebatch for ensuring the following snapshot can get all previous writes.
                 if apply_ctx.kv_wb().count() > 0 {
-                    apply_ctx.commit(&mut self.delegate);
-                    // Call `finish_for` here for generating an ApplyRes to keep track of sequence number relation.
-                    apply_ctx.finish_for(&mut self.delegate, VecDeque::new());
+                    apply_ctx.flush();
                 }
                 ReadResponse {
                     response: Default::default(),

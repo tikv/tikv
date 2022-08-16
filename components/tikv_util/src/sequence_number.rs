@@ -60,14 +60,23 @@ pub struct SequenceNumberWindow {
     // (end_counter, sequence number)
     pending_sequence: BTreeMap<u64, SequenceNumber>,
     committed_seqno: u64,
+    max_received_seqno: u64,
 }
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) {
-        let start_delta = sn.start_counter.checked_sub(self.ack_counter).unwrap() as usize;
-        if start_delta == 0 {
-            return;
-        }
+        info!(
+            "push seqno {:?} to window, ack_counter: {}",
+            sn, self.ack_counter,
+        );
+        let start_delta = match sn.start_counter.checked_sub(self.ack_counter) {
+            Some(delta) if delta > 0 => delta as usize,
+            _ => {
+                assert!(sn.number <= self.max_received_seqno);
+                return;
+            }
+        };
+        self.max_received_seqno = u64::max(sn.number, self.max_received_seqno);
         if start_delta > self.pending_start_counter.len() {
             self.pending_start_counter.resize(start_delta, false);
         }
@@ -77,10 +86,6 @@ impl SequenceNumberWindow {
                 *value = SequenceNumber::max(*value, sn);
             })
             .or_insert(sn);
-        // info!(
-        //     "push seqno {:?} to window, pending_start_counter: {:?}, pending_sequence: {:?}, ack_counter: {}",
-        //     sn, self.pending_start_counter, self.pending_sequence, self.ack_counter,
-        // );
         self.pending_start_counter[start_delta - 1] = true;
         let mut acks = 0;
         for received in self.pending_start_counter.iter() {
@@ -101,6 +106,10 @@ impl SequenceNumberWindow {
 
     pub fn committed_seqno(&self) -> u64 {
         self.committed_seqno
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending_start_counter.len()
     }
 }
 

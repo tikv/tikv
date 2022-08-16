@@ -6,6 +6,7 @@ use collections::{HashMap, HashMapEntry};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, Snapshot};
 use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, RegionSequenceNumberRelation};
 use tikv_util::{
+    info,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     time::Instant,
     worker::Runnable,
@@ -73,14 +74,14 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
         let mut sync_relations = HashMap::default();
         for res in &apply_res {
-            if let Some(seq) = res.last_seqno {
+            for seqno in &res.write_seqno {
                 let relation = SeqnoRelation {
                     region_id: res.region_id,
-                    seqno: seq,
+                    seqno: *seqno,
                     apply_state: res.apply_state.clone(),
                     region_local_state: res.region_local_state.clone(),
                 };
-                let relations = match seq.number.cmp(&self.last_flushed_seqno) {
+                let relations = match seqno.number.cmp(&self.last_flushed_seqno) {
                     Ordering::Less | Ordering::Equal => &mut sync_relations,
                     Ordering::Greater => &mut self.inflight_seqno_relations,
                 };
@@ -94,13 +95,15 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         e.insert(relation);
                     }
                 }
-                self.seqno_window.push(seq);
+                self.seqno_window.push(*seqno);
             }
         }
 
         if !sync_relations.is_empty() {
             self.handle_sync_relations(sync_relations);
         }
+        SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
+        info!("pending seqno count"; "count" => self.seqno_window.pending_count());
         self.apply_res_notifier.notify(apply_res);
     }
 
