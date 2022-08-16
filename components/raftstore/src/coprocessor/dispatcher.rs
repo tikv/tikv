@@ -894,7 +894,7 @@ mod tests {
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
 
-        let mut index: usize= 0;
+        let mut index: usize = 0;
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
