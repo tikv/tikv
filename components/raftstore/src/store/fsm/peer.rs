@@ -900,7 +900,7 @@ where
         });
         self.fsm
             .peer
-            .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
+            .maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
@@ -2032,12 +2032,8 @@ where
         }
     }
 
-    fn check_unsafe_recovery_state(&mut self) {
+    fn check_unsafe_recovery_state_after_apply(&mut self) {
         match &self.fsm.peer.unsafe_recovery_state {
-            Some(UnsafeRecoveryState::WaitApply { .. }) => self
-                .fsm
-                .peer
-                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ false),
             Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
                 failed_voters,
@@ -2163,9 +2159,8 @@ where
                 }
             }
         }
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
-            self.check_unsafe_recovery_state();
-        }
+        self.fsm.peer.maybe_finish_wait_apply(/* force= */ false);
+        self.check_unsafe_recovery_state_after_apply();
     }
 
     fn retry_pending_prepare_merge(&mut self, applied_index: u64) {
@@ -3288,11 +3283,7 @@ where
         assert!(!self.fsm.peer.is_handling_snapshot());
 
         // No need to wait for the apply anymore.
-        if self.fsm.peer.unsafe_recovery_state.is_some() {
-            self.fsm
-                .peer
-                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ true);
-        }
+        self.fsm.peer.maybe_finish_wait_apply(/* force= */ true);
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
 

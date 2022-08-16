@@ -605,8 +605,8 @@ impl UnsafeRecoveryExecutePlanSyncer {
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
     abort: Arc<Mutex<bool>>,
+    _closure_on_drop: Arc<InvokeClosureOnDrop>,
 }
 
 impl UnsafeRecoveryWaitApplySyncer {
@@ -618,29 +618,28 @@ impl UnsafeRecoveryWaitApplySyncer {
         let thread_safe_router = Mutex::new(router);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
-            if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, wait apply aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-            if exit_force_leader {
-                (*router_ptr).broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
-                });
-            }
-            let fill_out_report =
-                UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
-            (*router_ptr).broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
-                    fill_out_report.clone(),
-                ))
-            });
-        }));
         UnsafeRecoveryWaitApplySyncer {
-            _closure: Arc::new(closure),
             abort,
+            _closure_on_drop: Arc::new(InvokeClosureOnDrop(Box::new(move || {
+                info!("Unsafe recovery, wait apply finished");
+                if *abort_clone.lock().unwrap() {
+                    warn!("Unsafe recovery, wait apply aborted");
+                    return;
+                }
+                let router_ptr = thread_safe_router.lock().unwrap();
+                if exit_force_leader {
+                    (*router_ptr).broadcast_normal(|| {
+                        PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
+                    });
+                }
+                let fill_out_report =
+                    UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
+                (*router_ptr).broadcast_normal(|| {
+                    PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
+                        fill_out_report.clone(),
+                    ))
+                });
+            }))),
         }
     }
 
@@ -2368,8 +2367,8 @@ where
 
                     if self.unsafe_recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
-                        self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
+                    self.maybe_finish_wait_apply(/* force= */ false);
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -4903,7 +4902,8 @@ where
         )
     }
 
-    pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+    // Check if the target index is applied.
+    pub fn maybe_finish_wait_apply(&mut self, force: bool) {
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
         {
