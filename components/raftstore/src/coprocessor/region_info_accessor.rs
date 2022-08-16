@@ -340,7 +340,10 @@ impl RegionCollector {
                 "region_id" => region.get_id(),
             )
         }
-        self.region_leaders.write().unwrap().remove(&region.get_id());
+        self.region_leaders
+            .write()
+            .unwrap()
+            .remove(&region.get_id());
     }
 
     fn handle_role_change(&mut self, region: Region, new_role: StateRole) {

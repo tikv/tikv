@@ -355,15 +355,9 @@ impl<T: Simulator> Cluster<T> {
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
-        self.sim.wl().run_node(
-            node_id,
-            cfg,
-            engines,
-            store_meta,
-            key_mgr,
-            router,
-            system,
-        )?;
+        self.sim
+            .wl()
+            .run_node(node_id, cfg, engines, store_meta, key_mgr, router, system)?;
         debug!("node {} started", node_id);
         Ok(())
     }
