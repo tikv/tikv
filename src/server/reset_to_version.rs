@@ -363,7 +363,7 @@ mod tests {
 
     use super::*;
 
-    struct CFData<'a> {
+    struct CfData<'a> {
         // key, start_ts, commit_ts, write_type, is_short_value
         write: Vec<(&'a [u8], u64, u64, WriteType, bool)>,
         // key, start_ts
@@ -378,7 +378,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
-        let cf_data = CFData {
+        let cf_data = CfData {
             write: vec![
                 (b"k".as_slice(), 106, 107, WriteType::Put, false),
                 (b"k".as_slice(), 104, 105, WriteType::Put, false),
@@ -411,10 +411,10 @@ mod tests {
         prepare_data_for_cfs(&engine, &cf_data);
 
         // (ts_to_reset, expected_cf_data, expected_scanned, expected_deleted)
-        let test_cases: Vec<(TimeStamp, CFData, usize, usize)> = vec![
+        let test_cases: Vec<(TimeStamp, CfData<'_>, usize, usize)> = vec![
             (
                 107.into(),
-                CFData {
+                CfData {
                     write: vec![
                         (b"k".as_slice(), 106, 107, WriteType::Put, false),
                         (b"k".as_slice(), 104, 105, WriteType::Put, false),
@@ -444,7 +444,7 @@ mod tests {
             ),
             (
                 104.into(),
-                CFData {
+                CfData {
                     write: vec![
                         (b"k".as_slice(), 102, 103, WriteType::Put, false),
                         (b"k".as_slice(), 100, 101, WriteType::Put, false),
@@ -470,7 +470,7 @@ mod tests {
             ),
             (
                 96.into(),
-                CFData {
+                CfData {
                     write: vec![
                         (b"k".as_slice(), 94, 95, WriteType::Put, false),
                         (b"k".as_slice(), 92, 93, WriteType::Put, false),
@@ -489,7 +489,7 @@ mod tests {
             ),
             (
                 91.into(),
-                CFData {
+                CfData {
                     write: vec![
                         (b"k".as_slice(), 90, 91, WriteType::Delete, false),
                         (b"k".as_slice(), 88, 89, WriteType::Put, false),
@@ -502,7 +502,7 @@ mod tests {
             ),
             (
                 89.into(),
-                CFData {
+                CfData {
                     write: vec![(b"k".as_slice(), 88, 89, WriteType::Put, false)],
                     default: vec![(b"k".as_slice(), 88)],
                     lock: vec![],
@@ -526,7 +526,7 @@ mod tests {
                 "test case {}",
                 idx
             );
-            if test_case.1.write.len() > 0 {
+            if !test_case.1.write.is_empty() {
                 assert_eq!(
                     Key::from_encoded_slice(&remaining_writes[0])
                         .decode_ts()
@@ -542,7 +542,7 @@ mod tests {
                 "{}",
                 idx
             );
-            if test_case.1.default.len() > 0 {
+            if !test_case.1.default.is_empty() {
                 assert_eq!(
                     Key::from_encoded_slice(&remaining_defaults[0])
                         .decode_ts()
@@ -563,7 +563,7 @@ mod tests {
         }
     }
 
-    fn prepare_data_for_cfs(engine: &RocksEngine, cf_data: &CFData) {
+    fn prepare_data_for_cfs(engine: &RocksEngine, cf_data: &CfData<'_>) {
         let value = b"v".to_vec();
         let mut kv = vec![];
         // Write CF.
