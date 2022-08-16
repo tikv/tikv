@@ -31,7 +31,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{CfStatistics, CursorBuilder, Modify};
+use tikv_kv::{CfStatistics, CursorBuilder, EngineVersion, Modify};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -244,15 +244,15 @@ struct KeysInRegions<R: Iterator<Item = Region>> {
 }
 
 impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-    type Item = Key;
-    fn next(&mut self) -> Option<Key> {
+    type Item = (Key, u64);
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
             let region = self.regions.peek()?;
             let key = self.keys.peek()?.as_encoded().as_slice();
             if key < region.get_start_key() {
                 self.keys.next();
             } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                return (self.keys.next(), region.id);
+                return self.keys.next().map(|key| (key, region.id));
             } else {
                 self.regions.next();
             }
@@ -263,7 +263,8 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
 fn get_keys_in_regions(
     keys: Vec<Key>,
     regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-) -> Result<Box<dyn Iterator<Item = (Key, Option<u64>)>>> {
+    single_rocks: bool,
+) -> Result<Box<dyn Iterator<Item = (Key, u64)>>> {
     if keys.len() >= 2 {
         if let Some((store_id, region_info_provider)) = regions_provider {
             let start = keys.first().unwrap().as_encoded();
@@ -277,7 +278,12 @@ fn get_keys_in_regions(
             return Ok(Box::new(KeysInRegions { keys, regions }));
         }
     }
-    Ok(Box::new(vec![(keys[0], None)].into()))
+
+    if single_rocks {
+        Ok(Box::new(vec![(keys[0].clone(), 0)].into_iter()))
+    } else {
+        unimplemented!()
+    }
 }
 
 impl<E, RR> GcRunner<E, RR>
@@ -418,15 +424,17 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
+        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
-        let (mut next_gc_key, mut current_gc_region_id) = keys.next();
-        let mut prev_gc_region_id = current_gc_region_id.cloned();
+        let mut next_gc_key_id = keys.next();
+        let mut current_gc_region_id = next_gc_key_id.as_ref().map_or(0, |(_, id)| *id);
+        let mut prev_gc_region_id = current_gc_region_id;
 
         let snapshot = self.engine.snapshot_on_tablet(
-            current_gc_region_id,
+            Some(current_gc_region_id),
             &range_start_key,
             &range_end_key,
         )?;
@@ -440,12 +448,22 @@ where
             MvccReader::new(snapshot, Some(ScanMode::Forward), false)
         };
 
-        while let Some(ref key) = next_gc_key {
+        while let Some((ref key, id)) = next_gc_key_id {
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
+            }
+
+            current_gc_region_id = id;
+            if !single_rocks && current_gc_region_id != prev_gc_region_id {
+                let snapshot = self.engine.snapshot_on_tablet(
+                    Some(current_gc_region_id),
+                    &range_start_key,
+                    &range_end_key,
+                )?;
+                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
 
             if gc_info.is_completed {
@@ -469,16 +487,20 @@ where
                 } else {
                     wasted_keys += 1;
                 }
-                (next_gc_key, current_gc_region_id) = keys.next();
+                next_gc_key_id = keys.next();
                 gc_info = GcInfo::default();
             } else {
                 Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                let snapshot = self
-                    .engine
-                    .snapshot_on_tablet(&range_start_key, &range_end_key)?;
+                let snapshot = self.engine.snapshot_on_tablet(
+                    Some(current_gc_region_id),
+                    &range_start_key,
+                    &range_end_key,
+                )?;
                 txn = Self::new_txn();
                 reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
+
+            prev_gc_region_id = current_gc_region_id;
         }
         Self::flush_txn(txn, &self.limiter, &self.engine)?;
         Ok((handled_keys, wasted_keys))
@@ -501,17 +523,23 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let mut snapshot = self
-            .engine
-            .snapshot_on_tablet(&range_start_key, &range_end_key)?;
-
-        let mut raw_modifies = MvccRaw::new();
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
+        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
-        let mut next_gc_key = keys.next();
-        while let Some(ref key) = next_gc_key {
+        let mut next_gc_key_id = keys.next();
+        let mut current_gc_region_id = next_gc_key_id.as_ref().map_or(0, |(_, id)| *id);
+        let mut prev_gc_region_id = current_gc_region_id;
+
+        let mut snapshot = self.engine.snapshot_on_tablet(
+            Some(current_gc_region_id),
+            &range_start_key,
+            &range_end_key,
+        )?;
+
+        let mut raw_modifies = MvccRaw::new();
+        while let Some((ref key, id)) = next_gc_key_id {
             if let Err(e) = self.raw_gc_key(
                 safe_point,
                 key,
@@ -523,6 +551,15 @@ where
                 error!(?e; "Raw GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
+            }
+
+            current_gc_region_id = id;
+            if !single_rocks && current_gc_region_id != prev_gc_region_id {
+                snapshot = self.engine.snapshot_on_tablet(
+                    Some(current_gc_region_id),
+                    &range_start_key,
+                    &range_end_key,
+                )?;
             }
 
             if gc_info.is_completed {
@@ -541,7 +578,7 @@ where
 
                 gc_info.report_metrics();
 
-                next_gc_key = keys.next();
+                next_gc_key_id = keys.next();
                 gc_info = GcInfo::default();
             } else {
                 // Flush writeBatch to engine.
@@ -549,6 +586,8 @@ where
                 // After flush, reset raw_modifies.
                 raw_modifies = MvccRaw::new();
             }
+
+            prev_gc_region_id = current_gc_region_id;
         }
 
         Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
@@ -722,14 +761,14 @@ where
 
     fn handle_physical_scan_lock(
         &self,
-        _: &Context,
+        ctx: &Context,
         max_ts: TimeStamp,
         start_key: &Key,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
         let snap = self
             .engine
-            .snapshot_on_tablet(start_key.as_encoded(), &[])
+            .snapshot_on_tablet(Some(ctx.region_id), start_key.as_encoded(), &[])
             .unwrap();
         let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
         let (locks, _) = reader
@@ -1323,7 +1362,7 @@ mod tests {
 
         fn snapshot_on_tablet(
             &self,
-            _: Option<u64>,
+            region_id: Option<u64>,
             start_key: &[u8],
             end_key: &[u8],
         ) -> kv::Result<Self::Snap> {
@@ -1333,7 +1372,7 @@ mod tests {
             // Use a fake peer to avoid panic.
             region.mut_peers().push(Default::default());
             Ok(RegionSnapshot::from_snapshot(
-                Arc::new(self.get_tablet().snapshot()),
+                Arc::new(self.get_tablet(region_id).snapshot()),
                 Arc::new(region),
             ))
         }

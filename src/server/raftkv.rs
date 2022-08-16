@@ -36,6 +36,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
+use tikv_kv::EngineVersion;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -317,27 +318,52 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
-    fn get_tablet(&self, region_id: Option<u64>) -> E {
-        if let Some(region_id) = region_id {
-            return self
-                .factory
-                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                .unwrap()
-                .clone();
+    fn get_engine_version(&self) -> EngineVersion {
+        if self.factory.is_single_engine() {
+            return EngineVersion::V1;
         }
-        self.engine.clone()
+        EngineVersion::V2
     }
 
-    fn snapshot_on_tablet(&self, region_id: Option<u64>, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
+    fn get_tablet(&self, region_id: Option<u64>) -> E {
+        if self.get_engine_version() == EngineVersion::V1 {
+            self.engine.clone()
+        } else {
+            self.factory
+                .open_tablet(
+                    region_id.unwrap(),
+                    None,
+                    OpenOptions::default().set_cache_only(true),
+                )
+                .unwrap()
+        }
+    }
+
+    fn snapshot_on_tablet(
+        &self,
+        region_id: Option<u64>,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> kv::Result<Self::Snap> {
         let mut region = metapb::Region::default();
         region.set_start_key(start_key.to_owned());
         region.set_end_key(end_key.to_owned());
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
-            self.engine.clone(),
-            region,
-        ))
+
+        let tablet = if self.get_engine_version() == EngineVersion::V1 {
+            self.engine.clone()
+        } else {
+            self.factory
+                .open_tablet(
+                    region_id.unwrap(),
+                    None,
+                    OpenOptions::default().set_cache_only(true),
+                )
+                .unwrap()
+        };
+
+        Ok(RegionSnapshot::<E::Snapshot>::from_raw(tablet, region))
     }
 
     fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
