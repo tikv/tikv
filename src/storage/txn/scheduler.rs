@@ -408,11 +408,15 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     }
 
     /// Releases all the latches held by a command.
-    fn release_lock(&self, lock: &Lock, cid: u64) {
+    fn release_lock(&self, lock: &Lock, cid: u64, tag: CommandKind) {
+        let start_time = Instant::now();
         let wakeup_list = self.inner.latches.release(lock, cid);
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid);
         }
+        STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC
+            .get(tag)
+            .observe(start_time.saturating_elapsed_secs());
     }
 
     fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
@@ -578,7 +582,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             cb.execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, tctx.tag);
     }
 
     /// Event handler for the success of read.
@@ -597,7 +601,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             tctx.cb.unwrap().execute(pr);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, tag);
     }
 
     /// Event handler for the success of write.
@@ -651,7 +655,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, tag);
     }
 
     /// Event handler for the request of waiting for lock
@@ -677,7 +681,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             wait_timeout,
             diag_ctx,
         );
-        self.release_lock(&tctx.lock, cid);
+        self.release_lock(&tctx.lock, cid, tctx.tag);
     }
 
     fn early_response(
@@ -1383,7 +1387,7 @@ mod tests {
             block_on(f).unwrap(),
             Err(StorageError(box StorageErrorInner::DeadlineExceeded))
         ));
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_lock(&lock, cid, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();
@@ -1566,7 +1570,7 @@ mod tests {
 
         // When releasing the lock, the queuing tasks should be all waken up without
         // stack overflow.
-        scheduler.release_lock(&lock, cid);
+        scheduler.release_lock(&lock, cid, CommandKind::prewrite);
 
         // A new request should not be blocked.
         let mut req = BatchRollbackRequest::default();

@@ -268,6 +268,10 @@ make_auto_flush_static_metric! {
     pub struct InMemoryPessimisticLockingCounter: LocalIntCounter {
         "result" => InMemoryPessimisticLockingResult,
     }
+
+    pub struct SchedulerReleaseLatchTimeHistogramVec: LocalHistogram {
+        "type" => CommandKind,
+    }
 }
 
 impl From<ServerGcKeysCF> for GcKeysCF {
@@ -572,4 +576,13 @@ lazy_static! {
     .unwrap();
     pub static ref IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC: InMemoryPessimisticLockingCounter =
         auto_flush_from!(IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER, InMemoryPessimisticLockingCounter);
+    pub static ref STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
+        "tikv_storage_release_latch_duration",
+        "Histogram of the duration of releasing latch",
+        &["type"],
+        exponential_buckets(1e-6f64, 4f64, 10).unwrap() // 1us ~ 262ms
+    )
+    .unwrap();
+    pub static ref STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM_STATIC: SchedulerReleaseLatchTimeHistogramVec =
+        auto_flush_from!(STORAGE_RELEASE_LATCH_DURATION_HISTOGRAM, SchedulerReleaseLatchTimeHistogramVec);
 }
