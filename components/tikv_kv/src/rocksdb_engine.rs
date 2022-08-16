@@ -197,11 +197,11 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> BaseRocksEngine {
+    fn get_tablet(&self, _: Option<u64>) -> BaseRocksEngine {
         self.engines.kv.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
+    fn snapshot_on_tablet(&self, _: Option<u64>, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
         self.snapshot(Default::default())
     }
 

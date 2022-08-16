@@ -13,7 +13,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, TabletFactory};
+use engine_traits::{CfName, KvEngine, MvccProperties, OpenOptions, Snapshot, TabletFactory};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -317,11 +317,18 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
-    fn kv_engine(&self) -> E {
+    fn get_tablet(&self, region_id: Option<u64>) -> E {
+        if let Some(region_id) = region_id {
+            return self
+                .factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .clone();
+        }
         self.engine.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
+    fn snapshot_on_tablet(&self, region_id: Option<u64>, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
         let mut region = metapb::Region::default();
         region.set_start_key(start_key.to_owned());
         region.set_end_key(end_key.to_owned());

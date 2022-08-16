@@ -148,12 +148,17 @@ impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
 
-    fn kv_engine(&self) -> Self::Local {
-        self.base.kv_engine()
+    fn get_tablet(&self, region_id: Option<u64>) -> Self::Local {
+        self.base.get_tablet(region_id)
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap> {
-        self.base.snapshot_on_kv_engine(start_key, end_key)
+    fn snapshot_on_tablet(
+        &self,
+        region_id: Option<u64>,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<Self::Snap> {
+        self.base.snapshot_on_tablet(region_id, start_key, end_key)
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {

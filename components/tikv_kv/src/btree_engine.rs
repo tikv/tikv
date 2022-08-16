@@ -77,11 +77,11 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn get_tablet(&self, _: Option<u64>) -> PanicEngine {
         unimplemented!();
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
+    fn snapshot_on_tablet(&self, _: Option<u64>, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
         unimplemented!();
     }
 

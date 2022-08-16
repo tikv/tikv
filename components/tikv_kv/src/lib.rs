@@ -263,9 +263,9 @@ pub trait Engine: Send + Clone + 'static {
     type Local: LocalEngine;
 
     /// Local storage engine.
-    fn kv_engine(&self) -> Self::Local;
+    fn get_tablet(&self, region_id: Option<u64>) -> Self::Local;
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
+    fn snapshot_on_tablet(&self, region_id: Option<u64>, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
 
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;

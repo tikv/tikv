@@ -625,7 +625,7 @@ mod tests {
                 TestEngineBuilder::new()
                     .build_without_cache()
                     .unwrap()
-                    .kv_engine()
+                    .get_tablet()
             }),
             sched: receiver_worker.scheduler(),
             sink,
@@ -683,7 +683,7 @@ mod tests {
         let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
             total_bytes,
             buffer,
-            Some(engine.kv_engine()),
+            Some(engine.get_tablet()),
             ChangeDataRequestKvApi::TiDb,
         );
         let check_result = || loop {
@@ -775,7 +775,7 @@ mod tests {
                 let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
                     usize::MAX,
                     1000,
-                    Some(engine.kv_engine()),
+                    Some(engine.get_tablet()),
                     ChangeDataRequestKvApi::TiDb,
                 );
                 initializer.checkpoint_ts = checkpoint_ts.into();
@@ -813,13 +813,13 @@ mod tests {
         must_commit(&engine, b"zkey", 100, 110);
         must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
         must_commit(&engine, b"zzzz", 150, 160);
-        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        engine.get_tablet().flush_cf(CF_WRITE, true).unwrap();
         must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
         check_handling_old_value_seek_write(); // For TxnEntry::Prewrite.
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
         must_commit(&engine, b"zkey", 200, 210);
-        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
+        engine.get_tablet().flush_cf(CF_WRITE, false).unwrap();
         check_handling_old_value_seek_write(); // For TxnEntry::Commit.
     }
 

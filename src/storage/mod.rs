@@ -2693,16 +2693,19 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
     type Local = E::Local;
 
-    fn kv_engine(&self) -> Self::Local {
-        self.engine.kv_engine()
+    fn get_tablet(&self, region_id: Option<u64>) -> Self::Local {
+        self.engine.get_tablet(region_id)
     }
 
-    fn snapshot_on_kv_engine(
+    fn snapshot_on_tablet(
         &self,
+        region_id: Option<u64>,
         start_key: &[u8],
         end_key: &[u8],
     ) -> tikv_kv::Result<Self::Snap> {
-        let snapshot = self.engine.snapshot_on_kv_engine(start_key, end_key)?;
+        let snapshot = self
+            .engine
+            .snapshot_on_tablet(region_id, start_key, end_key)?;
         Ok(TxnTestSnapshot {
             snapshot,
             txn_ext: self.txn_ext.clone(),
