@@ -263,6 +263,17 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
+    /// Try to own the corresponding task context and take the callback.
+    ///
+    /// If the task is been processing, it should be owned.
+    /// If it has been finished, then it is not in the slot.
+    /// In both cases, cb should be None. Otherwise, cb should be some.
+    fn try_own_and_take_cb(&self, cid: u64) -> Option<StorageCallback> {
+        self.get_task_slot(cid)
+            .get_mut(&cid)
+            .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None })
+    }
+
     fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
@@ -406,7 +417,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             });
             return;
         }
-        self.schedule_command(cmd, callback, true);
+        self.schedule_command(cmd, callback);
     }
 
     /// Releases all the latches held by a command.
@@ -417,72 +428,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn run_deadline_checker(&self, cid: u64, deadline: Deadline) {
-        let sched = self.clone();
-        self.inner
-            .high_priority_pool
-            .pool
-            .spawn(async move {
-                GLOBAL_TIMER_HANDLE
-                    .delay(deadline.to_std_instant())
-                    .compat()
-                    .await
-                    .unwrap();
-                let cb = sched
-                    .inner
-                    .get_task_slot(cid)
-                    .get_mut(&cid)
-                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
-                if let Some(cb) = cb {
-                    cb.execute(ProcessResult::Failed {
-                        err: StorageErrorInner::DeadlineExceeded.into(),
-                    })
-                }
-            })
-            .unwrap();
-    }
-
-    /// Do some checking to decide whether fail fast or re-schedule.
-    fn fail_fast_or_reschedule(&self, cid: u64, cmd_ctx: Context) {
-        let sched = self.clone();
-        self.inner
-            .high_priority_pool
-            .pool
-            .spawn(async move {
-                let mut tctx = sched.inner.dequeue_task_context(cid);
-                // The task is not executed, so the task and cb should not be none.
-                let task = tctx.task.take().unwrap();
-                let cb = tctx.cb.take().unwrap();
-                let tag = task.cmd.tag();
-                match unsafe {
-                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
-                } {
-                    Err(e) => {
-                        // Precheck failed, return err early.
-                        let pr = ProcessResult::Failed {
-                            err: StorageError::from(e),
-                        };
-                        Self::early_response(
-                            cid,
-                            cb,
-                            pr,
-                            tag,
-                            CommandStageKind::precheck_write_err,
-                        );
-                    }
-                    Ok(()) => {
-                        // Precheck passed, try to re-schedule the command with precheck disabled.
-                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
-                        sched.schedule_command(task.cmd, cb, false);
-                    }
-                }
-            })
-            .unwrap();
-    }
-
-    /// Try to acquire all latches for the command and execute it.
-    /// Otherwise do some prechecking and then put it on the waiting queue.
-    fn schedule_command(&self, cmd: Command, callback: StorageCallback, fail_fast: bool) {
+    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
         let tracker = get_tls_tracker_token();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
@@ -499,48 +445,72 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.inner
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
-
-        if fail_fast {
-            // In fail fast mode, execute task only when all latches are required.
-            //
-            // For general workloads such as TPC-C,
-            // which usually has less conflicts, there is little chance
-            // the request fail to acquire all latches.
-            if self.inner.latches.acquire_all_or_none(&mut tctx.lock, cid) {
-                fail_point!("txn_scheduler_acquire_success");
-                tctx.on_schedule();
-                let task = tctx.task.take().unwrap();
-                drop(task_slot);
-                self.execute(task);
-                return;
-            }
-
-            // One or more latches are not required, there must be another running request.
-            // The request may run properly or hang due to other problems.
-            // Do some prechecking to fail fast in case there are problems.
-            //
-            // For example, a request hangs in the following case, and following
-            // requests should fail fast.
-            // 1. schedule/send a command to peer which is leader at the moment.
-            // 2. the store is network partitioned, the peer becomes follower.
-            // 3. the command may hang, and the latches are acquired.
-            self.fail_fast_or_reschedule(cid, cmd_ctx);
-        } else {
-            let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
-
-            // Acquire latches for the task as possible, and leave it in the task slot.
-            // It will be waked up when remain latches are available.
-            if self.inner.latches.acquire(&mut tctx.lock, cid) {
-                fail_point!("txn_scheduler_acquire_success");
-                tctx.on_schedule();
-                let task = tctx.task.take().unwrap();
-                drop(task_slot);
-                self.execute(task);
-                return;
-            }
-            self.run_deadline_checker(cid, deadline);
+        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+        if self.inner.latches.acquire(&mut tctx.lock, cid) {
+            fail_point!("txn_scheduler_acquire_success");
+            tctx.on_schedule();
+            let task = tctx.task.take().unwrap();
+            drop(task_slot);
+            self.execute(task);
+            return;
         }
+        self.fail_fast_or_check_deadline(cid, tag, cmd_ctx, deadline);
         fail_point!("txn_scheduler_acquire_fail");
+    }
+
+    fn fail_fast_or_check_deadline(
+        &self,
+        cid: u64,
+        tag: CommandKind,
+        cmd_ctx: Context,
+        deadline: Deadline,
+    ) {
+        let sched = self.clone();
+        self.inner
+            .high_priority_pool
+            .pool
+            .spawn(async move {
+                match unsafe {
+                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                } {
+                    // Precheck failed, try to return err early.
+                    Err(e) => {
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        // The task is not processing or finished currently. It's safe
+                        // to response early here. In the future, the task will be waked up
+                        // and it will finished with DeadlineExceeded error.
+                        // As the cb is taken here, it will not be executed anymore.
+                        if let Some(cb) = cb {
+                            let pr = ProcessResult::Failed {
+                                err: StorageError::from(e),
+                            };
+                            Self::early_response(
+                                cid,
+                                cb,
+                                pr,
+                                tag,
+                                CommandStageKind::precheck_write_err,
+                            );
+                        }
+                    }
+                    Ok(()) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                        // Check deadline in background.
+                        GLOBAL_TIMER_HANDLE
+                            .delay(deadline.to_std_instant())
+                            .compat()
+                            .await
+                            .unwrap();
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        if let Some(cb) = cb {
+                            cb.execute(ProcessResult::Failed {
+                                err: StorageErrorInner::DeadlineExceeded.into(),
+                            })
+                        }
+                    }
+                }
+            })
+            .unwrap();
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches
@@ -669,7 +639,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb.unwrap(), true);
+            self.schedule_command(cmd, tctx.cb.unwrap());
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -720,7 +690,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                self.schedule_command(cmd, cb, true);
+                self.schedule_command(cmd, cb);
             } else {
                 cb.execute(pr);
             }
@@ -1540,7 +1510,13 @@ mod tests {
             Err(StorageError(box StorageErrorInner::Kv(KvError(
                 box KvErrorInner::Request(ref e),
             )))) if e.has_not_leader(),
-        ))
+        ));
+        // The task context should be owned, and it's cb should be taken.
+        let cid2 = cid + 1; // Hack: get the cid of req2.
+        let mut task_slot = scheduler.inner.get_task_slot(cid2);
+        let tctx = task_slot.get_mut(&cid2).unwrap();
+        assert!(!tctx.try_own());
+        assert!(tctx.cb.is_none());
     }
 
     #[test]
