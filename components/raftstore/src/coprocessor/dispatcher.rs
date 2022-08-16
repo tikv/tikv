@@ -657,6 +657,26 @@ mod tests {
         return_err: Arc<AtomicBool>,
     }
 
+    enum ObserverIndex {
+        PreProposeAdmin = 1,
+        PreApplyAdmin = 2,
+        PostApplyAdmin = 3,
+        PreProposeQuery = 4,
+        PreApplyQuery = 5,
+        PostApplyQuery = 6,
+        OnRoleChange = 7,
+        OnRegionChanged = 8,
+        ApplyPlainKvs = 9,
+        ApplySst = 10,
+        OnFlushAppliedCmdBatch = 13,
+        OnEmptyCmd = 14,
+        PreExecQuery = 15,
+        PreExecAdmin = 16,
+        PostExecQuery = 17,
+        PostExecAdmin = 18,
+        OnComputeEngineSize = 19,
+    }
+
     impl Coprocessor for TestCoprocessor {}
 
     impl AdminObserver for TestCoprocessor {
@@ -665,7 +685,8 @@ mod tests {
             ctx: &mut ObserverContext<'_>,
             _: &mut AdminRequest,
         ) -> Result<()> {
-            self.called.fetch_add(1, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreApplyAdmin, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {
                 return Err(box_err!("error"));
@@ -674,12 +695,14 @@ mod tests {
         }
 
         fn pre_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminRequest) {
-            self.called.fetch_add(2, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreApplyAdmin, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminResponse) {
-            self.called.fetch_add(3, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PostApplyAdmin, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
@@ -690,7 +713,8 @@ mod tests {
             _: u64,
             _: u64,
         ) -> bool {
-            self.called.fetch_add(16, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreExecAdmin, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
@@ -703,7 +727,8 @@ mod tests {
             _: &RegionState,
             _: &mut ApplyCtxInfo<'_>,
         ) -> bool {
-            self.called.fetch_add(18, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PostExecAdmin, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
@@ -715,7 +740,8 @@ mod tests {
             ctx: &mut ObserverContext<'_>,
             _: &mut Vec<Request>,
         ) -> Result<()> {
-            self.called.fetch_add(4, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreProposeQuery, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {
                 return Err(box_err!("error"));
@@ -724,12 +750,14 @@ mod tests {
         }
 
         fn pre_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request]) {
-            self.called.fetch_add(5, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreApplyQuery, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &Cmd) {
-            self.called.fetch_add(6, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PostApplyQuery, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
@@ -740,13 +768,15 @@ mod tests {
             _: u64,
             _: u64,
         ) -> bool {
-            self.called.fetch_add(15, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreExecQuery, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
 
         fn on_empty_cmd(&self, ctx: &mut ObserverContext<'_>, _index: u64, _term: u64) {
-            self.called.fetch_add(14, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::OnEmptyCmd, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
@@ -758,7 +788,8 @@ mod tests {
             _: &RegionState,
             _: &mut ApplyCtxInfo<'_>,
         ) -> bool {
-            self.called.fetch_add(17, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PostExecQuery, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
@@ -766,13 +797,15 @@ mod tests {
 
     impl PdTaskObserver for TestCoprocessor {
         fn on_compute_engine_size(&self, _: &mut Option<StoreSizeInfo>) {
-            self.called.fetch_add(19, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::OnComputeEngineSize, Ordering::SeqCst);
         }
     }
 
     impl RoleObserver for TestCoprocessor {
         fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: &RoleChange) {
-            self.called.fetch_add(7, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::OnRoleChange, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -784,7 +817,8 @@ mod tests {
             _: RegionChangeEvent,
             _: StateRole,
         ) {
-            self.called.fetch_add(8, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::OnRegionChanged, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -796,12 +830,14 @@ mod tests {
             _: CfName,
             _: &[(Vec<u8>, Vec<u8>)],
         ) {
-            self.called.fetch_add(9, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::ApplyPlainKvs, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
-            self.called.fetch_add(10, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::ApplySst, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
@@ -813,7 +849,8 @@ mod tests {
             _: &mut Vec<CmdBatch>,
             _: &PanicEngine,
         ) {
-            self.called.fetch_add(13, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::OnFlushAppliedCmdBatch, Ordering::SeqCst);
         }
         fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
     }
@@ -885,6 +922,7 @@ mod tests {
         host.post_apply_sst_from_snapshot(&region, "default", "");
         assert_all!([&ob.called], &[55]);
 
+        let mut index = 55;
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -893,26 +931,31 @@ mod tests {
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
-        // `post_apply` + `on_flush_applied_cmd_batch` => 13 + 6 = 19
+        index += ObserverIndex::PostApplyQuery;
+        index += ObserverIndex::OnFlushAppliedCmdBatch;
         assert_all!([&ob.called], &[74]);
 
         let mut empty_req = RaftCmdRequest::default();
         empty_req.set_requests(vec![Request::default()].into());
         host.on_empty_cmd(&region, 0, 0);
-        assert_all!([&ob.called], &[88]); // 14
+        index += ObserverIndex::OnEmptyCmd;
+        assert_all!([&ob.called], &[index]);
 
         let mut query_req = RaftCmdRequest::default();
         query_req.set_requests(vec![Request::default()].into());
         host.pre_exec(&region, &query_req, 0, 0);
-        assert_all!([&ob.called], &[103]); // 15
+        index += ObserverIndex::PreExecQuery;
+        assert_all!([&ob.called], &[103]);
 
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_exec(&region, &admin_req, 0, 0);
-        assert_all!([&ob.called], &[119]); // 16
+        index += ObserverIndex::PreExecAdmin;
+        assert_all!([&ob.called], &[119]);
 
         host.on_compute_engine_size();
-        assert_all!([&ob.called], &[138]); // 19
+        index += ObserverIndex::OnComputeEngineSize;
+        assert_all!([&ob.called], &[138]);
 
         let mut pending_handle_ssts = None;
         let mut delete_ssts = vec![];
@@ -926,7 +969,8 @@ mod tests {
         let region_state = RegionState::default();
         let cmd = Cmd::default();
         host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
-        assert_all!([&ob.called], &[155]); // 17
+        index += ObserverIndex::PostExecQuery;
+        assert_all!([&ob.called], &[155]);
     }
 
     #[test]
