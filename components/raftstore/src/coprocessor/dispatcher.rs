@@ -686,7 +686,7 @@ mod tests {
             _: &mut AdminRequest,
         ) -> Result<()> {
             self.called
-                .fetch_add(ObserverIndex::PreApplyAdmin as usize, Ordering::SeqCst);
+                .fetch_add(ObserverIndex::PreProposeAdmin as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {
                 return Err(box_err!("error"));
