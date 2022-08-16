@@ -364,7 +364,9 @@ impl ServerCluster {
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.available_interval.0,
                     cfg.causal_ts.renew_batch_min_size,
+                    cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap(),
             );
@@ -497,6 +499,7 @@ impl ServerCluster {
             state,
             bg_worker.clone(),
             Some(health_service.clone()),
+            None,
         );
         node.try_bootstrap_store(engines.clone())?;
         let node_id = node.id();

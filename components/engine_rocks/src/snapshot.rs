@@ -32,11 +32,7 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot for RocksSnapshot {
-    fn cf_names(&self) -> Vec<&str> {
-        self.db.cf_names()
-    }
-}
+impl Snapshot for RocksSnapshot {}
 
 impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
