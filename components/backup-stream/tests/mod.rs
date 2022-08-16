@@ -670,7 +670,12 @@ mod test {
     /// Generally, those transactions:
     /// - Has N mutations, which's values are all short enough to be inlined in
     ///   the `Write` CF. (N > 1024)
-    /// - Commit the latest M mutations first.
+    /// - Commit the mutation set M first. (for all m in M: Nth-Of-Key(m) >
+    ///   1024)
+    /// ```text
+    /// |--...-----^------*---*-*--*-*-*-> (The line is the Key Space - from "" to inf)
+    ///            +The 1024th key  (* = committed mutation)
+    /// ```
     /// - Before committing remaining mutations, PiTR triggered initial
     ///   scanning.
     /// - The remaining mutations are committed before the instant when initial
