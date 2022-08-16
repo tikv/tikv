@@ -911,18 +911,22 @@ mod tests {
         host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
         assert_all!([&ob.called], &[21]);
 
+        let mut index = 21;
         host.on_role_change(&region, RoleChange::new(StateRole::Leader));
-        assert_all!([&ob.called], &[28]);
+        index += ObserverIndex::OnRoleChange;
+        assert_all!([&ob.called], &[index]);
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
-        assert_all!([&ob.called], &[36]);
+        index += ObserverIndex::OnRegionChanged;
+        assert_all!([&ob.called], &[index]);
 
         host.post_apply_plain_kvs_from_snapshot(&region, "default", &[]);
-        assert_all!([&ob.called], &[45]);
+        index += ObserverIndex::ApplyPlainKvs;
+        assert_all!([&ob.called], &[index]);
         host.post_apply_sst_from_snapshot(&region, "default", "");
-        assert_all!([&ob.called], &[55]);
+        index += ObserverIndex::ApplySst;
+        assert_all!([&ob.called], &[index]);
 
-        let mut index = 55;
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -933,7 +937,7 @@ mod tests {
         host.on_flush_applied_cmd_batch(cb.level, vec![cb], &PanicEngine);
         index += ObserverIndex::PostApplyQuery;
         index += ObserverIndex::OnFlushAppliedCmdBatch;
-        assert_all!([&ob.called], &[74]);
+        assert_all!([&ob.called], &[index]);
 
         let mut empty_req = RaftCmdRequest::default();
         empty_req.set_requests(vec![Request::default()].into());
@@ -945,17 +949,17 @@ mod tests {
         query_req.set_requests(vec![Request::default()].into());
         host.pre_exec(&region, &query_req, 0, 0);
         index += ObserverIndex::PreExecQuery;
-        assert_all!([&ob.called], &[103]);
+        assert_all!([&ob.called], &[index]);
 
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_exec(&region, &admin_req, 0, 0);
         index += ObserverIndex::PreExecAdmin;
-        assert_all!([&ob.called], &[119]);
+        assert_all!([&ob.called], &[index]);
 
         host.on_compute_engine_size();
         index += ObserverIndex::OnComputeEngineSize;
-        assert_all!([&ob.called], &[138]);
+        assert_all!([&ob.called], &[index]);
 
         let mut pending_handle_ssts = None;
         let mut delete_ssts = vec![];
@@ -970,7 +974,7 @@ mod tests {
         let cmd = Cmd::default();
         host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
         index += ObserverIndex::PostExecQuery;
-        assert_all!([&ob.called], &[155]);
+        assert_all!([&ob.called], &[index]);
     }
 
     #[test]
