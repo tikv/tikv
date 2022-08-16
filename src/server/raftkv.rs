@@ -13,7 +13,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, TabletFactory};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -157,6 +157,7 @@ where
 {
     router: S,
     engine: E,
+    factory: Arc<dyn TabletFactory<E> + Send + Sync>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
@@ -166,10 +167,15 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
+    pub fn new(
+        router: S,
+        engine: E,
+        factory: Arc<dyn TabletFactory<E> + Send + Sync>,
+    ) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
+            factory,
             txn_extra_scheduler: None,
         }
     }

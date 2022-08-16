@@ -155,8 +155,8 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.init_encryption();
     let fetcher = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (engines, engines_info) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone());
+    let (engines, engines_info, factory) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone(), factory);
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -562,7 +562,11 @@ where
         engine_rocks::FlowListener::new(tx)
     }
 
-    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
+    fn init_engines(
+        &mut self,
+        engines: Engines<RocksEngine, ER>,
+        factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
+    ) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -574,6 +578,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            factory,
         );
 
         self.engines = Some(TikvEngines {
@@ -1645,7 +1650,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (
+        Engines<RocksEngine, CER>,
+        Arc<EnginesResourceInfo>,
+        Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
+    ) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
@@ -1692,12 +1701,12 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            factory,
+            factory.clone(),
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
         ));
 
-        (engines, engines_info)
+        (engines, engines_info, factory)
     }
 }
 
