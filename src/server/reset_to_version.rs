@@ -137,7 +137,7 @@ impl ResetToVersionWorker {
                 *state.scanned() += 1;
                 self.total_scanned += 1;
             }
-            let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
+            let write = WriteRef::parse(self.write_iter.value())?.to_owned();
             let key = self.write_iter.key().to_vec();
             self.write_iter.next()?;
             return Ok(Some((key, write)));
@@ -148,7 +148,7 @@ impl ResetToVersionWorker {
     fn scan_next_batch(&mut self) -> Result<Batch> {
         let mut writes = Vec::with_capacity(BATCH_SIZE);
         let mut has_more = true;
-        for _ in 0..BATCH_SIZE {
+        while writes.len() < BATCH_SIZE {
             if let Some((key, write)) = self.next_write()? {
                 let commit_ts = Key::decode_ts_from(keys::origin_key(&key))?;
                 if commit_ts > self.ts {
@@ -219,7 +219,7 @@ impl ResetToVersionWorker {
                 let key = self.lock_iter.key();
                 self.write_batch.delete_cf(CF_LOCK, key)?;
                 deleted += 1;
-                let lock = box_try!(Lock::parse(self.lock_iter.value()));
+                let lock = Lock::parse(self.lock_iter.value())?;
                 // If it's not a deletion short value, we need to delete it from the
                 // `CF_DEFAULT` as well.
                 if lock.short_value.is_none() && lock.lock_type != LockType::Delete {
