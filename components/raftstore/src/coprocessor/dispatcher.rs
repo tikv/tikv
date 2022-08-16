@@ -889,29 +889,36 @@ mod tests {
             .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
+
+        let mut index = 0;
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
         host.pre_propose(&region, &mut admin_req).unwrap();
-        assert_all!([&ob.called], &[1]);
+        index += ObserverIndex::PreProposeAdmin;
+        assert_all!([&ob.called], &[index]);
         host.pre_apply(&region, &admin_req);
-        assert_all!([&ob.called], &[3]);
+        index += ObserverIndex::PreApplyAdmin;
+        assert_all!([&ob.called], &[index]);
         let mut admin_resp = RaftCmdResponse::default();
         admin_resp.set_admin_response(AdminResponse::default());
         host.post_apply(&region, &Cmd::new(0, 0, admin_req, admin_resp));
-        assert_all!([&ob.called], &[6]);
+        index += ObserverIndex::PostApplyAdmin;
+        assert_all!([&ob.called], &[index]);
 
         let mut query_req = RaftCmdRequest::default();
         query_req.set_requests(vec![Request::default()].into());
         host.pre_propose(&region, &mut query_req).unwrap();
-        assert_all!([&ob.called], &[10]);
+        index += ObserverIndex::PreProposeQuery;
+        assert_all!([&ob.called], &[index]);
+        index += ObserverIndex::PreApplyQuery;
         host.pre_apply(&region, &query_req);
-        assert_all!([&ob.called], &[15]);
+        assert_all!([&ob.called], &[index]);
         let query_resp = RaftCmdResponse::default();
         host.post_apply(&region, &Cmd::new(0, 0, query_req, query_resp));
-        assert_all!([&ob.called], &[21]);
+        index += ObserverIndex::PostApplyQuery;
+        assert_all!([&ob.called], &[index]);
 
-        let mut index = 21;
         host.on_role_change(&region, RoleChange::new(StateRole::Leader));
         index += ObserverIndex::OnRoleChange;
         assert_all!([&ob.called], &[index]);
