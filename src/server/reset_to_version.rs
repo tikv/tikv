@@ -339,7 +339,11 @@ impl ResetToVersionManager {
                             }
                         }
                     }
-                    info!("Reset to version done!"; "total_scanned" => worker.total_scanned);
+                    info!("Reset to version done!";
+                        "ts_to_reset" => ?ts,
+                        "total_scanned" => worker.total_scanned,
+                        "total_deleted" => worker.total_deleted,
+                    );
                     tikv_alloc::remove_thread_memory_accessor();
                 }).unwrap(),
         );
