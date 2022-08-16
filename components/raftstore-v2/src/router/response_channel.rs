@@ -41,10 +41,10 @@ use tikv_util::memory::HeapSize;
 /// type of payload.
 struct EventCore<Res> {
     /// Every event will have two bits.
-    /// - 0b00 means the event is not fired and not watched.
-    /// - 0b01 means the event is fired and not watched.
-    /// - 0b10 means the event is not fired and watched.
-    /// - 0b11 means the event is fired and watched.
+    /// - 0b00 means the event is not fired and not subscribed.
+    /// - 0b01 means the event is fired and not subscribed.
+    /// - 0b10 means the event is not fired and subscribed.
+    /// - 0b11 means the event is fired and subscribed.
     event: AtomicU64,
     res: UnsafeCell<Option<Res>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
@@ -62,14 +62,14 @@ const fn subscribed_bit_of(event: u64) -> u64 {
 }
 
 #[inline]
-const fn set_bit_of(event: u64) -> u64 {
+const fn fired_bit_of(event: u64) -> u64 {
     1 << (event * 2 + 1)
 }
 
 impl<Res> EventCore<Res> {
     #[inline]
-    pub fn notify_event(&self, event: u64) {
-        let previous = self.event.fetch_or(set_bit_of(event), Ordering::AcqRel);
+    fn notify_event(&self, event: u64) {
+        let previous = self.event.fetch_or(fired_bit_of(event), Ordering::AcqRel);
         if previous & subscribed_bit_of(event) != 0 {
             self.waker.wake()
         }
@@ -79,12 +79,12 @@ impl<Res> EventCore<Res> {
     ///
     /// After this call, no events should be notified.
     #[inline]
-    pub fn set_result(&self, result: Res) {
+    fn set_result(&self, result: Res) {
         unsafe {
             *self.res.get() = Some(result);
         }
         let previous = self.event.fetch_or(
-            set_bit_of(PAYLOAD_EVENT) | set_bit_of(CANCEL_EVENT),
+            fired_bit_of(PAYLOAD_EVENT) | fired_bit_of(CANCEL_EVENT),
             Ordering::AcqRel,
         );
         if previous & subscribed_bit_of(PAYLOAD_EVENT) != 0 {
@@ -97,10 +97,10 @@ impl<Res> EventCore<Res> {
     /// After this call, no events should be notified and no result should be
     /// set.
     #[inline]
-    pub fn cancel(&self) {
+    fn cancel(&self) {
         let mut previous = self
             .event
-            .fetch_or(set_bit_of(CANCEL_EVENT), Ordering::AcqRel);
+            .fetch_or(fired_bit_of(CANCEL_EVENT), Ordering::AcqRel);
         let subscribed_bit = subscribed_bit_of(0);
         while previous != 0 {
             // Not notified yet.
@@ -119,11 +119,11 @@ struct WaitEvent<'a, Res> {
 }
 
 #[inline]
-fn check_bit(e: u64, set_bit: u64) -> Option<bool> {
-    if e & set_bit != 0 {
+fn check_bit(e: u64, fired_bit: u64) -> Option<bool> {
+    if e & fired_bit != 0 {
         return Some(true);
     }
-    let cancel_bit = set_bit_of(CANCEL_EVENT);
+    let cancel_bit = fired_bit_of(CANCEL_EVENT);
     if e & cancel_bit != 0 {
         return Some(false);
     }
@@ -137,8 +137,8 @@ impl<'a, Res> Future for WaitEvent<'a, Res> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let event = &self.core.event;
         let mut e = event.load(Ordering::Relaxed);
-        let set_bit = set_bit_of(self.event);
-        if let Some(b) = check_bit(e, set_bit) {
+        let fired_bit = fired_bit_of(self.event);
+        if let Some(b) = check_bit(e, fired_bit) {
             return Poll::Ready(b);
         }
         self.core.waker.register(cx.waker());
@@ -153,7 +153,7 @@ impl<'a, Res> Future for WaitEvent<'a, Res> {
                 Ok(_) => return Poll::Pending,
                 Err(v) => e = v,
             };
-            if let Some(b) = check_bit(e, set_bit) {
+            if let Some(b) = check_bit(e, fired_bit) {
                 return Poll::Ready(b);
             }
         }
@@ -170,9 +170,9 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let event = &self.core.event;
-        let set_bit = set_bit_of(PAYLOAD_EVENT);
+        let fired_bit = fired_bit_of(PAYLOAD_EVENT);
         let mut e = event.load(Ordering::Relaxed);
-        if check_bit(e, set_bit).is_some() {
+        if check_bit(e, fired_bit).is_some() {
             unsafe {
                 return Poll::Ready((*self.core.res.get()).take());
             }
@@ -189,7 +189,7 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
                 Ok(_) => return Poll::Pending,
                 Err(v) => e = v,
             };
-            if check_bit(e, set_bit).is_some() {
+            if check_bit(e, fired_bit).is_some() {
                 unsafe {
                     return Poll::Ready((*self.core.res.get()).take());
                 }
@@ -232,8 +232,9 @@ pub struct WriteChannel {
 }
 
 impl WriteChannel {
-    const PROPOSED_EVENT: u64 = 2;
-    const COMMITTED_EVENT: u64 = 3;
+    // Valid range is [1, 30]
+    const PROPOSED_EVENT: u64 = 1;
+    const COMMITTED_EVENT: u64 = 2;
 
     #[inline]
     pub fn pair() -> (Self, WriteSubscriber) {

@@ -73,6 +73,8 @@ where
     }
 }
 
+pub type BoxReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
+pub type BoxWriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 
 #[cfg(any(test, feature = "testexport"))]
@@ -87,10 +89,10 @@ pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(Box<dyn FnOnce(ReadResponse<S>) + Send>),
+    Read(BoxReadCallback<S>),
     /// Write callback.
     Write {
-        cb: Box<dyn FnOnce(WriteResponse) + Send>,
+        cb: BoxWriteCallback,
         /// `proposed_cb` is called after a request is proposed to the raft
         /// group successfully. It's used to notify the caller to move on early
         /// because it's very likely the request will be applied to the
@@ -114,12 +116,12 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
-    pub fn write(cb: Box<dyn FnOnce(WriteResponse) + Send>) -> Self {
+    pub fn write(cb: BoxWriteCallback) -> Self {
         Self::write_ext(cb, None, None)
     }
 
     pub fn write_ext(
-        cb: Box<dyn FnOnce(WriteResponse) + Send>,
+        cb: BoxWriteCallback,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
