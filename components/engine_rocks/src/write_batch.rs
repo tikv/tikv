@@ -99,7 +99,7 @@ impl RocksWriteBatchVec {
 }
 
 impl engine_traits::WriteBatch for RocksWriteBatchVec {
-    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
         if self.support_write_batch_vec {
             self.get_db()
