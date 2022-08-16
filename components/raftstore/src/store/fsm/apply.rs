@@ -1366,6 +1366,9 @@ where
                     // `pending_handle_ssts` here indicates no `post_exec` handled.
                     ctx.delete_ssts.append(&mut v);
                 }
+                RAFT_APPLYING_SST_GAUGE
+                    .with_label_values(&["pending_delete"])
+                    .set(ctx.pending_delete_ssts.len());
             }
         }
 
