@@ -158,7 +158,6 @@ impl SuiteBuilder {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, use_v3);
         }
-        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
         // start or make slash_etc support multi-version, then we can get rid of this
@@ -316,6 +315,19 @@ impl Suite {
             ));
         }
         inserted
+    }
+
+    fn commit_keys(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let mut region_keys = HashMap::<u64, Vec<Vec<u8>>>::new();
+        for k in keys {
+            let enc_key = Key::from_raw(&k).into_encoded();
+            let region = self.cluster.get_region_id(&enc_key);
+            region_keys.entry(region).or_default().push(k);
+        }
+
+        for (region, keys) in region_keys {
+            self.must_kv_commit(region, keys, start_ts, commit_ts);
+        }
     }
 
     fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
@@ -604,10 +616,13 @@ mod test {
         errors::Error, metadata::MetadataClient, router::TaskSelector, GetCheckpointResult,
         RegionCheckpointOperation, RegionSet, Task,
     };
+    use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
-    use txn_types::TimeStamp;
+    use txn_types::{Key, TimeStamp};
 
-    use crate::{make_record_key, make_split_key_at_record, run_async_test, SuiteBuilder};
+    use crate::{
+        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+    };
 
     #[test]
     fn basic() {
@@ -645,6 +660,58 @@ mod test {
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
+            );
+        });
+        suite.cluster.shutdown();
+    }
+
+    /// This test tests whether we can handle some weird transactions and their
+    /// race with initial scanning.
+    /// Generally, those transactions:
+    /// - Has N mutations, which's values are all short enough to be inlined in
+    ///   the `Write` CF. (N > 1024)
+    /// - Commit the mutation set M first. (for all m in M: Nth-Of-Key(m) >
+    ///   1024)
+    /// ```text
+    /// |--...-----^------*---*-*--*-*-*-> (The line is the Key Space - from "" to inf)
+    ///            +The 1024th key  (* = committed mutation)
+    /// ```
+    /// - Before committing remaining mutations, PiTR triggered initial
+    ///   scanning.
+    /// - The remaining mutations are committed before the instant when initial
+    ///   scanning get the snapshot.
+    #[test]
+    fn with_split_txn() {
+        let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
+        run_async_test(async {
+            let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
+            suite.must_kv_prewrite(
+                1,
+                keys.clone()
+                    .into_iter()
+                    .map(|k| mutation(k, b"hello, world".to_vec()))
+                    .collect(),
+                make_record_key(1, 1913),
+                start_ts,
+            );
+            let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
+            suite.must_register_task(1, "test_split_txn");
+            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
+            suite.force_flush_files("test_split_txn");
+            suite.wait_for_flush();
+            let keys_encoded = keys
+                .iter()
+                .map(|v| {
+                    Key::from_raw(v.as_slice())
+                        .append_ts(commit_ts)
+                        .into_encoded()
+                })
+                .collect::<Vec<_>>();
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                keys_encoded.iter().map(Vec::as_slice),
             );
         });
         suite.cluster.shutdown();
