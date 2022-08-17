@@ -2973,9 +2973,6 @@ pub struct TikvConfig {
 
     #[online_config(skip)]
     pub causal_ts: CausalTsConfig,
-
-    #[online_config(skip)]
-    pub zone_label_key: String,
 }
 
 impl Default for TikvConfig {
@@ -3018,7 +3015,6 @@ impl Default for TikvConfig {
             resource_metering: ResourceMeteringConfig::default(),
             backup_stream: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
-            zone_label_key: String::from("zone"),
         }
     }
 }

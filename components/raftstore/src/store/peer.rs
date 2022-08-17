@@ -46,7 +46,7 @@ use pd_client::{BucketStat, INVALID_ID};
 use protobuf::Message;
 use raft::{
     self,
-    eraftpb::{self, ConfChangeType, Entry, EntryType, MessageType, Forward},
+    eraftpb::{self, ConfChangeType, Entry, EntryType, Forward, MessageType},
     Changer, GetEntriesContext, LightReady, ProgressState, ProgressTracker, RawNode, Ready,
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
@@ -936,6 +936,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
+            follower_repl: true,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
@@ -1696,34 +1697,56 @@ where
     }
 
     #[inline]
-    fn assign_zone_agent(&self, group: &Vec<usize>, msgs: &Vec<eraftpb::Message>) -> u64 {
+    fn assign_zone_agent(&self, group: &[usize], msgs: &[eraftpb::Message]) -> Option<u64> {
         // TODO: Find a better way to decide agent.
-        let idx = group[0];
-        msgs[idx].get_to()
-    }
-
-    fn merge_msg_append(&self, group: &Vec<usize>, msgs: &mut Vec<eraftpb::Message>, discard: &mut HashSet<usize>) {
-        let agent_id = self.assign_zone_agent(group, msgs);
-        let mut forwards: Vec<Forward> = Vec::new();
+        let mut agent_id: Option<u64> = None;
+        let mut next_idx = 0;
         for idx in group {
-            let msg = &msgs[*idx];
-            if msg.get_to() != agent_id {
-                let mut forward = Forward::new();
-                forward.set_to(msg.get_to());
-                forward.set_log_term(msg.get_log_term());
-                forward.set_index(msg.get_index());
-                forwards.push(forward);
-                discard.insert(*idx);
+            let peer_id = msgs[*idx].get_to();
+            let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
+            if self.raft_group.is_recent_active(peer_id)
+                && self.raft_group.get_next_idx(peer_id).unwrap() > next_idx
+                && is_voter
+            {
+                agent_id = Some(peer_id);
+                next_idx = self.raft_group.get_next_idx(peer_id).unwrap();
             }
         }
+        agent_id
+    }
 
-        for idx in group {
-            let msg = &mut msgs[*idx];
-            if msg.get_to() == agent_id {
-                msg.set_forwards(forwards.into());
-                msg.set_msg_type(MessageType::MsgGroupBroadcast);
-                break;
+    fn merge_msg_append(
+        &self,
+        group: &Vec<usize>,
+        msgs: &mut Vec<eraftpb::Message>,
+        discard: &mut HashSet<usize>,
+    ) {
+        // If no appropriate agent, do not use follower replication.
+        if let Some(agent_id) = self.assign_zone_agent(group, msgs) {
+            let mut forwards: Vec<Forward> = Vec::new();
+            for idx in group {
+                let msg = &msgs[*idx];
+                if msg.get_to() != agent_id {
+                    let mut forward = Forward::new();
+                    forward.set_to(msg.get_to());
+                    forward.set_log_term(msg.get_log_term());
+                    forward.set_index(msg.get_index());
+                    forwards.push(forward);
+                    discard.insert(*idx);
+                }
             }
+
+            for idx in group {
+                let msg = &mut msgs[*idx];
+                if msg.get_to() == agent_id {
+                    msg.set_forwards(forwards.into());
+                    msg.set_msg_type(MessageType::MsgGroupBroadcast);
+                    info!("Follower replication via agent {}. Msg:{:?}", agent_id, msg);
+                    break;
+                }
+            }
+        } else {
+            info!("Fail to select agent.");
         }
     }
 
@@ -1733,7 +1756,7 @@ where
         mut msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
-        
+
         let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
         let leader_store_id = self.peer.get_store_id();
 
@@ -1743,14 +1766,16 @@ where
             if self.follower_repl() && msg.get_msg_type() == MessageType::MsgAppend {
                 if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                     let to_peer_store_id = to_peer.get_store_id();
-                    let to_peer_zone = self.get_peer_zone(to_peer_store_id);
                     // Leader and to_peer is not in the same zone.
-                    if to_peer_zone.is_some() && to_peer_zone.unwrap() != self.get_peer_zone(leader_store_id).unwrap() {
-                        if msg_append_group.contains_key(to_peer_zone.unwrap()) {
-                            let msg_group = msg_append_group.get_mut(to_peer_zone.unwrap()).unwrap();
+                    if let Some(to_peer_zone) = self.get_peer_zone(to_peer_store_id)
+                        && to_peer_zone != self.get_peer_zone(leader_store_id).unwrap()
+                    {
+                        if msg_append_group.contains_key(to_peer_zone) {
+                            let msg_group =
+                                msg_append_group.get_mut(to_peer_zone).unwrap();
                             msg_group.push(pos);
                         } else {
-                            msg_append_group.insert(to_peer_zone.unwrap().clone(), vec![pos]);
+                            msg_append_group.insert(to_peer_zone.clone(), vec![pos]);
                         }
                     }
                 }

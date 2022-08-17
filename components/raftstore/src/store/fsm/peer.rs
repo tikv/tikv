@@ -749,6 +749,7 @@ where
     }
 
     fn on_update_zone_info(&mut self, update: HashMap<u64, String>) {
+        info!("Update zone info: {:?}", update);
         self.fsm.peer.update_peers_zone(update);
     }
 

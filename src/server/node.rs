@@ -363,10 +363,9 @@ where
                 .register_store(store.id, store.take_labels().into());
         }
         state.set_zone_label_key(self.zone_label_key.clone());
-        self.get_router().report_zone_info_update(state.group.build_update_zone_info());
+        self.get_router()
+            .report_zone_info_update(state.group.build_update_zone_info());
     }
-
-    
 
     // Exported for tests.
     #[doc(hidden)]

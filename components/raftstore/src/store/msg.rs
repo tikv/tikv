@@ -615,7 +615,7 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
-    //UpdateZoneInfo(HashMap<u64, String>),
+    // UpdateZoneInfo(HashMap<u64, String>),
     Destroy(u64),
 }
 

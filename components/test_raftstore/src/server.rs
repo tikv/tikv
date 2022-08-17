@@ -497,7 +497,7 @@ impl ServerCluster {
             state,
             bg_worker.clone(),
             Some(health_service.clone()),
-            cfg.zone_label_key.clone(),
+            String::from("zone"),
         );
         node.try_bootstrap_store(engines.clone())?;
         let node_id = node.id();
