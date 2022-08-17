@@ -9,6 +9,7 @@
 #![allow(unused_imports)]
 
 use std::{
+    ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -23,10 +24,19 @@ use engine_test::{
     raft::RaftTestEngine,
 };
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
-use kvproto::{metapb::Store, raft_serverpb::RaftMessage};
+use futures::executor::block_on;
+use kvproto::{
+    metapb::Store,
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
+};
 use pd_client::RpcClient;
 use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
-use raftstore_v2::{create_store_batch_system, Bootstrap, StoreRouter, StoreSystem};
+use raftstore_v2::{
+    create_store_batch_system,
+    router::{PeerMsg, QueryResult},
+    Bootstrap, StoreRouter, StoreSystem,
+};
 use slog::{o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
@@ -34,7 +44,35 @@ use tikv_util::config::{ReadableDuration, VersionTrack};
 
 mod test_status;
 
-type TestRouter = StoreRouter<KvTestEngine, RaftTestEngine>;
+struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
+
+impl Deref for TestRouter {
+    type Target = StoreRouter<KvTestEngine, RaftTestEngine>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for TestRouter {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl TestRouter {
+    fn query(&self, region_id: u64, req: RaftCmdRequest) -> Option<QueryResult> {
+        let (msg, sub) = PeerMsg::raft_query(req);
+        self.send(region_id, msg).unwrap();
+        block_on(sub.result())
+    }
+
+    fn command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
+        let (msg, sub) = PeerMsg::raft_command(req);
+        self.send(region_id, msg).unwrap();
+        block_on(sub.result())
+    }
+}
 
 struct TestNode {
     _pd_server: test_pd::Server<Service>,
@@ -124,7 +162,7 @@ impl TestNode {
             .unwrap();
         self.cfg = Some(cfg);
         self.system = Some(system);
-        router
+        TestRouter(router)
     }
 
     fn config(&self) -> &Arc<VersionTrack<Config>> {

@@ -203,11 +203,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
                 PeerMsg::RaftQuery(cmd) => {
-                    self.on_receive_command(cmd.req.send_time);
-                    self.on_query(cmd.req.request, cmd.ch)
+                    self.on_receive_command(cmd.send_time);
+                    self.on_query(cmd.request, cmd.ch)
                 }
                 PeerMsg::RaftCommand(cmd) => {
-                    self.on_receive_command(cmd.cmd.send_time);
+                    self.on_receive_command(cmd.send_time);
                     // self.on_command(cmd.cmd.request, cmd.ch)
                     unimplemented!()
                 }

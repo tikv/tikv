@@ -58,7 +58,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     status_resp.mut_region_leader().set_leader(leader);
                 }
             }
-            StatusCmdType::RegionDetail => self.fill_region_details(req, resp)?,
+            StatusCmdType::RegionDetail => {
+                if !self.storage().is_initialized() {
+                    let region_id = req.get_header().get_region_id();
+                    return Err(Error::RegionNotInitialized(region_id));
+                }
+                let status_resp = resp.mut_status_response();
+                status_resp
+                    .mut_region_detail()
+                    .set_region(self.region().clone());
+                if let Some(leader) = self.leader() {
+                    status_resp.mut_region_detail().set_leader(leader);
+                }
+            }
             StatusCmdType::InvalidStatus => {
                 return Err(box_err!("{:?} invalid status command!", self.logger.list()));
             }
@@ -66,25 +78,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Bind peer current term here.
         cmd_resp::bind_term(resp, self.term());
-        Ok(())
-    }
-
-    fn fill_region_details(
-        &mut self,
-        req: &RaftCmdRequest,
-        resp: &mut RaftCmdResponse,
-    ) -> Result<()> {
-        if !self.storage().is_initialized() {
-            let region_id = req.get_header().get_region_id();
-            return Err(Error::RegionNotInitialized(region_id));
-        }
-        let status_resp = resp.mut_status_response();
-        status_resp
-            .mut_region_detail()
-            .set_region(self.region().clone());
-        if let Some(leader) = self.leader() {
-            status_resp.mut_region_detail().set_leader(leader);
-        }
         Ok(())
     }
 }
