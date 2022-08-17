@@ -1,16 +1,19 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! There are two types of read:
-//! - If the ReadDelegate is in the leader lease status, the read is operated
-//!   locally and need not to go through the raft layer (namely local read).
-//! - Otherwise, redirect the request to the raftstore and proposed as a
-//!   RaftCommand in the raft layer.
+//! There are two types of Query: KV read and status query.
+//!
+//! KV Read is implemented in local module and lease module (not implemented
+//! yet). Read will be executed in callee thread if in lease, which is
+//! implemented in local module. If lease is expired, it will extend the lease
+//! first. Lease maintainance is implemented in lease module.
+//!
+//! Status query is implemented in the root module directly.
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
-    store::{cmd_resp, ReadCallback},
-    Error,
+    store::{cmd_resp, util, ReadCallback},
+    Error, Result,
 };
 use tikv_util::box_err;
 
@@ -36,10 +39,18 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// Status command is used to query target region information.
     #[inline]
-    pub fn on_query_status(&mut self, req: &RaftCmdRequest, ch: QueryResChannel) {
+    fn on_query_status(&mut self, req: &RaftCmdRequest, ch: QueryResChannel) {
         let mut response = RaftCmdResponse::default();
+        if let Err(e) = self.query_status(req, &mut response) {
+            cmd_resp::bind_error(&mut response, e);
+        }
+        ch.set_result(QueryResult::Response(response));
+    }
+
+    fn query_status(&mut self, req: &RaftCmdRequest, resp: &mut RaftCmdResponse) -> Result<()> {
+        util::check_store_id(req, self.peer().get_store_id())?;
         let cmd_type = req.get_status_request().get_cmd_type();
-        let mut status_resp = response.mut_status_response();
+        let mut status_resp = resp.mut_status_response();
         status_resp.set_cmd_type(cmd_type);
         match cmd_type {
             StatusCmdType::RegionLeader => {
@@ -47,32 +58,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     status_resp.mut_region_leader().set_leader(leader);
                 }
             }
-            StatusCmdType::RegionDetail => self.fill_region_details(req, &mut response),
+            StatusCmdType::RegionDetail => self.fill_region_details(req, resp)?,
             StatusCmdType::InvalidStatus => {
-                cmd_resp::bind_error(
-                    &mut response,
-                    box_err!("{:?} invalid status command!", self.logger.list()),
-                );
+                return Err(box_err!("{:?} invalid status command!", self.logger.list()));
             }
         }
 
         // Bind peer current term here.
-        cmd_resp::bind_term(&mut response, self.term());
-        ch.set_result(QueryResult::Response(response));
+        cmd_resp::bind_term(resp, self.term());
+        Ok(())
     }
 
-    fn fill_region_details(&mut self, req: &RaftCmdRequest, resp: &mut RaftCmdResponse) {
+    fn fill_region_details(
+        &mut self,
+        req: &RaftCmdRequest,
+        resp: &mut RaftCmdResponse,
+    ) -> Result<()> {
         if !self.storage().is_initialized() {
             let region_id = req.get_header().get_region_id();
-            cmd_resp::bind_error(resp, Error::RegionNotInitialized(region_id));
-            return;
+            return Err(Error::RegionNotInitialized(region_id));
         }
         let status_resp = resp.mut_status_response();
         status_resp
             .mut_region_detail()
             .set_region(self.region().clone());
         if let Some(leader) = self.leader() {
-            status_resp.mut_region_leader().set_leader(leader);
+            status_resp.mut_region_detail().set_leader(leader);
         }
+        Ok(())
     }
 }

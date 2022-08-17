@@ -15,7 +15,7 @@ use raftstore::store::{
 use tikv_util::time::Instant;
 
 use super::{
-    response_channel::{CmdResChannel, QueryResChannel},
+    response_channel::{CmdResChannel, CmdResSubscriber, QueryResChannel, QueryResSubscriber},
     ApplyRes,
 };
 
@@ -116,31 +116,11 @@ pub struct RaftQuery {
     pub ch: QueryResChannel,
 }
 
-impl RaftQuery {
-    #[inline]
-    pub fn new(request: RaftCmdRequest, ch: QueryResChannel) -> Self {
-        Self {
-            req: RaftRequest::new(request),
-            ch,
-        }
-    }
-}
-
 /// Commands that change the inernal states. It will be transformed into logs
 /// and reach consensus in the raft group.
 pub struct RaftCommand {
     pub cmd: RaftRequest,
     pub ch: CmdResChannel,
-}
-
-impl RaftCommand {
-    #[inline]
-    pub fn new(request: RaftCmdRequest, ch: CmdResChannel) -> Self {
-        Self {
-            cmd: RaftRequest::new(request),
-            ch,
-        }
-    }
 }
 
 /// Message that can be sent to a peer.
@@ -170,6 +150,30 @@ pub enum PeerMsg {
         peer_id: u64,
         ready_number: u64,
     },
+}
+
+impl PeerMsg {
+    pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
+        let (ch, sub) = QueryResChannel::pair();
+        (
+            PeerMsg::RaftQuery(RaftQuery {
+                req: RaftRequest::new(req),
+                ch,
+            }),
+            sub,
+        )
+    }
+
+    pub fn raft_command(req: RaftCmdRequest) -> (Self, CmdResSubscriber) {
+        let (ch, sub) = CmdResChannel::pair();
+        (
+            PeerMsg::RaftCommand(RaftCommand {
+                cmd: RaftRequest::new(req),
+                ch,
+            }),
+            sub,
+        )
+    }
 }
 
 impl fmt::Debug for PeerMsg {
