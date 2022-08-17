@@ -93,7 +93,7 @@ use crate::{
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
         PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
-        SignificantMsg, SnapKey, StoreMsg,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -490,13 +490,7 @@ where
             let mut cbs = std::mem::take(&mut self.callbacks);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = cb {
-                        proposed_cb.take()
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.take_proposed_cb())
                 .collect();
             let proposed_cb: Option<ExtCallback> = if proposed_cbs.is_empty() {
                 None
@@ -509,13 +503,7 @@ where
             };
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = cb {
-                        committed_cb.take()
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.take_committed_cb())
                 .collect();
             let committed_cb: Option<ExtCallback> = if committed_cbs.is_empty() {
                 None
@@ -529,13 +517,7 @@ where
 
             let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { trackers, .. } = cb {
-                        Some(trackers[0])
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.trackers().map(|t| t[0]))
                 .collect();
 
             let mut cb = Callback::write_ext(
@@ -550,7 +532,7 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { trackers, .. } = &mut cb {
+            if let Some(trackers) = cb.trackers_mut() {
                 *trackers = tokens;
             }
 
@@ -4829,7 +4811,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
