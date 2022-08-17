@@ -11,7 +11,9 @@ use std::{
 use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use encryption::{DataKeyManager, EncrypterWriter};
 use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{EncryptionKeyManager, Iterable, KvEngine, SstMetaInfo, SstReader};
+use engine_traits::{
+    iter_option, EncryptionKeyManager, Iterator, KvEngine, RefIterable, SstMetaInfo, SstReader,
+};
 use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
@@ -181,6 +183,10 @@ impl ImportFile {
         }
         Ok(())
     }
+
+    pub fn get_import_path(&self) -> &ImportPath {
+        &self.path
+    }
 }
 
 impl fmt::Debug for ImportFile {
@@ -330,19 +336,14 @@ impl ImportDir {
                     let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
-                        let mut unexpected_data_key = None;
-                        // No CF in sst.
-                        sst_reader.scan("", start, end, false, |key, _| {
-                            unexpected_data_key = Some(key.to_vec());
-                            Ok(false)
-                        })?;
-
-                        if let Some(unexpected_data_key) = unexpected_data_key {
+                        let opt = iter_option(start, end, false);
+                        let mut iter = sst_reader.iter(opt)?;
+                        if iter.seek(start)? {
                             error!(
                                 "unable to import: switch api version with non-tidb key";
                                 "sst" => ?meta.api_version,
                                 "current" => ?api_version,
-                                "key" => ?log_wrappers::hex_encode_upper(&unexpected_data_key)
+                                "key" => ?log_wrappers::hex_encode_upper(iter.key())
                             );
                             return Ok(false);
                         }

@@ -73,7 +73,8 @@ use super::metrics::*;
 use crate::{
     bytes_capacity,
     coprocessor::{
-        Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel, RegionState,
+        ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+        RegionState,
     },
     store::{
         cmd_resp,
@@ -408,6 +409,11 @@ where
     /// never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
+    /// A self-defined engine may be slow to ingest ssts.
+    /// It may move some elements of `delete_ssts` into `pending_delete_ssts` to
+    /// delay deletion. Otherwise we may lost data.
+    pending_delete_ssts: Vec<SstMetaInfo>,
+
     /// The priority of this Handler.
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
@@ -465,6 +471,7 @@ where
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
+            pending_delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -533,7 +540,7 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             let trackers: Vec<_> = self
@@ -1244,7 +1251,6 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
-            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
             apply_ctx.commit(self);
         }
         exec_result
@@ -1323,6 +1329,22 @@ where
         self.applied_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
+        let (modified_region, mut pending_handle_ssts) = match exec_result {
+            ApplyResult::Res(ref e) => match e {
+                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
+                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+        let mut apply_ctx_info = ApplyCtxInfo {
+            pending_handle_ssts: &mut pending_handle_ssts,
+            delete_ssts: &mut ctx.delete_ssts,
+            pending_delete_ssts: &mut ctx.pending_delete_ssts,
+        };
         let should_write = ctx.host.post_exec(
             &self.region,
             &cmd,
@@ -1330,18 +1352,25 @@ where
             &RegionState {
                 peer_id: self.id(),
                 pending_remove: self.pending_remove,
-                modified_region: match exec_result {
-                    ApplyResult::Res(ref e) => match e {
-                        ExecResult::SplitRegion { ref derived, .. } => Some(derived.clone()),
-                        ExecResult::PrepareMerge { ref region, .. } => Some(region.clone()),
-                        ExecResult::CommitMerge { ref region, .. } => Some(region.clone()),
-                        ExecResult::RollbackMerge { ref region, .. } => Some(region.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                },
+                modified_region,
             },
+            &mut apply_ctx_info,
         );
+        match pending_handle_ssts {
+            None => (),
+            Some(mut v) => {
+                if !v.is_empty() {
+                    // All elements in `pending_handle_ssts` should be moved into either
+                    // `delete_ssts` or `pending_delete_ssts`, once handled by by any of the
+                    // `post_exec` observers. So a non-empty
+                    // `pending_handle_ssts` here indicates no `post_exec` handled.
+                    ctx.delete_ssts.append(&mut v);
+                }
+                RAFT_APPLYING_SST_GAUGE
+                    .with_label_values(&["pending_delete"])
+                    .set(ctx.pending_delete_ssts.len() as i64);
+            }
+        }
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
             match *exec_result {
@@ -1564,7 +1593,6 @@ where
                 };
                 dont_delete_ingested_sst_fp();
             }
-            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -4967,6 +4995,10 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        delay_remove_ssts: Arc<AtomicBool>,
+        last_delete_sst_count: Arc<AtomicU64>,
+        last_pending_delete_sst_count: Arc<AtomicU64>,
+        last_pending_handle_sst_count: Arc<AtomicU64>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -4979,6 +5011,43 @@ mod tests {
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
+
+        fn post_exec_query(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: &Cmd,
+            _: &RaftApplyState,
+            _: &RegionState,
+            apply_info: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            match apply_info.pending_handle_ssts {
+                Some(v) => {
+                    // If it is a ingest sst
+                    let mut ssts = std::mem::take(v);
+                    assert_ne!(ssts.len(), 0);
+                    if self.delay_remove_ssts.load(Ordering::SeqCst) {
+                        apply_info.pending_delete_ssts.append(&mut ssts);
+                    } else {
+                        apply_info.delete_ssts.append(&mut ssts);
+                    }
+                }
+                None => (),
+            }
+            self.last_delete_sst_count
+                .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
+            self.last_pending_delete_sst_count.store(
+                apply_info.pending_delete_ssts.len() as u64,
+                Ordering::SeqCst,
+            );
+            self.last_pending_handle_sst_count.store(
+                match apply_info.pending_handle_ssts {
+                    Some(ref v) => v.len() as u64,
+                    None => 0,
+                },
+                Ordering::SeqCst,
+            );
+            false
+        }
     }
 
     impl AdminObserver for ApplyObserver {
@@ -4988,6 +5057,7 @@ mod tests {
             cmd: &Cmd,
             _: &RaftApplyState,
             region_state: &RegionState,
+            _: &mut ApplyCtxInfo<'_>,
         ) -> bool {
             let request = cmd.request.get_admin_request();
             match request.get_cmd_type() {
@@ -5664,11 +5734,13 @@ mod tests {
     #[test]
     fn test_exec_observer() {
         let (_path, engine) = create_tmp_engine("test-exec-observer");
-        let (_import_dir, importer) = create_tmp_importer("test-exec-observer");
+        let (import_dir, importer) = create_tmp_importer("test-exec-observer");
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -5682,7 +5754,7 @@ mod tests {
             sender,
             region_scheduler,
             coprocessor_host: host,
-            importer,
+            importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
             store_id: 1,
@@ -5783,7 +5855,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_term, 1);
-        let (_, r8) = if let ExecResult::SplitRegion {
+        let (r1, r8) = if let ExecResult::SplitRegion {
             regions,
             derived: _,
             new_split_regions: _,
@@ -5813,6 +5885,48 @@ mod tests {
             .unwrap()
             .unwrap_or_default();
         assert_eq!(apply_res.apply_state, state);
+
+        // Phase 3: we test if we can delay deletion of some sst files.
+        let r1_epoch = r1.get_region_epoch();
+        index_id += 1;
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"2")];
+        let sst_path = import_dir.path().join("test.sst");
+        let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+        meta.set_region_id(1);
+        meta.set_region_epoch(r1_epoch.clone());
+        let mut file = importer.create(&meta).unwrap();
+        file.append(&data).unwrap();
+        file.finish().unwrap();
+        let src = sst_path.clone();
+        let dst = file.get_import_path().save.to_str().unwrap();
+        std::fs::copy(src, dst).unwrap();
+        assert!(sst_path.as_path().exists());
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+
+        obs.delay_remove_ssts.store(true, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
+
+        index_id += 1;
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+        obs.delay_remove_ssts.store(false, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
 
         system.shutdown();
     }
