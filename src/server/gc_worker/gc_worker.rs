@@ -1795,7 +1795,7 @@ mod tests {
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.get_tablet().as_inner().clone();
+        let db = engine.get_tablet(None).as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
         for i in 0..100 {
@@ -1868,7 +1868,7 @@ mod tests {
         let ri_provider = RegionInfoAccessor::new(&mut host);
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.get_tablet().as_inner().clone();
+        let db = engine.get_tablet(None).as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         let mut keys = vec![];
         for i in 0..100 {
@@ -1982,7 +1982,7 @@ mod tests {
         assert_eq!(7, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
 
-        let snapshot = prefixed_engine.snapshot_on_tablet(&[], &[]).unwrap();
+        let snapshot = prefixed_engine.snapshot_on_tablet(None, &[], &[]).unwrap();
 
         test_raws
             .clone()
@@ -2023,7 +2023,7 @@ mod tests {
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.get_tablet().as_inner().clone();
+        let db = engine.get_tablet(None).as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
@@ -2106,7 +2106,7 @@ mod tests {
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
         must_commit(&engine, b"key", 10, 20);
-        let db = engine.get_tablet().as_inner().clone();
+        let db = engine.get_tablet(None).as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
 

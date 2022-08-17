@@ -985,8 +985,8 @@ mod tests {
         must_commit(&engine, b"zkey", 100, 110);
         must_prewrite_put(&engine, b"zkey1", &value, b"zkey1", 150);
         must_commit(&engine, b"zkey1", 150, 160);
-        engine.get_tablet().flush_cf(CF_WRITE, true).unwrap();
-        engine.get_tablet().flush_cf(CF_DEFAULT, true).unwrap();
+        engine.get_tablet(None).flush_cf(CF_WRITE, true).unwrap();
+        engine.get_tablet(None).flush_cf(CF_DEFAULT, true).unwrap();
         must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
 
         let tests = vec![
@@ -1011,8 +1011,8 @@ mod tests {
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
         must_commit(&engine, b"zkey", 200, 210);
-        engine.get_tablet().flush_cf(CF_WRITE, false).unwrap();
-        engine.get_tablet().flush_cf(CF_DEFAULT, false).unwrap();
+        engine.get_tablet(None).flush_cf(CF_WRITE, false).unwrap();
+        engine.get_tablet(None).flush_cf(CF_DEFAULT, false).unwrap();
 
         let tests = vec![
             // `zkey_110` is filtered, so no old value and block reads is 0.

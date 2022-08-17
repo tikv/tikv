@@ -33,7 +33,7 @@ use std::{
 
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
-    CF_DEFAULT, CF_LOCK,
+    WriteBatchExt, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::prelude::*;
@@ -661,6 +661,7 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
                 }
             }
         };
+
         // TODO: turn the error into an engine error.
         if let Err(msg) = res {
             return Err(box_err!("{}", msg));
@@ -669,6 +670,120 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     wb.write()?;
     Ok(())
 }
+
+/// Write modifications into a `BaseRocksEngine` instance.
+pub fn write_modifies_multi_rocks(
+    engine: &impl Engine,
+    modifies: Vec<Modify>,
+    key_to_id: HashMap<Key, u64>,
+) -> Result<()> {
+    fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+    let mut wbs = HashMap::new();
+
+    for rev in modifies {
+        let region_id: u64 = *key_to_id.get(rev.key()).unwrap();
+        let wb = wbs
+            .entry(region_id)
+            .or_insert_with(|| engine.get_tablet(Some(region_id)).write_batch());
+
+        let res = match rev {
+            Modify::Delete(cf, k) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: delete"; "key" => %k);
+                    wb.delete(k.as_encoded())
+                } else {
+                    trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
+                    wb.delete_cf(cf, k.as_encoded())
+                }
+            }
+            Modify::Put(cf, k, v) => {
+                if cf == CF_DEFAULT {
+                    trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
+                    wb.put(k.as_encoded(), &v)
+                } else {
+                    trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
+                    wb.put_cf(cf, k.as_encoded(), &v)
+                }
+            }
+            Modify::PessimisticLock(k, lock) => {
+                let v = lock.into_lock().to_bytes();
+                trace!("RocksEngine: put lock"; "key" => %k, "values" => escape(&v));
+                wb.put_cf(CF_LOCK, k.as_encoded(), &v)
+            }
+            Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                trace!(
+                    "RocksEngine: delete_range_cf";
+                    "cf" => cf,
+                    "start_key" => %start_key,
+                    "end_key" => %end_key,
+                    "notify_only" => notify_only,
+                );
+                if !notify_only {
+                    wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
+            }
+        };
+
+        // TODO: turn the error into an engine error.
+        if let Err(msg) = res {
+            return Err(box_err!("{}", msg));
+        }
+    }
+
+    for mut wb in wbs.into_values() {
+        wb.write()?;
+    }
+    Ok(())
+}
+
+// // todo: Meet some compilation problem
+// fn handle_modify(
+//     wb: &mut impl WriteBatch,
+//     modify: Modify,
+// ) -> std::result::Result<(), engine_traits::Error> {
+//     match modify {
+//         Modify::Delete(cf, k) => {
+//             if cf == CF_DEFAULT {
+//                 trace!("RocksEngine: delete"; "key" => %k);
+//                 wb.delete(k.as_encoded())
+//             } else {
+//                 trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
+//                 wb.delete_cf(cf, k.as_encoded())
+//             }
+//         }
+//         Modify::Put(cf, k, v) => {
+//             if cf == CF_DEFAULT {
+//                 trace!("RocksEngine: put"; "key" => %k, "value" =>
+// escape(&v));                 wb.put(k.as_encoded(), &v)
+//             } else {
+//                 trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k,
+// "value" => escape(&v));                 wb.put_cf(cf, k.as_encoded(), &v)
+//             }
+//         }
+//         Modify::PessimisticLock(k, lock) => {
+//             let v = lock.into_lock().to_bytes();
+//             trace!("RocksEngine: put lock"; "key" => %k, "values" =>
+// escape(&v));             wb.put_cf(CF_LOCK, k.as_encoded(), &v)
+//         }
+//         Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+//             trace!(
+//                 "RocksEngine: delete_range_cf";
+//                 "cf" => cf,
+//                 "start_key" => %start_key,
+//                 "end_key" => %end_key,
+//                 "notify_only" => notify_only,
+//             );
+//             if !notify_only {
+//                 wb.delete_range_cf(cf, start_key.as_encoded(),
+// end_key.as_encoded())             } else {
+//                 Ok(())
+//             }
+//         }
+//     }
+// }
 
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];
 

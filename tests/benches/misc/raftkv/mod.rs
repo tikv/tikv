@@ -22,7 +22,11 @@ use raftstore::{
 };
 use tempfile::{Builder, TempDir};
 use tikv::{
-    server::raftkv::{CmdRes, RaftKv},
+    config::TikvConfig,
+    server::{
+        raftkv::{CmdRes, RaftKv},
+        KvEngineFactoryBuilder,
+    },
     storage::{
         kv::{Callback as EngineCallback, Modify, SnapContext, WriteData},
         Engine,
@@ -178,8 +182,17 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_peers().push(leader.clone());
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
-    let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let (tmp, db) = new_engine();
+
+    let cfg = TikvConfig::default();
+    let env = cfg.build_shared_rocks_env(None, None).unwrap();
+    let builder = KvEngineFactoryBuilder::new(env, &cfg, tmp.path());
+    let factory = builder.build();
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(factory),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
@@ -207,8 +220,17 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_peers().push(leader.clone());
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
-    let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let (tmp, db) = new_engine();
+
+    let cfg = TikvConfig::default();
+    let env = cfg.build_shared_rocks_env(None, None).unwrap();
+    let builder = KvEngineFactoryBuilder::new(env, &cfg, tmp.path());
+    let factory = builder.build();
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(factory),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());

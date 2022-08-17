@@ -1527,7 +1527,7 @@ mod tests {
                 TestEngineBuilder::new()
                     .build_without_cache()
                     .unwrap()
-                    .get_tablet()
+                    .get_tablet(None)
             }),
             CdcObserver::new(task_sched, api_version),
             Arc::new(StdMutex::new(StoreMeta::new(0))),

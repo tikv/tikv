@@ -1982,7 +1982,7 @@ pub mod tests {
     fn test_reader_prefix_seek() {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let db = builder.build().unwrap().get_tablet();
+        let db = builder.build().unwrap().get_tablet(None);
 
         let region = make_region(1, vec![], vec![]);
         let mut engine = RegionEngine::new(&db, &region);
