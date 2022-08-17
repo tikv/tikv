@@ -665,6 +665,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         if let Some(seqno_worker) = &mut self.seqno_worker {
             let seqno_runner = SeqnoRelationRunner::new(
+                engines.store_meta.clone(),
                 ApplyResNotifier::new(self.router.clone(), Some(seqno_worker.scheduler())),
                 self.engines.as_ref().unwrap().engines.raft.clone(),
             );
