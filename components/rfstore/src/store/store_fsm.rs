@@ -1398,7 +1398,11 @@ impl<'a> StoreMsgHandler<'a> {
             let mut peer_fsm = peer.peer_fsm.lock().unwrap();
             std::mem::take(&mut peer_fsm.peer.pending_apply_results)
         };
-        assert!(!apply_results.is_empty());
+        if apply_results.is_empty() {
+            // The apply_results can be empty if a uninitialized peer received gc message and later
+            // replaced by split.
+            return None;
+        }
         for mut apply_result in apply_results {
             while let Some(result) = apply_result.results.pop_front() {
                 match result {
