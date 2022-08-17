@@ -8,9 +8,12 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -27,9 +30,9 @@ use raftstore_v2::{create_store_batch_system, Bootstrap, StoreRouter, StoreSyste
 use slog::{o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
-use tikv_util::config::VersionTrack;
+use tikv_util::config::{ReadableDuration, VersionTrack};
 
-mod test_election;
+mod test_status;
 
 type TestRouter = StoreRouter<KvTestEngine, RaftTestEngine>;
 
@@ -41,6 +44,7 @@ struct TestNode {
     raft_engine: Option<RaftTestEngine>,
     factory: Option<Arc<TestTabletFactoryV2>>,
     system: Option<StoreSystem<KvTestEngine, RaftTestEngine>>,
+    cfg: Option<Arc<VersionTrack<Config>>>,
     logger: Logger,
 }
 
@@ -93,13 +97,14 @@ impl TestNode {
             raft_engine: Some(raft_engine),
             factory: Some(factory),
             system: None,
+            cfg: None,
             logger,
         }
     }
 
     fn start(
         &mut self,
-        cfg: &Arc<VersionTrack<Config>>,
+        cfg: Arc<VersionTrack<Config>>,
         trans: impl Transport + 'static,
     ) -> TestRouter {
         let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
@@ -117,8 +122,13 @@ impl TestNode {
                 &router,
             )
             .unwrap();
+        self.cfg = Some(cfg);
         self.system = Some(system);
         router
+    }
+
+    fn config(&self) -> &Arc<VersionTrack<Config>> {
+        self.cfg.as_ref().unwrap()
     }
 
     fn stop(&mut self) {
@@ -165,10 +175,44 @@ impl Transport for TestTransport {
     }
 }
 
+// TODO: remove following when we finally integrate it in tikv-server binary.
+fn v2_default_config() -> Config {
+    let mut config = Config::default();
+    config.store_io_pool_size = 1;
+    config
+}
+
+/// Disable all ticks, so test case can schedule manually.
+fn disable_all_auto_ticks(cfg: &mut Config) {
+    cfg.raft_base_tick_interval = ReadableDuration::ZERO;
+    cfg.raft_log_gc_tick_interval = ReadableDuration::ZERO;
+    cfg.raft_log_compact_sync_interval = ReadableDuration::ZERO;
+    cfg.raft_engine_purge_interval = ReadableDuration::ZERO;
+    cfg.split_region_check_tick_interval = ReadableDuration::ZERO;
+    cfg.region_compact_check_interval = ReadableDuration::ZERO;
+    cfg.pd_heartbeat_tick_interval = ReadableDuration::ZERO;
+    cfg.pd_store_heartbeat_tick_interval = ReadableDuration::ZERO;
+    cfg.snap_mgr_gc_tick_interval = ReadableDuration::ZERO;
+    cfg.lock_cf_compact_interval = ReadableDuration::ZERO;
+    cfg.peer_stale_state_check_interval = ReadableDuration::ZERO;
+    cfg.consistency_check_interval = ReadableDuration::ZERO;
+    cfg.report_region_flow_interval = ReadableDuration::ZERO;
+    cfg.check_leader_lease_interval = ReadableDuration::ZERO;
+    cfg.merge_check_tick_interval = ReadableDuration::ZERO;
+    cfg.cleanup_import_sst_interval = ReadableDuration::ZERO;
+    cfg.inspect_interval = ReadableDuration::ZERO;
+    cfg.report_min_resolved_ts_interval = ReadableDuration::ZERO;
+    cfg.reactive_memory_lock_tick_interval = ReadableDuration::ZERO;
+    cfg.report_region_buckets_tick_interval = ReadableDuration::ZERO;
+    cfg.check_long_uncommitted_interval = ReadableDuration::ZERO;
+}
+
 fn setup_default_cluster() -> (TestNode, Receiver<RaftMessage>, TestRouter) {
     let mut node = TestNode::new();
-    let cfg = Default::default();
+    let mut cfg = v2_default_config();
+    disable_all_auto_ticks(&mut cfg);
+    cfg.store_io_pool_size = 1;
     let (tx, rx) = new_test_transport();
-    let router = node.start(&cfg, tx);
+    let router = node.start(Arc::new(VersionTrack::new(cfg)), tx);
     (node, rx, router)
 }
