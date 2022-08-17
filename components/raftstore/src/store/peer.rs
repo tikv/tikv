@@ -4902,8 +4902,10 @@ where
         )
     }
 
-    // Check if the target index is applied.
+    // All the apply waiting progress should be checked here to see if the applied
+    // index reaches the target index and do the needed actions.
     pub fn maybe_finish_wait_apply(&mut self, force: bool) {
+        // Try to move `UnsafeRecoveryState::WaitApply` forward.
         if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
             &self.unsafe_recovery_state
         {
