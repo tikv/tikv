@@ -45,6 +45,8 @@ struct EventCore<Res> {
     /// - 0b01 means the event is fired and not subscribed.
     /// - 0b10 means the event is not fired and subscribed.
     /// - 0b11 means the event is fired and subscribed.
+    /// Event 0 and Event 31 is reserved as payload and cancel respectively.
+    /// Other events should be defined within [1, 30].
     event: AtomicU64,
     res: UnsafeCell<Option<Res>>,
     // Waker can be changed, need to use `AtomicWaker` to guarantee no data race.
