@@ -67,7 +67,7 @@ use std::{
     sync::{
         atomic::{self, AtomicBool},
         Arc,
-    },
+    }, collections::HashMap,
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
@@ -2712,8 +2712,12 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         })
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> tikv_kv::Result<()> {
-        self.engine.modify_on_kv_engine(modifies)
+    fn modify_on_kv_engine(
+        &self,
+        modifies: Vec<Modify>,
+        key_to_id: Option<HashMap<Key, u64>>,
+    ) -> tikv_kv::Result<()> {
+        self.engine.modify_on_kv_engine(modifies, key_to_id)
     }
 
     fn async_snapshot(

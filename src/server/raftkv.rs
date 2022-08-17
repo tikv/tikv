@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
     mem,
@@ -13,7 +14,10 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, OpenOptions, Snapshot, TabletFactory};
+use engine_traits::{
+    CfName, KvEngine, Mutable, MvccProperties, OpenOptions, Snapshot, TabletFactory, WriteBatch,
+    CF_DEFAULT, CF_LOCK,
+};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -37,7 +41,7 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_kv::EngineVersion;
-use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use tikv_util::{codec::number::NumberEncoder, escape, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -281,6 +285,73 @@ where
 
         Ok(())
     }
+
+    /// Write modifications into a `BaseRocksEngine` instance.
+    fn write_modifies(
+        &self,
+        modifies: Vec<Modify>,
+        key_to_id: HashMap<Key, u64>,
+    ) -> tikv_kv::Result<()> {
+        fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
+
+        let mut wbs = HashMap::new();
+
+        for rev in modifies {
+            let region_id: u64 = *key_to_id.get(&rev.key()).unwrap();
+            let wb = wbs
+                .entry(region_id)
+                .or_insert(self.get_tablet(Some(region_id)).write_batch());
+
+            let res = match rev {
+                Modify::Delete(cf, k) => {
+                    if cf == CF_DEFAULT {
+                        trace!("RocksEngine: delete"; "key" => %k);
+                        wb.delete(k.as_encoded())
+                    } else {
+                        trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
+                        wb.delete_cf(cf, k.as_encoded())
+                    }
+                }
+                Modify::Put(cf, k, v) => {
+                    if cf == CF_DEFAULT {
+                        trace!("RocksEngine: put"; "key" => %k, "value" => escape(&v));
+                        wb.put(k.as_encoded(), &v)
+                    } else {
+                        trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
+                        wb.put_cf(cf, k.as_encoded(), &v)
+                    }
+                }
+                Modify::PessimisticLock(k, lock) => {
+                    let v = lock.into_lock().to_bytes();
+                    trace!("RocksEngine: put lock"; "key" => %k, "values" => escape(&v));
+                    wb.put_cf(CF_LOCK, k.as_encoded(), &v)
+                }
+                Modify::DeleteRange(cf, start_key, end_key, notify_only) => {
+                    trace!(
+                        "RocksEngine: delete_range_cf";
+                        "cf" => cf,
+                        "start_key" => %start_key,
+                        "end_key" => %end_key,
+                        "notify_only" => notify_only,
+                    );
+                    if !notify_only {
+                        wb.delete_range_cf(cf, start_key.as_encoded(), end_key.as_encoded())
+                    } else {
+                        Ok(())
+                    }
+                }
+            };
+            // TODO: turn the error into an engine error.
+            if let Err(msg) = res {
+                return Err(box_err!("{}", msg));
+            }
+        }
+
+        for mut wb in wbs.into_values() {
+            wb.write()?;
+        }
+        Ok(())
+    }
 }
 
 fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
@@ -366,7 +437,11 @@ where
         Ok(RegionSnapshot::<E::Snapshot>::from_raw(tablet, region))
     }
 
-    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+    fn modify_on_kv_engine(
+        &self,
+        mut modifies: Vec<Modify>,
+        key_to_id: Option<HashMap<Key, u64>>,
+    ) -> kv::Result<()> {
         for modify in &mut modifies {
             match modify {
                 Modify::Delete(_, ref mut key) => {
@@ -389,7 +464,12 @@ where
                 }
             }
         }
-        write_modifies(&self.engine, modifies)
+
+        if self.get_engine_version() == EngineVersion::V1 {
+            write_modifies(&self.engine, modifies)
+        } else {
+            self.write_modifies(modifies, key_to_id.unwrap())
+        }
     }
 
     fn async_write(

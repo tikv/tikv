@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
     fmt::{self, Display, Formatter},
     iter::Peekable,
     mem,
@@ -352,12 +353,17 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    fn flush_txn(txn: MvccTxn, limiter: &Limiter, engine: &E) -> Result<()> {
+    fn flush_txn(
+        txn: MvccTxn,
+        limiter: &Limiter,
+        engine: &E,
+        key_to_id: HashMap<Key, u64>,
+    ) -> Result<()> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies)?;
+            engine.modify_on_kv_engine(modifies, Some(key_to_id))?;
         }
         Ok(())
     }
@@ -448,6 +454,8 @@ where
             MvccReader::new(snapshot, Some(ScanMode::Forward), false)
         };
 
+        let mut key_to_id: HashMap<Key, u64> = HashMap::new();
+
         while let Some((ref key, id)) = next_gc_key_id {
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 GC_KEY_FAILURES.inc();
@@ -457,13 +465,16 @@ where
             }
 
             current_gc_region_id = id;
-            if !single_rocks && current_gc_region_id != prev_gc_region_id {
-                let snapshot = self.engine.snapshot_on_tablet(
-                    Some(current_gc_region_id),
-                    &range_start_key,
-                    &range_end_key,
-                )?;
-                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
+            if !single_rocks {
+                key_to_id.insert(key.clone(), id);
+                if current_gc_region_id != prev_gc_region_id {
+                    let snapshot = self.engine.snapshot_on_tablet(
+                        Some(current_gc_region_id),
+                        &range_start_key,
+                        &range_end_key,
+                    )?;
+                    reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
+                }
             }
 
             if gc_info.is_completed {
@@ -490,7 +501,8 @@ where
                 next_gc_key_id = keys.next();
                 gc_info = GcInfo::default();
             } else {
-                Self::flush_txn(txn, &self.limiter, &self.engine)?;
+                Self::flush_txn(txn, &self.limiter, &self.engine, key_to_id)?;
+                key_to_id = HashMap::new();
                 let snapshot = self.engine.snapshot_on_tablet(
                     Some(current_gc_region_id),
                     &range_start_key,
@@ -502,7 +514,7 @@ where
 
             prev_gc_region_id = current_gc_region_id;
         }
-        Self::flush_txn(txn, &self.limiter, &self.engine)?;
+        Self::flush_txn(txn, &self.limiter, &self.engine, key_to_id)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -582,7 +594,7 @@ where
                 gc_info = GcInfo::default();
             } else {
                 // Flush writeBatch to engine.
-                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, None)?;
                 // After flush, reset raw_modifies.
                 raw_modifies = MvccRaw::new();
             }
@@ -590,7 +602,7 @@ where
             prev_gc_region_id = current_gc_region_id;
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, None)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -656,13 +668,18 @@ where
         gc_info.deleted_versions += 1;
     }
 
-    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+    fn flush_raw_gc(
+        raw_modifies: MvccRaw,
+        limiter: &Limiter,
+        engine: &E,
+        key_to_id: Option<HashMap<Key, u64>>,
+    ) -> Result<()> {
         let write_size = raw_modifies.write_size();
         let modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies)?;
+            engine.modify_on_kv_engine(modifies, key_to_id)?;
         }
         Ok(())
     }
@@ -1377,7 +1394,11 @@ mod tests {
             ))
         }
 
-        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+        fn modify_on_kv_engine(
+            &self,
+            mut modifies: Vec<Modify>,
+            _: Option<HashMap<Key, u64>>,
+        ) -> kv::Result<()> {
             for modify in &mut modifies {
                 match modify {
                     Modify::Delete(_, ref mut key) => {
@@ -1400,7 +1421,7 @@ mod tests {
                     }
                 }
             }
-            write_modifies(&self.get_tablet(), modifies)
+            write_modifies(&self.get_tablet(None), modifies)
         }
 
         fn async_write(

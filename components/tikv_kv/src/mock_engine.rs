@@ -1,11 +1,12 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::LinkedList,
+    collections::{HashMap, LinkedList},
     sync::{Arc, Mutex},
 };
 
 use kvproto::kvrpcpb::Context;
+use txn_types::Key;
 
 use super::Result;
 use crate::{Callback, Engine, ExtCallback, Modify, RocksEngine, SnapContext, WriteData};
@@ -161,8 +162,12 @@ impl Engine for MockEngine {
         self.base.snapshot_on_tablet(region_id, start_key, end_key)
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        self.base.modify_on_kv_engine(modifies)
+    fn modify_on_kv_engine(
+        &self,
+        modifies: Vec<Modify>,
+        key_to_id: Option<HashMap<Key, u64>>,
+    ) -> Result<()> {
+        self.base.modify_on_kv_engine(modifies, key_to_id)
     }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {

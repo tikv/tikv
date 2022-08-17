@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -205,7 +206,11 @@ impl Engine for RocksEngine {
         self.snapshot(Default::default())
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+    fn modify_on_kv_engine(
+        &self,
+        modifies: Vec<Modify>,
+        _: Option<HashMap<Key, u64>>,
+    ) -> Result<()> {
         write_modifies(&self.engines.kv, modifies)
     }
 
