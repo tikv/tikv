@@ -508,6 +508,10 @@ impl EngineCore {
             self.compact_tx
                 .send(CompactMsg::Applied(IDVer::new(cs.shard_id, cs.shard_ver)))
                 .unwrap();
+            // This compaction may be conflicted with initial flush, so we have to trigger next
+            // compaction if needed.
+            let shard = self.get_shard(cs.shard_id).unwrap();
+            self.refresh_shard_states(&shard);
         }
     }
 
