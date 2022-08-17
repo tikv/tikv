@@ -9,7 +9,9 @@ use kvproto::{
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
 };
-use raftstore::store::{metrics::RaftEventDurationType, InspectedRaftMessage, RegionSnapshot};
+use raftstore::store::{
+    metrics::RaftEventDurationType, FetchedLogs, InspectedRaftMessage, RegionSnapshot,
+};
 use tikv_util::time::Instant;
 
 use super::{
@@ -154,12 +156,16 @@ pub enum PeerMsg {
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes(ApplyRes),
+    FetchedLogs(FetchedLogs),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
     Noop,
     /// A message that indicates an asynchronous write has finished.
-    Persisted { peer_id: u64, ready_number: u64 },
+    Persisted {
+        peer_id: u64,
+        ready_number: u64,
+    },
 }
 
 impl fmt::Debug for PeerMsg {
@@ -184,6 +190,7 @@ impl fmt::Debug for PeerMsg {
                 "Persisted peer_id {}, ready_number {}",
                 peer_id, ready_number
             ),
+            PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
         }
     }
 }

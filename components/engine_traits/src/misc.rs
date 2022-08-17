@@ -29,9 +29,9 @@ pub enum DeleteStrategy {
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
-    fn flush(&self, sync: bool) -> Result<()>;
+    fn flush_cfs(&self, wait: bool) -> Result<()>;
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()>;
+    fn flush_cf(&self, cf: &str, wait: bool) -> Result<()>;
 
     fn delete_all_in_range(&self, strategy: DeleteStrategy, ranges: &[Range<'_>]) -> Result<()> {
         for cf in self.cf_names() {

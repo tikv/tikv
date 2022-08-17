@@ -82,13 +82,13 @@ mod tests {
         db.put(&data_key(b"a1"), &value).unwrap();
         db.put(&data_key(b"a2"), &value).unwrap();
         assert_eq!(stats.fetch(IoType::Flush, IoOp::Write), 0);
-        db.flush(true /* sync */).unwrap();
+        db.flush_cfs(true /* wait */).unwrap();
         assert!(stats.fetch(IoType::Flush, IoOp::Write) > value_size * 2);
         assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.put(&data_key(b"a2"), &value).unwrap();
         db.put(&data_key(b"a3"), &value).unwrap();
-        db.flush(true /* sync */).unwrap();
+        db.flush_cfs(true /* wait */).unwrap();
         assert!(stats.fetch(IoType::Flush, IoOp::Write) > value_size * 2);
         assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
