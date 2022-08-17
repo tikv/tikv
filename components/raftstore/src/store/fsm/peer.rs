@@ -1306,8 +1306,8 @@ where
             SignificantMsg::RaftLogGcFlushed => {
                 self.on_raft_log_gc_flushed();
             }
-            SignificantMsg::RaftlogFetched { context, res } => {
-                self.on_raft_log_fetched(context, res);
+            SignificantMsg::RaftlogFetched(fetched_logs) => {
+                self.on_raft_log_fetched(fetched_logs.context, fetched_logs.logs);
             }
             SignificantMsg::EnterForceLeaderState {
                 syncer,
