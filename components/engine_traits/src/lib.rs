@@ -250,6 +250,7 @@
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
 #![feature(min_specialization)]
 #![feature(assert_matches)]
+#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;

@@ -6,7 +6,8 @@ use std::fs;
 
 use engine_test::kv::KvTestEngine;
 use engine_traits::{
-    Error, ExternalSstFileInfo, Iterator, Result, SstExt, SstReader, SstWriter, SstWriterBuilder,
+    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstExt, SstReader,
+    SstWriter, SstWriterBuilder,
 };
 use panic_hook::recover_safe;
 
@@ -48,7 +49,7 @@ fn basic() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
     let key = iter.key();
@@ -77,7 +78,7 @@ fn forward() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
 
@@ -114,7 +115,7 @@ fn reverse() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_last()?;
 
@@ -152,7 +153,7 @@ fn delete() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
 
@@ -206,7 +207,7 @@ fn same_key() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
     let key = iter.key();
@@ -248,7 +249,7 @@ fn reverse_key() -> Result<()> {
     sst_writer.finish()?;
 
     let sst_reader = <KvTestEngine as SstExt>::SstReader::open(&sst_path)?;
-    let mut iter = sst_reader.iter();
+    let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
 
     iter.seek_to_first()?;
     let key = iter.key();

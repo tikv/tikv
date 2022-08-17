@@ -9,7 +9,7 @@ use std::{
     vec::IntoIter,
 };
 
-use engine_traits::CfName;
+use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
@@ -75,10 +75,19 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+/// Context of a region provided for observers.
+#[derive(Default, Clone)]
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+}
+
+/// Context for exec observers of mutation to be applied to ApplyContext.
+pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_delete_ssts: &'a mut Vec<SstMetaInfo>,
 }
 
 pub trait AdminObserver: Coprocessor {
@@ -115,6 +124,7 @@ pub trait AdminObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
@@ -154,6 +164,7 @@ pub trait QueryObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
