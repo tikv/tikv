@@ -2,7 +2,11 @@
 
 use super::{
     super::Result,
-    path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK},
+    path_expr::{
+        PathExpression, PathLeg, PATH_EXPRESSION_CONTAINS_ASTERISK,
+        PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
+        PATH_EXPR_ASTERISK,
+    },
     Json, JsonRef, JsonType,
 };
 
@@ -14,27 +18,44 @@ impl<'a> JsonRef<'a> {
     ///
     /// See `Extract()` in TiDB `json.binary_function.go`
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
+        let mut could_return_multiple_matches = path_expr_list.len() > 1;
+
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
+            could_return_multiple_matches |= (path_expr.flags & PATH_EXPRESSION_CONTAINS_ASTERISK != 0)
+                | (path_expr.flags & PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK != 0);
             elem_list.append(&mut extract_json(*self, &path_expr.legs)?)
         }
         if elem_list.is_empty() {
-            return Ok(None);
+            Ok(None)
+        } else if could_return_multiple_matches {
+            Ok(Some(Json::from_array(
+                elem_list.drain(..).map(|j| j.to_owned()).collect(),
+            )?))
+        } else {
+            Ok(Some(elem_list.remove(0).to_owned()))
         }
-        if path_expr_list.len() == 1 && elem_list.len() == 1 {
-            // If path_expr contains asterisks, elem_list.len() won't be 1
-            // even if path_expr_list.len() equals to 1.
-            return Ok(Some(elem_list.remove(0).to_owned()));
+    }
+}
+
+// append the elem_list vector, if the referenced json object doesn't exist
+// unlike the append in std, this function **doesn't** set the `other` length to
+// 0
+fn append_if_ref_unique<'a>(elem_list: &mut Vec<JsonRef<'a>>, other: &Vec<JsonRef<'a>>) {
+    'outer: for new_elem in other {
+        for elem in elem_list.iter() {
+            if elem.ref_eq(new_elem) {
+                continue 'outer;
+            }
         }
-        Ok(Some(Json::from_array(
-            elem_list.drain(..).map(|j| j.to_owned()).collect(),
-        )?))
+
+        elem_list.push(*new_elem)
     }
 }
 
 /// `extract_json` is used by JSON::extract().
 pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<JsonRef<'a>>> {
-    if path_legs.is_empty() {
+    if path_legs.len() == 0 {
         return Ok(vec![j]);
     }
     let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
@@ -45,18 +66,21 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
                 let elem_count = j.get_elem_count();
                 if i == PATH_EXPR_ARRAY_INDEX_ASTERISK {
                     for k in 0..elem_count {
-                        ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
+                        append_if_ref_unique(
+                            &mut ret,
+                            &extract_json(j.array_get_elem(k)?, sub_path_legs)?,
+                        )
                     }
                 } else if (i as usize) < elem_count {
-                    ret.append(&mut extract_json(
-                        j.array_get_elem(i as usize)?,
-                        sub_path_legs,
-                    )?)
+                    append_if_ref_unique(
+                        &mut ret,
+                        &extract_json(j.array_get_elem(i as usize)?, sub_path_legs)?,
+                    )
                 }
             }
             _ => {
                 if i as usize == 0 {
-                    ret.append(&mut extract_json(j, sub_path_legs)?)
+                    append_if_ref_unique(&mut ret, &extract_json(j, sub_path_legs)?)
                 }
             }
         },
@@ -65,33 +89,50 @@ pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Result<Vec<Jso
                 if key == PATH_EXPR_ASTERISK {
                     let elem_count = j.get_elem_count();
                     for i in 0..elem_count {
-                        ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
+                        append_if_ref_unique(
+                            &mut ret,
+                            &extract_json(j.object_get_val(i)?, sub_path_legs)?,
+                        )
                     }
                 } else if let Some(idx) = j.object_search_key(key.as_bytes()) {
                     let val = j.object_get_val(idx)?;
-                    ret.append(&mut extract_json(val, sub_path_legs)?)
+                    append_if_ref_unique(&mut ret, &mut extract_json(val, sub_path_legs)?)
                 }
             }
         }
         PathLeg::DoubleAsterisk => {
-            ret.append(&mut extract_json(j, sub_path_legs)?);
+            append_if_ref_unique(&mut ret, &extract_json(j, sub_path_legs)?);
             match j.get_type() {
                 JsonType::Array => {
                     let elem_count = j.get_elem_count();
                     for k in 0..elem_count {
-                        ret.append(&mut extract_json(j.array_get_elem(k)?, sub_path_legs)?)
+                        append_if_ref_unique(
+                            &mut ret,
+                            &extract_json(j.array_get_elem(k)?, path_legs)?,
+                        )
                     }
                 }
                 JsonType::Object => {
                     let elem_count = j.get_elem_count();
                     for i in 0..elem_count {
-                        ret.append(&mut extract_json(j.object_get_val(i)?, sub_path_legs)?)
+                        append_if_ref_unique(
+                            &mut ret,
+                            &extract_json(j.object_get_val(i)?, path_legs)?,
+                        )
                     }
                 }
                 _ => {}
             }
         }
     }
+    // remove all duplicated items
+    // because of the double-asterisk, the child and parent may exist in the same
+    // array and the following operation may extract the same child from its
+    // parent
+    //
+    // the mysql-server implementation compares and keep the uniquety at every
+    // insert but just deduping at last is also fine (with more memory but less
+    // time cost)
     Ok(ret)
 }
 
@@ -257,7 +298,7 @@ mod tests {
                     legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
-                Some("false"),
+                Some("[false]"),
             ),
             (
                 r#"[{"a": "a1", "b": 20.08, "c": false}, true]"#,
@@ -265,8 +306,91 @@ mod tests {
                     legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("c"))],
                     flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
                 }],
-                Some("false"),
+                Some("[false]"),
             ),
+            (
+                r#"[[0, 1], [2, 3], [4, [5, 6]]]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
+                Some("[[0, 1], 0, 1, 2, 3, 4, 5, 6]"),
+            ),
+            (
+                r#"[[0, 1], [2, 3], [4, [5, 6]]]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                },PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
+                Some("[[0, 1], 0, 1, 2, 3, 4, 5, 6, [0, 1], 0, 1, 2, 3, 4, 5, 6]"),
+            ),
+            (
+                "[1]",
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
+                Some("[1]"),
+            ),
+            (
+                r#"{"a": 1}"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::Key(String::from("a")), PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("1"),
+            ),
+            (
+                r#"{"a": 1}"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Index(0)],
+                    flags: PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
+                Some(r#"[{"a": 1}, 1]"#),
+            ),
+            (
+                r#"{"a": 1}"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0), PathLeg::Index(0), PathLeg::Index(0), PathLeg::Key(String::from("a"))],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some(r#"1"#),
+            ),
+            (
+                r#"[1, [[{"x": [{"a":{"b":{"c":42}}}]}]]]"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::DoubleAsterisk, PathLeg::Key(String::from("a")), PathLeg::Key(String::from("*"))],
+                    flags: PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK,
+                }],
+                Some(r#"[{"c": 42}]"#)
+            ),
+            (
+                r#"[{"a": [3,4]}, {"b": 2 }]"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(0), PathLeg::Key(String::from("a"))],
+                        flags: PathExpressionFlag::default(),
+                    },
+                    PathExpression {
+                        legs: vec![PathLeg::Index(1), PathLeg::Key(String::from("a"))],
+                        flags: PathExpressionFlag::default(),
+                    },
+                ],
+                Some("[[3, 4]]")
+            ),
+            (
+                r#"[{"a": [1,1,1,1]}]"#,
+                vec![
+                    PathExpression {
+                        legs: vec![PathLeg::Index(0), PathLeg::Key(String::from("a"))],
+                        flags: PathExpressionFlag::default(),
+                    }
+                ],
+                Some("[1, 1, 1, 1]")
+            )
         ];
         for (i, (js, exprs, expected)) in test_cases.drain(..).enumerate() {
             let j = js.parse();
@@ -276,11 +400,15 @@ mod tests {
                 Some(es) => {
                     let e = Json::from_str(es);
                     assert!(e.is_ok(), "#{} expect parse json ok but got {:?}", i, e);
-                    Some(e.unwrap())
+                    Some(e.unwrap().to_string())
                 }
                 None => None,
             };
-            let got = j.as_ref().extract(&exprs[..]).unwrap();
+            let got = j
+                .as_ref()
+                .extract(&exprs[..])
+                .unwrap()
+                .map(|got| got.to_string());
             assert_eq!(
                 got, expected,
                 "#{} expect {:?}, but got {:?}",
