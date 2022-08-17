@@ -246,8 +246,8 @@ impl TestWriters {
         }
     }
 
-    fn write_sender(&self, id: usize) -> &Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
-        &self.writers.senders()[id]
+    fn write_sender(&self, id: usize) -> Sender<WriteMsg<KvTestEngine, RaftTestEngine>> {
+        self.writers.senders()[id].clone()
     }
 }
 

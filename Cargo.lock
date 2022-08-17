@@ -4201,6 +4201,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raft-proto",
  "raftstore",

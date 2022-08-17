@@ -28,8 +28,8 @@ use tikv_util::Either;
 
 use crate::perf_context::RaftEnginePerfContext;
 
-// A special region ID representing global state.
-const STORE_REGION_ID: u64 = 0;
+// A special region ID representing store state.
+const STORE_STATE_ID: u64 = 0;
 
 #[derive(Clone)]
 pub struct MessageExtTyped;
@@ -377,14 +377,14 @@ impl RaftLogBatchTrait for RaftLogBatch {
 
     fn put_store_ident(&mut self, ident: &StoreIdent) -> Result<()> {
         self.0
-            .put_message(STORE_REGION_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
             .map_err(transfer_error)
     }
 
     fn put_prepare_bootstrap_region(&mut self, region: &Region) -> Result<()> {
         self.0
             .put_message(
-                STORE_REGION_ID,
+                STORE_STATE_ID,
                 PREPARE_BOOTSTRAP_REGION_KEY.to_vec(),
                 region,
             )
@@ -393,7 +393,7 @@ impl RaftLogBatchTrait for RaftLogBatch {
 
     fn remove_prepare_bootstrap_region(&mut self) -> Result<()> {
         self.0
-            .delete(STORE_REGION_ID, PREPARE_BOOTSTRAP_REGION_KEY.to_vec());
+            .delete(STORE_STATE_ID, PREPARE_BOOTSTRAP_REGION_KEY.to_vec());
         Ok(())
     }
 
@@ -451,13 +451,13 @@ impl RaftEngineReadOnly for RaftLogEngine {
 
     fn get_store_ident(&self) -> Result<Option<StoreIdent>> {
         self.0
-            .get_message(STORE_REGION_ID, STORE_IDENT_KEY)
+            .get_message(STORE_STATE_ID, STORE_IDENT_KEY)
             .map_err(transfer_error)
     }
 
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>> {
         self.0
-            .get_message(STORE_REGION_ID, PREPARE_BOOTSTRAP_REGION_KEY)
+            .get_message(STORE_STATE_ID, PREPARE_BOOTSTRAP_REGION_KEY)
             .map_err(transfer_error)
     }
 
@@ -541,7 +541,7 @@ impl RaftEngine for RaftLogEngine {
         let mut batch = Self::LogBatch::default();
         batch
             .0
-            .put_message(STORE_REGION_ID, STORE_IDENT_KEY.to_vec(), ident)
+            .put_message(STORE_STATE_ID, STORE_IDENT_KEY.to_vec(), ident)
             .map_err(transfer_error)?;
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
@@ -605,12 +605,17 @@ impl RaftEngine for RaftLogEngine {
         Ok(self.0.get_used_size() as u64)
     }
 
-    fn for_each_raft_group<E, F>(&self, _f: &mut F) -> std::result::Result<(), E>
+    fn for_each_raft_group<E, F>(&self, f: &mut F) -> std::result::Result<(), E>
     where
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<engine_traits::Error>,
     {
-        unimplemented!()
+        for id in self.0.raft_groups() {
+            if id != STORE_STATE_ID {
+                f(id)?;
+            }
+        }
+        Ok(())
     }
 }
 
