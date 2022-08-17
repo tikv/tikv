@@ -229,7 +229,7 @@ impl<'a> JsonRef<'a> {
     //
     // PartialEq and PartialCmp have been implemented for JsonRef
     // to compare the value.
-    pub(crate) fn ref_eq(&self, other: &JsonRef) -> bool {
+    pub(crate) fn ref_eq(&self, other: &JsonRef<'a>) -> bool {
         std::ptr::eq(self.value, other.value)
     }
 }
