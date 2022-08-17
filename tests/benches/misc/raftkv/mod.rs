@@ -191,7 +191,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
-        Arc::new(factory),
+        Some(Arc::new(factory)),
     );
 
     let mut ctx = Context::default();
@@ -229,7 +229,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
-        Arc::new(factory),
+        Some(Arc::new(factory)),
     );
 
     let mut ctx = Context::default();

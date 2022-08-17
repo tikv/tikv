@@ -58,8 +58,8 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         service::DebugService,
-        ConnectionBuilder, Error, KvEngineFactoryBuilder, Node, PdStoreAddrResolver, RaftClient,
-        RaftKv, Result as ServerResult, Server, ServerTransport,
+        ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
+        Result as ServerResult, Server, ServerTransport,
     },
     storage::{
         self,
@@ -292,16 +292,13 @@ impl ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
-        // todo(SpadeA): tmp code for compilation
-        let env = cfg.tikv.build_shared_rocks_env(None, None).unwrap();
-        let t = test_util::temp_dir("test_cluster1", cfg.prefer_mem);
-        let builder = KvEngineFactoryBuilder::new(env, &cfg.tikv, t.path());
-        let factory = builder.build();
-        let raft_engine = RaftKv::new(
-            sim_router.clone(),
-            engines.kv.clone(),
-            Arc::new(factory.clone()),
-        );
+        // // todo(SpadeA): tmp code for compilation
+        // let env = cfg.tikv.build_shared_rocks_env(None, None).unwrap();
+        // let tmp_path = std::env::temp_dir().join(format!("{}",
+        // rand::thread_rng().next_u64())); let builder =
+        // KvEngineFactoryBuilder::new(env, &cfg.tikv, tmp_path); let factory =
+        // builder.build();
+        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone(), None);
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
@@ -322,7 +319,7 @@ impl ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone(), Arc::new(factory));
+        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone(), None);
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }

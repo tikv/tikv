@@ -265,6 +265,7 @@ fn get_keys_in_regions(
     keys: Vec<Key>,
     regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     single_rocks: bool,
+    // region_id: Option<u64>,
 ) -> Result<Box<dyn Iterator<Item = (Key, u64)>>> {
     if keys.len() >= 2 {
         if let Some((store_id, region_info_provider)) = regions_provider {
@@ -280,8 +281,10 @@ fn get_keys_in_regions(
         }
     }
 
+    println!("Is Single {}", single_rocks);
+
     if single_rocks {
-        Ok(Box::new(vec![(keys[0].clone(), 0)].into_iter()))
+        Ok(Box::new(keys.into_iter().map(|k| (k, 0))))
     } else {
         unimplemented!()
     }

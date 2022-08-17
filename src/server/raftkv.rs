@@ -159,7 +159,7 @@ where
 {
     router: S,
     engine: E,
-    factory: Arc<dyn TabletFactory<E> + Send + Sync>,
+    factory: Option<Arc<dyn TabletFactory<E> + Send + Sync>>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
 }
 
@@ -172,7 +172,7 @@ where
     pub fn new(
         router: S,
         engine: E,
-        factory: Arc<dyn TabletFactory<E> + Send + Sync>,
+        factory: Option<Arc<dyn TabletFactory<E> + Send + Sync>>,
     ) -> RaftKv<E, S> {
         RaftKv {
             router,
@@ -320,7 +320,7 @@ where
     type Local = E;
 
     fn get_engine_version(&self) -> EngineVersion {
-        if self.factory.is_single_engine() {
+        if self.factory.is_none() || self.factory.as_ref().unwrap().is_single_engine() {
             return EngineVersion::V1;
         }
         EngineVersion::V2
@@ -331,6 +331,8 @@ where
             self.engine.clone()
         } else {
             self.factory
+                .as_ref()
+                .unwrap()
                 .open_tablet(
                     region_id.unwrap(),
                     None,
@@ -356,6 +358,8 @@ where
             self.engine.clone()
         } else {
             self.factory
+                .as_ref()
+                .unwrap()
                 .open_tablet(
                     region_id.unwrap(),
                     None,

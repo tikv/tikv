@@ -578,7 +578,7 @@ where
                 ),
             ),
             engines.kv.clone(),
-            factory,
+            Some(factory),
         );
 
         self.engines = Some(TikvEngines {
