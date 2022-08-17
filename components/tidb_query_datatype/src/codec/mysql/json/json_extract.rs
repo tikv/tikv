@@ -36,9 +36,17 @@ impl<'a> JsonRef<'a> {
 // append the elem_list vector, if the referenced json object doesn't exist
 // unlike the append in std, this function **doesn't** set the `other` length to
 // 0
+//
+// To use this function, you have to ensure both `elem_list` and `other` are
+// unique, with this assumption, we optimize the performance from O((n+m)*m) to
+// O(n*m).
 fn append_if_ref_unique<'a>(elem_list: &mut Vec<JsonRef<'a>>, other: &Vec<JsonRef<'a>>) {
+    let initial_length = elem_list.len();
+
     'outer: for new_elem in other {
-        for elem in elem_list.iter() {
+        // only need to compare with the initial part of the elem_list
+        // as the other is
+        for elem in elem_list[0..initial_length].iter() {
             if elem.ref_eq(new_elem) {
                 continue 'outer;
             }
