@@ -882,7 +882,7 @@ where
                     limit,
                 );
             }
-            GcTask::OrphanVersions { wb, id } => {
+            GcTask::OrphanVersions { mut wb, id } => {
                 info!("handling GcTask::OrphanVersions"; "id" => id);
                 let mut wopts = WriteOptions::default();
                 wopts.set_sync(true);

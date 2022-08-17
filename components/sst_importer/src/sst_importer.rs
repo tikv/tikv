@@ -15,8 +15,8 @@ use encryption::{to_engine_encryption_method, DataKeyManager};
 use engine_rocks::{get_env, RocksSstReader};
 use engine_traits::{
     name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    Iterator, KvEngine, SstCompressionType, SstExt, SstMetaInfo, SstReader, SstWriter,
-    SstWriterBuilder, CF_DEFAULT, CF_WRITE,
+    IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
+    SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
 };
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
@@ -560,7 +560,7 @@ impl SstImporter {
         let start_rename_rewrite = Instant::now();
         // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default())?;
         let direct_retval = (|| -> Result<Option<_>> {
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
                 || rewrite_rule.new_timestamp != 0
@@ -596,7 +596,6 @@ impl SstImporter {
         })()?;
 
         if let Some(range) = direct_retval {
-            file_system::rename(&path.temp, &path.save)?;
             if let Some(key_manager) = &self.key_manager {
                 let temp_str = path
                     .temp
@@ -607,7 +606,14 @@ impl SstImporter {
                     .to_str()
                     .ok_or_else(|| Error::InvalidSstPath(path.save.clone()))?;
                 key_manager.link_file(temp_str, save_str)?;
-                key_manager.delete_file(temp_str)?;
+                let r = file_system::rename(&path.temp, &path.save);
+                let del_file = if r.is_ok() { temp_str } else { save_str };
+                if let Err(e) = key_manager.delete_file(del_file) {
+                    warn!("fail to remove encryption metadata during 'do_download'"; "err" => ?e);
+                }
+                r?;
+            } else {
+                file_system::rename(&path.temp, &path.save)?;
             }
             IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["rename"])
@@ -804,7 +810,7 @@ mod tests {
 
     use engine_traits::{
         collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
+        RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
     };
     use file_system::File;
     use openssl::hash::{Hasher, MessageDigest};
@@ -1346,7 +1352,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1405,7 +1411,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1453,7 +1459,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1498,7 +1504,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1542,7 +1548,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1683,7 +1689,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1727,7 +1733,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1862,7 +1868,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1920,7 +1926,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),
@@ -1975,7 +1981,7 @@ mod tests {
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
-        let mut iter = sst_reader.iter();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
         assert_eq!(
             collect(iter),

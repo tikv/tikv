@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use kvproto::import_sstpb::SstMeta;
 
-use crate::{errors::Result, iterable::Iterable};
+use crate::{errors::Result, RefIterable};
 
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {
@@ -20,11 +20,9 @@ pub trait SstExt: Sized {
 }
 
 /// SstReader is used to read an SST file.
-pub trait SstReader: Iterable + Sized {
+pub trait SstReader: RefIterable + Sized {
     fn open(path: &str) -> Result<Self>;
     fn verify_checksum(&self) -> Result<()>;
-    // FIXME: Shouldn't this me a method on Iterable?
-    fn iter(&self) -> Self::Iterator;
 }
 
 /// SstWriter is used to create sst files that can be added to database later.

@@ -749,6 +749,7 @@ dependencies = [
  "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "raft",
  "raftstore",
  "serde",
@@ -1635,8 +1636,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76b9f5b0b4f53cf836bef05b22cd5239479700bc8d44a04c3c77f1ba6c2c73e9"
+source = "git+https://github.com/pingcap/etcd-client?rev=e0321a1990ee561cf042973666c0db61c8d82364#e0321a1990ee561cf042973666c0db61c8d82364"
 dependencies = [
  "http",
  "prost",
@@ -4210,7 +4210,6 @@ dependencies = [
  "batch-system",
  "collections",
  "crossbeam",
- "engine_rocks",
  "engine_test",
  "engine_traits",
  "error_code",
@@ -4220,6 +4219,7 @@ dependencies = [
  "kvproto",
  "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
@@ -4229,7 +4229,6 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_util",
- "tikv_kv",
  "tikv_util",
  "time",
  "txn_types",
