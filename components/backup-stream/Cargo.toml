@@ -61,7 +61,7 @@ tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["compat", "io"] } 
+tokio-util = { version = "0.7", features = ["compat"] } 
 tonic = "0.5"
 txn_types = { path = "../txn_types", default-features = false }
 uuid = "0.8"
