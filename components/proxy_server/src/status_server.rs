@@ -1,8 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-/// Provides profilers for TiKV.
-pub mod profile;
-pub mod region_meta;
 use std::{
     error::Error as StdError,
     marker::PhantomData,
@@ -43,6 +40,19 @@ use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
 use security::{self, SecurityConfig};
 use serde_json::Value;
+use tikv::{
+    config::{log_level_serde, ConfigController},
+    server::{
+        status_server::{
+            profile::{
+                activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile,
+                list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
+            },
+            region_meta,
+        },
+        Result,
+    },
+};
 use tikv_util::{logger::set_log_level, metrics::dump, timer::GLOBAL_TIMER_HANDLE};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -50,15 +60,6 @@ use tokio::{
     sync::oneshot::{self, Receiver, Sender},
 };
 use tokio_openssl::SslStream;
-
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
-};
-use crate::{
-    config::{log_level_serde, ConfigController},
-    server::Result,
-};
 
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
@@ -146,7 +147,7 @@ where
             .enable_all()
             .worker_threads(status_thread_pool_size)
             .thread_name("status-server")
-            .on_thread_start(|| debug!("Status server started"))
+            .on_thread_start(|| debug!("Proxy's Status server started"))
             .on_thread_stop(|| debug!("stopping status server"))
             .build()?;
 

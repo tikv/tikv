@@ -82,7 +82,6 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
-        status_server::StatusServer,
         ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
         GRPC_THREAD_PREFIX,
@@ -106,7 +105,7 @@ use tokio::runtime::Builder;
 
 use crate::{
     config::ProxyConfig, fatal, hacked_lock_mgr::HackedLockManager as LockManager, setup::*,
-    util::ffi_server_info,
+    status_server::StatusServer, util::ffi_server_info,
 };
 
 #[inline]

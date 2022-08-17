@@ -1,6 +1,15 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+#![recursion_limit = "256"]
 
 extern crate slog_global;
+
+// For status server
+#[macro_use(fail_point)]
+extern crate fail;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate serde_derive;
 
 #[macro_use]
 extern crate tikv_util;
@@ -11,6 +20,7 @@ pub mod hacked_lock_mgr;
 pub mod proxy;
 pub mod run;
 pub mod setup;
+pub mod status_server;
 pub mod util;
 
 pub use server::fatal;
