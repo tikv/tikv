@@ -439,13 +439,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .get(priority_tag)
             .inc();
 
-        let cmd_ctx = cmd.ctx().clone();
         let mut task_slot = self.inner.get_task_slot(cid);
         let tctx = task_slot.entry(cid).or_insert_with(|| {
             self.inner
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
-        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -454,6 +453,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.execute(task);
             return;
         }
+        let task = tctx.task.as_ref().unwrap();
+        let deadline = task.cmd.deadline();
+        let cmd_ctx = task.cmd.ctx().clone();
         self.fail_fast_or_check_deadline(cid, tag, cmd_ctx, deadline);
         fail_point!("txn_scheduler_acquire_fail");
     }
