@@ -211,7 +211,6 @@ fn setup_default_cluster() -> (TestNode, Receiver<RaftMessage>, TestRouter) {
     let mut node = TestNode::new();
     let mut cfg = v2_default_config();
     disable_all_auto_ticks(&mut cfg);
-    cfg.store_io_pool_size = 1;
     let (tx, rx) = new_test_transport();
     let router = node.start(Arc::new(VersionTrack::new(cfg)), tx);
     (node, rx, router)
