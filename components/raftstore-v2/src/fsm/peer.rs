@@ -187,8 +187,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
-                PeerMsg::ReadCommand(_) => unimplemented!(),
-                PeerMsg::WriteCommand(_) => unimplemented!(),
+                PeerMsg::RaftQuery(_) => unimplemented!(),
+                PeerMsg::RaftCommand(_) => unimplemented!(),
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => unimplemented!(),
                 PeerMsg::Start => self.on_start(),

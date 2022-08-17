@@ -5,6 +5,9 @@ mod internal_message;
 mod message;
 mod response_channel;
 
-pub use internal_message::ApplyRes;
-pub(crate) use internal_message::ApplyTask;
-pub use message::{PeerMsg, PeerTick, StoreMsg, StoreTick};
+pub(crate) use self::internal_message::ApplyTask;
+pub use self::{
+    internal_message::ApplyRes,
+    message::{PeerMsg, PeerTick, RaftCommand, RaftQuery, RaftRequest, StoreMsg, StoreTick},
+    response_channel::{CmdResChannel, QueryResult, QueryResChannel},
+};

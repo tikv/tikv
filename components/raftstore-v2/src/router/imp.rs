@@ -3,7 +3,8 @@
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::store::{FetchedLogs, LogFetchedNotifier};
 
-use crate::{batch::StoreRouter, PeerMsg};
+use super::PeerMsg;
+use crate::batch::StoreRouter;
 
 impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for StoreRouter<EK, ER> {
     fn notify(&self, region_id: u64, fetched: FetchedLogs) {

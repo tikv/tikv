@@ -198,14 +198,14 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
     }
 }
 
-pub struct WriteSubscriber {
+pub struct CommandResultSubscriber {
     core: Arc<EventCore<RaftCmdResponse>>,
 }
 
-impl WriteSubscriber {
+impl CommandResultSubscriber {
     pub async fn wait_proposed(&mut self) -> bool {
         WaitEvent {
-            event: WriteChannel::PROPOSED_EVENT,
+            event: CmdResChannel::PROPOSED_EVENT,
             core: &self.core,
         }
         .await
@@ -213,31 +213,31 @@ impl WriteSubscriber {
 
     pub async fn wait_committed(&mut self) -> bool {
         WaitEvent {
-            event: WriteChannel::COMMITTED_EVENT,
+            event: CmdResChannel::COMMITTED_EVENT,
             core: &self.core,
         }
         .await
     }
 
-    pub async fn result(&mut self) -> Option<RaftCmdResponse> {
+    pub async fn result(mut self) -> Option<RaftCmdResponse> {
         WaitResult { core: &self.core }.await
     }
 }
 
-unsafe impl Send for WriteSubscriber {}
-unsafe impl Sync for WriteSubscriber {}
+unsafe impl Send for CommandResultSubscriber {}
+unsafe impl Sync for CommandResultSubscriber {}
 
-pub struct WriteChannel {
+pub struct CmdResChannel {
     core: ManuallyDrop<Arc<EventCore<RaftCmdResponse>>>,
 }
 
-impl WriteChannel {
+impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
 
     #[inline]
-    pub fn pair() -> (Self, WriteSubscriber) {
+    pub fn pair() -> (Self, CommandResultSubscriber) {
         let core = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
@@ -247,12 +247,12 @@ impl WriteChannel {
             Self {
                 core: ManuallyDrop::new(core.clone()),
             },
-            WriteSubscriber { core },
+            CommandResultSubscriber { core },
         )
     }
 }
 
-impl ErrorCallback for WriteChannel {
+impl ErrorCallback for CmdResChannel {
     fn report_error(self, err: RaftCmdResponse) {
         self.set_result(err);
     }
@@ -262,7 +262,7 @@ impl ErrorCallback for WriteChannel {
     }
 }
 
-impl WriteCallback for WriteChannel {
+impl WriteCallback for CmdResChannel {
     type Response = RaftCmdResponse;
 
     /// Called after a request is proposed to the raft group successfully. It's
@@ -299,7 +299,7 @@ impl WriteCallback for WriteChannel {
     }
 }
 
-impl Drop for WriteChannel {
+impl Drop for CmdResChannel {
     #[inline]
     fn drop(&mut self) {
         self.core.cancel();
@@ -309,8 +309,8 @@ impl Drop for WriteChannel {
     }
 }
 
-unsafe impl Send for WriteChannel {}
-unsafe impl Sync for WriteChannel {}
+unsafe impl Send for CmdResChannel {}
+unsafe impl Sync for CmdResChannel {}
 
 /// Response for Read.
 ///
@@ -321,14 +321,39 @@ pub struct ReadResponse {
     pub txn_extra_op: TxnExtraOp,
 }
 
-pub type ReadResult = Result<ReadResponse, RaftCmdResponse>;
-
-pub struct ReadChannel {
-    core: ManuallyDrop<Arc<EventCore<ReadResult>>>,
+/// Possible result of a raft query.
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueryResult {
+    /// If it's a read like get or snapshot, `ReadResponse` is returned on
+    /// success.
+    Read(ReadResponse),
+    /// If it's a status query, `RaftCmdResponse` is returned. If it's a read
+    /// like query, `RaftCmdResponse` is returned on error.
+    Response(RaftCmdResponse),
 }
 
-impl ReadChannel {
-    pub fn pair() -> (Self, ReadSubscriber) {
+impl QueryResult {
+    pub fn read(&self) -> Option<&ReadResponse> {
+        match self {
+            QueryResult::Read(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn response(&self) -> Option<&RaftCmdResponse> {
+        match self {
+            QueryResult::Response(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+pub struct QueryResChannel {
+    core: ManuallyDrop<Arc<EventCore<QueryResult>>>,
+}
+
+impl QueryResChannel {
+    pub fn pair() -> (Self, QueryResSubscriber) {
         let core = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
@@ -338,15 +363,15 @@ impl ReadChannel {
             Self {
                 core: ManuallyDrop::new(core.clone()),
             },
-            ReadSubscriber { core },
+            QueryResSubscriber { core },
         )
     }
 }
 
-impl ErrorCallback for ReadChannel {
+impl ErrorCallback for QueryResChannel {
     #[inline]
     fn report_error(self, err: RaftCmdResponse) {
-        self.set_result(Err(err));
+        self.set_result(QueryResult::Response(err));
     }
 
     #[inline]
@@ -355,11 +380,11 @@ impl ErrorCallback for ReadChannel {
     }
 }
 
-impl ReadCallback for ReadChannel {
-    type Response = ReadResult;
+impl ReadCallback for QueryResChannel {
+    type Response = QueryResult;
 
     #[inline]
-    fn set_result(mut self, res: ReadResult) {
+    fn set_result(mut self, res: QueryResult) {
         self.core.set_result(res);
         unsafe {
             ManuallyDrop::drop(&mut self.core);
@@ -368,7 +393,7 @@ impl ReadCallback for ReadChannel {
     }
 }
 
-impl Drop for ReadChannel {
+impl Drop for QueryResChannel {
     #[inline]
     fn drop(&mut self) {
         self.core.cancel();
@@ -378,21 +403,21 @@ impl Drop for ReadChannel {
     }
 }
 
-unsafe impl Send for ReadChannel {}
-unsafe impl Sync for ReadChannel {}
+unsafe impl Send for QueryResChannel {}
+unsafe impl Sync for QueryResChannel {}
 
-pub struct ReadSubscriber {
-    core: Arc<EventCore<ReadResult>>,
+pub struct QueryResSubscriber {
+    core: Arc<EventCore<QueryResult>>,
 }
 
-impl ReadSubscriber {
-    pub async fn result(&mut self) -> Option<ReadResult> {
+impl QueryResSubscriber {
+    pub async fn result(mut self) -> Option<QueryResult> {
         WaitResult { core: &self.core }.await
     }
 }
 
-unsafe impl Send for ReadSubscriber {}
-unsafe impl Sync for ReadSubscriber {}
+unsafe impl Send for QueryResSubscriber {}
+unsafe impl Sync for QueryResSubscriber {}
 
 #[cfg(test)]
 mod tests {
@@ -403,13 +428,13 @@ mod tests {
 
     #[test]
     fn test_cancel() {
-        let (mut chan, mut sub) = WriteChannel::pair();
+        let (mut chan, mut sub) = CmdResChannel::pair();
         drop(chan);
         assert!(!block_on(sub.wait_proposed()));
         assert!(!block_on(sub.wait_committed()));
         assert!(block_on(sub.result()).is_none());
 
-        let (mut chan, mut sub) = WriteChannel::pair();
+        let (mut chan, mut sub) = CmdResChannel::pair();
         chan.notify_proposed();
         let mut result = RaftCmdResponse::default();
         result.mut_header().set_current_term(4);
@@ -418,14 +443,14 @@ mod tests {
         assert!(!block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result));
 
-        let (mut chan, mut sub) = ReadChannel::pair();
+        let (mut chan, mut sub) = QueryResChannel::pair();
         drop(chan);
         assert!(block_on(sub.result()).is_none());
     }
 
     #[test]
     fn test_channel() {
-        let (mut chan, mut sub) = WriteChannel::pair();
+        let (mut chan, mut sub) = CmdResChannel::pair();
         chan.notify_proposed();
         chan.notify_committed();
         let mut result = RaftCmdResponse::default();
@@ -435,15 +460,16 @@ mod tests {
         assert!(block_on(sub.wait_committed()));
         assert_eq!(block_on(sub.result()), Some(result.clone()));
 
-        let (mut chan, mut sub) = ReadChannel::pair();
-        chan.set_result(Err(result.clone()));
-        assert_eq!(block_on(sub.result()).unwrap(), Err(result));
+        let (mut chan, mut sub) = QueryResChannel::pair();
+        let resp = QueryResult::Response(result.clone());
+        chan.set_result(resp.clone());
+        assert_eq!(block_on(sub.result()).unwrap(), resp);
 
-        let (mut chan, mut sub) = ReadChannel::pair();
-        let resp = ReadResponse {
+        let (mut chan, mut sub) = QueryResChannel::pair();
+        let read = QueryResult::Read(ReadResponse {
             txn_extra_op: TxnExtraOp::ReadOldValue,
-        };
-        chan.set_result(Ok(resp.clone()));
-        assert_eq!(block_on(sub.result()).unwrap(), Ok(resp));
+        });
+        chan.set_result(read.clone());
+        assert_eq!(block_on(sub.result()).unwrap(), read);
     }
 }

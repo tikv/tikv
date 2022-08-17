@@ -15,7 +15,7 @@ use raftstore::store::{
 use tikv_util::time::Instant;
 
 use super::{
-    response_channel::{ReadChannel, WriteChannel},
+    response_channel::{CmdResChannel, QueryResChannel},
     ApplyRes,
 };
 
@@ -95,45 +95,49 @@ impl StoreTick {
 }
 
 /// Command that can be handled by raftstore.
-pub struct RaftCommand {
+pub struct RaftRequest {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
 }
 
-impl RaftCommand {
+impl RaftRequest {
     pub fn new(request: RaftCmdRequest) -> Self {
-        RaftCommand {
+        RaftRequest {
             send_time: Instant::now(),
             request,
         }
     }
 }
 
-pub struct ReadCommand {
-    pub cmd: RaftCommand,
-    pub ch: ReadChannel,
+/// A query that won't change any state. So it doesn't have to be replicated to
+/// all replicas.
+pub struct RaftQuery {
+    pub req: RaftRequest,
+    pub ch: QueryResChannel,
 }
 
-impl ReadCommand {
+impl RaftQuery {
     #[inline]
-    pub fn new(request: RaftCmdRequest, ch: ReadChannel) -> Self {
+    pub fn new(request: RaftCmdRequest, ch: QueryResChannel) -> Self {
         Self {
-            cmd: RaftCommand::new(request),
+            req: RaftRequest::new(request),
             ch,
         }
     }
 }
 
-pub struct WriteCommand {
-    pub cmd: RaftCommand,
-    pub ch: WriteChannel,
+/// Commands that change the inernal states. It will be transformed into logs
+/// and reach consensus in the raft group.
+pub struct RaftCommand {
+    pub cmd: RaftRequest,
+    pub ch: CmdResChannel,
 }
 
-impl WriteCommand {
+impl RaftCommand {
     #[inline]
-    pub fn new(request: RaftCmdRequest, ch: WriteChannel) -> Self {
+    pub fn new(request: RaftCmdRequest, ch: CmdResChannel) -> Self {
         Self {
-            cmd: RaftCommand::new(request),
+            cmd: RaftRequest::new(request),
             ch,
         }
     }
@@ -147,10 +151,10 @@ pub enum PeerMsg {
     RaftMessage(InspectedRaftMessage),
     /// Read command only involves read operations, they are usually processed
     /// using lease or read index.
-    ReadCommand(ReadCommand),
-    /// Write command needs to be processed by all peers in a raft group. They
-    /// will be transformed into logs and be proposed by the leader peer.
-    WriteCommand(WriteCommand),
+    RaftQuery(RaftQuery),
+    /// Proposal needs to be processed by all peers in a raft group. They will
+    /// be transformed into logs and be proposed by the leader peer.
+    RaftCommand(RaftCommand),
     /// Tick is periodical task. If target peer doesn't exist there is a
     /// potential that the raft node will not work anymore.
     Tick(PeerTick),
@@ -172,8 +176,8 @@ impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            PeerMsg::ReadCommand(_) => write!(fmt, "Read Command"),
-            PeerMsg::WriteCommand(_) => write!(fmt, "Write Command"),
+            PeerMsg::RaftQuery(_) => write!(fmt, "Raft Query"),
+            PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
                 "{:?}",
