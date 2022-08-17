@@ -87,6 +87,7 @@ use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::SnapshotExt;
 use tikv_util::{
+    deadline::Deadline,
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, Instant, ThreadReadId},
 };
@@ -1448,10 +1449,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     // Schedule raw modify commands, which reuse the txn scheduler.
     // TODO: seperate the txn and raw commands if needed in the future.
-    fn sched_raw_command<T>(&self, future: T) -> Result<()>
+    fn sched_raw_command<T>(&self, tag: CommandKind, future: T) -> Result<()>
     where
         T: Future + Send + 'static,
     {
+        SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         if self
             .sched
             .get_sched_pool(CommandPri::Normal)
@@ -1462,6 +1464,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             return Err(Error::from(ErrorInner::SchedTooBusy));
         }
         Ok(())
+    }
+
+    fn get_deadline(ctx: &Context) -> Deadline {
+        let execution_duration_limit = if ctx.max_execution_duration_ms == 0 {
+            crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT
+        } else {
+            ::std::time::Duration::from_millis(ctx.max_execution_duration_ms)
+        };
+        Deadline::from_now(execution_duration_limit)
     }
 
     /// Delete all keys in the range [`start_key`, `end_key`).
@@ -1835,10 +1846,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
+        let deadline = Self::get_deadline(&ctx);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let engine = self.engine.clone();
-        let (cb, f) = tikv_util::future::paired_future_callback();
-        self.sched_raw_command(async move {
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(ttl),
@@ -1852,6 +1867,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
+            let (cb, f) = tikv_util::future::paired_future_callback();
             let async_ret =
                 engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
             let v: Result<()> = match async_ret {
@@ -1860,6 +1876,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             callback(v);
             KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
         })
     }
 
@@ -1906,10 +1926,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_batch_put;
         Self::check_api_version(
             self.api_version,
             ctx.api_version,
-            CommandKind::raw_batch_put,
+            CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
@@ -1923,12 +1944,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
         let engine = self.engine.clone();
-        let (cb, f) = tikv_util::future::paired_future_callback();
-        self.sched_raw_command(async move {
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls);
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-
+            let (cb, f) = tikv_util::future::paired_future_callback();
             let async_ret =
                 engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
             let v: Result<()> = match async_ret {
@@ -1937,6 +1962,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             callback(v);
             KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
         })
     }
 
@@ -1958,22 +1987,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_delete,
-            [&key],
-        )?;
+        const CMD: CommandKind = CommandKind::raw_delete;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let engine = self.engine.clone();
-        let (cb, f) = tikv_util::future::paired_future_callback();
-        self.sched_raw_command(async move {
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
             let m = Self::raw_delete_request_to_modify(cf, key);
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
-
+            let (cb, f) = tikv_util::future::paired_future_callback();
             let async_ret =
                 engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
             let v: Result<()> = match async_ret {
@@ -1982,6 +2011,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             callback(v);
             KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
         })
     }
 
@@ -1997,18 +2030,23 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_delete_range;
         check_key_size!([&start_key, &end_key], self.max_key_size, callback);
         Self::check_api_version_ranges(
             self.api_version,
             ctx.api_version,
-            CommandKind::raw_delete_range,
+            CMD,
             [(Some(&start_key), Some(&end_key))],
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let engine = self.engine.clone();
-        let (cb, f) = tikv_util::future::paired_future_callback();
-        self.sched_raw_command(async move {
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
             let start_key = F::encode_raw_key_owned(start_key, None);
             let end_key = F::encode_raw_key_owned(end_key, None);
 
@@ -2017,7 +2055,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             batch.set_allowed_on_disk_almost_full();
 
             // TODO: special notification channel for API V2.
-
+            let (cb, f) = tikv_util::future::paired_future_callback();
             let async_ret =
                 engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
             let v: Result<()> = match async_ret {
@@ -2026,6 +2064,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             callback(v);
             KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
         })
     }
 
@@ -2039,25 +2081,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_batch_delete,
-            &keys,
-        )?;
+        const CMD: CommandKind = CommandKind::raw_batch_delete;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
         let engine = self.engine.clone();
-        let (cb, f) = tikv_util::future::paired_future_callback();
-        self.sched_raw_command(async move {
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
             let modifies = keys
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k))
                 .collect();
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
-
+            let (cb, f) = tikv_util::future::paired_future_callback();
             let async_ret =
                 engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
             let v: Result<()> = match async_ret {
@@ -2066,6 +2108,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             callback(v);
             KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
         })
     }
 
