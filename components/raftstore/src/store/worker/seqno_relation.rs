@@ -4,7 +4,7 @@ use std::{fmt, sync::atomic::Ordering};
 
 use collections::{HashMap, HashMapEntry};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, Snapshot};
-use kvproto::raft_serverpb::{RaftApplyState, RegionLocalState, RegionSequenceNumberRelation};
+use kvproto::raft_serverpb::{RaftApplyState, RegionSequenceNumberRelation};
 use tikv_util::{
     info,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
@@ -45,7 +45,7 @@ struct SeqnoRelation {
     region_id: u64,
     seqno: SequenceNumber,
     apply_state: RaftApplyState,
-    region_local_state: Option<RegionLocalState>,
+    // region_local_state: Option<RegionLocalState>,
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
@@ -79,7 +79,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_id: res.region_id,
                     seqno: *seqno,
                     apply_state: res.apply_state.clone(),
-                    region_local_state: res.region_local_state.clone(),
                 };
                 let relations = match seqno.number.cmp(&self.last_flushed_seqno) {
                     Ordering::Less | Ordering::Equal => &mut sync_relations,

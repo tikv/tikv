@@ -625,22 +625,6 @@ where
             delegate.write_apply_state(self.kv_wb_mut());
         }
         self.commit_opt(delegate, false);
-        // TODO: keep region local state in memory.
-        let region_local_state = if !results.is_empty() {
-            let region_state_key = keys::region_state_key(delegate.region_id());
-            let state = match self.engine.get_msg_cf(CF_RAFT, &region_state_key) {
-                Ok(Some(s)) => s,
-                e => panic!(
-                    "{} failed to get regions state of {:?}: {:?}",
-                    self.tag,
-                    delegate.region_id(),
-                    e
-                ),
-            };
-            Some(state)
-        } else {
-            None
-        };
         self.apply_res.push(Box::new(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
@@ -649,7 +633,6 @@ where
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
             bucket_stat: delegate.buckets.clone(),
-            region_local_state,
         }));
         if !self.kv_wb().is_empty() {
             // Pending writes not flushed, need to set seqno to following ApplyRes later after flushing
@@ -3358,7 +3341,6 @@ where
     // write_senqo should be a vector because there may be multiple `commit` before a ApplyRes created.
     // See more details in the comment of `prepare_for`.
     pub write_seqno: Vec<SequenceNumber>,
-    pub region_local_state: Option<RegionLocalState>,
 }
 
 #[derive(Debug)]
