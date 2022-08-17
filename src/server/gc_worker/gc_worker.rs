@@ -261,12 +261,17 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
     }
 }
 
+// Two cases:
+// 1. regions_provider not None: Keys can be located in different regions
+// 2. region_id not None: It means all keys belong to the same region
+// Exactly one of them can be None.
 fn get_keys_in_regions(
     keys: Vec<Key>,
     regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     single_rocks: bool,
-    // region_id: Option<u64>,
+    region_id: Option<u64>,
 ) -> Result<Box<dyn Iterator<Item = (Key, u64)>>> {
+    assert!(region_id.is_some() || regions_provider.is_some());
     if keys.len() >= 2 {
         if let Some((store_id, region_info_provider)) = regions_provider {
             let start = keys.first().unwrap().as_encoded();
@@ -281,12 +286,21 @@ fn get_keys_in_regions(
         }
     }
 
-    println!("Is Single {}", single_rocks);
-
     if single_rocks {
         Ok(Box::new(keys.into_iter().map(|k| (k, 0))))
+    } else if let Some(region_id) = region_id {
+        Ok(Box::new(keys.into_iter().map(move |k| (k, region_id))))
     } else {
-        unimplemented!()
+        // In this case, keys.len() == 1
+        let key = keys.first().unwrap().as_encoded();
+        let (store_id, region_info_provider) = regions_provider.unwrap();
+        let regions = box_try!(region_info_provider.get_regions_in_range(key, key))
+            .into_iter()
+            .filter(move |r| find_peer(r, store_id).is_some())
+            .peekable();
+
+        let keys = keys.into_iter().peekable();
+        Ok(Box::new(KeysInRegions { keys, regions }))
     }
 }
 
@@ -402,7 +416,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(keys, safe_point, None)?;
+            self.gc_keys(keys, safe_point, None, Some(region_id))?;
         }
 
         self.stats.add(&reader.statistics);
@@ -420,6 +434,7 @@ where
         keys: Vec<Key>,
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+        region_id: Option<u64>,
     ) -> Result<(usize, usize)> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone().into_encoded();
@@ -434,7 +449,7 @@ where
         };
 
         let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
-        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks)?;
+        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks, region_id)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -539,7 +554,7 @@ where
         };
 
         let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
-        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks)?;
+        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks, None)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -884,7 +899,12 @@ where
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
-                match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
+                match self.gc_keys(
+                    keys,
+                    safe_point,
+                    Some((store_id, region_info_provider)),
+                    None,
+                ) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
@@ -1887,7 +1907,12 @@ mod tests {
         assert_eq!(runner.stats.write.seek, 0);
         assert_eq!(runner.stats.write.next, 0);
         runner
-            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .gc_keys(
+                keys,
+                TimeStamp::new(200),
+                Some((1, Arc::new(ri_provider))),
+                None,
+            )
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
@@ -2042,6 +2067,7 @@ mod tests {
                 vec![Key::from_raw(b"k2\x00")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
+                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 20);
@@ -2054,6 +2080,7 @@ mod tests {
                 vec![Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
+                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2066,6 +2093,7 @@ mod tests {
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
+                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2094,6 +2122,7 @@ mod tests {
                 vec![Key::from_raw(b"k2")],
                 safepoint.into(),
                 Some((1, ri_provider)),
+                None,
             )
             .unwrap();
         // The first batch will leave tombstones that will be seen while processing the
