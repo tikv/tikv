@@ -181,8 +181,10 @@ where
     M: FnMut(&mut RequestMetrics) -> &mut u64,
 {
     fn drop(&mut self) {
-        GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
-            *(self.field)(&mut tracker.metrics) += self.value;
-        });
+        if self.value > 0 {
+            GLOBAL_TRACKERS.with_tracker(self.token, |tracker| {
+                *(self.field)(&mut tracker.metrics) += self.value;
+            });
+        }
     }
 }

@@ -814,7 +814,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 })
             }
         };
-        let process_duration = begin_instant.saturating_elapsed();
+        let process_end = Instant::now();
+        let process_duration = process_end.saturating_duration_since(begin_instant);
         SCHED_PROCESSING_READ_HISTOGRAM_STATIC
             .get(tag)
             .observe(process_duration.as_secs_f64());
@@ -835,7 +836,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let mut total_throttle_duration =
             TrackGuard::new(tracker, |m| &mut m.scheduler_throttle_nanos);
         if !quota_delay.is_zero() {
-            total_throttle_duration.value += quota_delay.as_nanos() as u64;
+            let actual_quota_delay = process_end.saturating_elapsed();
+            total_throttle_duration.value += actual_quota_delay.as_nanos() as u64;
             TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
                 .get(tag)
                 .inc_by(quota_delay.as_micros() as u64);
