@@ -9,19 +9,58 @@ use std::{
 use itertools::Itertools;
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
+use serde_with::with_prefix;
 use tikv::config::TiKvConfig;
 use tikv_util::crit;
 
 use crate::fatal;
 
+with_prefix!(prefix_apply "apply-");
+with_prefix!(prefix_store "store-");
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct RaftstoreConfig {
+    pub snap_handle_pool_size: usize,
+}
+
+impl Default for RaftstoreConfig {
+    fn default() -> Self {
+        RaftstoreConfig {
+            snap_handle_pool_size: 2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct ServerConfig {
+    pub engine_addr: String,
+    pub engine_store_version: String,
+    pub engine_store_git_hash: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        ServerConfig {
+            engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
+            engine_store_version: String::default(),
+            engine_store_git_hash: String::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ProxyConfig {
-    pub snap_handle_pool_size: usize,
-    pub engine_addr: String,
-    pub engine_store_version: String,
-    pub engine_store_git_hash: String,
+    #[online_config(submodule)]
+    pub server: ServerConfig,
+
+    #[online_config(submodule)]
+    #[serde(rename = "raftstore")]
+    pub raft_store: RaftstoreConfig,
 }
 
 pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
@@ -33,10 +72,8 @@ pub const DEFAULT_ENGINE_ADDR: &str = if cfg!(feature = "failpoints") {
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
-            snap_handle_pool_size: 2,
-            engine_addr: DEFAULT_ENGINE_ADDR.to_string(),
-            engine_store_version: String::default(),
-            engine_store_git_hash: String::default(),
+            raft_store: RaftstoreConfig::default(),
+            server: ServerConfig::default(),
         }
     }
 }

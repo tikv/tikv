@@ -522,6 +522,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         // Initialize and check config
         let cfg_controller = Self::init_config(config);
+        info!("using proxy config"; "config" => ?proxy_config);
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
@@ -1081,11 +1082,11 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let health_service = HealthService::default();
         let mut default_store = kvproto::metapb::Store::default();
 
-        if !self.proxy_config.engine_store_version.is_empty() {
-            default_store.set_version(self.proxy_config.engine_store_version.clone());
+        if !self.proxy_config.server.engine_store_version.is_empty() {
+            default_store.set_version(self.proxy_config.server.engine_store_version.clone());
         }
-        if !self.proxy_config.engine_store_git_hash.is_empty() {
-            default_store.set_git_hash(self.proxy_config.engine_store_git_hash.clone());
+        if !self.proxy_config.server.engine_store_git_hash.is_empty() {
+            default_store.set_git_hash(self.proxy_config.server.engine_store_git_hash.clone());
         }
         // addr -> store.peer_address
         if self.config.server.advertise_addr.is_empty() {
@@ -1094,8 +1095,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             default_store.set_peer_address(self.config.server.advertise_addr.clone())
         }
         // engine_addr -> store.addr
-        if !self.proxy_config.engine_addr.is_empty() {
-            default_store.set_address(self.proxy_config.engine_addr.clone());
+        if !self.proxy_config.server.engine_addr.is_empty() {
+            default_store.set_address(self.proxy_config.server.engine_addr.clone());
         } else {
             panic!("engine address is empty");
         }
@@ -1213,7 +1214,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             node.id(),
             self.engines.as_ref().unwrap().engines.kv.clone(),
             importer.clone(),
-            self.proxy_config.snap_handle_pool_size,
+            self.proxy_config.raft_store.snap_handle_pool_size,
         );
         tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 

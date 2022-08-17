@@ -61,7 +61,7 @@ use crate::proxy::*;
 #[test]
 fn test_config() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
-    let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+    let text = "memory-usage-high-water=0.65\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
     write!(file, "{}", text).unwrap();
     let path = file.path();
 
@@ -76,7 +76,11 @@ fn test_config() {
 
     let mut proxy_unrecognized_keys = Vec::new();
     let proxy_config = ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
-    assert_eq!(proxy_config.snap_handle_pool_size, 4);
+    assert_eq!(proxy_config.raft_store.snap_handle_pool_size, 4);
+    assert_eq!(proxy_config.server.engine_addr, "1.2.3.4:5");
+    assert!(proxy_unrecognized_keys.contains(&"rocksdb".to_string()));
+    assert!(proxy_unrecognized_keys.contains(&"memory-usage-high-water".to_string()));
+    assert!(proxy_unrecognized_keys.contains(&"nosense".to_string()));
     let v1 = vec!["a.b", "b"]
         .iter()
         .map(|e| String::from(*e))
@@ -97,16 +101,16 @@ fn test_config() {
 
     // Will not override ProxyConfig
     let proxy_config_new = ProxyConfig::from_file(path, None).unwrap();
-    assert_eq!(proxy_config_new.snap_handle_pool_size, 4);
+    assert_eq!(proxy_config_new.raft_store.snap_handle_pool_size, 4);
 }
 
 #[test]
-fn test_config_addr() {
+fn test_config_default_addr() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
     let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
     write!(file, "{}", text).unwrap();
     let path = file.path();
-    let mut args: Vec<&str> = vec![];
+    let args: Vec<&str> = vec![];
     let matches = App::new("RaftStore Proxy")
         .arg(
             Arg::with_name("config")

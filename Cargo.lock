@@ -4146,6 +4146,7 @@ dependencies = [
  "serde_derive",
  "serde_ignored",
  "serde_json",
+ "serde_with",
  "server",
  "signal",
  "slog",

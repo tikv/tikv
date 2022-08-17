@@ -292,6 +292,7 @@ pub unsafe fn run_proxy(
                 })
             });
     check_engine_label(&matches);
+    // Replace config from `match` from TiFlash's side.
     overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
     config.logger_compatible_adjust();
 

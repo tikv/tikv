@@ -52,21 +52,21 @@ pub fn overwrite_config_with_cmd_args(
     }
 
     if let Some(engine_store_version) = matches.value_of("engine-version") {
-        proxy_config.engine_store_version = engine_store_version.to_owned();
+        proxy_config.server.engine_store_version = engine_store_version.to_owned();
     }
 
     if let Some(engine_store_git_hash) = matches.value_of("engine-git-hash") {
-        proxy_config.engine_store_git_hash = engine_store_git_hash.to_owned();
+        proxy_config.server.engine_store_git_hash = engine_store_git_hash.to_owned();
     }
 
-    if proxy_config.engine_addr.is_empty() {
+    if proxy_config.server.engine_addr.is_empty() {
         if let Some(engine_addr) = matches.value_of("engine-addr") {
-            proxy_config.engine_addr = engine_addr.to_owned();
+            proxy_config.server.engine_addr = engine_addr.to_owned();
         }
     }
 
     if let Some(engine_addr) = matches.value_of("advertise-engine-addr") {
-        proxy_config.engine_addr = engine_addr.to_owned();
+        proxy_config.server.engine_addr = engine_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {

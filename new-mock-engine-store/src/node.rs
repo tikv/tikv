@@ -300,7 +300,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             node_id,
             engines.kv.clone(),
             importer.clone(),
-            cfg.proxy_cfg.snap_handle_pool_size,
+            cfg.proxy_cfg.raft_store.snap_handle_pool_size,
         );
         tiflash_ob.register_to(&mut coprocessor_host);
 

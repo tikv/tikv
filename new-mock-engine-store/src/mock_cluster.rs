@@ -283,7 +283,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
 
         engines.kv.init(
             helper_ptr,
-            self.cfg.proxy_cfg.snap_handle_pool_size,
+            self.cfg.proxy_cfg.raft_store.snap_handle_pool_size,
             Some(ffi_hub),
         );
 
