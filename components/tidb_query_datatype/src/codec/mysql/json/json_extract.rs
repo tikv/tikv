@@ -2,11 +2,7 @@
 
 use super::{
     super::Result,
-    path_expr::{
-        PathExpression, PathLeg, PATH_EXPRESSION_CONTAINS_ASTERISK,
-        PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK, PATH_EXPR_ARRAY_INDEX_ASTERISK,
-        PATH_EXPR_ASTERISK,
-    },
+    path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK},
     Json, JsonRef, JsonType,
 };
 
