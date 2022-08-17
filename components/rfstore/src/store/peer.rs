@@ -1418,10 +1418,18 @@ impl Peer {
             if new_meta.id == self.region_id {
                 ctx.raft_wb
                     .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
-                let store = self.mut_store();
                 // The raft state key changed when region version change, we need to set it here.
-                store.write_raft_state(ctx, new_region.get_region_epoch().get_version());
+                // We handle committed entries before update peer storage's raft state, so the peer
+                // storage's raft state may not be update to date, we set the hard state of raft.
+                // This is the final raft state of the old version.
+                let hard_state = self.raft_group.raft.hard_state();
+                let store = self.mut_store();
+                store.raft_state.set_hard_state(&hard_state);
+                store.write_raft_state(ctx);
                 store.shard_meta = Some(new_meta.clone());
+                // PeerStore use the shard meta's version to persist raft state, since the
+                // shard_meta has updated, we also need to set the new version's raft state.
+                store.write_raft_state(ctx);
                 store.initial_flushed = false;
                 self.preprocessed_region = Some(new_region.clone());
             } else {

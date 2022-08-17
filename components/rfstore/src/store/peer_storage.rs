@@ -416,7 +416,7 @@ impl PeerStorage {
             }
         }
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
-            self.write_raft_state(ctx, self.region().get_region_epoch().get_version());
+            self.write_raft_state(ctx);
         }
         res
     }
@@ -449,10 +449,14 @@ impl PeerStorage {
         }
     }
 
-    pub fn write_raft_state(&mut self, ctx: &mut RaftContext, region_version: u64) {
-        let key = raft_state_key(region_version);
-        ctx.raft_wb
-            .set_state(self.get_region_id(), &key, &self.raft_state.marshal());
+    pub fn write_raft_state(&mut self, ctx: &mut RaftContext) {
+        // The meta's version is the latest region version, use it to persist raft state.
+        let meta = self.shard_meta.as_ref().unwrap();
+        let id_ver = RegionIDVer::new(meta.id, meta.ver);
+        let tag = PeerTag::new(ctx.store_id(), id_ver);
+        debug!("{} write raft state {:?}", tag, self.raft_state);
+        let key = raft_state_key(meta.ver);
+        ctx.raft_wb.set_state(meta.id, &key, &self.raft_state.marshal());
     }
 
     fn apply_snapshot(
