@@ -370,7 +370,7 @@ impl Simulator for NodeCluster {
         let router = ServerRaftStoreRouter::new(
             router,
             local_reader,
-            region_info_accessor.region_leaders.clone(),
+            region_info_accessor.region_leaders,
         );
         self.trans
             .core
