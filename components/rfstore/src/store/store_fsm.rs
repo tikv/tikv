@@ -569,6 +569,9 @@ impl<'a> StoreMsgHandler<'a> {
             StoreMsg::ApplyResult { region_id, peer_id } => {
                 apply_region = self.on_apply_result(region_id, peer_id);
             }
+            StoreMsg::DependentsEmpty(region_id) => {
+                self.on_dependents_empty(region_id);
+            }
             StoreMsg::Stop => {
                 self.store.stopped = true;
             }
@@ -1286,13 +1289,36 @@ impl<'a> StoreMsgHandler<'a> {
 
         // Mark itself as pending_remove
         peer_fsm.peer.pending_remove = true;
-        if let Some(parent_id) = peer_fsm.peer.mut_store().parent_id() {
-            self.ctx
+
+        let peer_store = peer_fsm.peer.get_store();
+        if let Some(parent_id) = peer_store.parent_id() {
+            if self
+                .ctx
                 .global
                 .engines
                 .raft
-                .remove_dependent(parent_id, region_id);
+                .remove_dependent(parent_id, region_id)
+                == 0
+                && parent_id != region_id
+            {
+                self.ctx
+                    .global
+                    .router
+                    .send_store(StoreMsg::DependentsEmpty(parent_id));
+            }
         }
+
+        if peer_store.engines.raft.has_dependents(region_id) {
+            // A region can't be destroyed until all dependents gone.
+            // The peer still exists to prevent the region from moving back.
+            info!(
+                "delays destroy";
+                "tag" => peer_fsm.peer.tag(),
+                "peer_id" => peer_fsm.peer_id(),
+            );
+            return;
+        }
+
         // Destroy read delegates.
         self.ctx.store_meta.readers.remove(&region_id);
 
@@ -1447,5 +1473,23 @@ impl<'a> StoreMsgHandler<'a> {
             .get(&region_id)
             .map(|region| region.get_peers().iter().any(|p| p.id == peer_id))
             .unwrap_or(false)
+    }
+
+    fn on_dependents_empty(&mut self, region_id: u64) {
+        let peer = match self.ctx.peers.get(&region_id) {
+            Some(peer) => peer,
+            None => return,
+        };
+        let peer_fsm = peer.peer_fsm.lock().unwrap();
+        if !peer_fsm.peer.pending_remove {
+            return;
+        }
+        info!(
+            "Dependents become empty, continue to destroy peer";
+            "tag" => peer_fsm.peer.tag(),
+            "peer_id" => peer_fsm.peer_id(),
+        );
+        drop(peer_fsm);
+        self.on_destroy_peer(region_id, false);
     }
 }

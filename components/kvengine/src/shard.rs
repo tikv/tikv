@@ -110,7 +110,11 @@ impl Shard {
             snap.end.as_slice(),
             opt,
         );
-        store_bool(&shard.initial_flushed, true);
+        if !cs.has_parent() {
+            store_bool(&shard.initial_flushed, true);
+        } else {
+            shard.parent_id = cs.get_parent().shard_id;
+        }
         shard.base_version = snap.base_version;
         shard.meta_seq.store(cs.sequence, Release);
         shard.write_sequence.store(snap.data_sequence, Release);

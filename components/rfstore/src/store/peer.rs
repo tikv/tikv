@@ -1379,10 +1379,18 @@ impl Peer {
             .set_state(region_id, KV_ENGINE_META_KEY, &shard_meta.marshal());
         if cs.has_initial_flush() || cs.has_snapshot() {
             if let Some(parent_id) = opt_parent_id {
-                ctx.global
+                if ctx
+                    .global
                     .engines
                     .raft
-                    .remove_dependent(parent_id, self.region_id);
+                    .remove_dependent(parent_id, self.region_id)
+                    == 0
+                    && parent_id != self.region_id
+                {
+                    ctx.global
+                        .router
+                        .send_store(StoreMsg::DependentsEmpty(parent_id));
+                }
             }
         }
         ctx.apply_msgs.msgs.push(ApplyMsg::PrepareChangeSet(cs))

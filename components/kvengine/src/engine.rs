@@ -256,7 +256,6 @@ impl EngineCore {
             scfs,
         );
         shard.set_data(data);
-        store_bool(&shard.initial_flushed, true);
         self.refresh_shard_states(&shard);
         match self.shards.entry(shard.id) {
             Entry::Occupied(entry) => {

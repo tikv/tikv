@@ -85,6 +85,10 @@ impl ServerCluster {
         self.channels.keys().copied().collect()
     }
 
+    pub fn get_store_id(&self, node_id: u16) -> u64 {
+        self.servers.get(&node_id).unwrap().get_store_id()
+    }
+
     pub fn get_pd_client(&self) -> Arc<TestPdClient> {
         self.pd_client.clone()
     }

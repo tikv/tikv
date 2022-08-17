@@ -1098,7 +1098,7 @@ impl<'a> PeerMsgHandler<'a> {
         let engines = &self.ctx.global.engines;
         if !self.peer.is_initialized()
             || self.peer.is_applying_snapshot()
-            || !engines.raft.can_truncate(region_id)
+            || engines.raft.has_dependents(region_id)
         {
             return;
         }

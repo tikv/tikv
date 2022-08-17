@@ -568,11 +568,8 @@ impl Applier {
             match exec_result {
                 ExecResult::ChangePeer(cp) => {
                     self.region = cp.region.clone();
-                    if let Some(new_peer) = cp
-                        .region
-                        .get_peers()
-                        .into_iter()
-                        .find(|p| p.id == self.peer.id)
+                    if let Some(new_peer) =
+                        cp.region.get_peers().iter().find(|p| p.id == self.peer.id)
                     {
                         self.peer = new_peer.clone();
                     } else {

@@ -329,24 +329,30 @@ impl RfEngine {
         }
     }
 
-    pub fn remove_dependent(&self, region_id: u64, dependent_id: u64) {
-        if let Some(len) = self.regions.get(&region_id).map(|data| {
-            let mut data = data.write().unwrap();
-            data.dependents.remove(&dependent_id);
-            data.dependents.len()
-        }) {
-            let tag = RegionTag::new(self.get_engine_id(), region_id);
-            info!(
-                "{} remove dependent {}, dependents_len {}",
-                tag, dependent_id, len
-            );
-        }
-    }
-
-    pub fn can_truncate(&self, region_id: u64) -> bool {
+    pub fn remove_dependent(&self, region_id: u64, dependent_id: u64) -> usize {
         self.regions
             .get(&region_id)
-            .map_or(false, |data| data.read().unwrap().can_truncate())
+            .map(|data| {
+                let len = {
+                    let mut data = data.write().unwrap();
+                    data.dependents.remove(&dependent_id);
+                    data.dependents.len()
+                };
+
+                let tag = RegionTag::new(self.get_engine_id(), region_id);
+                info!(
+                    "{} remove dependent {}, dependents_len {}",
+                    tag, dependent_id, len
+                );
+                len
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn has_dependents(&self, region_id: u64) -> bool {
+        self.regions
+            .get(&region_id)
+            .map_or(false, |data| data.read().unwrap().has_dependents())
     }
 
     /// Dumps the state of the engine.
@@ -488,8 +494,8 @@ impl RegionData {
         truncated_blocks
     }
 
-    pub(crate) fn can_truncate(&self) -> bool {
-        self.dependents.is_empty()
+    pub(crate) fn has_dependents(&self) -> bool {
+        !self.dependents.is_empty()
     }
 
     pub(crate) fn get_stats(&self) -> RegionStats {

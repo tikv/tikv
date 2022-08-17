@@ -548,7 +548,6 @@ mod tests {
 
     use api_version::ApiV1;
     use collections::{HashMap, HashSet};
-    use protobuf::well_known_types::Api;
     use tipb::ColumnInfo;
 
     use super::*;

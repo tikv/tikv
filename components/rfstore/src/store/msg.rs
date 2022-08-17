@@ -87,6 +87,7 @@ pub enum StoreMsg {
         region_id: u64,
         peer_id: u64,
     },
+    DependentsEmpty(u64 /* region id*/),
     Stop,
 }
 

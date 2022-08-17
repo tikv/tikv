@@ -119,6 +119,7 @@ impl Engine {
     }
 
     pub(crate) fn flush_initial(&self, task: FlushTask) -> Result<pb::ChangeSet> {
+        fail_point!("kvengine_flush_initial");
         let flush = task.initial.as_ref().unwrap();
         let tag = ShardTag::new(self.get_engine_id(), task.id_ver);
         info!(
