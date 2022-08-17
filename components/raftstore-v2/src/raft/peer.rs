@@ -1,13 +1,13 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{
     kvrpcpb::{ExtraOp as TxnExtraOp, LockInfo},
     metapb,
-    raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse, CmdType},
+    raft_cmdpb::{self, CmdType, RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RegionLocalState,
 };
 use pd_client::BucketMeta;
@@ -21,7 +21,8 @@ use raftstore::{
         read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
         util::{check_region_epoch, find_peer, Lease, LeaseState, RegionReadProgress},
         worker::{LocalReadContext, RaftlogFetchTask, ReadExecutor},
-        Callback, Config, PdTask, RaftCommand, Transport, TxnExt,
+        Callback, Config, EntryStorage, PdTask, RaftCommand, RaftlogFetchTask, Transport, TxnExt,
+        WriteRouter,
     },
     Error,
 };
@@ -37,6 +38,7 @@ use tikv_util::{
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
+    operation::AsyncWriter,
     tablet::{self, CachedTablet},
     Result,
 };
@@ -48,7 +50,13 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
-    logger: Logger,
+    /// We use a cache for looking up peers. Not all peers exist in region's
+    /// peer list, for example, an isolated peer may need to send/receive
+    /// messages with unknown peers after recovery.
+    peer_cache: Vec<metapb::Peer>,
+    pub(crate) async_writer: AsyncWriter<EK, ER>,
+    has_ready: bool,
+    pub(crate) logger: Logger,
     pending_reads: ReadIndexQueue<EK::Snapshot>,
     read_progress: Arc<RegionReadProgress>,
     tag: String,
@@ -77,10 +85,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_id: u64,
         tablet_factory: &dyn TabletFactory<EK>,
         engine: ER,
+        scheduler: Scheduler<RaftlogFetchTask>,
         logger: &Logger,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Result<Option<Self>> {
-        let s = match Storage::new(region_id, store_id, engine, logger, raftlog_fetch_scheduler)? {
+        let s = match Storage::new(region_id, store_id, engine, scheduler, logger)? {
             Some(s) => s,
             None => return Ok(None),
         };
@@ -132,7 +140,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(Some(Peer {
             raft_group,
             tablet: CachedTablet::new(tablet),
+            has_ready: false,
+            async_writer: AsyncWriter::new(region_id, peer_id),
             logger,
+            peer_cache: vec![],
             pending_reads: Default::default(),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -160,9 +171,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.store()
     }
 
-    #[inline]
-    pub fn tablet(&self) -> &CachedTablet<EK> {
-        &self.tablet
+    pub fn region(&self) -> &metapb::Region {
+        self.raft_group.store().region()
     }
 
     #[inline]
@@ -390,6 +400,97 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
         }
+    }
+
+    pub fn storage_mut(&mut self) -> &mut Storage<ER> {
+        self.raft_group.mut_store()
+    }
+
+    #[inline]
+    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+        self.raft_group.store().entry_storage()
+    }
+
+    #[inline]
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+        self.raft_group.mut_store().entry_storage_mut()
+    }
+
+    #[inline]
+    pub fn tablet(&self) -> &CachedTablet<EK> {
+        &self.tablet
+    }
+
+    pub fn tablet_mut(&mut self) -> &mut CachedTablet<EK> {
+        &mut self.tablet
+    }
+
+    #[inline]
+    pub fn raft_group(&self) -> &RawNode<Storage<ER>> {
+        &self.raft_group
+    }
+
+    #[inline]
+    pub fn raft_group_mut(&mut self) -> &mut RawNode<Storage<ER>> {
+        &mut self.raft_group
+    }
+
+    /// Mark the peer has a ready so it will be checked at the end of every
+    /// processing round.
+    #[inline]
+    pub fn set_has_ready(&mut self) {
+        self.has_ready = true;
+    }
+
+    /// Mark the peer has no ready and return its previous state.
+    #[inline]
+    pub fn reset_has_ready(&mut self) -> bool {
+        mem::take(&mut self.has_ready)
+    }
+
+    #[inline]
+    pub fn insert_peer_cache(&mut self, peer: metapb::Peer) {
+        for p in self.raft_group.store().region().get_peers() {
+            if p.get_id() == peer.get_id() {
+                return;
+            }
+        }
+        for p in &mut self.peer_cache {
+            if p.get_id() == peer.get_id() {
+                *p = peer;
+                return;
+            }
+        }
+        self.peer_cache.push(peer);
+    }
+
+    #[inline]
+    pub fn clear_peer_cache(&mut self) {
+        self.peer_cache.clear();
+    }
+
+    #[inline]
+    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        for p in self.raft_group.store().region().get_peers() {
+            if p.get_id() == peer_id {
+                return Some(p.clone());
+            }
+        }
+        self.peer_cache
+            .iter()
+            .find(|p| p.get_id() == peer_id)
+            .cloned()
+    }
+
+    #[inline]
+    pub fn is_leader(&self) -> bool {
+        self.raft_group.raft.state == StateRole::Leader
+    }
+
+    /// Term of the state machine.
+    #[inline]
+    pub fn term(&self) -> u64 {
+        self.raft_group.raft.term
     }
 }
 

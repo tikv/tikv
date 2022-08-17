@@ -8,6 +8,7 @@ use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
 use tikv_util::{error, warn};
 
+use super::worker::{FetchedLogs, LogFetchedNotifier};
 use crate::{
     store::{
         fsm::store::RaftSender, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg,
@@ -172,5 +173,13 @@ where
             Ok(()) => Ok(()),
             Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for RaftRouter<EK, ER> {
+    #[inline]
+    fn notify(&self, region_id: u64, fetched: FetchedLogs) {
+        // Ignore region not found as it may be removed.
+        let _ = self.significant_send(region_id, SignificantMsg::RaftlogFetched(fetched));
     }
 }
