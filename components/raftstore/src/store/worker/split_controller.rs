@@ -616,7 +616,6 @@ impl AutoSplitController {
     }
 
     fn is_grpc_poll_busy(&self, avg_grpc_thread_usage: f64) -> bool {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("mock_grpc_poll_is_not_busy", |_| { false });
         if self.max_grpc_thread_count == 0 {
             return false;
@@ -629,7 +628,6 @@ impl AutoSplitController {
     }
 
     fn is_unified_read_pool_busy(&self, unified_read_pool_thread_usage: f64) -> bool {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("mock_unified_read_pool_is_busy", |_| { true });
         if self.max_unified_read_pool_thread_count == 0 {
             return false;
@@ -644,7 +642,6 @@ impl AutoSplitController {
     }
 
     fn is_region_busy(&self, unified_read_pool_thread_usage: f64, region_cpu_usage: f64) -> bool {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("mock_region_is_busy", |_| { true });
         if unified_read_pool_thread_usage <= 0.0 || !self.should_check_region_cpu() {
             return false;
