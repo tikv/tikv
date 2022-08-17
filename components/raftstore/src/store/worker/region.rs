@@ -380,7 +380,7 @@ where
 
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>, peer_id: u64) -> Result<()> {
-        info!("begin apply snap data"; "region_id" => region_id);
+        info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);

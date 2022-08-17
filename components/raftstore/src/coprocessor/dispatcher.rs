@@ -1051,11 +1051,11 @@ mod tests {
         let key = SnapKey::new(region.get_id(), 1, 1);
         host.pre_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PreApplySnapshot as usize;
-        assert_all!([&ob.called], &[155]);
+        assert_all!([&ob.called], &[index]);
 
         host.post_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PostApplySnapshot as usize;
-        assert_all!([&ob.called], &[173]);
+        assert_all!([&ob.called], &[index]);
     }
 
     #[test]
