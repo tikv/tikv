@@ -14,9 +14,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{
-    CfName, KvEngine, MvccProperties, OpenOptions, Snapshot, TabletFactory,
-};
+use engine_traits::{CfName, KvEngine, MvccProperties, OpenOptions, Snapshot, TabletFactory};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},

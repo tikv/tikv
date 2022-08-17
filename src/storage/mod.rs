@@ -62,12 +62,13 @@ mod types;
 
 use std::{
     borrow::Cow,
+    collections::HashMap,
     iter,
     marker::PhantomData,
     sync::{
         atomic::{self, AtomicBool},
         Arc,
-    }, collections::HashMap,
+    },
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
