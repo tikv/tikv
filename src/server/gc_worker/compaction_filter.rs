@@ -475,7 +475,8 @@ impl WriteCompactionFilter {
                     ),
                 ))
             });
-            wb.write_opt(wopts)
+            wb.write_opt(wopts)?;
+            Ok(())
         }
 
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {
