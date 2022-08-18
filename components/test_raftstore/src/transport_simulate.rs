@@ -15,7 +15,7 @@ use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
+    router::{LocalReadRouter, RaftStoreRouter},
     store::{
         Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
@@ -211,12 +211,6 @@ impl<C: Transport> Transport for SimulateTransport<C> {
 
     fn flush(&mut self) {
         self.ch.flush();
-    }
-}
-
-impl<C: WritePreChecker> WritePreChecker for SimulateTransport<C> {
-    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
-        self.ch.pre_send_write_to(region_id)
     }
 }
 

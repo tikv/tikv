@@ -8,10 +8,11 @@ use std::{
     mem,
     num::NonZeroU64,
     result,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
@@ -29,7 +30,7 @@ use raftstore::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
     },
     errors::Error as RaftServerError,
-    router::{LocalReadRouter, RaftStoreRouter, WritePreChecker},
+    router::{LocalReadRouter, RaftStoreRouter},
     store::{
         Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
         RegionSnapshot, WriteResponse,
@@ -153,24 +154,26 @@ where
 pub struct RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<E, S> RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
             txn_extra_scheduler: None,
+            region_leaders,
         }
     }
 
@@ -286,7 +289,7 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
 impl<E, S> Display for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
@@ -296,7 +299,7 @@ where
 impl<E, S> Debug for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
@@ -306,7 +309,7 @@ where
 impl<E, S> Engine for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + WritePreChecker + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
@@ -354,8 +357,11 @@ where
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
-        self.router.pre_send_write_to(ctx.get_region_id())?;
-        Ok(())
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(RaftServerError::NotLeader(region_id, None).into()),
+        }
     }
 
     fn async_write(

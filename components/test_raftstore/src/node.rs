@@ -19,7 +19,7 @@ use kvproto::{
 };
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
-    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
@@ -152,7 +152,6 @@ pub struct NodeCluster {
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-    region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
@@ -167,7 +166,6 @@ impl NodeCluster {
             cfg_controller: None,
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
-            region_info_accessors: HashMap::default(),
             post_create_coprocessor_host: None,
         }
     }
@@ -283,7 +281,6 @@ impl Simulator for NodeCluster {
             f(node_id, &mut coprocessor_host);
         }
 
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
@@ -365,10 +362,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        self.region_info_accessors
-            .insert(node_id, region_info_accessor.clone());
-        let router =
-            ServerRaftStoreRouter::new(router, local_reader, region_info_accessor.region_leaders);
+        let router = ServerRaftStoreRouter::new(router, local_reader);
         self.trans
             .core
             .lock()
@@ -398,9 +392,6 @@ impl Simulator for NodeCluster {
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
             node.stop();
-        }
-        if let Some(region_info_accessor) = self.region_info_accessors.remove(&node_id) {
-            region_info_accessor.stop()
         }
         self.trans
             .core

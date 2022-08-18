@@ -569,9 +569,9 @@ where
                     StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
                     self.router.clone(),
                 ),
-                self.region_info_accessor.region_leaders.clone(),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders.clone(),
         );
 
         self.engines = Some(TikvEngines {

@@ -1,12 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{
-    cell::RefCell,
-    sync::{Arc, RwLock},
-};
+use std::cell::RefCell;
 
-use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
@@ -129,12 +125,6 @@ where
     fn release_snapshot_cache(&self);
 }
 
-/// A checker do some checking before routing raft write requests.
-pub trait WritePreChecker: Send + Clone {
-    /// Check before sending write command to the given region.
-    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()>;
-}
-
 #[derive(Clone)]
 pub struct RaftStoreBlackHole;
 
@@ -186,8 +176,6 @@ where
     router: RaftRouter<EK, ER>,
     local_reader:
         RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
-    /// Region leader ids set on the store.
-    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -199,7 +187,6 @@ where
         ServerRaftStoreRouter {
             router: self.router.clone(),
             local_reader: self.local_reader.clone(),
-            region_leaders: self.region_leaders.clone(),
         }
     }
 }
@@ -209,22 +196,11 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     pub fn new(
         router: RaftRouter<EK, ER>,
         reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {
             router,
             local_reader,
-            region_leaders,
-        }
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> WritePreChecker for ServerRaftStoreRouter<EK, ER> {
-    fn pre_send_write_to(&self, region_id: u64) -> RaftStoreResult<()> {
-        match self.region_leaders.read().unwrap().get(&region_id) {
-            Some(_) => Ok(()),
-            None => Err(RaftStoreError::NotLeader(region_id, None)),
         }
     }
 }
