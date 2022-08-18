@@ -137,6 +137,7 @@ make_auto_flush_static_metric! {
         resolve_lock,
         resolve_lock_lite,
         delete_range,
+        flashback_to_version,
         pause,
         key_mvcc,
         start_ts_mvcc,

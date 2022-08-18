@@ -853,6 +853,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
             Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
         }
         ErrorType::Ok => Ok(()),
+        _ => unimplemented!(),
     }
 }
 

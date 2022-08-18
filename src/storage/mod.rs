@@ -82,11 +82,15 @@ use kvproto::{
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
-use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{msg::SignificantMsg, util::build_key_range, ReadStats, TxnExt, WriteStats},
+};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::SnapshotExt;
 use tikv_util::{
+    future::paired_future_callback,
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, Instant, ThreadReadId},
 };
@@ -1488,6 +1492,36 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             Box::new(|res| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
+        Ok(())
+    }
+
+    pub fn flashback_to_version<R: RaftStoreRouter<E::Local> + 'static>(
+        &self,
+        ctx: Context,
+        raft_router: &R,
+        _version: u64,
+        start_key: Key,
+        end_key: Key,
+        _callback: Callback<()>,
+    ) -> Result<()> {
+        Self::check_api_version_ranges(
+            self.api_version,
+            ctx.api_version,
+            CommandKind::flashback_to_version,
+            [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
+        )?;
+
+        let region_id = ctx.get_region_id();
+        // TODO: reject any scheduling, read or write request.
+        // TODO: wait for the applied index to reach the latest committed index.
+        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback);
+
+        // TODO: flashback to the specified version.
+
+        // Resume the scheduling, reading and writing.
+        let _ = raft_router.significant_send(region_id, SignificantMsg::FinishFlashback);
+
+        KV_COMMAND_COUNTER_VEC_STATIC.flashback_to_version.inc();
         Ok(())
     }
 
