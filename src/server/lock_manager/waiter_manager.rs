@@ -22,10 +22,12 @@ use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
 use tikv_util::{
     config::ReadableDuration,
+    time::InstantExt,
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
+use tracker::GLOBAL_TRACKERS;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -110,6 +112,7 @@ pub enum Task {
         lock: Lock,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
+        wait_timer: Instant,
     },
     WakeUp {
         // lock info
@@ -182,6 +185,7 @@ pub(crate) struct Waiter {
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
+    wait_timer: Instant,
 }
 
 impl Waiter {
@@ -192,6 +196,7 @@ impl Waiter {
         lock: Lock,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
+        wait_timer: Instant,
     ) -> Self {
         Self {
             start_ts,
@@ -201,6 +206,7 @@ impl Waiter {
             delay: Delay::new(deadline),
             diag_ctx,
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_timer,
         }
     }
 
@@ -224,6 +230,10 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
+        let elapsed = self.wait_timer.saturating_elapsed();
+        GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
+            tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
+        });
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         self.cb.execute(self.pr);
@@ -424,6 +434,7 @@ impl Scheduler {
             lock,
             timeout,
             diag_ctx,
+            wait_timer: Instant::now(),
         });
     }
 
@@ -597,6 +608,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock,
                 timeout,
                 diag_ctx,
+                wait_timer,
             } => {
                 let waiter = Waiter::new(
                     start_ts,
@@ -605,6 +617,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     lock,
                     self.normalize_deadline(timeout),
                     diag_ctx,
+                    wait_timer,
                 );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
