@@ -198,9 +198,9 @@ error = '''
 KV:Engine:IO
 '''
 
-["KV:Engine:CFName"]
+["KV:Engine:CfName"]
 error = '''
-KV:Engine:CFName
+KV:Engine:CfName
 '''
 
 ["KV:Engine:Codec"]
@@ -463,9 +463,9 @@ error = '''
 KV:SSTImporter:Future
 '''
 
-["KV:SSTImporter:RocksDB"]
+["KV:SSTImporter:RocksDb"]
 error = '''
-KV:SSTImporter:RocksDB
+KV:SSTImporter:RocksDb
 '''
 
 ["KV:SSTImporter:ParseIntError"]

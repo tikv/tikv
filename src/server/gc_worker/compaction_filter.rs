@@ -483,7 +483,7 @@ impl WriteCompactionFilter {
         }
 
         fn do_flush(
-            wb: &RocksWriteBatchVec,
+            wb: &mut RocksWriteBatchVec,
             wopts: &WriteOptions,
         ) -> Result<(), engine_traits::Error> {
             let _io_type_guard = WithIoType::new(IoType::Gc);
@@ -501,7 +501,7 @@ impl WriteCompactionFilter {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {
             let mut wopts = WriteOptions::default();
             wopts.set_no_slowdown(true);
-            if let Err(e) = do_flush(&self.write_batch, &wopts) {
+            if let Err(e) = do_flush(&mut self.write_batch, &wopts) {
                 let wb = mem::replace(
                     &mut self.write_batch,
                     self.engine.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE),

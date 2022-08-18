@@ -8,7 +8,7 @@ pub enum PerfLevel {
     Disable,
     EnableCount,
     EnableTimeExceptForMutex,
-    EnableTimeAndCPUTimeExceptForMutex,
+    EnableTimeAndCpuTimeExceptForMutex,
     EnableTime,
     OutOfBounds,
 }
@@ -18,7 +18,7 @@ numeric_enum_serializing_mod! {perf_level_serde PerfLevel {
     Disable = 1,
     EnableCount = 2,
     EnableTimeExceptForMutex = 3,
-    EnableTimeAndCPUTimeExceptForMutex = 4,
+    EnableTimeAndCpuTimeExceptForMutex = 4,
     EnableTime = 5,
     OutOfBounds = 6,
 }}

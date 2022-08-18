@@ -6,7 +6,7 @@ use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb::Region};
 use raftstore::{
-    coprocessor::{ObserveHandle, ObserveID},
+    coprocessor::{ObserveHandle, ObserveId},
     router::RaftStoreRouter,
     store::{
         fsm::ChangeObserver,
@@ -33,7 +33,7 @@ const GET_SNAPSHOT_RETRY_TIME: u32 = 3;
 const GET_SNAPSHOT_RETRY_BACKOFF_STEP: Duration = Duration::from_millis(25);
 
 pub type BeforeStartCallback = Box<dyn Fn() + Send>;
-pub type OnErrorCallback = Box<dyn Fn(ObserveID, Region, Error) + Send>;
+pub type OnErrorCallback = Box<dyn Fn(ObserveId, Region, Error) + Send>;
 pub type OnEntriesCallback = Box<dyn Fn(Vec<ScanEntry>, u64) + Send>;
 pub type IsCancelledCallback = Box<dyn Fn() -> bool + Send>;
 

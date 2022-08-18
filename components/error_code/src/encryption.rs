@@ -4,7 +4,7 @@ define_error_codes!(
     "KV:Encryption:",
 
     ROCKS => ("Rocks", "", ""),
-    IO => ("IO", "", ""),
+    IO => ("Io", "", ""),
     CRYPTER => ("Crypter", "", ""),
     PROTO => ("Proto", "", ""),
     UNKNOWN_ENCRYPTION => ("UnknownEncryption", "", ""),
