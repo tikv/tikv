@@ -1454,16 +1454,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         T: Future + Send + 'static,
     {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
-        if self
-            .sched
+        self.sched
             .get_sched_pool(CommandPri::Normal)
             .pool
             .spawn(future)
-            .is_err()
-        {
-            return Err(Error::from(ErrorInner::SchedTooBusy));
-        }
-        Ok(())
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
     fn get_deadline(ctx: &Context) -> Deadline {
