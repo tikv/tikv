@@ -25,8 +25,8 @@ macro_rules! set_send_status {
 
 pub struct RaftSendMessageMetrics(RaftSentMessageCounterVec);
 
-impl RaftSendMessageMetrics {
-    pub fn new() -> Self {
+impl Default for RaftSendMessageMetrics {
+    fn default() -> Self {
         Self(RaftSentMessageCounterVec::from(
             &STORE_RAFT_SENT_MESSAGE_COUNTER_VEC,
         ))
@@ -103,7 +103,7 @@ impl RaftMetrics {
     pub fn new(waterfall_metrics: bool) -> Self {
         Self {
             ready: RaftReadyCounterVec::from(&STORE_RAFT_READY_COUNTER_VEC),
-            send_message: RaftSendMessageMetrics::new(),
+            send_message: RaftSendMessageMetrics::default(),
             message_dropped: RaftDroppedMessageCounterVec::from(
                 &STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC,
             ),
