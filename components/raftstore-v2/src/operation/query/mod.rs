@@ -50,7 +50,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     fn query_status(&mut self, req: &RaftCmdRequest, resp: &mut RaftCmdResponse) -> Result<()> {
         util::check_store_id(req, self.peer().get_store_id())?;
         let cmd_type = req.get_status_request().get_cmd_type();
-        let mut status_resp = resp.mut_status_response();
+        let status_resp = resp.mut_status_response();
         status_resp.set_cmd_type(cmd_type);
         match cmd_type {
             StatusCmdType::RegionLeader => {
@@ -63,7 +63,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let region_id = req.get_header().get_region_id();
                     return Err(Error::RegionNotInitialized(region_id));
                 }
-                let status_resp = resp.mut_status_response();
                 status_resp
                     .mut_region_detail()
                     .set_region(self.region().clone());
