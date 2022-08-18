@@ -5,8 +5,9 @@ use std::{convert::TryInto, ops::Deref};
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, StoreVersion, SyncMutable, WriteBatch,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    STORE_VERSION_RECOVER_FROM_RAFTDB,
 };
 use kvproto::{
     metapb::Region,
@@ -369,14 +370,24 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn store_version(&self) -> Result<Option<StoreVersion>> {
-        Ok(self.get_value(keys::STORE_VERSION_KEY)?.map(|v| {
-            StoreVersion::from_bits(u64::from_be_bytes(v.deref().try_into().unwrap())).unwrap()
-        }))
+    fn recover_from_raftdb(&self) -> Result<bool> {
+        let recover_from_raftdb = matches!(self
+            .get_value(keys::STORE_VERSION_KEY)?
+            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap())),
+            Some(val) if val == STORE_VERSION_RECOVER_FROM_RAFTDB);
+        Ok(recover_from_raftdb)
     }
 
-    fn put_store_version(&self, version: StoreVersion) -> Result<()> {
-        self.put(keys::STORE_VERSION_KEY, &u64::to_be_bytes(version.bits()))
+    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()> {
+        let recover_from_raftdb = if recover_from_raftdb {
+            STORE_VERSION_RECOVER_FROM_RAFTDB
+        } else {
+            0
+        };
+        self.put(
+            keys::STORE_VERSION_KEY,
+            &u64::to_be_bytes(recover_from_raftdb),
+        )
     }
 }
 

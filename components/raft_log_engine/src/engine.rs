@@ -12,7 +12,7 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result, StoreVersion,
+    RaftLogGcTask, Result, STORE_VERSION_RECOVER_FROM_RAFTDB,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -289,10 +289,6 @@ impl FileSystem for ManagedFileSystem {
                 rate_limiter: self.rate_limiter.clone(),
             })
         }
-    }
-
-    fn rename<P: AsRef<Path>>(&self, _src_path: P, _dst_path: P) -> IoResult<()> {
-        unimplemented!()
     }
 }
 
@@ -624,18 +620,26 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn store_version(&self) -> Result<Option<StoreVersion>> {
-        Ok(self.0.get(STORE_REGION_ID, STORE_VERSION_KEY).map(|v| {
-            StoreVersion::from_bits(u64::from_be_bytes(v.as_slice().try_into().unwrap())).unwrap()
-        }))
+    fn recover_from_raftdb(&self) -> Result<bool> {
+        let recover_from_raftdb = matches!(self
+            .0
+            .get(STORE_STATE_ID, STORE_VERSION_KEY)
+            .map(|v| u64::from_be_bytes(v.try_into().unwrap())),
+            Some(val) if val == STORE_VERSION_RECOVER_FROM_RAFTDB);
+        Ok(recover_from_raftdb)
     }
 
-    fn put_store_version(&self, version: StoreVersion) -> Result<()> {
+    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()> {
+        let recover_from_raftdb = if recover_from_raftdb {
+            STORE_VERSION_RECOVER_FROM_RAFTDB
+        } else {
+            0
+        };
         let mut batch = Self::LogBatch::default();
         batch.0.put(
-            STORE_REGION_ID,
+            STORE_STATE_ID,
             STORE_VERSION_KEY.to_vec(),
-            u64::to_be_bytes(version.bits()).to_vec(),
+            u64::to_be_bytes(recover_from_raftdb).to_vec(),
         );
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
