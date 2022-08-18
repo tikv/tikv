@@ -37,13 +37,13 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     need_check_existence: bool,
     min_commit_ts: TimeStamp,
     need_old_value: bool,
-    lock_if_exists: bool,
+    lock_only_if_exists: bool,
 ) -> MvccResult<(Option<Value>, OldValue)> {
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
-    if lock_if_exists {
-        assert!(need_value, "when acquire pessimistic lock, lock_if_exists is used, but return_value is not");
+    if lock_only_if_exists {
+        assert!(need_value, "when acquire pessimistic lock, lock_only_if_exists is used, but return_value is not");
     }
     // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
     if should_not_exist {
@@ -228,8 +228,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
             };
         }
-        // this flag is used for lock_if_exists is true
-        key_exists = lock_if_exists && val.is_some();
+        // this flag is used for lock_only_if_exists is true
+        key_exists = lock_only_if_exists && val.is_some();
     }
 
     let old_value = load_old_value(
@@ -250,9 +250,9 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
     };
 
-    // when lock_if_exists is false, always accquire pessimitic lock,
+    // when lock_only_if_exists is false, always accquire pessimitic lock,
     // otherwise do it when key_exists is trye
-    if !lock_if_exists || key_exists {
+    if !lock_only_if_exists || key_exists {
         txn.put_pessimistic_lock(key, lock);
     } 
     // TODO don't we need to commit the modifies in txn?
