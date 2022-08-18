@@ -595,8 +595,8 @@ pub struct RegionInfoAccessor {
 
     /// Region leader ids set on the store.
     ///
-    /// Others can access this info directly, such as ServerRaftStoreRouter.
-    pub region_leaders: Arc<RwLock<HashSet<u64>>>,
+    /// Others can access this info directly, such as RaftKV.
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl RegionInfoAccessor {
@@ -618,6 +618,11 @@ impl RegionInfoAccessor {
             scheduler,
             region_leaders,
         }
+    }
+
+    /// Get a set of region leader ids.
+    pub fn get_region_leaders(&self) -> Arc<RwLock<HashSet<u64>>> {
+        self.region_leaders.clone()
     }
 
     /// Stops the `RegionInfoAccessor`. It should be stopped after raftstore.
