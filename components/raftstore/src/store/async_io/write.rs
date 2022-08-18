@@ -564,7 +564,7 @@ where
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
-            message_metrics: Default::default(),
+            message_metrics: RaftSendMessageMetrics::new(),
             perf_context,
             pending_latency_inspect: vec![],
         }
