@@ -10,7 +10,9 @@ use lazy_static::lazy_static;
 
 lazy_static! {
     static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+    // Everytime active memtable switched, this version should be increased.
     pub static ref VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+    // Max sequence number that was synced and persisted.
     pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 }
 
@@ -33,7 +35,6 @@ impl SequenceNumber {
             number: 0,
             start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
             end_counter: 0,
-            // start_version: VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst),
             version: 0,
         }
     }
@@ -41,7 +42,6 @@ impl SequenceNumber {
     pub fn end(&mut self, number: u64) {
         self.number = number;
         self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
-        // self.end_version = VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
     }
 
     pub fn max(left: Self, right: Self) -> Self {
@@ -54,23 +54,21 @@ impl SequenceNumber {
 
 #[derive(Default)]
 pub struct SequenceNumberWindow {
-    // The sequence number doesn't be received in order, we need a ordered set to
-    // store received start counters which are bigger than last_start_counter + 1.
+    // The sequence number doesn't be received in order, we need a buffer to
+    // store received start counters which are bigger than ack_counter.
     pending_start_counter: VecDeque<bool>,
-    // counter start from 1, so 0 means no start counter received.
+    // counter start from 1, so ack_counter as 0 means no start counter received.
     ack_counter: u64,
     // (end_counter, sequence number)
     pending_sequence: BTreeMap<u64, SequenceNumber>,
+    // max corresponding sequence number before ack_counter.
     committed_seqno: u64,
     max_received_seqno: u64,
 }
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) {
-        info!(
-            "push seqno {:?} to window, ack_counter: {}",
-            sn, self.ack_counter,
-        );
+        // start_delta - 1 is the index of `pending_start_counter`.
         let start_delta = match sn.start_counter.checked_sub(self.ack_counter) {
             Some(delta) if delta > 0 => delta as usize,
             _ => {
@@ -79,9 +77,12 @@ impl SequenceNumberWindow {
             }
         };
         self.max_received_seqno = u64::max(sn.number, self.max_received_seqno);
+        // Increase the length of `pending_start_counter`
         if start_delta > self.pending_start_counter.len() {
             self.pending_start_counter.resize(start_delta, false);
         }
+        // Insert the seqno of `pending_sequence`. Because an `end_counter`
+        // may correspond to multiple seqno, we only keep the max seqno.
         self.pending_sequence
             .entry(sn.end_counter)
             .and_modify(|value| {
@@ -89,6 +90,7 @@ impl SequenceNumberWindow {
             })
             .or_insert(sn);
         self.pending_start_counter[start_delta - 1] = true;
+        // Commit seqno of the counter which all smaller counter were received.
         let mut acks = 0;
         for received in self.pending_start_counter.iter() {
             if *received {
