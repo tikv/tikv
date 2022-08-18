@@ -28,7 +28,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawRegionTs {
     pub region_id: u64,
-    pub cdc_id: ObserveID,
+    pub cdc_id: ObserveId,
     pub max_ts: TimeStamp,
 }
 
@@ -42,7 +42,7 @@ pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashMap<u64, ObserveID>>>,
+    observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
     api_version: ApiVersion,
 }
 
@@ -76,8 +76,8 @@ impl CdcObserver {
     /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
     ///
-    /// Return previous ObserveID if there is one.
-    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    /// Return previous ObserveId if there is one.
+    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
         self.observe_regions
             .write()
             .unwrap()
@@ -87,9 +87,9 @@ impl CdcObserver {
     /// Stops observe the region.
     ///
     /// Return ObserverID if unsubscribe successfully.
-    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveID) -> Option<ObserveID> {
+    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
         let mut regions = self.observe_regions.write().unwrap();
-        // To avoid ABA problem, we must check the unique ObserveID.
+        // To avoid ABA problem, we must check the unique ObserveId.
         if let Some(oid) = regions.get(&region_id) {
             if *oid == observe_id {
                 return regions.remove(&region_id);
@@ -99,7 +99,7 @@ impl CdcObserver {
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveID> {
+    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveId> {
         self.observe_regions
             .read()
             .unwrap()
@@ -364,7 +364,7 @@ mod tests {
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
-        let oid = ObserveID::new();
+        let oid = ObserveId::new();
         observer.subscribe_region(1, oid);
         let mut ctx = ObserverContext::new(&region);
 
@@ -440,7 +440,7 @@ mod tests {
         };
 
         // unsubscribed fail if observer id is different.
-        assert_eq!(observer.unsubscribe_region(1, ObserveID::new()), None);
+        assert_eq!(observer.unsubscribe_region(1, ObserveId::new()), None);
 
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
