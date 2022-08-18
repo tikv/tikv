@@ -2091,7 +2091,12 @@ txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, Pes
                 tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
             });
         },
-        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+        Err(e) | Ok(Err(e)) =>  {
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+            });
+            resp.set_errors(vec![extract_key_error(&e)].into())
+        },
     }
 });
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
