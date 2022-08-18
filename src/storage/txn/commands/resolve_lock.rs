@@ -100,9 +100,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
                     false,
                 )?
             } else if commit_ts > current_lock.ts {
-                // Continue to resolve locks if the not found committed locks are pessimistic type.
-                // They could be left if the transaction is finally committed and pessimistic conflict
-                // retry happens during execution.
+                // Continue to resolve locks if the not found committed locks are pessimistic
+                // type. They could be left if the transaction is finally committed and
+                // pessimistic conflict retry happens during execution.
                 match commit(&mut txn, &mut reader, current_key.clone(), commit_ts) {
                     Ok(res) => res,
                     Err(MvccError(box MvccErrorInner::TxnLockNotFound { .. }))
@@ -160,6 +160,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     }
 }
 
-// To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
-// The write batch will be around 32KB if we scan 256 keys each time.
+// To resolve a key, the write size is about 100~150 bytes, depending on key and
+// value length. The write batch will be around 32KB if we scan 256 keys each
+// time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;

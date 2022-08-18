@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-//! Functionality for handling optimistic and pessimistic prewrites. These are separate commands
-//! (although maybe they shouldn't be since there is only one protobuf), but
-//! handling of the commands is similar. We therefore have a single type (Prewriter) to handle both
-//! kinds of prewrite.
+//! Functionality for handling optimistic and pessimistic prewrites. These are
+//! separate commands (although maybe they shouldn't be since there is only one
+//! protobuf), but handling of the commands is similar. We therefore have a
+//! single type (Prewriter) to handle both kinds of prewrite.
 
 use std::mem;
 
@@ -410,7 +410,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PrewritePessimistic {
     }
 }
 
-/// Handles both kinds of prewrite (K statically indicates either optimistic or pessimistic).
+/// Handles both kinds of prewrite (K statically indicates either optimistic or
+/// pessimistic).
 struct Prewriter<K: PrewriteKind> {
     kind: K,
     mutations: Vec<K::Mutation>,
@@ -444,7 +445,8 @@ impl<K: PrewriteKind> Prewriter<K> {
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
             context.statistics,
         );
-        // Set extra op here for getting the write record when check write conflict in prewrite.
+        // Set extra op here for getting the write record when check write conflict in
+        // prewrite.
 
         let rows = self.mutations.len();
         let res = self.prewrite(&mut txn, &mut reader, context.extra_op);
@@ -460,9 +462,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         ))
     }
 
-    // Async commit requires the max timestamp in the concurrency manager to be up-to-date.
-    // If it is possibly stale due to leader transfer or region merge, return an error.
-    // TODO: Fallback to non-async commit if not synced instead of returning an error.
+    // Async commit requires the max timestamp in the concurrency manager to be
+    // up-to-date. If it is possibly stale due to leader transfer or region
+    // merge, return an error. TODO: Fallback to non-async commit if not synced
+    // instead of returning an error.
     fn check_max_ts_synced(&self, snapshot: &impl Snapshot) -> Result<()> {
         if (self.secondary_keys.is_some() || self.try_one_pc) && !snapshot.ext().is_max_ts_synced()
         {
@@ -476,9 +479,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         }
     }
 
-    /// The core part of the prewrite action. In the abstract, this method iterates over the mutations
-    /// in the prewrite and prewrites each one. It keeps track of any locks encountered and (if it's
-    /// an async commit transaction) the min_commit_ts, these are returned by the method.
+    /// The core part of the prewrite action. In the abstract, this method
+    /// iterates over the mutations in the prewrite and prewrites each one.
+    /// It keeps track of any locks encountered and (if it's an async commit
+    /// transaction) the min_commit_ts, these are returned by the method.
     fn prewrite(
         &mut self,
         txn: &mut MvccTxn,
@@ -710,10 +714,11 @@ impl<K: PrewriteKind> Prewriter<K> {
     }
 }
 
-/// Encapsulates things which must be done differently for optimistic or pessimistic transactions.
+/// Encapsulates things which must be done differently for optimistic or
+/// pessimistic transactions.
 trait PrewriteKind {
-    /// The type of mutation and, optionally, its extra information, differing for the
-    /// optimistic and pessimistic transaction.
+    /// The type of mutation and, optionally, its extra information, differing
+    /// for the optimistic and pessimistic transaction.
     type Mutation: MutationLock;
 
     fn txn_kind(&self) -> TransactionKind;
@@ -783,8 +788,8 @@ impl PrewriteKind for Pessimistic {
     }
 }
 
-/// The type of mutation and, optionally, its extra information, differing for the
-/// optimistic and pessimistic transaction.
+/// The type of mutation and, optionally, its extra information, differing for
+/// the optimistic and pessimistic transaction.
 /// For optimistic txns, this is `Mutation`.
 /// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
 /// whether the mutation takes a pessimistic lock or not.
@@ -845,7 +850,8 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
             txn.start_ts,
             lock.short_value,
         );
-        // Transactions committed with 1PC should be impossible to overwrite rollback records.
+        // Transactions committed with 1PC should be impossible to overwrite rollback
+        // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         if delete_pessimistic_lock {
             released_locks.push(txn.unlock_key(key, true));
@@ -1044,8 +1050,8 @@ mod tests {
         .unwrap();
         // Rollback to make tombstones in lock-cf.
         rollback(&engine, &mut statistic, keys, 100).unwrap();
-        // Gc rollback flags store in write-cf to make sure the next prewrite operation will skip
-        // seek write cf.
+        // Gc rollback flags store in write-cf to make sure the next prewrite operation
+        // will skip seek write cf.
         gc_by_compact(&engine, pri_key, 101);
         set_perf_level(PerfLevel::EnableTimeExceptForMutex);
         let perf = ReadPerfInstant::new();
@@ -1132,9 +1138,9 @@ mod tests {
         )
         .unwrap();
 
-        // Test a 1PC request should not be partially written when encounters error on the halfway.
-        // If some of the keys are successfully written as committed state, the atomicity will be
-        // broken.
+        // Test a 1PC request should not be partially written when encounters error on
+        // the halfway. If some of the keys are successfully written as committed state,
+        // the atomicity will be broken.
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
         // Lock k2.
@@ -1248,9 +1254,9 @@ mod tests {
 
         must_rollback(&engine, k1, 20, true);
 
-        // Test a 1PC request should not be partially written when encounters error on the halfway.
-        // If some of the keys are successfully written as committed state, the atomicity will be
-        // broken.
+        // Test a 1PC request should not be partially written when encounters error on
+        // the halfway. If some of the keys are successfully written as committed state,
+        // the atomicity will be broken.
 
         // Lock k2 with a optimistic lock.
         let mut statistics = Statistics::default();
@@ -1452,10 +1458,7 @@ mod tests {
             fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> Result<Option<Value>> {
                 unimplemented!()
             }
-            fn iter(&self, _: IterOptions) -> Result<Self::Iter> {
-                unimplemented!()
-            }
-            fn iter_cf(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
+            fn iter(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
             fn ext(&self) -> MockSnapshotExt {
@@ -1476,7 +1479,7 @@ mod tests {
         }
 
         macro_rules! assert_max_ts_err {
-            ($e: expr) => {
+            ($e:expr) => {
                 match $e {
                     Err(Error(box ErrorInner::MaxTimestampNotSynced { .. })) => {}
                     _ => panic!("Should have returned an error"),
@@ -1679,11 +1682,12 @@ mod tests {
 
         assert_eq!(cm.max_ts().into_inner(), 15);
 
-        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on k
+        // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on
+        // k
         must_prewrite_delete(&engine, key, key, 8);
         must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
-        // T1: start_ts = 10, reapeatly prewrite on k, with should_not_exist flag set
+        // T1: start_ts = 10, repeatedly prewrite on k, with should_not_exist flag set
         let res = prewrite_with_cm(
             &engine,
             cm,
@@ -2022,8 +2026,8 @@ mod tests {
         must_commit(&engine, b"k1", 35, 40);
         must_commit(&engine, b"k2", 35, 40);
 
-        // A retrying non-pessimistic-lock prewrite request should not skip constraint checks.
-        // Here it should take no effect, even there's already a newer version
+        // A retrying non-pessimistic-lock prewrite request should not skip constraint
+        // checks. Here it should take no effect, even there's already a newer version
         // after it. (No matter if it's async commit).
         prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
         must_unlocked(&engine, b"k2");
@@ -2032,8 +2036,8 @@ mod tests {
         must_unlocked(&engine, b"k2");
         // Committing still does nothing.
         must_commit(&engine, b"k2", 10, 25);
-        // Try a different txn start ts (which haven't been successfully committed before).
-        // It should report a PessimisticLockNotFound.
+        // Try a different txn start ts (which haven't been successfully committed
+        // before). It should report a PessimisticLockNotFound.
         let err = prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 11, false, true).unwrap_err();
         assert!(matches!(
             err,
@@ -2042,7 +2046,8 @@ mod tests {
             )))
         ));
         must_unlocked(&engine, b"k2");
-        // However conflict still won't be checked if there's a non-retry request arriving.
+        // However conflict still won't be checked if there's a non-retry request
+        // arriving.
         prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, false, false).unwrap();
         must_locked(&engine, b"k2", 10);
     }
@@ -2111,8 +2116,8 @@ mod tests {
     fn test_assertion_fail_on_conflicting_index_key() {
         let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
 
-        // Simulate two transactions that tries to insert the same row with a secondary index, and
-        // the second one canceled the first one (by rolling back its lock).
+        // Simulate two transactions that tries to insert the same row with a secondary
+        // index, and the second one canceled the first one (by rolling back its lock).
 
         let t1_start_ts = TimeStamp::compose(1, 0);
         let t2_start_ts = TimeStamp::compose(2, 0);
@@ -2225,8 +2230,8 @@ mod tests {
             )))
         ));
 
-        // If the two keys are sent in different requests, it would be the client's duty to ignore
-        // the assertion error.
+        // If the two keys are sent in different requests, it would be the client's duty
+        // to ignore the assertion error.
         let err = must_prewrite_put_err_impl(
             &engine,
             b"row",

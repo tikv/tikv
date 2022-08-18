@@ -9,7 +9,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::{raw::Writable, Compat};
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT,
     CF_WRITE,
@@ -709,7 +708,7 @@ fn test_debug_get() {
     let engine = cluster.get_engine(store_id);
     let key = keys::data_key(k);
     engine.put(&key, v).unwrap();
-    assert_eq!(engine.get(&key).unwrap().unwrap(), v);
+    assert_eq!(engine.get_value(&key).unwrap().unwrap(), v);
 
     // Debug get
     let mut req = debugpb::GetRequest::default();
@@ -784,12 +783,10 @@ fn test_debug_region_info() {
     let mut apply_state = raft_serverpb::RaftApplyState::default();
     apply_state.set_applied_index(42);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
@@ -800,12 +797,10 @@ fn test_debug_region_info() {
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
     kv_engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &region_state)
         .unwrap();
     assert_eq!(
         kv_engine
-            .c()
             .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
@@ -844,7 +839,6 @@ fn test_debug_region_size() {
     let mut state = RegionLocalState::default();
     state.set_region(region);
     engine
-        .c()
         .put_msg_cf(CF_RAFT, &region_state_key, &state)
         .unwrap();
 
@@ -852,8 +846,7 @@ fn test_debug_region_size() {
     // At lease 8 bytes for the WRITE cf.
     let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
-        let cf_handle = engine.cf_handle(cf).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
+        engine.put_cf(cf, k.as_slice(), v).unwrap();
     }
 
     let mut req = debugpb::RegionSizeRequest::default();
@@ -938,8 +931,7 @@ fn test_debug_scan_mvcc() {
             TimeStamp::zero(),
         )
         .to_bytes();
-        let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
-        engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
+        engine.put_cf(CF_LOCK, k.as_slice(), &v).unwrap();
     }
 
     let mut req = debugpb::ScanMvccRequest::default();
@@ -1353,7 +1345,7 @@ fn test_prewrite_check_max_commit_ts() {
     }
 
     // There shouldn't be locks remaining in the lock table.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 }
 
 #[test]
@@ -1452,7 +1444,7 @@ macro_rules! test_func {
 
 macro_rules! test_func_init {
     ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident) => {{ test_func!($client, $ctx, $call_opt, $func, $req::default()) }};
-    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident, batch) => {{
+    ($client:ident, $ctx:ident, $call_opt:ident, $func:ident, $req:ident,batch) => {{
         test_func!($client, $ctx, $call_opt, $func, {
             let mut req = $req::default();
             req.set_keys(vec![b"key".to_vec()].into());
@@ -1672,7 +1664,8 @@ fn test_tikv_forwarding() {
     }
 }
 
-/// Test if forwarding works correctly if the target node is shutdown and restarted.
+/// Test if forwarding works correctly if the target node is shutdown and
+/// restarted.
 #[test]
 fn test_forwarding_reconnect() {
     let (mut cluster, client, call_opt, ctx) = setup_cluster();
@@ -1761,7 +1754,8 @@ fn test_get_lock_wait_info_api() {
 // Test API version verification for transaction requests.
 // See the following for detail:
 //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+//   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+//     enum APIVersion.
 #[test]
 fn test_txn_api_version() {
     const TIDB_KEY_CASE: &[u8] = b"t_a";
@@ -1839,7 +1833,7 @@ fn test_txn_api_version() {
                 let expect_prefix = format!("Error({}", errcode);
                 assert!(!errs.is_empty(), "case {}", i);
                 assert!(
-                    errs[0].get_abort().starts_with(&expect_prefix), // e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 })
+                    errs[0].get_abort().starts_with(&expect_prefix), /* e.g. Error(ApiVersionNotMatched { storage_api_version: V1, req_api_version: V2 }) */
                     "case {}: errs[0]: {:?}, expected: {}",
                     i,
                     errs[0],
@@ -1942,7 +1936,7 @@ fn test_txn_api_version() {
                 // Pessimistic Lock
                 ts += 1;
                 let lock_ts = ts;
-                let _resp = must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
+                must_kv_pessimistic_lock(&client, ctx.clone(), k.clone(), lock_ts);
 
                 // Prewrite Pessimistic
                 let mut mutation = Mutation::default();
@@ -1964,7 +1958,8 @@ fn test_txn_api_version() {
 #[test]
 fn test_storage_with_quota_limiter_enable() {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
-        // write_bandwidth is limited to 1, which means that every write request will trigger the limit.
+        // write_bandwidth is limited to 1, which means that every write request will
+        // trigger the limit.
         let quota_config = QuotaConfig {
             foreground_cpu_time: 2000,
             foreground_write_bandwidth: ReadableSize(10),

@@ -25,8 +25,9 @@ fn test_one_node_leader_missing() {
     let election_timeout = base_tick_interval * 5;
     cluster.cfg.raft_store.raft_store_max_leader_lease =
         ReadableDuration(election_timeout - base_tick_interval);
-    // Use large peer check interval, abnormal and max leader missing duration to make a valid config,
-    // that is election timeout x 2 < peer stale state check < abnormal < max leader missing duration.
+    // Use large peer check interval, abnormal and max leader missing duration to
+    // make a valid config, that is election timeout x 2 < peer stale state
+    // check < abnormal < max leader missing duration.
     cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration(election_timeout * 3);
     cluster.cfg.raft_store.abnormal_leader_missing_duration =
         ReadableDuration(election_timeout * 4);
@@ -132,7 +133,8 @@ fn test_stale_learner_restart() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
 
-/// Test if a peer can be destroyed through tombstone msg when applying snapshot.
+/// Test if a peer can be destroyed through tombstone msg when applying
+/// snapshot.
 #[test]
 fn test_stale_peer_destroy_when_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
@@ -208,7 +210,8 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
-/// Test if destroy a uninitialized peer through tombstone msg would allow a staled peer be created again.
+/// Test if destroy a uninitialized peer through tombstone msg would allow a
+/// staled peer be created again.
 #[test]
 fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     // 4 stores cluster.
@@ -286,7 +289,8 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
 }
 
 /// Logs scan are now moved to raftlog gc threads. The case is to test if logs
-/// are still cleaned up when there is stale logs before first index during destroy.
+/// are still cleaned up when there is stale logs before first index during
+/// destroy.
 #[test]
 fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
@@ -319,8 +323,8 @@ fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     must_get_equal(&cluster.get_engine(1), b"k30", b"v30");
 
     fail::remove(fp);
-    // So peer (3, 3) will be destroyed by gc message. And all stale logs before first
-    // index should be cleaned up.
+    // So peer (3, 3) will be destroyed by gc message. And all stale logs before
+    // first index should be cleaned up.
     cluster.run_node(3).unwrap();
     must_get_none(&cluster.get_engine(3), b"k29");
 

@@ -123,11 +123,13 @@ pub struct PrewriteResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PessimisticLockRes {
-    /// The previous value is loaded while handling the `AcquirePessimisticLock` command. The i-th
-    /// item is the value of the i-th key in the `AcquirePessimisticLock` command.
+    /// The previous value is loaded while handling the `AcquirePessimisticLock`
+    /// command. The i-th item is the value of the i-th key in the
+    /// `AcquirePessimisticLock` command.
     Values(Vec<Option<Value>>),
-    /// Checked whether the key exists while handling the `AcquirePessimisticLock` command. The i-th
-    /// item is true if the i-th key in the `AcquirePessimisticLock` command exists.
+    /// Checked whether the key exists while handling the
+    /// `AcquirePessimisticLock` command. The i-th item is true if the i-th key
+    /// in the `AcquirePessimisticLock` command exists.
     Existence(Vec<bool>),
     Empty,
 }

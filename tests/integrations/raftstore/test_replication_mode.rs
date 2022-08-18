@@ -38,8 +38,8 @@ fn run_cluster(cluster: &mut Cluster<ServerCluster>) {
     cluster.must_put(b"k1", b"v0");
 }
 
-/// When using DrAutoSync replication mode, data should be replicated to different labels
-/// before committed.
+/// When using DrAutoSync replication mode, data should be replicated to
+/// different labels before committed.
 #[test]
 fn test_dr_auto_sync() {
     let mut cluster = prepare_cluster();
@@ -212,22 +212,22 @@ fn test_update_group_id() {
     cluster.must_split(&region, b"k2");
     let left = pd_client.get_region(b"k0").unwrap();
     let right = pd_client.get_region(b"k2").unwrap();
-    // When a node is started, all store information are loaded at once, so we need an extra node
-    // to verify resolve will assign group id.
+    // When a node is started, all store information are loaded at once, so we need
+    // an extra node to verify resolve will assign group id.
     cluster.add_label(3, "zone", "WS");
     cluster.add_new_engine();
     pd_client.must_add_peer(left.id, new_peer(2, 2));
     pd_client.must_add_peer(left.id, new_learner_peer(3, 3));
     pd_client.must_add_peer(left.id, new_peer(3, 3));
-    // If node 3's group id is not assigned, leader will make commit index as the smallest last
-    // index of all followers.
+    // If node 3's group id is not assigned, leader will make commit index as the
+    // smallest last index of all followers.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     cluster.must_put(b"k11", b"v11");
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
     must_get_equal(&cluster.get_engine(1), b"k11", b"v11");
 
-    // So both node 1 and node 3 have fully resolved all stores. Further updates to group ID have
-    // to be done when applying conf change and snapshot.
+    // So both node 1 and node 3 have fully resolved all stores. Further updates to
+    // group ID have to be done when applying conf change and snapshot.
     cluster.clear_send_filters();
     pd_client.must_add_peer(right.id, new_peer(2, 4));
     pd_client.must_add_peer(right.id, new_learner_peer(3, 5));
@@ -348,7 +348,8 @@ fn test_replication_mode_allowlist() {
     must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
 
-/// Ensures hibernate region still works properly when switching replication mode.
+/// Ensures hibernate region still works properly when switching replication
+/// mode.
 #[test]
 fn test_switching_replication_mode_hibernate() {
     let mut cluster = new_server_cluster(0, 3);

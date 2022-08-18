@@ -118,7 +118,6 @@ fn test_load_global_config() {
             )
             .await
     });
-    assert!(res.is_ok());
     for (k, v) in res.unwrap() {
         assert_eq!(k, format!("/global/config/{}", v))
     }
@@ -130,7 +129,7 @@ fn test_watch_global_config_on_closed_server() {
     let client = Arc::new(client);
     use futures::StreamExt;
     let j = std::thread::spawn(move || {
-        let _ = futures::executor::block_on(async move {
+        futures::executor::block_on(async move {
             let mut r = client.watch_global_config().unwrap();
             let mut i: usize = 0;
             while let Some(r) = r.next().await {

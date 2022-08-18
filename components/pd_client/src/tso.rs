@@ -3,13 +3,15 @@
 //! This module is the low-level mechanisms for getting timestamps from a PD
 //! cluster. It should be used via the `get_tso` API in `PdClient`.
 //!
-//! Once a `TimestampOracle` is created, there will be two futures running in a background working
-//! thread created automatically. The `get_timestamp` method creates a oneshot channel whose
-//! transmitter is served as a `TimestampRequest`. `TimestampRequest`s are sent to the working
-//! thread through a bounded multi-producer, single-consumer channel. Every time the first future
-//! is polled, it tries to exhaust the channel to get as many requests as possible and sends a
-//! single `TsoRequest` to the PD server. The other future receives `TsoResponse`s from the PD
-//! server and allocates timestamps for the requests.
+//! Once a `TimestampOracle` is created, there will be two futures running in a
+//! background working thread created automatically. The `get_timestamp` method
+//! creates a oneshot channel whose transmitter is served as a
+//! `TimestampRequest`. `TimestampRequest`s are sent to the working thread
+//! through a bounded multi-producer, single-consumer channel. Every time the
+//! first future is polled, it tries to exhaust the channel to get as many
+//! requests as possible and sends a single `TsoRequest` to the PD server. The
+//! other future receives `TsoResponse`s from the PD server and allocates
+//! timestamps for the requests.
 
 use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, thread};
 
@@ -37,13 +39,14 @@ struct TimestampRequest {
     count: u32,
 }
 
-/// The timestamp oracle (TSO) which provides monotonically increasing timestamps.
+/// The timestamp oracle (TSO) which provides monotonically increasing
+/// timestamps.
 pub struct TimestampOracle {
-    /// The transmitter of a bounded channel which transports requests of getting a single
-    /// timestamp to the TSO working thread. A bounded channel is used to prevent using
-    /// too much memory unexpectedly.
-    /// In the working thread, the `TimestampRequest`, which is actually a one channel sender,
-    /// is used to send back the timestamp result.
+    /// The transmitter of a bounded channel which transports requests of
+    /// getting a single timestamp to the TSO working thread. A bounded
+    /// channel is used to prevent using too much memory unexpectedly.
+    /// In the working thread, the `TimestampRequest`, which is actually a one
+    /// channel sender, is used to send back the timestamp result.
     request_tx: mpsc::Sender<TimestampRequest>,
     close_rx: watch::Receiver<()>,
 }
@@ -113,12 +116,14 @@ async fn run_tso(
     mut request_rx: mpsc::Receiver<TimestampRequest>,
     close_tx: watch::Sender<()>,
 ) {
-    // The `TimestampRequest`s which are waiting for the responses from the PD server
+    // The `TimestampRequest`s which are waiting for the responses from the PD
+    // server
     let pending_requests = Rc::new(RefCell::new(VecDeque::with_capacity(MAX_PENDING_COUNT)));
 
-    // When there are too many pending requests, the `send_request` future will refuse to fetch
-    // more requests from the bounded channel. This waker is used to wake up the sending future
-    // if the queue containing pending requests is no longer full.
+    // When there are too many pending requests, the `send_request` future will
+    // refuse to fetch more requests from the bounded channel. This waker is
+    // used to wake up the sending future if the queue containing pending
+    // requests is no longer full.
     let sending_future_waker = Rc::new(AtomicWaker::new());
 
     let mut request_stream = TsoRequestStream {
@@ -139,8 +144,8 @@ async fn run_tso(
         while let Some(Ok(resp)) = rpc_receiver.next().await {
             let mut pending_requests = pending_requests.borrow_mut();
 
-            // Wake up the sending future blocked by too many pending requests as we are consuming
-            // some of them here.
+            // Wake up the sending future blocked by too many pending requests as we are
+            // consuming some of them here.
             if pending_requests.len() >= MAX_PENDING_COUNT {
                 sending_future_waker.wake();
             }
@@ -204,8 +209,8 @@ impl<'a> Stream for TsoRequestStream<'a> {
             let write_flags = WriteFlags::default().buffer_hint(false);
             Poll::Ready(Some((req, write_flags)))
         } else {
-            // Set the waker to the context, then the stream can be waked up after the pending queue
-            // is no longer full.
+            // Set the waker to the context, then the stream can be waked up after the
+            // pending queue is no longer full.
             self.self_waker.register(cx.waker());
             Poll::Pending
         }
@@ -216,9 +221,9 @@ fn allocate_timestamps(
     resp: &TsoResponse,
     pending_requests: &mut VecDeque<RequestGroup>,
 ) -> Result<()> {
-    // PD returns the timestamp with the biggest logical value. We can send back timestamps
-    // whose logical value is from `logical - count + 1` to `logical` using the senders
-    // in `pending`.
+    // PD returns the timestamp with the biggest logical value. We can send back
+    // timestamps whose logical value is from `logical - count + 1` to `logical`
+    // using the senders in `pending`.
     let tail_ts = resp
         .timestamp
         .as_ref()

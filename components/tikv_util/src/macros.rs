@@ -41,7 +41,8 @@ macro_rules! slow_log {
 
 }
 
-/// Makes a thread name with an additional tag inherited from the current thread.
+/// Makes a thread name with an additional tag inherited from the current
+/// thread.
 #[macro_export]
 macro_rules! thd_name {
     ($name:expr) => {{
@@ -54,7 +55,8 @@ macro_rules! thd_name {
 /// Simulates Go's defer.
 ///
 /// Please note that, different from go, this defer is bound to scope.
-/// When exiting the scope, its deferred calls are executed in last-in-first-out order.
+/// When exiting the scope, its deferred calls are executed in last-in-first-out
+/// order.
 #[macro_export]
 macro_rules! defer {
     ($t:expr) => {
@@ -62,8 +64,8 @@ macro_rules! defer {
     };
 }
 
-/// Waits for async operation. It returns `Option<Res>` after the expression gets executed.
-/// It only accepts a `Result` expression.
+/// Waits for async operation. It returns `Option<Res>` after the expression
+/// gets executed. It only accepts a `Result` expression.
 #[macro_export]
 macro_rules! wait_op {
     ($expr:expr) => {
@@ -87,7 +89,8 @@ macro_rules! wait_op {
     }};
 }
 
-/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or `Ok(None)`.
+/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or
+/// `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt {
     ($expr:expr) => {{
@@ -99,8 +102,8 @@ macro_rules! try_opt {
     }};
 }
 
-/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or `Ok(None)`.
-/// return `Ok(or)` when met `Ok(None)`.
+/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or
+/// `Ok(None)`. return `Ok(or)` when met `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt_or {
     ($expr:expr, $or:expr) => {{
@@ -115,8 +118,8 @@ macro_rules! try_opt_or {
 /// A safe panic macro that prevents double panic.
 ///
 /// You probably want to use this macro instead of `panic!` in a `drop` method.
-/// It checks whether the current thread is unwinding because of panic. If it is,
-/// log an error message instead of causing double panic.
+/// It checks whether the current thread is unwinding because of panic. If it
+/// is, log an error message instead of causing double panic.
 #[macro_export]
 macro_rules! safe_panic {
     () => ({

@@ -19,7 +19,7 @@ define_error_codes!(
     STALE_COMMAND => ("StaleCommand", "", ""),
     TRANSPORT => ("Transport", "", ""),
     COPROCESSOR => ("Coprocessor", "", ""),
-    IO => ("IO", "", ""),
+    IO => ("Io", "", ""),
     PROTOBUF => ("Protobuf", "", ""),
     ADDR_PARSE => ("AddressParse", "", ""),
     TIMEOUT => ("Timeout", "", ""),

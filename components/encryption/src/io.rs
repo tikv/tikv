@@ -409,7 +409,8 @@ impl CrypterCore {
     }
 
     fn reset_buffer(&mut self, size: usize) {
-        // OCrypter require the output buffer to have block_size extra bytes, or it will panic.
+        // OCrypter require the output buffer to have block_size extra bytes, or it will
+        // panic.
         self.buffer.resize(size + self.block_size, 0);
     }
 
@@ -436,9 +437,10 @@ impl CrypterCore {
         Ok(())
     }
 
-    /// For simplicity, the following implementation rely on the fact that OpenSSL always
-    /// return exact same size as input in CTR mode. If it is not true in the future, or we
-    /// want to support other counter modes, this code needs to be updated.
+    /// For simplicity, the following implementation rely on the fact that
+    /// OpenSSL always return exact same size as input in CTR mode. If it is
+    /// not true in the future, or we want to support other counter modes,
+    /// this code needs to be updated.
     pub fn do_crypter_in_place(&mut self, buf: &mut [u8]) -> IoResult<()> {
         if self.crypter.is_none() {
             self.reset_crypter(0)?;
@@ -692,9 +694,8 @@ mod tests {
             buf: &mut [u8],
         ) -> Poll<IoResult<usize>> {
             let len = min(self.read_maxsize_once, buf.len());
-            let r = self.cursor.read(&mut buf[..len]);
-            assert!(r.is_ok());
-            Poll::Ready(IoResult::Ok(r.unwrap()))
+            let r = self.cursor.read(&mut buf[..len]).unwrap();
+            Poll::Ready(IoResult::Ok(r))
         }
     }
 
@@ -725,11 +726,10 @@ mod tests {
             let mut encrypt_read_len = 0;
 
             loop {
-                let s = encrypt_reader
+                let read_len = encrypt_reader
                     .read(&mut encrypt_text[encrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }
@@ -755,11 +755,10 @@ mod tests {
             .unwrap();
 
             loop {
-                let s = decrypt_reader
+                let read_len = decrypt_reader
                     .read(&mut decrypt_text[decrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }

@@ -8,4 +8,5 @@
 mod apply;
 mod store;
 
-pub use store::{create_store_batch_system, StoreContext, StoreSystem};
+pub(crate) use apply::ApplyContext;
+pub use store::{create_store_batch_system, StoreContext, StoreRouter, StoreSystem};

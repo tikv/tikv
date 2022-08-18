@@ -39,7 +39,7 @@ impl KeyHandle {
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&Option<Lock>) -> T) -> T {
-        f(&*self.lock_store.lock())
+        f(&self.lock_store.lock())
     }
 
     /// Set the LockTable that the KeyHandle is in.
@@ -80,7 +80,7 @@ impl KeyHandleGuard {
     }
 
     pub fn with_lock<T>(&self, f: impl FnOnce(&mut Option<Lock>) -> T) -> T {
-        f(&mut *self.handle.lock_store.lock())
+        f(&mut self.handle.lock_store.lock())
     }
 
     pub(crate) fn handle(&self) -> &Arc<KeyHandle> {

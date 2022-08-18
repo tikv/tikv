@@ -10,12 +10,12 @@ use tikv_util::time::Instant;
 use tracker::{Tracker, TrackerToken, GLOBAL_TRACKERS};
 
 use crate::{
-    perf_context_metrics::*, raw_util, set_perf_flags, set_perf_level,
-    PerfContext as RawPerfContext, PerfFlag, PerfFlags,
+    perf_context_metrics::*, set_perf_flags, set_perf_level, util, PerfContext as RawPerfContext,
+    PerfFlag, PerfFlags,
 };
 
 macro_rules! report_write_perf_context {
-    ($ctx: expr, $metric: ident) => {
+    ($ctx:expr, $metric:ident) => {
         if $ctx.perf_level != PerfLevel::Disable {
             $ctx.write = WritePerfContext::capture();
             observe_write_time!($ctx, $metric, write_wal_time);
@@ -31,7 +31,7 @@ macro_rules! report_write_perf_context {
 }
 
 macro_rules! observe_write_time {
-    ($ctx:expr, $metric: expr, $v:ident) => {
+    ($ctx:expr, $metric:expr, $v:ident) => {
         $metric.$v.observe(($ctx.write.$v) as f64 / 1e9);
     };
 }
@@ -169,7 +169,8 @@ pub struct PerfContextStatistics {
 const FLUSH_METRICS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl PerfContextStatistics {
-    /// Create an instance which stores instant statistics values, retrieved at creation.
+    /// Create an instance which stores instant statistics values, retrieved at
+    /// creation.
     pub fn new(perf_level: PerfLevel, kind: PerfContextKind) -> Self {
         PerfContextStatistics {
             perf_level,
@@ -184,14 +185,14 @@ impl PerfContextStatistics {
         if self.perf_level == PerfLevel::Uninitialized {
             match self.kind {
                 PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
-                    set_perf_flags(&*DEFAULT_READ_PERF_FLAGS)
+                    set_perf_flags(&DEFAULT_READ_PERF_FLAGS)
                 }
                 PerfContextKind::RaftstoreStore | PerfContextKind::RaftstoreApply => {
-                    set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS)
+                    set_perf_flags(&DEFAULT_WRITE_PERF_FLAGS)
                 }
             }
         } else {
-            set_perf_level(raw_util::to_raw_perf_level(self.perf_level));
+            set_perf_level(util::to_raw_perf_level(self.perf_level));
         }
     }
 

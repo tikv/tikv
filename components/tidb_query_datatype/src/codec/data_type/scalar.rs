@@ -13,17 +13,19 @@ use crate::{
 
 /// A scalar value container, a.k.a. datum, for all concrete eval types.
 ///
-/// In many cases, for example, at the framework level, the concrete eval type is unknown at compile
-/// time. So we use this enum container to represent types dynamically. It is similar to trait
-/// object `Box<T>` where `T` is a concrete eval type but faster.
+/// In many cases, for example, at the framework level, the concrete eval type
+/// is unknown at compile time. So we use this enum container to represent types
+/// dynamically. It is similar to trait object `Box<T>` where `T` is a concrete
+/// eval type but faster.
 ///
 /// Like `VectorValue`, the inner concrete value is immutable.
 ///
 /// Compared to `VectorValue`, it only contains a single concrete value.
-/// Compared to `Datum`, it is a newer encapsulation that naturally wraps `Option<..>`.
+/// Compared to `Datum`, it is a newer encapsulation that naturally wraps
+/// `Option<..>`.
 ///
-/// TODO: Once we removed the `Option<..>` wrapper, it will be much like `Datum`. At that time,
-/// we only need to preserve one of them.
+/// TODO: Once we removed the `Option<..>` wrapper, it will be much like
+/// `Datum`. At that time, we only need to preserve one of them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScalarValue {
     Int(Option<super::Int>),
@@ -81,7 +83,7 @@ impl ScalarValue {
     }
 }
 
-impl AsMySQLBool for ScalarValue {
+impl AsMySqlBool for ScalarValue {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match_template_evaltype! {
@@ -170,7 +172,8 @@ impl From<ScalarValue> for Option<f64> {
     }
 }
 
-/// A scalar value reference container. Can be created from `ScalarValue` or `VectorValue`.
+/// A scalar value reference container. Can be created from `ScalarValue` or
+/// `VectorValue`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalarValueRef<'a> {
     Int(Option<&'a super::Int>),

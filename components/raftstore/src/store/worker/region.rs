@@ -18,7 +18,7 @@ use std::{
 
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
 use fail::fail_point;
-use file_system::{IOType, WithIOType};
+use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -48,7 +48,8 @@ use crate::{
     },
 };
 
-// used to periodically check whether we should delete a stale peer's range in region runner
+// used to periodically check whether we should delete a stale peer's range in
+// region runner
 
 #[cfg(test)]
 pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
@@ -72,7 +73,7 @@ const ENGINE: &str = "engine";
 pub enum Task<S> {
     Gen {
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
         canceled: Arc<AtomicBool>,
@@ -137,7 +138,8 @@ struct StalePeerInfo {
 }
 
 /// A structure records all ranges to be deleted with some delay.
-/// The delay is because there may be some coprocessor requests related to these ranges.
+/// The delay is because there may be some coprocessor requests related to these
+/// ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
@@ -202,7 +204,8 @@ impl PendingDeleteRanges {
 
     /// Inserts a new range waiting to be deleted.
     ///
-    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
+    /// Before an insert is called, it must call drain_overlap_ranges to clean
+    /// the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(start_key, end_key).is_empty() {
             panic!(
@@ -262,7 +265,7 @@ where
     fn generate_snap(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         notifier: SyncSender<RaftSnapshot>,
@@ -275,7 +278,7 @@ where
             &self.engine,
             kv_snap,
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             for_balance,
             allow_multi_files_snapshot,
@@ -290,18 +293,20 @@ where
                 "err" => %e,
             );
         }
-        // The error can be ignored as snapshot will be sent in next heartbeat in the end.
+        // The error can be ignored as snapshot will be sent in next heartbeat in the
+        // end.
         let _ = self
             .router
             .send(region_id, CasualMessage::SnapshotGenerated);
         Ok(())
     }
 
-    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
+    /// Handles the task of generating snapshot of the Region. It calls
+    /// `generate_snap` to do the actual work.
     fn handle_gen(
         &self,
         region_id: u64,
-        last_applied_index_term: u64,
+        last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         canceled: Arc<AtomicBool>,
@@ -317,15 +322,15 @@ where
         }
 
         let start = Instant::now();
-        let _io_type_guard = WithIOType::new(if for_balance {
-            IOType::LoadBalance
+        let _io_type_guard = WithIoType::new(if for_balance {
+            IoType::LoadBalance
         } else {
-            IOType::Replication
+            IoType::Replication
         });
 
         if let Err(e) = self.generate_snap(
             region_id,
-            last_applied_index_term,
+            last_applied_term,
             last_applied_state,
             kv_snap,
             notifier,
@@ -425,7 +430,8 @@ where
         Ok(())
     }
 
-    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
+    /// Tries to apply the snapshot of the specified Region. It calls
+    /// `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
@@ -493,7 +499,8 @@ where
         let mut df_ranges = Vec::with_capacity(overlap_ranges.len());
         for (region_id, start_key, end_key, stale_sequence) in overlap_ranges.iter() {
             // `DeleteFiles` may break current rocksdb snapshots consistency,
-            // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
+            // so do not use it unless we can make sure there is no reader of the destroyed
+            // peer anymore.
             if *stale_sequence < oldest_sequence {
                 df_ranges.push(Range::new(start_key, end_key));
             } else {
@@ -588,8 +595,8 @@ where
         }
     }
 
-    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
-    /// Returns true if the ingestion causes write stall.
+    /// Checks the number of files at level 0 to avoid write stall after
+    /// ingesting sst. Returns true if the ingestion causes write stall.
     fn ingest_maybe_stall(&self) -> bool {
         for cf in SNAPSHOT_CFS {
             // no need to check lock cf
@@ -679,8 +686,9 @@ where
     fn handle_pending_applies(&mut self) {
         fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
-            // should not handle too many applies than the number of files that can be ingested.
-            // check level 0 every time because we can not make sure how does the number of level 0 files change.
+            // should not handle too many applies than the number of files that can be
+            // ingested. check level 0 every time because we can not make sure
+            // how does the number of level 0 files change.
             if self.ctx.ingest_maybe_stall() {
                 break;
             }
@@ -703,7 +711,7 @@ where
         match task {
             Task::Gen {
                 region_id,
-                last_applied_index_term,
+                last_applied_term,
                 last_applied_state,
                 kv_snap,
                 canceled,
@@ -742,7 +750,7 @@ where
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
                         region_id,
-                        last_applied_index_term,
+                        last_applied_term,
                         last_applied_state,
                         kv_snap,
                         canceled,
@@ -813,12 +821,12 @@ mod tests {
     };
 
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions},
+        ctor::CfOptions,
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
         CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
-        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
+        RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
     use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -982,14 +990,14 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("write", cf_opts.clone()),
-            CFOptions::new("lock", cf_opts.clone()),
-            CFOptions::new("raft", cf_opts.clone()),
+            (CF_DEFAULT, cf_opts.clone()),
+            (CF_WRITE, cf_opts.clone()),
+            (CF_LOCK, cf_opts.clone()),
+            (CF_RAFT, cf_opts.clone()),
         ];
         let engine = get_test_db_for_regions(
             &temp_dir,
@@ -1055,7 +1063,7 @@ mod tests {
                 .schedule(Task::Gen {
                     region_id: id,
                     kv_snap: engine.kv.snapshot(),
-                    last_applied_index_term: entry.get_term(),
+                    last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,
                     canceled: Arc::new(AtomicBool::new(false)),
                     notifier: tx,

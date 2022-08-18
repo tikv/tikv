@@ -483,7 +483,14 @@ fn must_prewrite_lock_impl<E: Engine>(
 }
 
 pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: impl Into<TimeStamp>) {
-    must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), PessimisticLockType::NonPessimisticLocked);
+    must_prewrite_lock_impl(
+        engine,
+        key,
+        pk,
+        ts,
+        TimeStamp::zero(),
+        PessimisticLockType::NonPessimisticLocked,
+    );
 }
 
 pub fn must_prewrite_lock_err<E: Engine>(
@@ -498,17 +505,15 @@ pub fn must_prewrite_lock_err<E: Engine>(
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    assert!(
-        prewrite(
-            &mut txn,
-            &mut reader,
-            &default_txn_props(ts, pk, TimeStamp::zero()),
-            Mutation::make_lock(Key::from_raw(key)),
-            &None,
-            PessimisticLockType::NonPessimisticLocked,
-        )
-        .is_err()
-    );
+    prewrite(
+        &mut txn,
+        &mut reader,
+        &default_txn_props(ts, pk, TimeStamp::zero()),
+        Mutation::make_lock(Key::from_raw(key)),
+        &None,
+        PessimiticLockType::NonPessimisticLocked,
+    )
+    .unwrap_err();
 }
 
 pub fn must_pessimistic_prewrite_lock<E: Engine>(
@@ -551,14 +556,12 @@ pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<
     let cm = ConcurrencyManager::new(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-    assert!(
-        txn::cleanup(
-            &mut txn,
-            &mut reader,
-            Key::from_raw(key),
-            TimeStamp::zero(),
-            false,
-        )
-        .is_err()
-    );
+    txn::cleanup(
+        &mut txn,
+        &mut reader,
+        Key::from_raw(key),
+        TimeStamp::zero(),
+        false,
+    )
+    .unwrap_err();
 }

@@ -1086,6 +1086,23 @@
 ## When it's not set, 15% of available system memory will be used.
 # memory-limit = "1GB"
 
+## Version of the log file in Raft Engine.
+##
+## Candidates:
+##   1: Can be read by TiKV release 6.1 and above.
+##   2: Can be read by TiKV release 6.3 and above. Supports log recycling.
+##
+## Default: 1.
+# format-version = 1
+
+## Whether to recycle stale log files in Raft Engine.
+## If `true`, logically purged log files will be reserved for recycling.
+## Only available for `format-version` >= 2. This option is only
+## available when TiKV >= 6.3.x.
+##
+## Default: false.
+# enable-log-recycle = false
+
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
 # ca-path = ""
@@ -1189,7 +1206,7 @@
 
 [log-backup] 
 ## Number of threads to perform backup stream tasks.
-## The default value is set to min(CPU_NUM * 0.5, 8).
+## The default value is CPU_NUM * 0.5, and limited to [2, 12].
 # num-threads = 8
 
 ## enable this feature. TiKV will starts watch related tasks in PD. and backup kv changes to storage accodring to task.

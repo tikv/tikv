@@ -238,6 +238,7 @@ impl PdMocker for Service {
             .insert(region_id, req.get_leader().clone());
 
         let mut resp = RegionHeartbeatResponse::default();
+        resp.set_region_id(req.get_region().get_id());
         let header = Service::header();
         resp.set_header(header);
         Some(Ok(resp))

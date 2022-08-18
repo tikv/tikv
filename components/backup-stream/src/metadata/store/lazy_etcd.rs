@@ -10,6 +10,8 @@ use tokio::sync::OnceCell;
 use super::{etcd::EtcdSnapshot, EtcdStore, MetaStore};
 use crate::errors::{ContextualResultExt, Result};
 
+const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct LazyEtcdClient(Arc<LazyEtcdClientInner>);
 
@@ -26,7 +28,11 @@ impl ConnectionConfig {
         if let Some(tls) = &self.tls {
             opts = opts.with_tls(tls.clone())
         }
-        opts = opts.with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout);
+        opts = opts
+            .with_keep_alive(self.keep_alive_interval, self.keep_alive_timeout)
+            .with_timeout(RPC_TIMEOUT)
+            .keep_alive_while_idle(false);
+
         opts
     }
 }
@@ -105,9 +111,10 @@ impl LazyEtcdClientInner {
     async fn connect(&self) -> Result<EtcdStore> {
         let store = retry(|| {
             // For now, the interface of the `etcd_client` doesn't us to control
-            // how to create channels when connecting, hence we cannot update the tls config at runtime.
-            // TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt the `SecurityManager` API,
-            //       instead of doing everything by own.
+            // how to create channels when connecting, hence we cannot update the tls config
+            // at runtime.
+            // TODO: maybe add some method like `with_channel` for `etcd_client`, and adapt
+            // the `SecurityManager` API, instead of doing everything by own.
             etcd_client::Client::connect(self.endpoints.clone(), Some(self.opt.clone()))
         })
         .await

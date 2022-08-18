@@ -17,10 +17,7 @@ use rocksdb::{
 };
 use tikv_util::warn;
 
-use crate::{
-    properties::{RangeProperties, UserCollectedPropertiesDecoder},
-    raw::EventListener,
-};
+use crate::properties::{RangeProperties, UserCollectedPropertiesDecoder};
 
 pub struct RocksCompactionJobInfo<'a>(&'a RawCompactionJobInfo);
 
@@ -200,7 +197,7 @@ impl CompactedEvent for RocksCompactedEvent {
     }
 
     fn cf(&self) -> &str {
-        &*self.cf
+        &self.cf
     }
 }
 
@@ -229,7 +226,7 @@ impl CompactionListener {
     }
 }
 
-impl EventListener for CompactionListener {
+impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &RawCompactionJobInfo) {
         let info = &RocksCompactionJobInfo::from_raw(info);
         if info.status().is_err() {

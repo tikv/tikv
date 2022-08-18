@@ -410,9 +410,9 @@ impl PdCluster {
 
     fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let store_id = store.get_id();
-        // There is a race between put_store and handle_region_heartbeat_response. If store id is
-        // 0, it means it's a placeholder created by latter, we just need to update the meta.
-        // Otherwise we should overwrite it.
+        // There is a race between put_store and handle_region_heartbeat_response. If
+        // store id is 0, it means it's a placeholder created by latter, we just need to
+        // update the meta. Otherwise we should overwrite it.
         if self
             .stores
             .get(&store_id)
@@ -538,8 +538,8 @@ impl PdCluster {
             && incoming_epoch.get_conf_ver() == 0;
         let overlaps = self.get_overlap(start_key, end_key);
         if created_by_unsafe_recovery {
-            // Allow recreated region by unsafe recover to overwrite other regions with a "older"
-            // epoch.
+            // Allow recreated region by unsafe recover to overwrite other regions with a
+            // "older" epoch.
             return Ok(overlaps);
         }
         for r in overlaps.iter() {
@@ -811,7 +811,7 @@ pub struct TestPdClient {
     pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct GcSafePoint {
     pub serivce: String,
     pub ttl: Duration,
@@ -1318,7 +1318,8 @@ impl TestPdClient {
         self.cluster.wl().check_merge_target_integrity = false;
     }
 
-    /// The next generated TSO will be `ts + 1`. See `get_tso()` and `batch_get_tso()`.
+    /// The next generated TSO will be `ts + 1`. See `get_tso()` and
+    /// `batch_get_tso()`.
     pub fn set_tso(&self, ts: TimeStamp) {
         let old = self.tso.swap(ts.into_inner(), Ordering::SeqCst);
         if old > ts.into_inner() {

@@ -48,7 +48,7 @@ fn bench_engine_snapshot<E: Engine, F: EngineFactory<E>>(
     });
 }
 
-//exclude snapshot
+// exclude snapshot
 fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     bencher: &mut Bencher<'_>,
     config: &BenchConfig<F>,

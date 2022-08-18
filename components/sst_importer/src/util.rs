@@ -9,8 +9,8 @@ use file_system::File;
 use super::Result;
 
 /// Prepares the SST file for ingestion.
-/// The purpose is to make the ingestion retryable when using the `move_files` option.
-/// Things we need to consider here:
+/// The purpose is to make the ingestion retryable when using the `move_files`
+/// option. Things we need to consider here:
 /// 1. We need to access the original file on retry, so we should make a clone
 ///    before ingestion.
 /// 2. `RocksDB` will modified the global seqno of the ingested file, so we need
@@ -32,8 +32,9 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     if Path::new(clone).exists() {
         file_system::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
     }
-    // always try to remove the file from key manager because the clean up in rocksdb is not atomic,
-    // thus the file may be deleted but key in key manager is not.
+    // always try to remove the file from key manager because the clean up in
+    // rocksdb is not atomic, thus the file may be deleted but key in key
+    // manager is not.
     if let Some(key_manager) = encryption_key_manager {
         key_manager.delete_file(clone)?;
     }
@@ -69,13 +70,12 @@ mod tests {
 
     use encryption::DataKeyManager;
     use engine_rocks::{
-        util::{new_engine, RocksCFOptions},
-        RocksColumnFamilyOptions, RocksDBOptions, RocksEngine, RocksSstWriterBuilder,
-        RocksTitanDBOptions,
+        util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstWriterBuilder,
+        RocksTitanDbOptions,
     };
     use engine_traits::{
-        CfName, ColumnFamilyOptions, DBOptions, EncryptionKeyManager, ImportExt, Peekable,
-        SstWriter, SstWriterBuilder, TitanDBOptions,
+        CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
+        SstWriterBuilder, TitanDbOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -115,8 +115,8 @@ mod tests {
     }
 
     fn check_prepare_sst_for_ingestion(
-        db_opts: Option<RocksDBOptions>,
-        cf_opts: Option<Vec<RocksCFOptions<'_>>>,
+        db_opts: Option<RocksDbOptions>,
+        cf_opts: Option<Vec<(&str, RocksCfOptions)>>,
         key_manager: Option<&DataKeyManager>,
         was_encrypted: bool,
     ) {
@@ -135,10 +135,11 @@ mod tests {
 
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
-        let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
+        let db_opts = db_opts.unwrap_or_default();
+        let cf_opts = cf_opts.unwrap_or_else(|| vec![(CF_DEFAULT, RocksCfOptions::default())]);
+        let db = new_engine_opt(path_str, db_opts, cf_opts).unwrap();
 
-        gen_sst_with_kvs(&db, cf_name, sst_path.to_str().unwrap(), &kvs);
+        gen_sst_with_kvs(&db, CF_DEFAULT, sst_path.to_str().unwrap(), &kvs);
 
         if was_encrypted {
             // Add the file to key_manager to simulate an encrypted file.
@@ -156,12 +157,12 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf_name, &kvs);
+        check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
-        // Since we are not using key_manager in db, simulate the db deleting the file from
-        // key_manager.
+        // Since we are not using key_manager in db, simulate the db deleting the file
+        // from key_manager.
         if let Some(manager) = key_manager {
             manager.delete_file(sst_clone.to_str().unwrap()).unwrap();
         }
@@ -171,34 +172,34 @@ mod tests {
         prepare_sst_for_ingestion(&sst_path, &sst_clone, key_manager).unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf_name, &[sst_clone.to_str().unwrap()])
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
             .unwrap();
-        check_db_with_kvs(&db, cf_name, &kvs);
+        check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
     }
 
     #[test]
     fn test_prepare_sst_for_ingestion() {
         check_prepare_sst_for_ingestion(
-            None, None, None,  /*key_manager*/
-            false, /* was encrypted*/
+            None, None, None,  // key_manager
+            false, // was encrypted
         );
     }
 
     #[test]
     fn test_prepare_sst_for_ingestion_titan() {
-        let mut db_opts = RocksDBOptions::new();
-        let mut titan_opts = RocksTitanDBOptions::new();
+        let mut db_opts = RocksDbOptions::new();
+        let mut titan_opts = RocksTitanDbOptions::new();
         // Force all values write out to blob files.
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);
-        let mut cf_opts = RocksColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::new();
         cf_opts.set_titandb_options(&titan_opts);
         check_prepare_sst_for_ingestion(
             Some(db_opts),
-            Some(vec![RocksCFOptions::new("default", cf_opts)]),
-            None,  /*key_manager*/
-            false, /*was_encrypted*/
+            Some(vec![(CF_DEFAULT, cf_opts)]),
+            None,  // key_manager
+            false, // was_encrypted
         );
     }
 
@@ -207,7 +208,7 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
-        check_prepare_sst_for_ingestion(None, None, Some(&manager), false /*was_encrypted*/);
+        check_prepare_sst_for_ingestion(None, None, Some(&manager), false /* was_encrypted */);
     }
 
     #[test]
@@ -215,6 +216,6 @@ mod tests {
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
-        check_prepare_sst_for_ingestion(None, None, Some(&manager), true /*was_encrypted*/);
+        check_prepare_sst_for_ingestion(None, None, Some(&manager), true /* was_encrypted */);
     }
 }

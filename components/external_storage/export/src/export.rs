@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! To use External storage with protobufs as an application, import this module.
-//! external_storage contains the actual library code
+//! To use External storage with protobufs as an application, import this
+//! module. external_storage contains the actual library code
 //! Cloud provider backends are under components/cloud
 use std::{
     io::{self, Write},
@@ -29,7 +29,7 @@ pub use external_storage::{
 };
 use futures_io::AsyncRead;
 #[cfg(feature = "cloud-gcp")]
-pub use gcp::{Config as GCSConfig, GCSStorage};
+pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
@@ -55,8 +55,9 @@ pub fn create_storage(
     }
 }
 
-// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage is automatically wrapped with a client
-// This function is used by the library/server to avoid any wrapping
+// when the flag cloud-storage-dylib or cloud-storage-grpc is set create_storage
+// is automatically wrapped with a client This function is used by the
+// library/server to avoid any wrapping
 pub fn create_storage_no_client(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -138,7 +139,7 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
         }
         #[cfg(feature = "cloud-gcp")]
         Backend::Gcs(config) => {
-            let conf = GCSConfig::from_input(config.clone());
+            let conf = GcsConfig::from_input(config.clone());
             Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
         }
         #[cfg(feature = "cloud-azure")]
@@ -154,7 +155,7 @@ fn create_config(backend: &Backend) -> Option<io::Result<Box<dyn BlobConfig>>> {
             }
             #[cfg(feature = "cloud-gcp")]
             "gcp" | "gcs" => {
-                let conf = GCSConfig::from_cloud_dynamic(&dyn_backend);
+                let conf = GcsConfig::from_cloud_dynamic(&dyn_backend);
                 Some(conf.map(|c| Box::new(c) as Box<dyn BlobConfig>))
             }
             #[cfg(feature = "cloud-azure")]
@@ -190,14 +191,14 @@ fn create_backend_inner(
             blob_store(s)
         }
         #[cfg(feature = "cloud-gcp")]
-        Backend::Gcs(config) => blob_store(GCSStorage::from_input(config.clone())?),
+        Backend::Gcs(config) => blob_store(GcsStorage::from_input(config.clone())?),
         #[cfg(feature = "cloud-azure")]
         Backend::AzureBlobStorage(config) => blob_store(AzureStorage::from_input(config.clone())?),
         Backend::CloudDynamic(dyn_backend) => match dyn_backend.provider_name.as_str() {
             #[cfg(feature = "cloud-aws")]
             "aws" | "s3" => blob_store(S3Storage::from_cloud_dynamic(dyn_backend)?),
             #[cfg(feature = "cloud-gcp")]
-            "gcp" | "gcs" => blob_store(GCSStorage::from_cloud_dynamic(dyn_backend)?),
+            "gcp" | "gcs" => blob_store(GcsStorage::from_cloud_dynamic(dyn_backend)?),
             #[cfg(feature = "cloud-azure")]
             "azure" | "azblob" => blob_store(AzureStorage::from_cloud_dynamic(dyn_backend)?),
             _ => {

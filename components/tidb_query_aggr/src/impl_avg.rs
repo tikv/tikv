@@ -73,7 +73,8 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
 /// The AVG aggregate function.
 ///
-/// Note that there are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) -> (Int, Double)`.
+/// Note that there are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) ->
+/// (Int, Double)`.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggrFnStateAvg::<T>::new())]
 pub struct AggrFnAvg<T>

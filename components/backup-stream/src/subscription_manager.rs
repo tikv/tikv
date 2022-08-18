@@ -62,10 +62,10 @@ pub struct ResolvedRegions {
 }
 
 impl ResolvedRegions {
-    /// compose the calculated global checkpoint and region checkpoints.
-    /// note: maybe we can compute the global checkpoint internal and getting the interface clear.
-    ///       however we must take the `min_ts` or we cannot provide valid global checkpoint if there
-    ///       isn't any region checkpoint.
+    /// Compose the calculated global checkpoint and region checkpoints.
+    /// Note: Maybe we can compute the global checkpoint internal and getting
+    /// the interface clear. However we must take the `min_ts` or we cannot
+    /// provide valid global checkpoint if there isn't any region checkpoint.
     pub fn new(checkpoint: TimeStamp, checkpoints: Vec<(Region, TimeStamp)>) -> Self {
         Self {
             items: checkpoints,
@@ -128,7 +128,8 @@ where
         handle: ObserveHandle,
     ) -> Result<Statistics> {
         let region_id = region.get_id();
-        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep retrying here?
+        // Note: we have external retry at `ScanCmd::exec_by_with_retry`, should we keep
+        // retrying here?
         let snap = self.observe_over_with_retry(region, move || {
             ChangeObserver::from_pitr(region_id, handle.clone())
         })?;
@@ -201,7 +202,6 @@ fn scan_executor_loop(
     canceled: Arc<AtomicBool>,
 ) {
     while let Ok(cmd) = cmds.recv() {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("execute_scan_command");
         debug!("handling initial scan request"; "region_id" => %cmd.region.get_id());
         metrics::PENDING_INITIAL_SCAN_LEN
@@ -222,9 +222,11 @@ fn scan_executor_loop(
 }
 
 /// spawn the executors in the scan pool.
-/// we make workers thread instead of spawn scan task directly into the pool because the [`InitialDataLoader`] isn't `Sync` hence
-/// we must use it very carefully or rustc (along with tokio) would complain that we made a `!Send` future.
-/// so we have moved the data loader to the synchronous context so its reference won't be shared between threads any more.
+/// we make workers thread instead of spawn scan task directly into the pool
+/// because the [`InitialDataLoader`] isn't `Sync` hence we must use it very
+/// carefully or rustc (along with tokio) would complain that we made a `!Send`
+/// future. so we have moved the data loader to the synchronous context so its
+/// reference won't be shared between threads any more.
 fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> ScanPoolHandle {
     let (tx, rx) = crossbeam::channel::bounded(MESSAGE_BUFFER_SIZE);
     let pool = create_scan_pool(number);
@@ -235,7 +237,7 @@ fn spawn_executors(init: impl InitialScan + Send + 'static, number: usize) -> Sc
         let stopped = stopped.clone();
         pool.spawn(move |_: &mut YatpHandle<'_>| {
             tikv_alloc::add_thread_memory_accessor();
-            let _io_guard = file_system::WithIOType::new(file_system::IOType::Replication);
+            let _io_guard = file_system::WithIoType::new(file_system::IoType::Replication);
             scan_executor_loop(init, rx, stopped);
             tikv_alloc::remove_thread_memory_accessor();
         })
@@ -280,8 +282,9 @@ const MESSAGE_BUFFER_SIZE: usize = 4096;
 
 /// The operator for region subscription.
 /// It make a queue for operations over the `SubscriptionTracer`, generally,
-/// we should only modify the `SubscriptionTracer` itself (i.e. insert records, remove records) at here.
-/// So the order subscription / desubscription won't be broken.
+/// we should only modify the `SubscriptionTracer` itself (i.e. insert records,
+/// remove records) at here. So the order subscription / desubscription won't be
+/// broken.
 pub struct RegionSubscriptionManager<S, R, PDC> {
     // Note: these fields appear everywhere, maybe make them a `context` type?
     regions: R,
@@ -337,7 +340,8 @@ where
     ///
     /// # returns
     ///
-    /// a two-tuple, the first is the handle to the manager, the second is the operator loop future.
+    /// a two-tuple, the first is the handle to the manager, the second is the
+    /// operator loop future.
     pub fn start<E, RT>(
         initial_loader: InitialDataLoader<E, R, RT>,
         observer: BackupStreamObserver,
@@ -388,7 +392,6 @@ where
             info!("backup stream: on_modify_observe"; "op" => ?op);
             match op {
                 ObserveOp::Start { region } => {
-                    #[cfg(feature = "failpoints")]
                     fail::fail_point!("delay_on_start_observe");
                     self.start_observe(region).await;
                     metrics::INITIAL_SCAN_REASON
@@ -453,7 +456,8 @@ where
                     }
                     let cps = self.subs.resolve_with(min_ts);
                     let min_region = cps.iter().min_by_key(|(_, rts)| rts);
-                    // If there isn't any region observed, the `min_ts` can be used as resolved ts safely.
+                    // If there isn't any region observed, the `min_ts` can be used as resolved ts
+                    // safely.
                     let rts = min_region.map(|(_, rts)| *rts).unwrap_or(min_ts);
                     info!("getting checkpoint"; "defined_by_region" => ?min_region.map(|r| r.0.get_id()), "checkpoint" => %rts);
                     self.subs.warn_if_gap_too_huge(rts);
@@ -516,7 +520,6 @@ where
             }
 
             Some(for_task) => {
-                #[cfg(feature = "failpoints")]
                 fail::fail_point!("try_start_observe", |_| {
                     Err(Error::Other(box_err!("Nature is boring")))
                 });
@@ -598,7 +601,6 @@ where
     }
 
     async fn get_last_checkpoint_of(&self, task: &str, region: &Region) -> Result<TimeStamp> {
-        #[cfg(feature = "failpoints")]
         fail::fail_point!("get_last_checkpoint_of", |hint| Err(Error::Other(
             box_err!(
                 "get_last_checkpoint_of({}, {:?}) failed because {:?}",
@@ -621,8 +623,9 @@ where
     fn spawn_scan(&self, cmd: ScanCmd) {
         // we should not spawn initial scanning tasks to the tokio blocking pool
         // because it is also used for converting sync File I/O to async. (for now!)
-        // In that condition, if we blocking for some resources(for example, the `MemoryQuota`)
-        // at the block threads, we may meet some ghosty deadlock.
+        // In that condition, if we blocking for some resources(for example, the
+        // `MemoryQuota`) at the block threads, we may meet some ghosty
+        // deadlock.
         let s = self.scan_pool_handle.request(cmd);
         if let Err(err) = s {
             let region_id = err.0.region.get_id();
@@ -659,8 +662,6 @@ mod test {
     use tikv::storage::Statistics;
 
     use super::InitialScan;
-    #[cfg(feature = "failpoints")]
-    use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
 
     #[derive(Clone, Copy)]
     struct NoopInitialScan;
@@ -680,27 +681,27 @@ mod test {
         }
     }
 
-    #[cfg(feature = "failpoints")]
-    fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            f();
-            tx.send(()).unwrap();
-        });
-        let pool = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        let _e = pool.handle().enter();
-        pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
-    }
-
     #[test]
     #[cfg(feature = "failpoints")]
     fn test_message_delay_and_exit() {
         use std::time::Duration;
 
         use super::ScanCmd;
+        use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
+
+        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                f();
+                tx.send(()).unwrap();
+            });
+            let pool = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let _e = pool.handle().enter();
+            pool.block_on(tokio::time::timeout(d, rx)).unwrap().unwrap();
+        }
 
         let pool = spawn_executors(NoopInitialScan, 1);
         let wg = CallbackWaitGroup::new();

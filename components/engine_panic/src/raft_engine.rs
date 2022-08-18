@@ -118,10 +118,6 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        panic!()
-    }
-
     fn flush_metrics(&self, instance: &str) {
         panic!()
     }

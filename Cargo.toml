@@ -38,7 +38,7 @@ cloud-azure = [
   "encryption_export/cloud-azure",
   "sst_importer/cloud-azure",
 ]
-testexport = ["raftstore/testexport", "api_version/testexport"]
+testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
 test-engine-kv-rocksdb = [
   "engine_test/test-engine-kv-rocksdb"
 ]
@@ -110,7 +110,7 @@ libc = "0.2"
 libloading = "0.7"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { path = "components/log_wrappers" }
-match_template = { path = "components/match_template" }
+match-template = "0.0.1"
 memory_trace_macros = { path = "components/memory_trace_macros" }
 mime = "0.3.13"
 more-asserts = "0.2"
@@ -243,7 +243,6 @@ members = [
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
-  "components/match_template",
   "components/online_config",
   "components/panic_hook",
   "components/pd_client",

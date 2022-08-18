@@ -13,7 +13,7 @@ use tidb_query_common::storage::{
     Range,
 };
 use tikv::{
-    coprocessor::{dag::TiKvStorage, *},
+    coprocessor::{dag::TikvStorage, *},
     storage::{Engine, SnapshotStore},
 };
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
@@ -79,7 +79,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         false,
     );
     let mut scanner = RangesScanner::new(RangesScannerOptions {
-        storage: TiKvStorage::new(store, false),
+        storage: TikvStorage::new(store, false),
         ranges: vec![Range::from_pb_range(range, false)],
         scan_backward_in_range: true,
         is_key_only: false,

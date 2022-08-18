@@ -57,7 +57,7 @@ enum Cli {
 }
 
 arg_enum! {
-    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    #[derive(Debug, PartialEq, Clone, Copy)]
     enum Fuzzer {
         Afl,
         Honggfuzz,
@@ -212,7 +212,10 @@ fn run_afl(target: &str) -> Result<()> {
         ));
     }
 
-    // 2. cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
+    // 2.
+    // ```
+    // cargo afl fuzz -i {seed_dir} -o {corpus_dir} target/debug/{instrumented_binary}
+    // ```
     let instrumented_bin = WORKSPACE_ROOT.join("target/debug").join(target);
     let fuzzer_bin = Command::new("cargo")
         .args(&["afl", "fuzz"])

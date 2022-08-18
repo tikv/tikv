@@ -8,34 +8,44 @@ set -euo pipefail
 # Run from the Makefile environment
 MAKEFILE_RUN=${MAKEFILE_RUN:-""}
 if [[ -z $MAKEFILE_RUN ]] ; then
-	COMMAND="$0 $*" exec make run
+    COMMAND="$0 $*" exec make run
 fi
 SHELL_DEBUG=${SHELL_DEBUG:-""}
 if [[ -n "$SHELL_DEBUG" ]] ; then
-  set -x
+    set -x
 fi
 
-CLIPPY_LINTS=(-A clippy::module_inception  \
-	-A clippy::should_implement_trait \
-	-A clippy::too_many_arguments \
-	-A clippy::blacklisted_name \
-	-A clippy::redundant_closure \
-	-A clippy::upper_case_acronyms \
-	-A clippy::field_reassign_with_default \
-	-A clippy::wrong_self_convention \
-	-A clippy::needless_range_loop \
-	-A clippy::inconsistent_struct_constructor \
-	-A clippy::new_ret_no_self \
-	-A clippy::unnecessary_sort_by \
-	-A clippy::unnecessary_wraps \
-	-A clippy::bool_assert_comparison \
-	-A clippy::self_named_constructors \
-	-A clippy::enum_variant_names \
-        -W clippy::dbg_macro \
-        -W clippy::todo \
-        -D clippy::disallowed-methods \
-        -D rust-2018-idioms)
+# Notes:
+# - Enables `significant_drop_in_scrutinee` after
+#   https://github.com/rust-lang/rust-clippy/issues/8963 is fixed.
+# - `derive_partial_eq_without_eq` has compilation overhead.
+CLIPPY_LINTS=(
+    -A clippy::module_inception  \
+    -A clippy::should_implement_trait \
+    -A clippy::too_many_arguments \
+    -A clippy::blacklisted_name \
+    -A clippy::redundant_closure \
+    -A clippy::field_reassign_with_default \
+    -A clippy::wrong_self_convention \
+    -A clippy::needless_range_loop \
+    -A clippy::inconsistent_struct_constructor \
+    -A clippy::new_ret_no_self \
+    -A clippy::unnecessary_sort_by \
+    -A clippy::unnecessary_wraps \
+    -A clippy::bool_assert_comparison \
+    -A clippy::self_named_constructors \
+    -A clippy::enum_variant_names \
+    -A clippy::type_complexity \
+    -A clippy::significant_drop_in_scrutinee \
+    -A clippy::derive_partial_eq_without_eq \
+    -W clippy::dbg_macro \
+    -W clippy::todo \
+    -D clippy::upper_case_acronyms \
+    -D clippy::disallowed_methods \
+    -D rust-2018-idioms \
+    -D clippy::assertions_on_result_states \
+)
 
 cargo clippy --workspace \
-	--exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
-	--features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"
+    --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
+    --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

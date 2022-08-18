@@ -17,7 +17,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, FlowControlFactorsExt};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt};
 use getset::{CopyGetters, Setters};
 use num_traits::cast::{AsPrimitive, FromPrimitive};
 use rand::Rng;
@@ -38,15 +38,16 @@ const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(PartialEq, Debug)]
 enum Trend {
     Increasing,
     Decreasing,
     NoTrend,
 }
 
-/// Flow controller is used to throttle the write rate at scheduler level, aiming
-/// to substitute the write stall mechanism of RocksDB. It features in two points:
+/// Flow controller is used to throttle the write rate at scheduler level,
+/// aiming to substitute the write stall mechanism of RocksDB. It features in
+/// two points:
 ///   * throttle at scheduler, so raftstore and apply won't be blocked anymore
 ///   * better control on the throttle rate to avoid QPS drop under heavy write
 ///
@@ -54,22 +55,22 @@ enum Trend {
 /// is limited to 16MB/s by default which doesn't take real disk ability into
 /// account. It may underestimate the disk's throughout that 16MB/s is too small
 /// at once, causing a very large jitter on the write duration.
-/// Also, it decreases the delayed write rate further if the factors still exceed
-/// the threshold. So under heavy write load, the write rate may be throttled to
-/// a very low rate from time to time, causing QPS drop eventually.
-///
+/// Also, it decreases the delayed write rate further if the factors still
+/// exceed the threshold. So under heavy write load, the write rate may be
+/// throttled to a very low rate from time to time, causing QPS drop eventually.
 
 /// For compaction pending bytes, we use discardable ratio to do flow control
-/// which is separated mechanism from throttle speed. Compaction pending bytes is
-/// a approximate value, usually, changes up and down dramatically, so it's unwise
-/// to map compaction pending bytes to a specified throttle speed. Instead,
-/// mapping it from soft limit to hard limit as 0% to 100% discardable ratio. With
-/// this, there must be a point that foreground write rate is equal to the
-/// background compaction pending bytes consuming rate so that compaction pending
-/// bytes is kept around a steady level.
+/// which is separated mechanism from throttle speed. Compaction pending bytes
+/// is a approximate value, usually, changes up and down dramatically, so it's
+/// unwise to map compaction pending bytes to a specified throttle speed.
+/// Instead, mapping it from soft limit to hard limit as 0% to 100% discardable
+/// ratio. With this, there must be a point that foreground write rate is equal
+/// to the background compaction pending bytes consuming rate so that compaction
+/// pending bytes is kept around a steady level.
 ///
 /// Here is a brief flow showing where the mechanism works:
-/// grpc -> check should drop(discardable ratio) -> limiter -> async write to raftstore
+/// grpc -> check should drop(discardable ratio) -> limiter -> async write to
+/// raftstore
 pub struct EngineFlowController {
     discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
@@ -114,7 +115,7 @@ impl EngineFlowController {
         }
     }
 
-    pub fn new<E: CFNamesExt + FlowControlFactorsExt + Send + 'static>(
+    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Send + 'static>(
         config: &FlowControlConfig,
         engine: E,
         flow_info_receiver: Receiver<FlowInfo>,
@@ -442,7 +443,7 @@ impl Default for CfFlowChecker {
 }
 
 #[derive(CopyGetters, Setters)]
-pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> {
+pub(super) struct FlowChecker<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> {
     pub soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
     memtables_threshold: u64,
@@ -472,7 +473,7 @@ pub(super) struct FlowChecker<E: CFNamesExt + FlowControlFactorsExt + Send + 'st
     tablet_suffix: u64,
 }
 
-impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
+impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
     pub fn new(
         config: &FlowControlConfig,
         engine: E,
@@ -702,7 +703,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             .with_label_values(&[&cf])
             .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
 
-        // do special check on start, see the comment of the variable definition for detail.
+        // do special check on start, see the comment of the variable definition for
+        // detail.
         if checker.on_start_pending_bytes {
             if num < soft || checker.long_term_pending_bytes.trend() == Trend::Increasing {
                 // the write is accumulating, still need to throttle
@@ -766,7 +768,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         let prev = checker.last_num_memtables.get_recent();
         checker.last_num_memtables.observe(num_memtables);
 
-        // do special check on start, see the comment of the variable definition for detail.
+        // do special check on start, see the comment of the variable definition for
+        // detail.
         if checker.on_start_memtable {
             if num_memtables < self.memtables_threshold
                 || checker.last_num_memtables.trend() == Trend::Increasing
@@ -904,7 +907,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         let num_l0_files = checker.long_term_num_l0_files.get_recent();
 
-        // do special check on start, see the comment of the variable definition for detail.
+        // do special check on start, see the comment of the variable definition for
+        // detail.
         if checker.on_start_l0_files {
             if num_l0_files < self.l0_files_threshold
                 || checker.long_term_num_l0_files.trend() == Trend::Increasing
@@ -989,7 +993,8 @@ impl<E: CFNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
 pub(super) mod tests {
     use std::sync::atomic::AtomicU64;
 
-    use engine_traits::Result;
+    use engine_rocks::RocksCfOptions;
+    use engine_traits::{CfOptionsExt, Result};
 
     use super::{super::FlowController, *};
 
@@ -1012,9 +1017,20 @@ pub(super) mod tests {
         }
     }
 
-    impl CFNamesExt for EngineStub {
+    impl CfNamesExt for EngineStub {
         fn cf_names(&self) -> Vec<&str> {
             vec!["default"]
+        }
+    }
+
+    impl CfOptionsExt for EngineStub {
+        type CfOptions = RocksCfOptions;
+        fn get_options_cf(&self, _cf: &str) -> Result<Self::CfOptions> {
+            unimplemented!();
+        }
+
+        fn set_options_cf(&self, _cf: &str, _options: &[(&str, &str)]) -> Result<()> {
+            unimplemented!();
         }
     }
 
@@ -1120,7 +1136,8 @@ pub(super) mod tests {
             tablet_suffix,
         ))
         .unwrap();
-        // not throttle when the average of the sliding window doesn't exceeds the threshold
+        // not throttle when the average of the sliding window doesn't exceeds the
+        // threshold
         stub.0.num_memtables.store(6, Ordering::Relaxed);
         tx.send(FlowInfo::Flush(
             "default".to_string(),
@@ -1511,7 +1528,8 @@ pub(super) mod tests {
         smoother.observe_with_time(4, now);
         assert_eq!(smoother.trend(), Trend::NoTrend);
 
-        // Incresing trend, the left range contains 3 records, the right range contains 1 records.
+        // Increasing trend, the left range contains 3 records, the right range contains
+        // 1 records.
         let mut smoother = Smoother::<
             f64,
             6,
@@ -1533,7 +1551,8 @@ pub(super) mod tests {
         smoother.observe_with_time(4.0, now);
         assert_eq!(smoother.trend(), Trend::Increasing);
 
-        // Decreasing trend, the left range contains 1 records, the right range contains 3 records.
+        // Decreasing trend, the left range contains 1 records, the right range contains
+        // 3 records.
         let mut smoother = Smoother::<
             f32,
             6,
@@ -1549,7 +1568,8 @@ pub(super) mod tests {
         smoother.observe_with_time(1.0, now);
         assert_eq!(smoother.trend(), Trend::Decreasing);
 
-        // No trend, the left range contains 1 records, the right range contains 3 records.
+        // No trend, the left range contains 1 records, the right range contains 3
+        // records.
         let mut smoother = Smoother::<
             f32,
             6,

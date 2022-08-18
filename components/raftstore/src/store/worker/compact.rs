@@ -23,9 +23,12 @@ pub enum Task {
     },
 
     CheckAndCompact {
-        cf_names: Vec<String>,         // Column families need to compact
-        ranges: Vec<Key>,              // Ranges need to check
-        tombstones_num_threshold: u64, // The minimum RocksDB tombstones a range that need compacting has
+        // Column families need to compact
+        cf_names: Vec<String>,
+        // Ranges need to check
+        ranges: Vec<Key>,
+        // The minimum RocksDB tombstones a range that need compacting has
+        tombstones_num_threshold: u64,
         tombstones_percent_threshold: u64,
     },
 }
@@ -181,7 +184,8 @@ fn need_compact(
         return false;
     }
 
-    // When the number of tombstones exceed threshold and ratio, this range need compacting.
+    // When the number of tombstones exceed threshold and ratio, this range need
+    // compacting.
     let estimate_num_del = num_entires - num_versions;
     estimate_num_del >= tombstones_num_threshold
         && estimate_num_del * 100 >= tombstones_percent_threshold * num_entires
@@ -193,14 +197,15 @@ fn collect_ranges_need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
-    // Check the SST properties for each range, and TiKV will compact a range if the range
-    // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
-    // that need compacting into a single range.
+    // Check the SST properties for each range, and TiKV will compact a range if the
+    // range contains too many RocksDB tombstones. TiKV will merge multiple
+    // neighboring ranges that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and checks if it needs to be compacted.
+        // Get total entries and total versions in this range and checks if it needs to
+        // be compacted.
         if let Some((num_ent, num_ver)) =
             box_try!(engine.get_range_entries_and_versions(CF_WRITE, &range[0], &range[1]))
         {
@@ -220,7 +225,8 @@ fn collect_ranges_need_compact(
             }
         }
 
-        // Current range doesn't need compacting, save previous range that need compacting.
+        // Current range doesn't need compacting, save previous range that need
+        // compacting.
         if compact_start.is_some() {
             assert!(compact_end.is_some());
         }
@@ -247,7 +253,7 @@ mod tests {
     use std::{thread::sleep, time::Duration};
 
     use engine_test::{
-        ctor::{CFOptions, ColumnFamilyOptions, DBOptions},
+        ctor::{CfOptions, DbOptions},
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
@@ -266,7 +272,7 @@ mod tests {
             .prefix("compact-range-test")
             .tempdir()
             .unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
 
         let mut runner = Runner::new(db.clone());
 
@@ -319,14 +325,14 @@ mod tests {
     }
 
     fn open_db(path: &str) -> KvTestEngine {
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-            CFOptions::new(CF_WRITE, cf_opts),
+            (CF_DEFAULT, CfOptions::new()),
+            (CF_RAFT, CfOptions::new()),
+            (CF_LOCK, CfOptions::new()),
+            (CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()
     }

@@ -25,7 +25,7 @@ pub enum Task {
 
 impl fmt::Display for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &*self {
+        match self {
             Task::GcSnapshot => write!(f, "Gc Snapshot"),
             Task::DeleteSnapshotFiles { key, .. } => write!(f, "Delete Snapshot Files for {}", key),
         }

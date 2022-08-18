@@ -3,14 +3,14 @@
 use std::{any::Any, fs, path::Path, sync::Arc};
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
-    TabletAccessor,
+    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable, TabletAccessor,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
-    db_vector::RocksDBVector,
+    db_vector::RocksDbVector,
     options::RocksReadOptions,
+    r2e,
     rocks_metrics::{
         flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
         flush_engine_ticker_metrics,
@@ -30,19 +30,16 @@ pub struct RocksEngine {
 }
 
 impl RocksEngine {
+    pub(crate) fn new(db: DB) -> RocksEngine {
+        RocksEngine::from_db(Arc::new(db))
+    }
+
     pub fn from_db(db: Arc<DB>) -> Self {
         RocksEngine {
             db: db.clone(),
             shared_block_cache: false,
             support_multi_batch_write: db.get_db_options().is_enable_multi_batch_write(),
         }
-    }
-
-    // Notice: After obtaining RocksEngine through this method, please make sure
-    // it has been initialized with db, otherwise do not call its member methods,
-    // as it'll contain garbage members.
-    pub fn from_ref(db: &Arc<DB>) -> &Self {
-        unsafe { &*(db as *const Arc<DB> as *const RocksEngine) }
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
@@ -59,9 +56,9 @@ impl RocksEngine {
             return false;
         }
 
-        // If path is not an empty directory, we say db exists. If path is not an empty directory
-        // but db has not been created, `DB::list_column_families` fails and we can clean up
-        // the directory by this indication.
+        // If path is not an empty directory, we say db exists. If path is not an empty
+        // directory but db has not been created, `DB::list_column_families` fails and
+        // we can clean up the directory by this indication.
         fs::read_dir(&path).unwrap().next().is_some()
     }
 
@@ -82,7 +79,7 @@ impl KvEngine for RocksEngine {
     }
 
     fn sync(&self) -> Result<()> {
-        self.db.sync_wal().map_err(Error::Engine)
+        self.db.sync_wal().map_err(r2e)
     }
 
     fn flush_metrics(&self, instance: &str) {
@@ -133,15 +130,7 @@ impl TabletAccessor<RocksEngine> for RocksEngine {
 impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        let opt: RocksReadOptions = opts.into();
-        Ok(RocksEngineIterator::from_raw(DBIterator::new(
-            self.db.clone(),
-            opt.into_raw(),
-        )))
-    }
-
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.db, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
@@ -153,12 +142,12 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    type DBVector = RocksDBVector;
+    type DbVector = RocksDbVector;
 
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
-        let v = self.db.get_opt(key, &opt.into_raw())?;
-        Ok(v.map(RocksDBVector::from_raw))
+        let v = self.db.get_opt(key, &opt.into_raw()).map_err(r2e)?;
+        Ok(v.map(RocksDbVector::from_raw))
     }
 
     fn get_value_cf_opt(
@@ -166,64 +155,61 @@ impl Peekable for RocksEngine {
         opts: &ReadOptions,
         cf: &str,
         key: &[u8],
-    ) -> Result<Option<RocksDBVector>> {
+    ) -> Result<Option<RocksDbVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.db, cf)?;
-        let v = self.db.get_cf_opt(handle, key, &opt.into_raw())?;
-        Ok(v.map(RocksDBVector::from_raw))
+        let v = self
+            .db
+            .get_cf_opt(handle, key, &opt.into_raw())
+            .map_err(r2e)?;
+        Ok(v.map(RocksDbVector::from_raw))
     }
 }
 
 impl SyncMutable for RocksEngine {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.db.put(key, value).map_err(Error::Engine)
+        self.db.put(key, value).map_err(r2e)
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        self.db.put_cf(handle, key, value).map_err(Error::Engine)
+        self.db.put_cf(handle, key, value).map_err(r2e)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        self.db.delete(key).map_err(Error::Engine)
+        self.db.delete(key).map_err(r2e)
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
-        self.db.delete_cf(handle, key).map_err(Error::Engine)
+        self.db.delete_cf(handle, key).map_err(r2e)
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.db
-            .delete_range(begin_key, end_key)
-            .map_err(Error::Engine)
+        self.db.delete_range(begin_key, end_key).map_err(r2e)
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.db, cf)?;
         self.db
             .delete_range_cf(handle, begin_key, end_key)
-            .map_err(Error::Engine)
+            .map_err(r2e)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::Region;
     use tempfile::Builder;
 
-    use crate::{raw_util, RocksEngine, RocksSnapshot};
+    use crate::{util, RocksSnapshot};
 
     #[test]
     fn test_base() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         let mut r = Region::default();
         r.set_id(10);
@@ -258,15 +244,13 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        engine.get_value_cf("foo", b"k1").unwrap_err();
         assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
@@ -274,9 +258,7 @@ mod tests {
     fn test_scan() {
         let path = Builder::new().prefix("var").tempdir().unwrap();
         let cf = "cf";
-        let engine = RocksEngine::from_db(Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
-        ));
+        let engine = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, cf]).unwrap();
 
         engine.put(b"a1", b"v1").unwrap();
         engine.put(b"a2", b"v2").unwrap();
@@ -285,7 +267,7 @@ mod tests {
 
         let mut data = vec![];
         engine
-            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -300,7 +282,7 @@ mod tests {
         data.clear();
 
         engine
-            .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -314,16 +296,16 @@ mod tests {
         );
         data.clear();
 
-        let pair = engine.seek(b"a1").unwrap().unwrap();
+        let pair = engine.seek(CF_DEFAULT, b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(engine.seek(b"a3").unwrap().is_none());
-        let pair_cf = engine.seek_cf(cf, b"a1").unwrap().unwrap();
+        assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_none());
+        let pair_cf = engine.seek(cf, b"a1").unwrap().unwrap();
         assert_eq!(pair_cf, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(engine.seek_cf(cf, b"a3").unwrap().is_none());
+        assert!(engine.seek(cf, b"a3").unwrap().is_none());
 
         let mut index = 0;
         engine
-            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
+            .scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
@@ -335,15 +317,15 @@ mod tests {
         let snap = RocksSnapshot::new(engine.get_sync_db());
 
         engine.put(b"a3", b"v3").unwrap();
-        assert!(engine.seek(b"a3").unwrap().is_some());
+        assert!(engine.seek(CF_DEFAULT, b"a3").unwrap().is_some());
 
-        let pair = snap.seek(b"a1").unwrap().unwrap();
+        let pair = snap.seek(CF_DEFAULT, b"a1").unwrap().unwrap();
         assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(snap.seek(b"a3").unwrap().is_none());
+        assert!(snap.seek(CF_DEFAULT, b"a3").unwrap().is_none());
 
         data.clear();
 
-        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
+        snap.scan(CF_DEFAULT, b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         })

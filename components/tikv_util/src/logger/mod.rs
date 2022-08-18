@@ -78,21 +78,21 @@ where
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
             .build_with_guard();
-        let drain = async_log.filter_level(level).fuse();
+        let drain = async_log.fuse();
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
 
         (slog::Logger::root(filtered, slog_o!()), Some(guard))
     } else {
-        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
+        let drain = LogAndFuse(Mutex::new(drain));
         let drain = SlowLogFilter {
             threshold: slow_threshold,
             inner: drain,
         };
-        let filtered = drain.filter(filter).fuse();
+        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
         (slog::Logger::root(filtered, slog_o!()), None)
     };
 
@@ -179,7 +179,8 @@ where
     TikvFormat::new(decorator, true)
 }
 
-/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger format.
+/// Same as text_format, but is adjusted to be closer to vanilla RocksDB logger
+/// format.
 pub fn rocks_text_format<W>(io: W, enable_timestamp: bool) -> RocksFormat<PlainDecorator<W>>
 where
     W: io::Write,
@@ -237,8 +238,8 @@ pub fn get_level_by_string(lv: &str) -> Option<Level> {
     }
 }
 
-// The `to_string()` function of `slog::Level` produces values like `erro` and `trce` instead of
-// the full words. This produces the full word.
+// The `to_string()` function of `slog::Level` produces values like `erro` and
+// `trce` instead of the full words. This produces the full word.
 pub fn get_string_by_level(lv: Level) -> &'static str {
     match lv {
         Level::Critical => "fatal",
@@ -287,7 +288,9 @@ pub fn get_log_level() -> Option<Level> {
 }
 
 pub fn set_log_level(new_level: Level) {
-    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst)
+    LOG_LEVEL.store(new_level.as_usize(), Ordering::SeqCst);
+    // also change std log to new level.
+    let _ = slog_global::redirect_std_log(Some(new_level));
 }
 
 pub struct TikvFormat<D>
@@ -405,23 +408,22 @@ where
     type Err = slog::Never;
 
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
-        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
-            if let Err(e) = self.0.log(record, values) {
-                let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
-                fatal_drainer.log(record, values).unwrap();
-                let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
-                slog::slog_crit!(
-                    fatal_logger,
-                    "logger encountered error";
-                    "err" => %e,
-                );
-            }
+        if let Err(e) = self.0.log(record, values) {
+            let fatal_drainer = Mutex::new(text_format(term_writer(), true)).ignore_res();
+            fatal_drainer.log(record, values).unwrap();
+            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+            slog::slog_crit!(
+                fatal_logger,
+                "logger encountered error";
+                "err" => %e,
+            );
         }
         Ok(())
     }
 }
 
-// Filters logs with operation cost lower than threshold. Otherwise output logs to inner drainer
+// Filters logs with operation cost lower than threshold. Otherwise output logs
+// to inner drainer
 struct SlowLogFilter<D> {
     threshold: u64,
     inner: D,
@@ -447,6 +449,36 @@ where
             }
         }
         self.inner.log(record, values)
+    }
+}
+
+// GlobalLevelFilter is a filter that base on the global `LOG_LEVEL`'s value.
+pub struct GlobalLevelFilter<D: Drain>(pub D);
+
+impl<D: Drain> GlobalLevelFilter<D> {
+    /// Create `LevelFilter`
+    pub fn new(drain: D) -> Self {
+        Self(drain)
+    }
+}
+
+impl<D> Drain for GlobalLevelFilter<D>
+where
+    D: Drain,
+    D::Ok: Default,
+{
+    type Ok = D::Ok;
+    type Err = D::Err;
+    fn log(&self, record: &Record<'_>, logger_values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if record.level().as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) {
+            self.0.log(record, logger_values)
+        } else {
+            Ok(Default::default())
+        }
+    }
+    #[inline]
+    fn is_enabled(&self, level: Level) -> bool {
+        level.as_usize() <= LOG_LEVEL.load(Ordering::Relaxed) && self.0.is_enabled(level)
     }
 }
 
@@ -656,8 +688,8 @@ mod tests {
 
     use super::*;
 
-    // Due to the requirements of `Logger::root*` on a writer with a 'static lifetime
-    // we need to make a Thread Local,
+    // Due to the requirements of `Logger::root*` on a writer with a 'static
+    // lifetime we need to make a Thread Local,
     // and implement a custom writer.
     thread_local! {
         static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
@@ -749,7 +781,7 @@ mod tests {
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
@@ -797,7 +829,7 @@ mod tests {
 
         BUFFER.with(|buffer| {
             let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             assert_eq!(output.lines().count(), expect.lines().count());
 
             for (output_line, expect_line) in output.lines().zip(expect.lines()) {
@@ -819,7 +851,40 @@ mod tests {
         });
     }
 
-    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels `"(hello)"` to `"hello"`,
+    #[test]
+    fn test_global_level_filter() {
+        let decorator = PlainSyncDecorator::new(TestWriter);
+        let drain = TikvFormat::new(decorator, true).fuse();
+        let logger =
+            slog::Logger::root_typed(GlobalLevelFilter::new(drain), slog_o!()).into_erased();
+
+        let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:871] [Welcome]\n";
+        let check_log = |log: &str| {
+            BUFFER.with(|buffer| {
+                let mut buffer = buffer.borrow_mut();
+                let output = from_utf8(&buffer).unwrap();
+                // only check the log len here as some field like timestamp, location may
+                // change.
+                assert_eq!(output.len(), log.len());
+                buffer.clear();
+            });
+        };
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
+
+        set_log_level(Level::Warning);
+        slog_info!(logger, "Welcome");
+        check_log("");
+
+        set_log_level(Level::Info);
+        slog_info!(logger, "Welcome");
+        check_log(expected);
+    }
+
+    /// Removes the wrapping signs, peels `"[hello]"` to `"hello"`, or peels
+    /// `"(hello)"` to `"hello"`,
     fn peel(output: &str) -> &str {
         assert!(output.len() >= 2);
         &(output[1..output.len() - 1])
@@ -949,8 +1014,8 @@ mod tests {
         }
     }
 
-    struct RaftDBWriter;
-    impl Write for RaftDBWriter {
+    struct RaftDbWriter;
+    impl Write for RaftDbWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             RAFTDB_BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
         }
@@ -964,7 +1029,7 @@ mod tests {
         let normal = TikvFormat::new(PlainSyncDecorator::new(NormalWriter), true);
         let slow = TikvFormat::new(PlainSyncDecorator::new(SlowLogWriter), true);
         let rocksdb = TikvFormat::new(PlainSyncDecorator::new(RocksdbLogWriter), true);
-        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDBWriter), true);
+        let raftdb = TikvFormat::new(PlainSyncDecorator::new(RaftDbWriter), true);
         let drain = LogDispatcher::new(normal, rocksdb, raftdb, Some(slow)).fuse();
         let drain = SlowLogFilter {
             threshold: 200,
@@ -983,7 +1048,7 @@ mod tests {
         let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
         NORMAL_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let output_segments = re.captures(output).unwrap();
             assert_eq!(output_segments["msg"].to_owned(), r#"["Hello World"]"#);
         });
@@ -995,7 +1060,7 @@ mod tests {
 "#;
         SLOW_BUFFER.with(|buffer| {
             let buffer = buffer.borrow_mut();
-            let output = from_utf8(&*buffer).unwrap();
+            let output = from_utf8(&buffer).unwrap();
             let expect_re = Regex::new(r"(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
             assert_eq!(output.lines().count(), slow_expect.lines().count());
             for (output, expect) in output.lines().zip(slow_expect.lines()) {
