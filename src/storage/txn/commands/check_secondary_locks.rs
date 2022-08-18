@@ -56,8 +56,8 @@ enum SecondaryLockStatus {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        // It is not allowed for commit to overwrite a protected rollback. So we update max_ts
-        // to prevent this case from happening.
+        // It is not allowed for commit to overwrite a protected rollback. So we update
+        // max_ts to prevent this case from happening.
         context.concurrency_manager.update_max_ts(self.start_ts);
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
@@ -83,8 +83,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                         (SecondaryLockStatus::Locked(lock), false, None)
                     }
                 }
-                // Searches the write CF for the commit record of the lock and returns the commit timestamp
-                // (0 if the lock is not committed).
+                // Searches the write CF for the commit record of the lock and returns the commit
+                // timestamp (0 if the lock is not committed).
                 l => {
                     mismatch_lock = l;
                     match reader.get_txn_commit_record(&key)? {
@@ -96,9 +96,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                             };
                             // We needn't write a rollback once there is a write record for it:
                             // If it's a committed record, it cannot be changed.
-                            // If it's a rollback record, it either comes from another check_secondary_lock
-                            // (thus protected) or the client stops commit actively. So we don't need
-                            // to make it protected again.
+                            // If it's a rollback record, it either comes from another
+                            // check_secondary_lock (thus protected) or the client stops commit
+                            // actively. So we don't need to make it protected again.
                             (status, false, None)
                         }
                         TxnCommitRecord::OverlappedRollback { .. } => {

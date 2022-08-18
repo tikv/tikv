@@ -5,7 +5,7 @@ use std::{collections::HashMap, fs, path::Path, sync::Arc};
 use engine_rocks::{
     raw::{DBEntryType, Env, TablePropertiesCollector, TablePropertiesCollectorFactory},
     util::new_engine_opt,
-    RocksCfOptions, RocksDBOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
+    RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstReader, RocksSstWriterBuilder,
 };
 pub use engine_rocks::{RocksEngine as TestEngine, RocksSstWriter};
 use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
@@ -38,7 +38,7 @@ where
             if let Some(ref env) = env {
                 opt.set_env(env.clone());
             }
-            apply(*cf, &mut opt);
+            apply(cf, &mut opt);
             opt.add_table_properties_collector_factory(
                 "tikv.test_properties",
                 TestPropertiesCollectorFactory::new(*cf),
@@ -47,8 +47,8 @@ where
         })
         .collect();
 
-    let db_opts = env.map_or_else(RocksDBOptions::default, |e| {
-        let mut opts = RocksDBOptions::default();
+    let db_opts = env.map_or_else(RocksDbOptions::default, |e| {
+        let mut opts = RocksDbOptions::default();
         opts.set_env(e);
         opts
     });

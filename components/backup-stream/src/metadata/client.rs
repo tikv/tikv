@@ -72,7 +72,7 @@ impl PartialEq for MetadataEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CheckpointProvider {
     Store(u64),
     Region { id: u64, version: u64 },
@@ -82,7 +82,7 @@ pub enum CheckpointProvider {
 
 /// The polymorphic checkpoint.
 /// The global checkpoint should be the minimal checkpoint of all checkpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Checkpoint {
     pub provider: CheckpointProvider,
     pub ts: TimeStamp,
@@ -244,7 +244,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// Initialize a task: execute some general operations over the keys.
-    /// For now, it sets the checkpoint ts if there isn't one for the current store.
+    /// For now, it sets the checkpoint ts if there isn't one for the current
+    /// store.
     pub async fn init_task(&self, task: &StreamBackupTaskInfo) -> Result<()> {
         let if_present = Condition::new(
             MetaKey::next_backup_ts_of(&task.name, self.store_id),
@@ -263,7 +264,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// Upload the last error information to the etcd.
-    /// This won't pause the task. Even this method would usually be paired with `pause`.
+    /// This won't pause the task. Even this method would usually be paired with
+    /// `pause`.
     pub async fn report_last_error(&self, name: &str, last_error: StreamBackupError) -> Result<()> {
         use protobuf::Message;
         let now = Instant::now();
@@ -376,7 +378,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// watch event stream from the revision(exclusive).
-    /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
+    /// the revision would usually come from a WithRevision struct(which indices
+    /// the revision of the inner item).
     pub async fn events_from(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {
         let watcher = self
             .meta_store
@@ -436,7 +439,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
         Ok(())
     }
 
-    /// Get the storage checkpoint from metadata. This function is justly used for test.
+    /// Get the storage checkpoint from metadata. This function is justly used
+    /// for test.
     pub async fn get_storage_checkpoint(&self, task_name: &str) -> Result<TimeStamp> {
         let now = Instant::now();
         defer! {
@@ -508,8 +512,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
-    /// Perform a two-phase bisection search algorithm for the intersection of all ranges
-    /// and the specificated range (usually region range.)
+    /// Perform a two-phase bisection search algorithm for the intersection of
+    /// all ranges and the specificated range (usually region range.)
     /// TODO: explain the algorithm?
     pub async fn range_overlap_of_task(
         &self,
@@ -637,8 +641,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// insert a task with ranges into the metadata store.
-    /// the current abstraction of metadata store doesn't support transaction API.
-    /// Hence this function is non-transactional and only for testing.
+    /// the current abstraction of metadata store doesn't support transaction
+    /// API. Hence this function is non-transactional and only for testing.
     pub async fn insert_task_with_range(
         &self,
         task: &StreamTask,

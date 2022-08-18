@@ -123,11 +123,7 @@ fn encoder(
             }
         };
         // Only reserve attributes that related to `serde`
-        field.attrs = field
-            .attrs
-            .into_iter()
-            .filter(|f| is_attr("serde", f))
-            .collect();
+        field.attrs.retain(|f| is_attr("serde", f));
         serialize_fields.push(field);
     }
     // Only reserve attributes that related to `serde`

@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This module contains the implementation of the `EntryStorage`, which covers a subset of
-//! raft storage. This module will be shared between raftstore v1 and v2.
+//! This module contains the implementation of the `EntryStorage`, which covers
+//! a subset of raft storage. This module will be shared between raftstore v1
+//! and v2.
 
 use std::{
     cell::{Cell, RefCell},
@@ -15,14 +16,20 @@ use std::{
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine, RAFT_LOG_MULTI_GET_CNT};
 use fail::fail_point;
-use kvproto::raft_serverpb::{RaftApplyState, RaftLocalState};
+use kvproto::{
+    metapb,
+    raft_serverpb::{RaftApplyState, RaftLocalState},
+};
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
-use tikv_util::{debug, info, worker::Scheduler};
+use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
 
-use super::{metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE};
-use crate::{bytes_capacity, store::worker::RaftlogFetchTask};
+use super::{
+    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
+};
+use crate::{bytes_capacity, store::worker::RaftlogFetchTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -60,7 +67,8 @@ impl CachedEntries {
         }
     }
 
-    /// Take cached entries and dangle size for them. `dangle` means not in entry cache.
+    /// Take cached entries and dangle size for them. `dangle` means not in
+    /// entry cache.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
@@ -119,8 +127,8 @@ impl EntryCache {
                 }
             })
             .count();
-        // Cache either is empty or contains latest log. Hence we don't need to fetch log
-        // from rocksdb anymore.
+        // Cache either is empty or contains latest log. Hence we don't need to fetch
+        // log from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
         let (first, second) = tikv_util::slices_in_range(&self.cache, start_idx, end_idx);
         ents.extend_from_slice(first);
@@ -172,10 +180,10 @@ impl EntryCache {
             self.cache.push_back(e.to_owned());
             mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
-        // In the past, the entry cache will be truncated if its size exceeds a certain number.
-        // However, after introducing async write io, the entry must stay in cache if it's not
-        // persisted to raft db because the raft-rs may need to read entries.(e.g. leader sends
-        // MsgAppend to followers)
+        // In the past, the entry cache will be truncated if its size exceeds a certain
+        // number. However, after introducing async write io, the entry must stay in
+        // cache if it's not persisted to raft db because the raft-rs may need to read
+        // entries.(e.g. leader sends MsgAppend to followers)
 
         mem_size_change
     }
@@ -198,9 +206,9 @@ impl EntryCache {
 
         let mut mem_size_change = 0;
 
-        // Clean cached entries which have been already sent to apply threads. For example,
-        // if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
-        // is called, only [20, 30) will still be kept in cache.
+        // Clean cached entries which have been already sent to apply threads. For
+        // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
+        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             if cached_entries.range.start >= idx {
@@ -227,7 +235,8 @@ impl EntryCache {
         }
 
         let cache_last_idx = self.cache.back().unwrap().get_index();
-        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if necessary.
+        // Use `cache_last_idx + 1` to make sure cache can be cleared completely if
+        // necessary.
         let compact_to = (cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize;
         for e in self.cache.drain(..compact_to) {
             mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
@@ -361,9 +370,10 @@ impl Drop for EntryCache {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum RaftlogFetchState {
-    Fetching,
+    // The Instant records the start time of the fetching.
+    Fetching(Instant),
     Fetched(Box<RaftlogFetchResult>),
 }
 
@@ -411,6 +421,115 @@ impl AsyncFetchStats {
     }
 }
 
+fn validate_states<ER: RaftEngine>(
+    region_id: u64,
+    raft_engine: &ER,
+    raft_state: &mut RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
+    let last_index = raft_state.get_last_index();
+    let mut commit_index = raft_state.get_hard_state().get_commit();
+    let recorded_commit_index = apply_state.get_commit_index();
+    let state_str = || -> String {
+        format!(
+            "region {}, raft state {:?}, apply state {:?}",
+            region_id, raft_state, apply_state
+        )
+    };
+    // The commit index of raft state may be less than the recorded commit index.
+    // If so, forward the commit index.
+    if commit_index < recorded_commit_index {
+        let entry = raft_engine.get_entry(region_id, recorded_commit_index)?;
+        if entry.map_or(true, |e| e.get_term() != apply_state.get_commit_term()) {
+            return Err(box_err!(
+                "log at recorded commit index [{}] {} doesn't exist, may lose data, {}",
+                apply_state.get_commit_term(),
+                recorded_commit_index,
+                state_str()
+            ));
+        }
+        info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
+        commit_index = recorded_commit_index;
+    }
+    // Invariant: applied index <= max(commit index, recorded commit index)
+    if apply_state.get_applied_index() > commit_index {
+        return Err(box_err!(
+            "applied index > max(commit index, recorded commit index), {}",
+            state_str()
+        ));
+    }
+    // Invariant: max(commit index, recorded commit index) <= last index
+    if commit_index > last_index {
+        return Err(box_err!(
+            "max(commit index, recorded commit index) > last index, {}",
+            state_str()
+        ));
+    }
+    // Since the entries must be persisted before applying, the term of raft state
+    // should also be persisted. So it should be greater than the commit term of
+    // apply state.
+    if raft_state.get_hard_state().get_term() < apply_state.get_commit_term() {
+        return Err(box_err!(
+            "term of raft state < commit term of apply state, {}",
+            state_str()
+        ));
+    }
+
+    raft_state.mut_hard_state().set_commit(commit_index);
+
+    Ok(())
+}
+
+pub fn init_last_term<ER: RaftEngine>(
+    raft_engine: &ER,
+    region: &metapb::Region,
+    raft_state: &RaftLocalState,
+    apply_state: &RaftApplyState,
+) -> Result<u64> {
+    let last_idx = raft_state.get_last_index();
+    if last_idx == 0 {
+        return Ok(0);
+    } else if last_idx == RAFT_INIT_LOG_INDEX {
+        return Ok(RAFT_INIT_LOG_TERM);
+    } else if last_idx == apply_state.get_truncated_state().get_index() {
+        return Ok(apply_state.get_truncated_state().get_term());
+    } else {
+        assert!(last_idx > RAFT_INIT_LOG_INDEX);
+    }
+    let entry = raft_engine.get_entry(region.get_id(), last_idx)?;
+    match entry {
+        None => Err(box_err!(
+            "[region {}] entry at {} doesn't exist, may lose data.",
+            region.get_id(),
+            last_idx
+        )),
+        Some(e) => Ok(e.get_term()),
+    }
+}
+
+pub fn init_applied_term<ER: RaftEngine>(
+    raft_engine: &ER,
+    region: &metapb::Region,
+    apply_state: &RaftApplyState,
+) -> Result<u64> {
+    if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
+        return Ok(RAFT_INIT_LOG_TERM);
+    }
+    let truncated_state = apply_state.get_truncated_state();
+    if apply_state.applied_index == truncated_state.get_index() {
+        return Ok(truncated_state.get_term());
+    }
+
+    match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
+        Some(e) => Ok(e.term),
+        None => Err(box_err!(
+            "[region {}] entry at apply index {} doesn't exist, may lose data.",
+            region.get_id(),
+            apply_state.applied_index
+        )),
+    }
+}
+
 /// A subset of `PeerStorage` that focus on accessing log entries.
 pub struct EntryStorage<ER> {
     region_id: u64,
@@ -428,17 +547,25 @@ pub struct EntryStorage<ER> {
 
 impl<ER: RaftEngine> EntryStorage<ER> {
     pub fn new(
-        region_id: u64,
         peer_id: u64,
         raft_engine: ER,
-        raft_state: RaftLocalState,
+        mut raft_state: RaftLocalState,
         apply_state: RaftApplyState,
-        last_term: u64,
-        applied_term: u64,
+        region: &metapb::Region,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
-    ) -> Self {
-        EntryStorage {
-            region_id,
+    ) -> Result<Self> {
+        if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
+            return Err(box_err!(
+                "[region {}] {} validate state fail: {:?}",
+                region.id,
+                peer_id,
+                e
+            ));
+        }
+        let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        Ok(Self {
+            region_id: region.id,
             peer_id,
             raft_engine,
             cache: EntryCache::default(),
@@ -449,7 +576,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             raftlog_fetch_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
-        }
+        })
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -478,26 +605,40 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     // None indicates cleanning the fetched result.
     pub fn update_async_fetch_res(&mut self, low: u64, res: Option<Box<RaftlogFetchResult>>) {
         // If it's in fetching, don't clean the async fetch result.
-        if self.async_fetch_results.borrow().get(&low) == Some(&RaftlogFetchState::Fetching)
-            && res.is_none()
-        {
-            return;
+        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low) {
+            if res.is_none() {
+                return;
+            }
         }
 
         match res {
             Some(res) => {
-                if let Some(RaftlogFetchState::Fetched(prev)) = self
+                match self
                     .async_fetch_results
                     .borrow_mut()
                     .insert(low, RaftlogFetchState::Fetched(res))
                 {
-                    info!(
-                        "unconsumed async fetch res";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer_id,
-                        "res" => ?prev,
-                        "low" => low,
-                    );
+                    Some(RaftlogFetchState::Fetching(start)) => {
+                        RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM
+                            .observe(start.saturating_elapsed_secs());
+                    }
+                    Some(RaftlogFetchState::Fetched(prev)) => {
+                        info!(
+                            "unconsumed async fetch res";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer_id,
+                            "res" => ?prev,
+                            "low" => low,
+                        );
+                    }
+                    _ => {
+                        warn!(
+                            "unknown async fetch res";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer_id,
+                            "low" => low,
+                        );
+                    }
                 }
             }
             None => {
@@ -518,7 +659,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         context: GetEntriesContext,
         buf: &mut Vec<Entry>,
     ) -> raft::Result<usize> {
-        if let Some(RaftlogFetchState::Fetching) = self.async_fetch_results.borrow().get(&low) {
+        if let Some(RaftlogFetchState::Fetching(_)) = self.async_fetch_results.borrow().get(&low) {
             // already an async fetch in flight
             return Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
@@ -564,7 +705,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                     return Ok(count);
                 }
 
-                // the count of left entries isn't too large, fetch the remaining entries synchronously one by one
+                // the count of left entries isn't too large, fetch the remaining entries
+                // synchronously one by one
                 for idx in last + 1..high {
                     let ent = self.raft_engine.get_entry(region_id, idx)?;
                     match ent {
@@ -597,7 +739,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 "max_size" => max_size,
                 "res_max_size" => res.max_size,
             );
-            // low index or max size is changed, the result is not fit for the current range, so refetch again.
+            // low index or max size is changed, the result is not fit for the current
+            // range, so refetch again.
             self.raftlog_fetch_stats.fetch_invalid.update(|m| m + 1);
             res.tried_cnt + 1
         } else {
@@ -606,7 +749,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
         // the first/second try: get [low, high) asynchronously
         // the third try:
-        //  - if term and low are matched: use result of [low, persisted) and get [persisted, high) synchronously
+        //  - if term and low are matched: use result of [low, persisted) and get
+        //    [persisted, high) synchronously
         //  - else: get [low, high) synchronously
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
@@ -624,7 +768,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.raftlog_fetch_stats.async_fetch.update(|m| m + 1);
         self.async_fetch_results
             .borrow_mut()
-            .insert(low, RaftlogFetchState::Fetching);
+            .insert(low, RaftlogFetchState::Fetching(Instant::now_coarse()));
         self.raftlog_fetch_scheduler
             .schedule(RaftlogFetchTask::PeerStorage {
                 region_id,
@@ -807,7 +951,8 @@ impl<ER: RaftEngine> EntryStorage<ER> {
         self.apply_state.get_truncated_state().get_term()
     }
 
-    // Append the given entries to the raft log using previous last index or self.last_index.
+    // Append the given entries to the raft log using previous last index or
+    // self.last_index.
     pub fn append<EK: KvEngine>(&mut self, entries: Vec<Entry>, task: &mut WriteTask<EK, ER>) {
         if entries.is_empty() {
             return;
@@ -842,6 +987,11 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     #[inline]
     pub fn is_entry_cache_empty(&self) -> bool {
         self.cache.is_empty()
+    }
+
+    #[inline]
+    pub fn entry_cache_first_index(&self) -> Option<u64> {
+        self.cache.first_index()
     }
 
     /// Evict entries from the cache.
@@ -1005,7 +1155,7 @@ pub mod tests {
             assert_eq!(e, cache.entry(e.get_index()).unwrap());
         }
         let res = panic_hook::recover_safe(|| cache.entry(7));
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

@@ -7,7 +7,7 @@ use raft::{Error as RaftError, StorageError};
 use thiserror::Error;
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq)]
 pub enum Code {
     Ok = 0,
     NotFound = 1,
@@ -28,7 +28,7 @@ pub enum Code {
 }
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq)]
 pub enum SubCode {
     None = 0,
     MutexTimeout = 1,
@@ -43,7 +43,7 @@ pub enum SubCode {
 }
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq)]
 pub enum Severity {
     NoError = 0,
     SoftError = 1,

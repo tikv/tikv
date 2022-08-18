@@ -4,7 +4,7 @@ use kvproto::coprocessor::KeyRange;
 
 // TODO: Remove this module after switching to DAG v2.
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Clone)]
 pub enum Range {
     Point(PointRange),
     Interval(IntervalRange),
@@ -41,7 +41,7 @@ impl From<PointRange> for Range {
     }
 }
 
-#[derive(Default, PartialEq, Eq, Clone)]
+#[derive(Default, PartialEq, Clone)]
 pub struct IntervalRange {
     pub lower_inclusive: Vec<u8>,
     pub upper_exclusive: Vec<u8>,
@@ -87,7 +87,7 @@ impl<'a, 'b> From<(&'a str, &'b str)> for IntervalRange {
     }
 }
 
-#[derive(Default, PartialEq, Eq, Clone)]
+#[derive(Default, PartialEq, Clone)]
 pub struct PointRange(pub Vec<u8>);
 
 impl std::fmt::Debug for PointRange {

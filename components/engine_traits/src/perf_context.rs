@@ -44,13 +44,14 @@ pub trait PerfContextExt {
 ///
 /// This is a leaky abstraction that supports the encapsulation of metrics
 /// reporting by the subsystems that use PerfContext.
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum PerfContextKind {
     RaftstoreApply,
     RaftstoreStore,
     /// Commands in tikv::storage, the inner str is the command tag.
     Storage(&'static str),
-    /// Coprocessor requests in tikv::coprocessor, the inner str is the request type.
+    /// Coprocessor requests in tikv::coprocessor, the inner str is the request
+    /// type.
     Coprocessor(&'static str),
 }
 

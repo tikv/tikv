@@ -53,7 +53,7 @@ fn test_summary() {
 
     let data_sink = MockDataSink::default();
 
-    /* At this point we are ready for everything except turning on the switch. */
+    // At this point we are ready for everything except turning on the switch.
 
     // expect no data
     {

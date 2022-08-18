@@ -11,12 +11,12 @@ use std::{
 
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
-    get_env, RocksCfOptions, RocksDBOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
+    get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
 };
 use engine_traits::{
     CfName, Engines, IterOptions, Iterable, Iterator, KvEngine, Peekable, ReadOptions,
 };
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::{kvrpcpb::Context, metapb, raft_cmdpb};
 use raftstore::coprocessor::CoprocessorHost;
 use tempfile::{Builder, TempDir};
@@ -88,10 +88,10 @@ pub struct RocksEngine {
 impl RocksEngine {
     pub fn new(
         path: &str,
-        db_opts: Option<RocksDBOptions>,
+        db_opts: Option<RocksDbOptions>,
         cfs_opts: Vec<(CfName, RocksCfOptions)>,
         shared_block_cache: bool,
-        io_rate_limiter: Option<Arc<IORateLimiter>>,
+        io_rate_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -104,7 +104,7 @@ impl RocksEngine {
         let worker = Worker::new("engine-rocksdb");
         let mut db_opts = db_opts.unwrap_or_default();
         if io_rate_limiter.is_some() {
-            db_opts.set_env(get_env(None /*key_manager*/, io_rate_limiter).unwrap());
+            db_opts.set_env(get_env(None /* key_manager */, io_rate_limiter).unwrap());
         }
 
         let db = engine_rocks::util::new_engine_opt(&path, db_opts, cfs_opts)?;
@@ -151,7 +151,8 @@ impl RocksEngine {
     }
 
     /// `pre_propose` is called before propose.
-    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by now.
+    /// It's used to trigger "pre_propose_query" observers for RawKV API V2 by
+    /// now.
     fn pre_propose(&self, mut batch: WriteData) -> Result<WriteData> {
         let requests = batch
             .modifies

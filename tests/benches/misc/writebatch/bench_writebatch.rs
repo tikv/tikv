@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::{RocksCfOptions, RocksDBOptions, RocksEngine, RocksWriteBatchVec};
+use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine, RocksWriteBatchVec};
 use engine_traits::{Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
 use tempfile::Builder;
 use test::Bencher;
@@ -22,7 +22,7 @@ fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = RocksDBOptions::default();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);
@@ -111,7 +111,7 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = RocksDBOptions::default();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);
@@ -134,7 +134,7 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = RocksDBOptions::default();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);

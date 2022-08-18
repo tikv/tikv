@@ -241,7 +241,8 @@ where
         self.store.get_id()
     }
 
-    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
     }
@@ -251,7 +252,8 @@ where
     pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
-    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    /// Gets a transmission end of a channel which is used send messages to
+    /// apply worker.
     pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
@@ -289,11 +291,12 @@ where
             .kv
             .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
             .expect("Store should have bootstrapped");
-        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
-        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
-        // TiKV, the config switch between V1 and V1ttl are not checked here.
-        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
-        // config check.
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be
+        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading
+        // from legacy V1 TiKV, the config switch between V1 and V1ttl are not checked
+        // here. It's safe to do so because `storage.enable_ttl` is impossible to change
+        // thanks to the config check. let should_check = match (ident.api_version,
+        // self.api_version) {
         let should_check = match (ident.api_version, self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,

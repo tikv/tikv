@@ -65,7 +65,7 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
 
     pub fn build(self) -> Result<Box<dyn RequestHandler>> {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(
+        Ok(BatchDagHandler::new(
             self.req,
             self.ranges,
             self.store,
@@ -81,12 +81,12 @@ impl<S: Store + 'static> DagHandlerBuilder<S> {
     }
 }
 
-pub struct BatchDAGHandler {
+pub struct BatchDagHandler {
     runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     data_version: Option<u64>,
 }
 
-impl BatchDAGHandler {
+impl BatchDagHandler {
     pub fn new<S: Store + 'static>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
@@ -116,7 +116,7 @@ impl BatchDAGHandler {
 }
 
 #[async_trait]
-impl RequestHandler for BatchDAGHandler {
+impl RequestHandler for BatchDagHandler {
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.runner.handle_request().await;
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())

@@ -24,7 +24,7 @@ fn test_config_validate() {
 
     let mut invalid_cfg = Config::default();
     invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
-    assert!(invalid_cfg.validate().is_err());
+    invalid_cfg.validate().unwrap_err();
 }
 
 #[derive(Clone)]

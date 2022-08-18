@@ -125,7 +125,7 @@ pub fn get_region_approximate_middle(
 mod tests {
     use std::{iter, sync::mpsc};
 
-    use engine_test::ctor::{ColumnFamilyOptions, DBOptions};
+    use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::{
         metapb::{Peer, Region},
@@ -485,8 +485,8 @@ mod tests {
             .unwrap();
         let path = tmp.path().to_str().unwrap();
 
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
         let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let engine = engine_test::kv::new_engine_opt(path, db_opts, cfs_opts).unwrap();

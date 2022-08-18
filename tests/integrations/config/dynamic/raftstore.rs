@@ -191,7 +191,7 @@ fn test_update_raftstore_config() {
     ];
     for cfg in invalid_cfgs {
         let change = new_changes(vec![cfg]);
-        assert!(cfg_controller.update(change).is_err());
+        cfg_controller.update(change).unwrap_err();
 
         // update failed, original config should not be changed.
         validate_store_cfg(&raft_store);

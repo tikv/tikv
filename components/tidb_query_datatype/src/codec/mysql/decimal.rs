@@ -58,10 +58,11 @@ impl<T> Res<T> {
         matches!(*self, Res::Truncated(_))
     }
 
-    /// Convert `Res` into `Result` with an `EvalContext` that handling the errors
-    /// If `truncated_err` is None, `ctx` will try to handle the default truncated error: `Error::truncated()`,
-    /// otherwise handle the specified error inside `truncated_err`.
-    /// Same does `overflow_err` means.
+    /// Convert `Res` into `Result` with an `EvalContext` that handling the
+    /// errors If `truncated_err` is None, `ctx` will try to handle the
+    /// default truncated error: `Error::truncated()`, otherwise handle the
+    /// specified error inside `truncated_err`. Same does `overflow_err`
+    /// means.
     fn into_result_impl(
         self,
         ctx: &mut EvalContext,
@@ -186,7 +187,8 @@ pub fn dec_encoded_len(encoded: &[u8]) -> Result<usize> {
     Ok(int_len + frac_len + 2)
 }
 
-/// `count_leading_zeroes` returns the number of leading zeroes that can be removed from int.
+/// `count_leading_zeroes` returns the number of leading zeroes that can be
+/// removed from int.
 fn count_leading_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
     while TEN_POW[i] > word {
@@ -196,7 +198,8 @@ fn count_leading_zeroes(i: u8, word: u32) -> u8 {
     c
 }
 
-/// `count_trailing_zeroes` returns the number of trailing zeroes that can be removed from fraction.
+/// `count_trailing_zeroes` returns the number of trailing zeroes that can be
+/// removed from fraction.
 fn count_trailing_zeroes(i: u8, word: u32) -> u8 {
     let (mut c, mut i) = (0, i as usize);
     while word % TEN_POW[i] == 0 {
@@ -259,14 +262,15 @@ fn sub2(lhs: u32, rhs: u32, carry: &mut i32, res: &mut u32) {
 
 type SubTmp = (usize, usize, u8);
 
-/// calculate the carry for lhs - rhs, returns the carry and needed temporary results for
-/// beginning a subtraction.
+/// calculate the carry for lhs - rhs, returns the carry and needed temporary
+/// results for beginning a subtraction.
 ///
 /// The new carry can be:
 ///     1. None if lhs is equals to rhs.
 ///     2. Some(0) if abs(lhs) > abs(rhs),
 ///     3. Some(1) if abs(lhs) < abs(rhs).
-/// l_frac_word_cnt and r_frac_word_cnt do not contain the suffix 0 when r_int_word_cnt == l_int_word_cnt.
+/// l_frac_word_cnt and r_frac_word_cnt do not contain the suffix 0 when
+/// r_int_word_cnt == l_int_word_cnt.
 #[inline]
 fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
@@ -303,9 +307,11 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
             while r_idx as isize <= r_end && rhs.word_buf[r_end as usize] == 0 {
                 r_end -= 1;
             }
-            // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+            // here l_end is the last nonzero index in l.word_buf, attention:it may in the
+            // range of (0,l_int_word_cnt)
             l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
-            // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
+            // here r_end is the last nonzero index in r.word_buf, attention:it may in the
+            // range of (0,r_int_word_cnt)
             r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
             while l_idx as isize <= l_end
                 && r_idx as isize <= r_end
@@ -976,10 +982,10 @@ impl Decimal {
     }
 
     /// Given a precision count 'prec', get:
-    ///  1. the index of first non-zero word in self.word_buf to hold the leading 'prec' number of
-    ///     digits
-    ///  2. the number of remained digits if we remove all leading zeros for the leading 'prec'
-    ///     number of digits
+    ///  1. the index of first non-zero word in self.word_buf to hold the
+    /// leading 'prec' number of     digits
+    ///  2. the number of remained digits if we remove all leading zeros for the
+    /// leading 'prec'     number of digits
     fn remove_leading_zeroes(&self, prec: u8) -> (usize, u8) {
         let mut cnt = prec;
         let mut i = ((cnt + DIGITS_PER_WORD - 1) % DIGITS_PER_WORD) + 1;
@@ -1016,7 +1022,8 @@ impl Decimal {
         (buf, word_start_idx, int_len, int_cnt, frac_cnt)
     }
 
-    /// Get the least precision and fraction count to encode this decimal completely.
+    /// Get the least precision and fraction count to encode this decimal
+    /// completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
         let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
         let prec = int_cnt + self.frac_cnt;
@@ -1338,8 +1345,9 @@ impl Decimal {
         dec
     }
 
-    /// `shift` shifts decimal digits in given number (with rounding if it need),
-    /// shift > 0 means shift to left shift, shift < 0 means right shift.
+    /// `shift` shifts decimal digits in given number (with rounding if it
+    /// need), shift > 0 means shift to left shift, shift < 0 means right
+    /// shift.
     ///
     /// In fact it is multiplying on 10^shift.
     pub fn shift(self, shift: isize) -> Res<Decimal> {
@@ -1564,7 +1572,8 @@ impl Decimal {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
 
-    /// Returns a `Decimal` from a given bytes slice buffer and specified buffer length
+    /// Returns a `Decimal` from a given bytes slice buffer and specified buffer
+    /// length
     ///
     /// # Notes
     ///
@@ -1574,7 +1583,7 @@ impl Decimal {
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
         // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
-            //TODO: return badnumber
+            // TODO: return badnumber
             None => return Err(box_err!("\"{}\" is empty", escape(s))),
             Some(pos) => &s[pos..],
         };
@@ -1618,7 +1627,7 @@ impl Decimal {
             word += u32::from(c - b'0') * TEN_POW[inner_idx];
             inner_idx += 1;
             if inner_idx == DIGITS_PER_WORD as usize {
-                //TODO overflow
+                // TODO overflow
                 word_idx -= 1;
                 d.word_buf[word_idx] = word;
                 word = 0;
@@ -1934,7 +1943,7 @@ impl Display for Decimal {
     }
 }
 
-impl crate::codec::data_type::AsMySQLBool for Decimal {
+impl crate::codec::data_type::AsMySqlBool for Decimal {
     #[inline]
     fn as_mysql_bool(&self, _ctx: &mut EvalContext) -> crate::codec::Result<bool> {
         Ok(!self.is_zero())
@@ -2245,7 +2254,8 @@ pub trait DecimalDecoder: NumberDecoder {
         Ok(d)
     }
 
-    /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
+    /// `read_decimal_from_chunk` decode Decimal encoded by
+    /// `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
         let buf = self.read_bytes(DECIMAL_STRUCT_SIZE)?;
         let d = unsafe {
@@ -2457,12 +2467,15 @@ mod tests {
                 Ok(Decimal::from_str("-18446744073709552000").unwrap()),
             ),
             // FIXME: because of rust's bug,
-            //  (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent by f64
-            //  so these cases can not pass
+            // (1<<64)(18446744073709551616), (1<<65)(36893488147419103232) can not be represent
+            // by f64  so these cases can not pass
             // (18446744073709551616.0, Ok(Decimal::from_str("18446744073709551616").unwrap())),
             // (-18446744073709551616.0, Ok(Decimal::from_str("-18446744073709551616").unwrap())),
             // (36893488147419103000.0, Ok(Decimal::from_str("36893488147419103000.0").unwrap())),
-            // (-36893488147419103000.0, Ok(Decimal::from_str("-36893488147419103000.0").unwrap())),
+            // (
+            //    -36893488147419103000.0,
+            //    Ok(Decimal::from_str("-36893488147419103000.0").unwrap())
+            // ),
             (
                 36893488147419103000.0,
                 Ok(Decimal::from_str("36893488147419103000.0").unwrap()),
@@ -3032,7 +3045,7 @@ mod tests {
         // error cases
         let cases = vec![b"1e18446744073709551620"];
         for case in cases {
-            assert!(Decimal::from_bytes(case).is_err());
+            Decimal::from_bytes(case).unwrap_err();
         }
     }
 
@@ -3721,11 +3734,9 @@ mod tests {
         )));
         let truncated_res = Res::Truncated(2333);
 
-        assert!(
-            truncated_res
-                .into_result_impl(&mut ctx, Some(Error::truncated()), None)
-                .is_ok()
-        );
+        truncated_res
+            .into_result_impl(&mut ctx, Some(Error::truncated()), None)
+            .unwrap();
 
         // Overflow cases
         let mut ctx = EvalContext::default();
@@ -3744,10 +3755,8 @@ mod tests {
             Flag::OVERFLOW_AS_WARNING,
         )));
         let error = Error::overflow("", "");
-        assert!(
-            overflow_res
-                .into_result_impl(&mut ctx, None, Some(error))
-                .is_ok()
-        );
+        overflow_res
+            .into_result_impl(&mut ctx, None, Some(error))
+            .unwrap();
     }
 }

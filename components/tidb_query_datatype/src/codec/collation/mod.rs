@@ -49,8 +49,8 @@ macro_rules! match_template_charset {
 
          match_template::match_template! {
              $t = [
-                 UTF8 => EncodingUTF8,
-                 UTF8Mb4 => EncodingUTF8Mb4,
+                 UTF8 => EncodingUtf8,
+                 UTF8Mb4 => EncodingUtf8Mb4,
                  Latin1 => EncodingLatin1,
                  GBK => EncodingGBK,
                  Binary => EncodingBinary,
@@ -149,8 +149,9 @@ where
     ///
     /// # Panic
     ///
-    /// The `Ord`, `Hash`, `PartialEq` and more implementations assume that the bytes are
-    /// valid for the certain collator. The violation will cause panic.
+    /// The `Ord`, `Hash`, `PartialEq` and more implementations assume that the
+    /// bytes are valid for the certain collator. The violation will cause
+    /// panic.
     #[inline]
     pub fn new_unchecked(inner: T) -> Self {
         Self {

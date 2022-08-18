@@ -5,7 +5,7 @@
 use std::fs;
 
 use engine_test::{
-    ctor::{ColumnFamilyOptions, DBOptions, KvEngineConstructorExt},
+    ctor::{CfOptions, DbOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
 };
 use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
@@ -23,11 +23,8 @@ fn new_engine_basic() {
 fn new_engine_opt_basic() {
     let dir = tempdir();
     let path = dir.path().to_str().unwrap();
-    let db_opts = DBOptions::default();
-    let cf_opts = ALL_CFS
-        .iter()
-        .map(|cf| (*cf, ColumnFamilyOptions::new()))
-        .collect();
+    let db_opts = DbOptions::default();
+    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let _db = KvTestEngine::new_kv_engine_opt(path, db_opts, cf_opts).unwrap();
 }
 
@@ -47,11 +44,8 @@ fn new_engine_opt_missing_dir() {
     let dir = tempdir();
     let path = dir.path();
     let path = path.join("missing").to_str().unwrap().to_owned();
-    let db_opts = DBOptions::default();
-    let cf_opts = ALL_CFS
-        .iter()
-        .map(|cf| (*cf, ColumnFamilyOptions::new()))
-        .collect();
+    let db_opts = DbOptions::default();
+    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let db = KvTestEngine::new_kv_engine_opt(&path, db_opts, cf_opts).unwrap();
     db.put(b"foo", b"bar").unwrap();
     db.sync().unwrap();
@@ -73,7 +67,7 @@ fn new_engine_readonly_dir() {
     let path = path.to_str().unwrap();
     let err = KvTestEngine::new_kv_engine(path, ALL_CFS);
 
-    assert!(err.is_err());
+    err.unwrap_err();
 }
 
 #[test]
@@ -90,12 +84,9 @@ fn new_engine_opt_readonly_dir() {
     fs::set_permissions(&path, perms).unwrap();
 
     let path = path.to_str().unwrap();
-    let db_opts = DBOptions::default();
-    let cf_opts = ALL_CFS
-        .iter()
-        .map(|cf| (*cf, ColumnFamilyOptions::new()))
-        .collect();
+    let db_opts = DbOptions::default();
+    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
     let err = KvTestEngine::new_kv_engine_opt(path, db_opts, cf_opts);
 
-    assert!(err.is_err());
+    err.unwrap_err();
 }

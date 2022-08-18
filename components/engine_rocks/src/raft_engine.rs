@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGCTask, Result, SyncMutable, WriteBatch,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
@@ -38,7 +38,8 @@ impl RaftEngineReadOnly for RocksEngine {
         let (max_size, mut total_size, mut count) = (max_size.unwrap_or(usize::MAX), 0, 0);
 
         if high - low <= RAFT_LOG_MULTI_GET_CNT {
-            // If election happens in inactive regions, they will just try to fetch one empty log.
+            // If election happens in inactive regions, they will just try to fetch one
+            // empty log.
             for i in low..high {
                 if total_size > 0 && total_size >= max_size {
                     break;
@@ -288,7 +289,7 @@ impl RaftEngine for RocksEngine {
         self.put_msg(&keys::raft_state_key(raft_group_id), state)
     }
 
-    fn batch_gc(&self, groups: Vec<RaftLogGCTask>) -> Result<usize> {
+    fn batch_gc(&self, groups: Vec<RaftLogGcTask>) -> Result<usize> {
         let mut total = 0;
         let mut raft_wb = self.write_batch_with_cap(4 * 1024);
         for task in groups {

@@ -226,7 +226,8 @@ fn test_applied_lock_collector() {
         assert_eq!(resp.get_locks().len(), 1024);
     });
 
-    // Register lock observer at a later safe point. Lock observer should reset its state.
+    // Register lock observer at a later safe point. Lock observer should reset its
+    // state.
     safe_point += 1;
     clients.iter().for_each(|(_, c)| {
         must_register_lock_observer(c, safe_point);
@@ -266,8 +267,8 @@ fn test_applied_lock_collector() {
     });
 }
 
-// Since v5.0 GC bypasses Raft, which means GC scans/deletes records with `keys::DATA_PREFIX`.
-// This case ensures it's performed correctly.
+// Since v5.0 GC bypasses Raft, which means GC scans/deletes records with
+// `keys::DATA_PREFIX`. This case ensures it's performed correctly.
 #[test]
 fn test_gc_bypass_raft() {
     let (cluster, leader, ctx) = must_new_cluster_mul(1);
@@ -300,7 +301,7 @@ fn test_gc_bypass_raft() {
     }
 
     let gc_sched = cluster.sim.rl().get_gc_worker(1).scheduler();
-    assert!(sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).is_ok());
+    sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).unwrap();
 
     for &start_ts in &[10, 20, 30] {
         let commit_ts = start_ts + 5;

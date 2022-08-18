@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -113,7 +113,7 @@ fn test_node_async_fetch() {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 
@@ -256,7 +256,8 @@ fn test_node_compact_entry_cache() {
     // change one peer to learner
     cluster.pd_client.add_peer(1, new_learner_peer(5, 5));
 
-    // cause log lag and pause async fetch to check if entry cache is reserved for the learner
+    // cause log lag and pause async fetch to check if entry cache is reserved for
+    // the learner
     for i in 1..6 {
         let k = i.to_string().into_bytes();
         let v = k.clone();

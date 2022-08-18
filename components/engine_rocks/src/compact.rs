@@ -2,7 +2,7 @@
 
 use std::cmp;
 
-use engine_traits::{CFNamesExt, CompactExt, Result};
+use engine_traits::{CfNamesExt, CompactExt, Result};
 use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
 
 use crate::{engine::RocksEngine, r2e, util};
@@ -137,10 +137,10 @@ impl CompactExt for RocksEngine {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{CFNamesExt, CFOptionsExt, CompactExt, MiscExt, SyncMutable};
+    use engine_traits::{CfNamesExt, CfOptionsExt, CompactExt, MiscExt, SyncMutable};
     use tempfile::Builder;
 
-    use crate::{util, RocksCfOptions, RocksDBOptions};
+    use crate::{util, RocksCfOptions, RocksDbOptions};
 
     #[test]
     fn test_compact_files_in_range() {
@@ -154,7 +154,7 @@ mod tests {
         let cfs_opts = vec![("default", cf_opts.clone()), ("test", cf_opts)];
         let db = util::new_engine_opt(
             temp_dir.path().to_str().unwrap(),
-            RocksDBOptions::default(),
+            RocksDbOptions::default(),
             cfs_opts,
         )
         .unwrap();

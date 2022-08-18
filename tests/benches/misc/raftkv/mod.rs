@@ -152,7 +152,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
 
     b.iter(|| {
         let cb1: EngineCallback<RegionSnapshot<RocksSnapshot>> = Box::new(move |res| {
-            assert!(res.is_ok());
+            res.unwrap();
         });
         let cb2: EngineCallback<CmdRes<RocksSnapshot>> = Box::new(move |res| {
             if let Ok(CmdRes::Snap(snap)) = res {

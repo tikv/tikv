@@ -3,7 +3,8 @@
 //! This module contains all structs related to apply batch system.
 //!
 //! After being started, each thread will have its own `ApplyPoller` and poll
-//! using `ApplyContext`. For more information, see the documentation of batch-system.
+//! using `ApplyContext`. For more information, see the documentation of
+//! batch-system.
 
 use std::{
     ops::{Deref, DerefMut},

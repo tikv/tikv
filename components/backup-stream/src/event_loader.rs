@@ -110,7 +110,8 @@ impl<S: Snapshot> EventLoader<S> {
         })
     }
 
-    /// Scan a batch of events from the snapshot, and save them into the internal buffer.
+    /// Scan a batch of events from the snapshot, and save them into the
+    /// internal buffer.
     fn fill_entries(&mut self) -> Result<Statistics> {
         assert!(
             self.entry_batch.is_empty(),
@@ -278,11 +279,13 @@ where
     /// and return the current snapshot of that region.
     fn observe_over(&self, region: &Region, cmd: ChangeObserver) -> Result<impl Snapshot> {
         // There are 2 ways for getting the initial snapshot of a region:
-        //   1. the BR method: use the interface in the RaftKv interface, read the key-values directly.
-        //   2. the CDC method: use the raftstore message `SignificantMsg::CaptureChange` to
-        //      register the region to CDC observer and get a snapshot at the same time.
-        // Registering the observer to the raftstore is necessary because we should only listen events from leader.
-        // In CDC, the change observer is per-delegate(i.e. per-region), we can create the command per-region here too.
+        // - the BR method: use the interface in the RaftKv interface, read the
+        //   key-values directly.
+        // - the CDC method: use the raftstore message `SignificantMsg::CaptureChange`
+        //   to register the region to CDC observer and get a snapshot at the same time.
+        // Registering the observer to the raftstore is necessary because we should only
+        // listen events from leader. In CDC, the change observer is
+        // per-delegate(i.e. per-region), we can create the command per-region here too.
 
         let (callback, fut) =
             tikv_util::future::paired_future_callback::<std::result::Result<_, Error>>();
@@ -351,7 +354,8 @@ where
                 raftstore::store::util::compare_region_epoch(
                     region.get_region_epoch(),
                     &v.value().meta,
-                    // No need for checking conf version because conf change won't cancel the observation.
+                    // No need for checking conf version because conf change won't cancel the
+                    // observation.
                     false,
                     true,
                     false,
@@ -359,8 +363,8 @@ where
                 Ok(v)
             })
             .map_err(|err| Error::Contextual {
-                // Both when we cannot find the region in the track and
-                // the epoch has changed means that we should cancel the current turn of initial scanning.
+                // Both when we cannot find the region in the track and the epoch has changed means
+                // that we should cancel the current turn of initial scanning.
                 inner_error: Box::new(Error::ObserveCanceled(
                     region_id,
                     region.get_region_epoch().clone(),
@@ -446,7 +450,8 @@ where
         Ok(stats)
     }
 
-    /// initialize a range: it simply scan the regions with leader role and send them to [`initialize_region`].
+    /// initialize a range: it simply scan the regions with leader role and send
+    /// them to [`initialize_region`].
     pub fn initialize_range(&self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let mut pager = RegionPager::scan_from(self.regions.clone(), start_key, end_key);
         loop {
@@ -456,10 +461,11 @@ where
                 break;
             }
             for r in regions {
-                // Note: Even we did the initial scanning, and blocking resolved ts from advancing,
-                //       if the next_backup_ts was updated in some extreme condition, there is still little chance to lost data:
-                //       For example, if a region cannot elect the leader for long time. (say, net work partition)
-                //       At that time, we have nowhere to record the lock status of this region.
+                // Note: Even we did the initial scanning, and blocking resolved ts from
+                // advancing, if the next_backup_ts was updated in some extreme condition, there
+                // is still little chance to lost data: For example, if a region cannot elect
+                // the leader for long time. (say, net work partition) At that time, we have
+                // nowhere to record the lock status of this region.
                 let success = try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::Start { region: r.region })

@@ -434,7 +434,7 @@ mod tests {
         let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
-        assert!(w.write(batch).is_err());
+        w.write(batch).unwrap_err();
     }
 
     #[test]
@@ -462,7 +462,7 @@ mod tests {
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());
 
-        assert!(w.write(batch).is_err());
+        w.write(batch).unwrap_err();
     }
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
         let pairs = vec![pair];
         batch.set_pairs(pairs.into());
 
-        assert!(w.write(batch.clone()).is_err());
+        w.write(batch.clone()).unwrap_err();
 
         // put a valid key
         let mut pair = Pair::default();

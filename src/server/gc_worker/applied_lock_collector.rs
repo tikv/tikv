@@ -20,7 +20,7 @@ use raftstore::coprocessor::{
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 use txn_types::Key;
 
-// TODO: Use new error type for GCWorker instead of storage::Error.
+// TODO: Use new error type for GcWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};
 use crate::storage::{
     mvcc::{ErrorInner as MvccErrorInner, Lock, TimeStamp},
@@ -34,9 +34,10 @@ const MAX_COLLECT_SIZE: usize = 1024;
 struct LockObserverState {
     max_ts: AtomicU64,
 
-    /// `is_clean` is true, only it's sure that all applying of stale locks (locks with start_ts <=
-    /// specified max_ts) are monitored and collected. If there are too many stale locks or any
-    /// error happens, `is_clean` must be set to `false`.
+    /// `is_clean` is true, only it's sure that all applying of stale locks
+    /// (locks with start_ts <= specified max_ts) are monitored and collected.
+    /// If there are too many stale locks or any error happens, `is_clean`
+    /// must be set to `false`.
     is_clean: AtomicBool,
 }
 
@@ -112,9 +113,10 @@ impl Display for LockCollectorTask {
     }
 }
 
-/// `LockObserver` observes apply events and apply snapshot events. If it happens in CF_LOCK, it
-/// checks the `start_ts`s of the locks being written. If a lock's `start_ts` <= specified `max_ts`
-/// in the `state`, it will send the lock to through the `sender`, so the receiver can collect it.
+/// `LockObserver` observes apply events and apply snapshot events. If it
+/// happens in CF_LOCK, it checks the `start_ts`s of the locks being written. If
+/// a lock's `start_ts` <= specified `max_ts` in the `state`, it will send the
+/// lock to through the `sender`, so the receiver can collect it.
 #[derive(Clone)]
 struct LockObserver {
     state: Arc<LockObserverState>,
@@ -310,9 +312,9 @@ impl LockCollectorRunner {
             Greater => {
                 info!("start collecting locks"; "max_ts" => max_ts);
                 self.collected_locks.clear();
-                // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
-                // previous observing. It need to be solved, although it's very unlikely to happen and
-                // doesn't affect correctness of data.
+                // TODO: `is_clean` may be unexpectedly set to false here, if any error happens
+                // on a previous observing. It need to be solved, although it's very unlikely to
+                // happen and doesn't affect correctness of data.
                 self.observer_state.mark_clean();
                 self.observer_state.store_max_ts(max_ts);
                 Ok(())
@@ -420,21 +422,22 @@ impl AppliedLockCollector {
         self.worker.lock().unwrap().stop();
     }
 
-    /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
-    /// at one time.
+    /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one
+    /// `max_ts` is valid at one time.
     pub fn start_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
-        // Before starting collecting, check the concurrency manager to avoid later prewrite
-        // requests uses a min_commit_ts less than the safepoint.
+        // Before starting collecting, check the concurrency manager to avoid later
+        // prewrite requests uses a min_commit_ts less than the safepoint.
         // `max_ts` here is the safepoint of the current round of GC.
-        // Ths is similar to that we update max_ts and check memory lock when handling other
-        // transactional read requests. However this is done at start_collecting instead of
-        // physical_scan_locks. The reason is that, to fully scan a TiKV store, it might needs more
-        // than one physical_scan_lock requests. However memory lock needs to be checked before
-        // scanning the locks, and we can't know the `end_key` of the scan range at that time. As
-        // a result, each physical_scan_lock request will cause scanning memory lock from the
-        // start_key to the very-end of the TiKV node, which is a waste. But since we always start
-        // collecting applied locks before physical scan lock, so a better idea is to check the
-        // memory lock before physical_scan_lock.
+        // Ths is similar to that we update max_ts and check memory lock when handling
+        // other transactional read requests. However this is done at start_collecting
+        // instead of physical_scan_locks. The reason is that, to fully scan a TiKV
+        // store, it might needs more than one physical_scan_lock requests. However
+        // memory lock needs to be checked before scanning the locks, and we can't know
+        // the `end_key` of the scan range at that time. As a result, each
+        // physical_scan_lock request will cause scanning memory lock from the start_key
+        // to the very-end of the TiKV node, which is a waste. But since we always start
+        // collecting applied locks before physical scan lock, so a better idea is to
+        // check the memory lock before physical_scan_lock.
         self.concurrency_manager.update_max_ts(max_ts);
         self.concurrency_manager
             .read_range_check(None, None, |key, lock| {
@@ -453,10 +456,11 @@ impl AppliedLockCollector {
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
     }
 
-    /// Get the collected locks after `start_collecting`. Only valid when `max_ts` matches the
-    /// `max_ts` provided to `start_collecting`.
-    /// Collects at most `MAX_COLLECT_SIZE` locks. If there are (even potentially) more locks than
-    /// `MAX_COLLECT_SIZE` or any error happens, the flag `is_clean` will be unset, which represents
+    /// Get the collected locks after `start_collecting`. Only valid when
+    /// `max_ts` matches the `max_ts` provided to `start_collecting`.
+    /// Collects at most `MAX_COLLECT_SIZE` locks. If there are (even
+    /// potentially) more locks than `MAX_COLLECT_SIZE` or any error happens,
+    /// the flag `is_clean` will be unset, which represents
     /// `AppliedLockCollector` cannot collect all locks.
     pub fn get_collected_locks(
         &self,
@@ -468,8 +472,8 @@ impl AppliedLockCollector {
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
     }
 
-    /// Stop collecting locks. Only valid when `max_ts` matches the `max_ts` provided to
-    /// `start_collecting`.
+    /// Stop collecting locks. Only valid when `max_ts` matches the `max_ts`
+    /// provided to `start_collecting`.
     pub fn stop_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
         self.scheduler
             .schedule(LockCollectorTask::StopCollecting { max_ts, callback })
@@ -588,8 +592,8 @@ mod tests {
         get_collected_locks(&c, 2).unwrap_err();
         stop_collecting(&c, 2).unwrap_err();
 
-        // When start_collecting is invoked with a larger ts, the later one will ovewrite the
-        // previous one.
+        // When start_collecting is invoked with a larger ts, the later one will
+        // ovewrite the previous one.
         start_collecting(&c, 3).unwrap();
         assert_eq!(c.concurrency_manager.max_ts(), 3.into());
         get_collected_locks(&c, 3).unwrap();
@@ -703,7 +707,8 @@ mod tests {
             (expected_result.clone(), true)
         );
 
-        // When start collecting with the same max_ts again, shouldn't clean up the observer state.
+        // When start collecting with the same max_ts again, shouldn't clean up the
+        // observer state.
         start_collecting(&c, 100).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -727,8 +732,8 @@ mod tests {
             (expected_result, true)
         );
 
-        // When start_collecting is double-invoked again with larger ts, the previous results are
-        // dropped.
+        // When start_collecting is double-invoked again with larger ts, the previous
+        // results are dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
         coprocessor_host.post_apply(&Region::default(), &make_raft_cmd(req));
@@ -789,8 +794,8 @@ mod tests {
             (expected_locks.clone(), true)
         );
 
-        // When stale start_collecting request arrives, the previous collected results shouldn't
-        // be dropped.
+        // When stale start_collecting request arrives, the previous collected results
+        // shouldn't be dropped.
         start_collecting(&c, 100).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
@@ -802,8 +807,8 @@ mod tests {
             (expected_locks, true)
         );
 
-        // When start_collecting is double-invoked again with larger ts, the previous results are
-        // dropped.
+        // When start_collecting is double-invoked again with larger ts, the previous
+        // results are dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
         coprocessor_host.post_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
@@ -813,8 +818,8 @@ mod tests {
         coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
-        // Apply SST file to lock cf is not supported. This will cause error and therefore
-        // `is_clean` will be set to false.
+        // Apply SST file to lock cf is not supported. This will cause error and
+        // therefore `is_clean` will be set to false.
         coprocessor_host.post_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, false));
     }

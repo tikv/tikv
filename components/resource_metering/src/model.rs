@@ -20,7 +20,7 @@ thread_local! {
 }
 
 /// Raw resource statistics record.
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct RawRecord {
     pub cpu_time: u32, // ms
     pub read_keys: u32,
@@ -48,7 +48,7 @@ impl RawRecord {
 /// [Recorder]: crate::recorder::Recorder
 /// [Reporter]: crate::reporter::Reporter
 /// [Collector]: crate::collector::Collector
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct RawRecords {
     pub begin_unix_time_secs: u64,
     pub duration: Duration,
@@ -71,7 +71,8 @@ impl Default for RawRecords {
 }
 
 impl RawRecords {
-    /// Keep a maximum of `k` self.records and aggregate the others into returned [RawRecord].
+    /// Keep a maximum of `k` self.records and aggregate the others into
+    /// returned [RawRecord].
     pub fn keep_top_k(&mut self, k: usize) -> RawRecord {
         let mut others = RawRecord::default();
         if self.records.len() <= k {

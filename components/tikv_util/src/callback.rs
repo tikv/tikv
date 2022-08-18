@@ -10,8 +10,8 @@ pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
 /// Note that leaking the callback can cause it to be never called but it
 /// rarely happens.
 ///
-/// Also note that because `callback` and `arg_on_drop` may be called in the `drop`
-/// method, do not panic inside them or use `safe_panic` instead.
+/// Also note that because `callback` and `arg_on_drop` may be called in the
+/// `drop` method, do not panic inside them or use `safe_panic` instead.
 pub fn must_call<T: Send + 'static>(
     callback: impl FnOnce(T) + Send + 'static,
     arg_on_drop: impl FnOnce() -> T + Send + 'static,

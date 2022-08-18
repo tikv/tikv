@@ -27,7 +27,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -38,7 +38,7 @@ fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 
@@ -93,7 +93,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -103,7 +103,7 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 
@@ -140,7 +140,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
                 &cluster.engines,
                 &before_states,
                 gc_limit * 2,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -151,7 +151,7 @@ fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
         &cluster.engines,
         &before_states,
         gc_limit * 2,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 

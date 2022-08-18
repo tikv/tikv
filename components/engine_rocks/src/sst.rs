@@ -93,8 +93,8 @@ impl Iterable for RocksSstReader {
 // FIXME: See comment on RocksSstReader for why this contains Rc
 pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
-// TODO(5kbpers): Temporarily force to add `Send` here, add a method for creating
-// DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
+// TODO(5kbpers): Temporarily force to add `Send` here, add a method for
+// creating DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
 unsafe impl Send for RocksSstIterator {}
 
 impl Iterator for RocksSstIterator {
@@ -231,10 +231,10 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
             io_options.set_compression_options(
                 -14,
                 self.compression_level,
-                0, /*strategy*/
-                0, /*max_dict_bytes*/
-                0, /*zstd_max_train_bytes*/
-                1, /*parallel_threads*/
+                0, // strategy
+                0, // max_dict_bytes
+                0, // zstd_max_train_bytes
+                1, // parallel_threads
             );
         }
         io_options.compression(compress_type);

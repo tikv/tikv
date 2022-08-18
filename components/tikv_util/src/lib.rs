@@ -498,10 +498,11 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         );
 
         // There might be remaining logs in the async logger.
-        // To collect remaining logs and also collect future logs, replace the old one with a
-        // terminal logger.
-        // When the old global async logger is replaced, the old async guard will be taken and dropped.
-        // In the drop() the async guard, it waits for the finish of the remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one
+        // with a terminal logger.
+        // When the old global async logger is replaced, the old async guard will be
+        // taken and dropped. In the drop() the async guard, it waits for the
+        // finish of the remaining logs in the async logger.
         if let Some(level) = ::log::max_level().to_level() {
             let drainer = logger::text_format(logger::term_writer(), true);
             let _ = logger::init_log(
@@ -727,7 +728,7 @@ mod tests {
             match foo(&mu.rl()) {
                 Some(_) | None => {
                     let res = mu.try_write();
-                    assert!(res.is_err());
+                    res.unwrap_err();
                 }
             }
         }

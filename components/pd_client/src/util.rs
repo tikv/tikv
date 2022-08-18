@@ -43,7 +43,8 @@ use super::{
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // 1s
 const MAX_RETRY_TIMES: u64 = 5;
-// The max duration when retrying to connect to leader. No matter if the MAX_RETRY_TIMES is reached.
+// The max duration when retrying to connect to leader. No matter if the
+// MAX_RETRY_TIMES is reached.
 const MAX_RETRY_DURATION: Duration = Duration::from_secs(10);
 
 // FIXME: Use a request-independent way to handle reconnection.
@@ -317,7 +318,8 @@ impl Client {
     /// Re-establishes connection with PD leader in asynchronized fashion.
     ///
     /// If `force` is false, it will reconnect only when members change.
-    /// Note: Retrying too quickly will return an error due to cancellation. Please always try to reconnect after sending the request first.
+    /// Note: Retrying too quickly will return an error due to cancellation.
+    /// Please always try to reconnect after sending the request first.
     pub async fn reconnect(&self, force: bool) -> Result<()> {
         PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
         let start = Instant::now();
@@ -477,9 +479,10 @@ where
 {
     loop {
         let ret = {
-            // Drop the read lock immediately to prevent the deadlock between the caller thread
-            // which may hold the read lock and wait for PD client thread completing the request
-            // and the PD client thread which may block on acquiring the write lock.
+            // Drop the read lock immediately to prevent the deadlock between the caller
+            // thread which may hold the read lock and wait for PD client thread
+            // completing the request and the PD client thread which may block
+            // on acquiring the write lock.
             let client_stub = client.inner.rl().client_stub.clone();
             func(&client_stub).map_err(Error::Grpc)
         };
@@ -610,7 +613,8 @@ impl PdConnector {
                     Ok((_, r)) => {
                         let new_cluster_id = r.get_header().get_cluster_id();
                         if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to loop the rest members
+                            // check whether the response have leader info, otherwise continue to
+                            // loop the rest members
                             if r.has_leader() {
                                 return Ok(r);
                             }
@@ -635,9 +639,11 @@ impl PdConnector {
     }
 
     // There are 3 kinds of situations we will return the new client:
-    // 1. the force is true which represents the client is newly created or the original connection has some problem
-    // 2. the previous forwarded host is not empty and it can connect the leader now which represents the network partition problem to leader may be recovered
-    // 3. the member information of PD has been changed
+    // 1. the force is true which represents the client is newly created or the
+    // original connection has some problem 2. the previous forwarded host is
+    // not empty and it can connect the leader now which represents the network
+    // partition problem to leader may be recovered 3. the member information of
+    // PD has been changed
     async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
@@ -844,8 +850,9 @@ pub fn find_bucket_index<S: AsRef<[u8]>>(key: &[u8], bucket_keys: &[S]) -> Optio
         )
 }
 
-/// Merge incoming bucket stats. If a range in new buckets overlaps with multiple ranges in
-/// current buckets, stats of the new range will be added to all stats of current ranges.
+/// Merge incoming bucket stats. If a range in new buckets overlaps with
+/// multiple ranges in current buckets, stats of the new range will be added to
+/// all stats of current ranges.
 pub fn merge_bucket_stats<C: AsRef<[u8]>, I: AsRef<[u8]>>(
     cur: &[C],
     cur_stats: &mut BucketStats,

@@ -33,7 +33,7 @@ use tikv::{
             GC_COMPACTION_FILTER_SKIP,
         },
         rawkv_compaction_filter::make_key,
-        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, TestGCRunner,
+        AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, TestGcRunner,
         STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
     },
     storage::{
@@ -58,7 +58,7 @@ fn test_txn_create_compaction_filter() {
     let engine = builder.build_with_cfg(&cfg).unwrap();
     let raw_engine = engine.get_rocksdb();
 
-    let mut gc_runner = TestGCRunner::new(0);
+    let mut gc_runner = TestGcRunner::new(0);
     let value = vec![b'v'; 512];
 
     must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -92,7 +92,7 @@ fn test_txn_mvcc_filtered() {
     let engine = TestEngineBuilder::new().build().unwrap();
     let raw_engine = engine.get_rocksdb();
     let value = vec![b'v'; 512];
-    let mut gc_runner = TestGCRunner::new(0);
+    let mut gc_runner = TestGcRunner::new(0);
 
     // GC can't delete keys after the given safe point.
     must_prewrite_put(&engine, b"zkey", &value, b"zkey", 100);
@@ -217,7 +217,7 @@ fn test_raw_mvcc_filtered() {
         .build_with_cfg(&cfg)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
-    let mut gc_runner = TestGCRunner::new(0);
+    let mut gc_runner = TestGcRunner::new(0);
 
     let user_key = b"r\0aaaaaaaaaaa";
 
