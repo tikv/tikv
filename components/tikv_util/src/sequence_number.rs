@@ -119,6 +119,10 @@ impl SequenceNumberWindow {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use test::Bencher;
+
     use super::*;
 
     #[test]
@@ -156,5 +160,39 @@ mod tests {
         assert_eq!(window.committed_seqno(), 7);
         window.push(sn8);
         assert_eq!(window.committed_seqno(), 8);
+    }
+
+    #[bench]
+    fn bench_sequence_number_window(b: &mut Bencher) {
+        fn produce_random_seqno(producer: usize, number: usize) -> Vec<SequenceNumber> {
+            let mock_seqno_allocator = Arc::new(AtomicU64::new(1));
+            let (tx, rx) = std::sync::mpsc::sync_channel(number);
+            let handles: Vec<_> = (0..producer)
+                .map(|_| {
+                    let allocator = mock_seqno_allocator.clone();
+                    let count = number / producer;
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        for _ in 0..count {
+                            let mut sn = SequenceNumber::start();
+                            sn.end(allocator.fetch_add(1, Ordering::AcqRel));
+                            tx.send(sn).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+            (0..number).map(|_| rx.recv().unwrap()).collect()
+        }
+
+        let seqno = produce_random_seqno(16, 100000);
+        b.iter(|| {
+            let mut window = SequenceNumberWindow::default();
+            for sn in &seqno {
+                window.push(*sn);
+            }
+        })
     }
 }
