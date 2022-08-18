@@ -35,11 +35,12 @@ crossbeam = "0.8"
 engine_traits = { path = "../engine_traits" }
 error_code = { path = "../error_code" }
 fail = "0.5"
-futures-util = { version = "0.3", features = ["compat"] }
+futures = { version = "0.3", features = ["compat"] }
 keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "../log_wrappers" }
 pd_client = { path = "../pd_client" }
+protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft-proto = { version = "0.7.0" }
 raftstore = { path = "../raftstore" }
@@ -60,3 +61,7 @@ test_util = { path = "../test_util" }
 name = "raftstore-v2-failpoints"
 path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
+
+[[test]]
+name = "raftstore-v2-integrations"
+path = "tests/integrations/mod.rs"
