@@ -258,19 +258,13 @@ pub struct SnapContext<'a> {
     pub key_ranges: Vec<KeyRange>,
 }
 
-#[derive(PartialEq, Eq)]
-pub enum EngineVersion {
-    V1,
-    V2,
-}
-
 /// Engine defines the common behaviour for a storage engine type.
 pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
 
-    fn get_engine_version(&self) -> EngineVersion {
-        EngineVersion::V1
+    fn is_single_engine(&self) -> bool {
+        true
     }
 
     /// Local storage engine.
@@ -287,7 +281,7 @@ pub trait Engine: Send + Clone + 'static {
     fn modify_on_kv_engine(
         &self,
         modifies: Vec<Modify>,
-        key_to_id: Option<HashMap<Key, u64>>,
+        key_to_region_id: Option<HashMap<Key, u64>>,
     ) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;

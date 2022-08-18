@@ -34,6 +34,7 @@ fn setup_cfg_controller(
         tx,
         cfg.gc.clone(),
         Default::default(),
+        None,
     );
     gc_worker.start().unwrap();
 

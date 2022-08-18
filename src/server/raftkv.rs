@@ -37,7 +37,6 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::EngineVersion;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -319,15 +318,12 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
-    fn get_engine_version(&self) -> EngineVersion {
-        if self.factory.is_none() || self.factory.as_ref().unwrap().is_single_engine() {
-            return EngineVersion::V1;
-        }
-        EngineVersion::V2
+    fn is_single_engine(&self) -> bool {
+        self.factory.is_none() || self.factory.as_ref().unwrap().is_single_engine()
     }
 
     fn get_tablet(&self, region_id: Option<u64>) -> E {
-        if self.get_engine_version() == EngineVersion::V1 {
+        if self.is_single_engine() {
             self.engine.clone()
         } else {
             self.factory
@@ -354,7 +350,7 @@ where
         // Use a fake peer to avoid panic.
         region.mut_peers().push(Default::default());
 
-        let tablet = if self.get_engine_version() == EngineVersion::V1 {
+        let tablet = if self.is_single_engine() {
             self.engine.clone()
         } else {
             self.factory
@@ -399,7 +395,7 @@ where
             }
         }
 
-        if self.get_engine_version() == EngineVersion::V1 {
+        if self.is_single_engine() {
             write_modifies(&self.engine, modifies)
         } else {
             write_modifies_multi_rocks(self, modifies, key_to_id.unwrap())

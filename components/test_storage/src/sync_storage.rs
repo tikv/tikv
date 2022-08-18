@@ -116,6 +116,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             tx,
             config,
             Default::default(),
+            None,
         );
         gc_worker.start()?;
         Ok(Self {

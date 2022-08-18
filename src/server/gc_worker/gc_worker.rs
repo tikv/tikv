@@ -7,7 +7,7 @@ use std::{
     mem,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
-        mpsc::Sender,
+        mpsc::{self, Sender},
         Arc, Mutex,
     },
     vec::IntoIter,
@@ -28,11 +28,11 @@ use kvproto::{
 };
 use pd_client::{FeatureGate, PdClient};
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
+    coprocessor::{CoprocessorHost, RangeKey, RegionInfoProvider},
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{CfStatistics, CursorBuilder, EngineVersion, Modify};
+use tikv_kv::{CfStatistics, CursorBuilder, Modify};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -113,6 +113,7 @@ where
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     },
     PhysicalScanLock {
         ctx: Context,
@@ -245,7 +246,7 @@ struct KeysInRegions<R: Iterator<Item = Region>> {
 }
 
 impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-    type Item = (Key, u64);
+    type Item = (Key, Region);
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let region = self.regions.peek()?;
@@ -253,7 +254,7 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
             if key < region.get_start_key() {
                 self.keys.next();
             } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                return self.keys.next().map(|key| (key, region.id));
+                return self.keys.next().map(|key| (key, region.clone()));
             } else {
                 self.regions.next();
             }
@@ -266,12 +267,12 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
 // 2. region_id not None: It means all keys belong to the same region
 // Exactly one of them can be None.
 fn get_keys_in_regions(
+    single_rocks: bool,
+    region: Option<Region>,
     keys: Vec<Key>,
     regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-    single_rocks: bool,
-    region_id: Option<u64>,
-) -> Result<Box<dyn Iterator<Item = (Key, u64)>>> {
-    assert!(region_id.is_some() || regions_provider.is_some());
+) -> Result<Box<dyn Iterator<Item = (Key, Region)>>> {
+    assert!(region.is_some() || regions_provider.is_some());
     if keys.len() >= 2 {
         if let Some((store_id, region_info_provider)) = regions_provider {
             let start = keys.first().unwrap().as_encoded();
@@ -287,20 +288,36 @@ fn get_keys_in_regions(
     }
 
     if single_rocks {
-        Ok(Box::new(keys.into_iter().map(|k| (k, 0))))
-    } else if let Some(region_id) = region_id {
-        Ok(Box::new(keys.into_iter().map(move |k| (k, region_id))))
+        Ok(Box::new(keys.into_iter().map(|k| (k, Region::default()))))
+    } else if let Some(region) = region {
+        // todo(SpadeA): find the region
+        Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone()))))
     } else {
         // In this case, keys.len() == 1
+        assert!(keys.len() == 1);
         let key = keys.first().unwrap().as_encoded();
         let (store_id, region_info_provider) = regions_provider.unwrap();
-        let regions = box_try!(region_info_provider.get_regions_in_range(key, key))
-            .into_iter()
-            .filter(move |r| find_peer(r, store_id).is_some())
-            .peekable();
 
-        let keys = keys.into_iter().peekable();
-        Ok(Box::new(KeysInRegions { keys, regions }))
+        let (tx, rx) = mpsc::channel();
+        box_try!(region_info_provider.seek_region(
+            key,
+            Box::new(move |iter| {
+                for info in iter {
+                    if find_peer(&info.region, store_id).is_some() {
+                        let _ = tx.send(Some(info.region.clone()));
+                        return;
+                    }
+                }
+                let _ = tx.send(None);
+            }),
+        ));
+
+        let region = match rx.recv() {
+            Ok(Some(region)) => region,
+            _ => unimplemented!(), // todo(SpadeA): when it can receive error or None?
+        };
+
+        Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone()))))
     }
 }
 
@@ -374,13 +391,13 @@ where
         txn: MvccTxn,
         limiter: &Limiter,
         engine: &E,
-        key_to_id: HashMap<Key, u64>,
+        key_to_region_id: HashMap<Key, u64>,
     ) -> Result<()> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies, Some(key_to_id))?;
+            engine.modify_on_kv_engine(modifies, Some(key_to_region_id))?;
         }
         Ok(())
     }
@@ -404,6 +421,9 @@ where
             false,
         );
 
+        let mut region = Region::default();
+        region.set_start_key(start_key.to_vec());
+        region.set_end_key(end_key.to_vec());
         let mut next_key = Some(Key::from_encoded_slice(start_key));
         while next_key.is_some() {
             // Scans at most `GcConfig.batch_keys` keys.
@@ -416,7 +436,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(keys, safe_point, None, Some(region_id))?;
+            self.gc_keys(Some(region.clone()), keys, safe_point, None)?;
         }
 
         self.stats.add(&reader.statistics);
@@ -431,10 +451,10 @@ where
 
     fn gc_keys(
         &mut self,
+        region: Option<Region>,
         keys: Vec<Key>,
         safe_point: TimeStamp,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-        region_id: Option<u64>,
     ) -> Result<(usize, usize)> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone().into_encoded();
@@ -448,33 +468,44 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
-        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks, region_id)?;
+        let single_rocks = self.engine.is_single_engine();
+        let mut keys = get_keys_in_regions(single_rocks, region, keys, regions_provider)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
-        let mut next_gc_key_id = keys.next();
-        let mut current_gc_region_id = next_gc_key_id.as_ref().map_or(0, |(_, id)| *id);
-        let mut prev_gc_region_id = current_gc_region_id;
+        let mut next_gc_key_region = keys.next();
+        let region = &next_gc_key_region.as_ref().unwrap().1;
+        let mut current_region_id = region.id;
 
-        let snapshot = self.engine.snapshot_on_tablet(
-            Some(current_gc_region_id),
-            &range_start_key,
-            &range_end_key,
-        )?;
+        let mut reader = {
+            let snapshot = if single_rocks {
+                self.engine
+                    .snapshot_on_tablet(None, &range_start_key, &range_end_key)?
+            } else {
+                self.engine.snapshot_on_tablet(
+                    Some(region.id),
+                    &region.start_key,
+                    &region.end_key,
+                )?
+            };
 
-        let mut txn = Self::new_txn();
-        let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)
-        } else {
-            // keys are closing to each other in one batch of gc keys, so do not use
-            // prefix seek here to avoid too many seeks
-            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+            if count <= 1 {
+                MvccReader::new(snapshot, None, false)
+            } else {
+                // keys are closing to each other in one batch of gc keys, so do not use
+                // prefix seek here to avoid too many seeks
+                MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+            }
         };
 
-        let mut key_to_id: HashMap<Key, u64> = HashMap::new();
+        let mut txn = Self::new_txn();
+        let mut key_to_region_id: HashMap<Key, u64> = HashMap::new();
 
-        while let Some((ref key, id)) = next_gc_key_id {
+        while let Some((ref key, ref region)) = next_gc_key_region {
+            if !single_rocks {
+                key_to_region_id.insert(key.clone(), region.id);
+            }
+
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "GC meets failure"; "key" => %key,);
@@ -482,20 +513,20 @@ where
                 gc_info.is_completed = true;
             }
 
-            current_gc_region_id = id;
-            if !single_rocks {
-                key_to_id.insert(key.clone(), id);
-                if current_gc_region_id != prev_gc_region_id {
-                    let snapshot = self.engine.snapshot_on_tablet(
-                        Some(current_gc_region_id),
-                        &range_start_key,
-                        &range_end_key,
-                    )?;
-                    reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
-                }
-            }
-
             if gc_info.is_completed {
+                if !single_rocks && current_region_id != region.id {
+                    current_region_id = region.id;
+                    reader = MvccReader::new(
+                        self.engine.snapshot_on_tablet(
+                            Some(region.id),
+                            &region.start_key,
+                            &region.end_key,
+                        )?,
+                        Some(ScanMode::Forward),
+                        false,
+                    );
+                }
+
                 if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
                     debug!(
                         "GC found plenty versions for a key";
@@ -516,23 +547,31 @@ where
                 } else {
                     wasted_keys += 1;
                 }
-                next_gc_key_id = keys.next();
+                next_gc_key_region = keys.next();
                 gc_info = GcInfo::default();
             } else {
-                Self::flush_txn(txn, &self.limiter, &self.engine, key_to_id)?;
-                key_to_id = HashMap::new();
-                let snapshot = self.engine.snapshot_on_tablet(
-                    Some(current_gc_region_id),
-                    &range_start_key,
-                    &range_end_key,
-                )?;
-                txn = Self::new_txn();
-                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
-            }
+                Self::flush_txn(txn, &self.limiter, &self.engine, key_to_region_id)?;
+                key_to_region_id = HashMap::new();
 
-            prev_gc_region_id = current_gc_region_id;
+                reader = {
+                    let snapshot = if single_rocks {
+                        self.engine
+                            .snapshot_on_tablet(None, &range_start_key, &range_end_key)?
+                    } else {
+                        self.engine.snapshot_on_tablet(
+                            Some(region.id),
+                            &region.start_key,
+                            &region.end_key,
+                        )?
+                    };
+
+                    MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+                };
+                txn = Self::new_txn();
+            }
         }
-        Self::flush_txn(txn, &self.limiter, &self.engine, key_to_id)?;
+
+        Self::flush_txn(txn, &self.limiter, &self.engine, key_to_region_id)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -553,23 +592,30 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let single_rocks = self.engine.get_engine_version() == EngineVersion::V1;
-        let mut keys = get_keys_in_regions(keys, regions_provider, single_rocks, None)?;
+        let single_rocks = self.engine.is_single_engine();
+        let mut keys = get_keys_in_regions(single_rocks, None, keys, regions_provider)?;
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
-        let mut next_gc_key_id = keys.next();
-        let mut current_gc_region_id = next_gc_key_id.as_ref().map_or(0, |(_, id)| *id);
-        let mut prev_gc_region_id = current_gc_region_id;
+        let mut next_gc_key_region = keys.next();
+        let region = &next_gc_key_region.as_ref().unwrap().1;
+        let mut current_region_id = region.id;
 
-        let mut snapshot = self.engine.snapshot_on_tablet(
-            Some(current_gc_region_id),
-            &range_start_key,
-            &range_end_key,
-        )?;
+        let mut snapshot = if single_rocks {
+            self.engine
+                .snapshot_on_tablet(None, &range_start_key, &range_end_key)?
+        } else {
+            self.engine
+                .snapshot_on_tablet(Some(region.id), &region.start_key, &region.end_key)?
+        };
 
+        let mut key_to_region_id: HashMap<Key, u64> = HashMap::new();
         let mut raw_modifies = MvccRaw::new();
-        while let Some((ref key, id)) = next_gc_key_id {
+        while let Some((ref key, ref region)) = next_gc_key_region {
+            if !single_rocks {
+                key_to_region_id.insert(key.clone(), region.id);
+            }
+
             if let Err(e) = self.raw_gc_key(
                 safe_point,
                 key,
@@ -583,12 +629,12 @@ where
                 gc_info.is_completed = true;
             }
 
-            current_gc_region_id = id;
-            if !single_rocks && current_gc_region_id != prev_gc_region_id {
+            if !single_rocks && current_region_id != region.id {
+                current_region_id = region.id;
                 snapshot = self.engine.snapshot_on_tablet(
-                    Some(current_gc_region_id),
-                    &range_start_key,
-                    &range_end_key,
+                    Some(region.id),
+                    &region.start_key,
+                    &region.end_key,
                 )?;
             }
 
@@ -608,19 +654,18 @@ where
 
                 gc_info.report_metrics();
 
-                next_gc_key_id = keys.next();
+                next_gc_key_region = keys.next();
                 gc_info = GcInfo::default();
             } else {
                 // Flush writeBatch to engine.
-                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, None)?;
+                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, key_to_region_id)?;
                 // After flush, reset raw_modifies.
                 raw_modifies = MvccRaw::new();
+                key_to_region_id = HashMap::new();
             }
-
-            prev_gc_region_id = current_gc_region_id;
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, None)?;
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, key_to_region_id)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -690,19 +735,25 @@ where
         raw_modifies: MvccRaw,
         limiter: &Limiter,
         engine: &E,
-        key_to_id: Option<HashMap<Key, u64>>,
+        key_to_id: HashMap<Key, u64>,
     ) -> Result<()> {
         let write_size = raw_modifies.write_size();
         let modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies, key_to_id)?;
+            engine.modify_on_kv_engine(modifies, Some(key_to_id))?;
         }
         Ok(())
     }
 
-    fn unsafe_destroy_range(&self, ctx: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
+    fn unsafe_destroy_range(
+        &self,
+        ctx: &Context,
+        start_key: &Key,
+        end_key: &Key,
+        regions_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Result<()> {
         info!(
             "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
@@ -710,73 +761,33 @@ where
 
         fail_point!("unsafe_destroy_range");
 
+        let single_rocks = self.engine.is_single_engine();
+
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.get_tablet(None);
 
-        // Convert keys to RocksDB layer form
-        // TODO: Logic coupled with raftstore's implementation. Maybe better design is
-        // to do it in somewhere of the same layer with apply_worker.
-        let start_data_key = keys::data_key(start_key.as_encoded());
-        let end_data_key = keys::data_end_key(end_key.as_encoded());
+        if single_rocks {
+            let tablet = self.engine.get_tablet(None);
+            exec_destroy_range::<E>(tablet, start_key, end_key)?;
+        } else {
+            let regions_provider = regions_provider.unwrap();
+            let store_id = ctx.peer.as_ref().unwrap().store_id;
+            let regions = box_try!(
+                regions_provider.get_regions_in_range(start_key.as_encoded(), end_key.as_encoded())
+            )
+            .into_iter()
+            .filter(move |r| find_peer(r, store_id).is_some());
 
-        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+            for mut region in regions {
+                let start_key = Key::from_encoded(get_start_key(start_key, &mut region));
+                let end_key = Key::from_encoded(get_end_key(end_key, &mut region));
 
-        // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
-        let delete_files_start_time = Instant::now();
-        for cf in cfs {
-            local_storage
-                .delete_ranges_cf(
-                    cf,
-                    DeleteStrategy::DeleteFiles,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
-                    e
-                })?;
+                let tablet = self.engine.get_tablet(Some(region.id));
+                exec_destroy_range::<E>(tablet, &start_key, &end_key)?;
+            }
         }
 
-        info!(
-            "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key,
-            "cost_time" => ?delete_files_start_time.saturating_elapsed(),
-        );
-
-        // Then, delete all remaining keys in the range.
-        let cleanup_all_start_time = Instant::now();
-        for cf in cfs {
-            // TODO: set use_delete_range with config here.
-            local_storage
-                .delete_ranges_cf(
-                    cf,
-                    DeleteStrategy::DeleteByKey,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
-                    e
-                })?;
-            local_storage
-                .delete_ranges_cf(
-                    cf,
-                    DeleteStrategy::DeleteBlobs,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
-                    e
-                })?;
-        }
-
-        info!(
-            "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
-        );
         self.flow_info_sender
             .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
             .unwrap();
@@ -844,6 +855,96 @@ where
     }
 }
 
+fn get_start_key(start_key: &Key, region: &mut Region) -> Vec<u8> {
+    if RangeKey::from_start_key(start_key.as_encoded().to_vec())
+        > RangeKey::from_start_key(region.get_start_key().to_vec())
+    {
+        start_key.as_encoded().to_vec()
+    } else {
+        region.take_start_key()
+    }
+}
+
+fn get_end_key(end_key: &Key, region: &mut Region) -> Vec<u8> {
+    if RangeKey::from_end_key(end_key.as_encoded().to_vec())
+        < RangeKey::from_end_key(region.get_end_key().to_vec())
+    {
+        end_key.as_encoded().to_vec()
+    } else {
+        region.take_end_key()
+    }
+}
+
+fn exec_destroy_range<E>(tablet: E::Local, start_key: &Key, end_key: &Key) -> Result<()>
+where
+    E: Engine,
+{
+    // Convert keys to RocksDB layer form
+    // TODO: Logic coupled with raftstore's implementation. Maybe better design is
+    // to do it in somewhere of the same layer with apply_worker.
+    let start_data_key = keys::data_key(start_key.as_encoded());
+    let end_data_key = keys::data_end_key(end_key.as_encoded());
+
+    let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+
+    // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
+    let delete_files_start_time = Instant::now();
+    for cf in cfs {
+        tablet
+            .delete_ranges_cf(
+                cf,
+                DeleteStrategy::DeleteFiles,
+                &[Range::new(&start_data_key, &end_data_key)],
+            )
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
+                e
+            })?;
+    }
+
+    info!(
+        "unsafe destroy range finished deleting files in range";
+        "start_key" => %start_key, "end_key" => %end_key,
+        "cost_time" => ?delete_files_start_time.saturating_elapsed(),
+    );
+
+    // Then, delete all remaining keys in the range.
+    let cleanup_all_start_time = Instant::now();
+    for cf in cfs {
+        // TODO: set use_delete_range with config here.
+        tablet
+            .delete_ranges_cf(
+                cf,
+                DeleteStrategy::DeleteByKey,
+                &[Range::new(&start_data_key, &end_data_key)],
+            )
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
+                e
+            })?;
+        tablet
+            .delete_ranges_cf(
+                cf,
+                DeleteStrategy::DeleteBlobs,
+                &[Range::new(&start_data_key, &end_data_key)],
+            )
+            .map_err(|e| {
+                let e: Error = box_err!(e);
+                warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                e
+            })?;
+    }
+
+    info!(
+        "unsafe destroy range finished cleaning up all";
+        "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
+    );
+
+    Ok(())
+}
+
 impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
@@ -900,10 +1001,10 @@ where
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
                 match self.gc_keys(
+                    None,
                     keys,
                     safe_point,
                     Some((store_id, region_info_provider)),
-                    None,
                 ) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
@@ -944,8 +1045,10 @@ where
                 start_key,
                 end_key,
                 callback,
+                region_info_provider,
             } => {
-                let res = self.unsafe_destroy_range(&ctx, &start_key, &end_key);
+                let res =
+                    self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
@@ -1067,6 +1170,7 @@ where
     raft_store_router: RR,
     /// Used to signal unsafe destroy range is executed.
     flow_info_sender: Option<Sender<FlowInfo>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -1102,6 +1206,7 @@ where
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
+            region_info_provider: self.region_info_provider.clone(),
         }
     }
 }
@@ -1137,6 +1242,7 @@ where
         flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> GcWorker<E, RR> {
         let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
@@ -1152,6 +1258,7 @@ where
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
+            region_info_provider,
         }
     }
 
@@ -1271,6 +1378,7 @@ where
                 start_key,
                 end_key,
                 callback,
+                region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
     }
@@ -1533,8 +1641,14 @@ mod tests {
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
-        let mut gc_worker =
-            GcWorker::new(engine, RaftStoreBlackHole, tx, GcConfig::default(), gate);
+        let mut gc_worker = GcWorker::new(
+            engine,
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+            None,
+        );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1701,6 +1815,7 @@ mod tests {
             tx,
             GcConfig::default(),
             FeatureGate::default(),
+            None,
         );
         gc_worker.start().unwrap();
 
@@ -1783,6 +1898,7 @@ mod tests {
             tx,
             GcConfig::default(),
             feature_gate,
+            None,
         );
         gc_worker.start().unwrap();
 
@@ -1908,10 +2024,10 @@ mod tests {
         assert_eq!(runner.stats.write.next, 0);
         runner
             .gc_keys(
+                None,
                 keys,
                 TimeStamp::new(200),
                 Some((1, Arc::new(ri_provider))),
-                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
@@ -2064,10 +2180,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                None,
                 vec![Key::from_raw(b"k2\x00")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
-                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 20);
@@ -2077,10 +2193,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                None,
                 vec![Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
-                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2090,10 +2206,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                None,
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Some((1, ri_provider.clone())),
-                None,
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2119,10 +2235,10 @@ mod tests {
         runner.stats.write.seek_tombstone = 0;
         runner
             .gc_keys(
+                None,
                 vec![Key::from_raw(b"k2")],
                 safepoint.into(),
                 Some((1, ri_provider)),
-                None,
             )
             .unwrap();
         // The first batch will leave tombstones that will be seen while processing the
@@ -2152,6 +2268,7 @@ mod tests {
             tx,
             GcConfig::default(),
             gate,
+            None,
         );
 
         // Before starting gc_worker, fill the scheduler to full.

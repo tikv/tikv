@@ -507,6 +507,7 @@ mod tests {
             tx,
             Default::default(),
             Default::default(),
+            None,
         );
         gc_worker.start().unwrap();
 
