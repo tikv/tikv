@@ -22708,10 +22708,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (key_mode,tag)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{tag}}",
+              "legendFormat": "{{key_mode}}_{{tag}}",
               "refId": "A"
             }
           ],
@@ -22801,7 +22801,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (kye_mode,tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (key_mode,tag)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{key_mode}}_{{tag}}",
