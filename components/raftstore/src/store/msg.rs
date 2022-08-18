@@ -439,6 +439,8 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    PrepareFlashback,
+    FinishFlashback,
 }
 
 /// Message that will be sent to a peer.

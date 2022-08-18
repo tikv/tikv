@@ -914,6 +914,14 @@ where
         syncer.report_for_self(self_report);
     }
 
+    fn on_prepare_flashback(&mut self) {
+        todo!()
+    }
+
+    fn on_finish_flashback(&mut self) {
+        todo!();
+    }
+
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -1310,6 +1318,8 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
+            SignificantMsg::PrepareFlashback => self.on_prepare_flashback(),
+            SignificantMsg::FinishFlashback => self.on_finish_flashback(),
         }
     }
 
