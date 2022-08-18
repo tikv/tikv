@@ -6,11 +6,12 @@ use std::{
     thread::JoinHandle,
 };
 
-use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatch};
+use engine_rocks::{RocksEngine, RocksEngineIterator, RocksWriteBatchVec};
 use engine_traits::{
-    IterOptions, Iterable, Iterator, Mutable, SeekKey, WriteBatch, WriteBatchExt, CF_DEFAULT,
-    CF_LOCK, CF_WRITE,
+    IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
+use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};
 
 use super::Result;
@@ -21,7 +22,8 @@ const BATCH_SIZE: usize = 256;
 /// todo: Report this to the user.
 #[derive(Debug, Clone)]
 pub enum ResetToVersionState {
-    /// `RemovingWrite` means we are removing stale data in the `WRITE` and `DEFAULT` cf
+    /// `RemovingWrite` means we are removing stale data in the `WRITE` and
+    /// `DEFAULT` cf
     RemovingWrite { scanned: usize },
     /// `RemovingWrite` means we are removing stale data in the `LOCK` cf
     RemovingLock { scanned: usize },
@@ -39,7 +41,8 @@ impl ResetToVersionState {
     }
 }
 
-/// `ResetToVersionWorker` is the worker that does the actual reset-to-version work.
+/// `ResetToVersionWorker` is the worker that does the actual reset-to-version
+/// work.
 pub struct ResetToVersionWorker {
     /// `ts` is the timestamp to reset to.
     ts: TimeStamp,
@@ -70,8 +73,8 @@ impl ResetToVersionWorker {
             .lock()
             .expect("failed to lock `state` in `ResetToVersionWorker::new`") =
             ResetToVersionState::RemovingWrite { scanned: 0 };
-        write_iter.seek(SeekKey::Start).unwrap();
-        lock_iter.seek(SeekKey::Start).unwrap();
+        write_iter.seek_to_first().unwrap();
+        lock_iter.seek_to_first().unwrap();
         Self {
             write_iter,
             lock_iter,
@@ -120,7 +123,7 @@ impl ResetToVersionWorker {
     pub fn process_next_batch(
         &mut self,
         batch_size: usize,
-        wb: &mut RocksWriteBatch,
+        wb: &mut RocksWriteBatchVec,
     ) -> Result<bool> {
         let Batch { writes, has_more } = self.scan_next_batch(batch_size)?;
         for (key, write) in writes {
@@ -131,15 +134,17 @@ impl ResetToVersionWorker {
             box_try!(wb.delete_cf(CF_WRITE, &key));
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
         }
-        wb.write().unwrap();
-        wb.clear();
+        if !wb.is_empty() {
+            wb.write().unwrap();
+            wb.clear();
+        }
         Ok(has_more)
     }
 
     pub fn process_next_batch_lock(
         &mut self,
         batch_size: usize,
-        wb: &mut RocksWriteBatch,
+        wb: &mut RocksWriteBatchVec,
     ) -> Result<bool> {
         let mut has_more = true;
         for _ in 0..batch_size {
@@ -162,13 +167,17 @@ impl ResetToVersionWorker {
                 break;
             }
         }
-        wb.write().unwrap();
+        if !wb.is_empty() {
+            wb.write().unwrap();
+            wb.clear();
+        }
         Ok(has_more)
     }
 }
 
-/// `ResetToVersionManager` is the manager that manages the reset-to-version process.
-/// User should interact with `ResetToVersionManager` instead of using `ResetToVersionWorker` directly.  
+/// `ResetToVersionManager` is the manager that manages the reset-to-version
+/// process. User should interact with `ResetToVersionManager` instead of using
+/// `ResetToVersionWorker` directly.
 pub struct ResetToVersionManager {
     /// Current state of the reset-to-version process.
     state: Arc<Mutex<ResetToVersionState>>,
@@ -206,9 +215,9 @@ impl ResetToVersionManager {
         let readopts = IterOptions::new(None, None, false);
         let write_iter = self
             .engine
-            .iterator_cf_opt(CF_WRITE, readopts.clone())
+            .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
-        let lock_iter = self.engine.iterator_cf_opt(CF_LOCK, readopts).unwrap();
+        let lock_iter = self.engine.iterator_opt(CF_LOCK, readopts).unwrap();
         let mut worker = ResetToVersionWorker::new(write_iter, lock_iter, ts, self.state.clone());
         let mut wb = self.engine.write_batch();
         let props = tikv_util::thread_group::current_properties();
@@ -218,7 +227,7 @@ impl ResetToVersionManager {
         }
         *self.worker_handle.borrow_mut() = Some(std::thread::Builder::new()
             .name("reset_to_version".to_string())
-            .spawn(move || {
+            .spawn_wrapper(move || {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
 
@@ -232,7 +241,7 @@ impl ResetToVersionManager {
                 *worker.state.lock()
                         .expect("failed to lock `ResetToVersionWorker::state` in `ResetToVersionWorker::process_next_batch_lock`")
                     = ResetToVersionState::Done;
-
+                info!("Reset to version done!");
                 tikv_alloc::remove_thread_memory_accessor();
             })
             .expect("failed to spawn reset_to_version thread"));
@@ -254,12 +263,7 @@ impl ResetToVersionManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_rocks::{
-        raw::{ColumnFamilyOptions, DBOptions},
-        raw_util::CFOptions,
-        Compat,
-    };
-    use engine_traits::{WriteBatch, WriteBatchExt, CF_LOCK, CF_RAFT};
+    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
     use tempfile::Builder;
     use txn_types::{Lock, LockType, WriteType};
 
@@ -269,19 +273,7 @@ mod tests {
     fn test_basic() {
         let tmp = Builder::new().prefix("test_basic").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
-        let fake_engine = Arc::new(
-            engine_rocks::raw_util::new_engine_opt(
-                path,
-                DBOptions::new(),
-                vec![
-                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
-                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
-                ],
-            )
-            .unwrap(),
-        );
+        let fake_engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let write = vec![
             // key, start_ts, commit_ts
@@ -338,22 +330,21 @@ mod tests {
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }
-        let mut wb = fake_engine.c().write_batch();
+        let mut wb = fake_engine.write_batch();
         for &(cf, ref k, ref v) in &kv {
             wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
         }
         wb.write().unwrap();
 
-        let manager = ResetToVersionManager::new(fake_engine.c().clone());
+        let manager = ResetToVersionManager::new(fake_engine.clone());
         manager.start(100.into());
         manager.wait();
 
         let readopts = IterOptions::new(None, None, false);
         let mut write_iter = fake_engine
-            .c()
-            .iterator_cf_opt(CF_WRITE, readopts.clone())
+            .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
-        write_iter.seek(SeekKey::Start).unwrap();
+        write_iter.seek_to_first().unwrap();
         let mut remaining_writes = vec![];
         while write_iter.valid().unwrap() {
             let write = WriteRef::parse(write_iter.value()).unwrap().to_owned();
@@ -362,10 +353,9 @@ mod tests {
             remaining_writes.push((key, write));
         }
         let mut default_iter = fake_engine
-            .c()
-            .iterator_cf_opt(CF_DEFAULT, readopts.clone())
+            .iterator_opt(CF_DEFAULT, readopts.clone())
             .unwrap();
-        default_iter.seek(SeekKey::Start).unwrap();
+        default_iter.seek_to_first().unwrap();
         let mut remaining_defaults = vec![];
         while default_iter.valid().unwrap() {
             let key = default_iter.key().to_vec();
@@ -374,8 +364,8 @@ mod tests {
             remaining_defaults.push((key, value));
         }
 
-        let mut lock_iter = fake_engine.c().iterator_cf_opt(CF_LOCK, readopts).unwrap();
-        lock_iter.seek(SeekKey::Start).unwrap();
+        let mut lock_iter = fake_engine.iterator_opt(CF_LOCK, readopts).unwrap();
+        lock_iter.seek_to_first().unwrap();
         let mut remaining_locks = vec![];
         while lock_iter.valid().unwrap() {
             let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();

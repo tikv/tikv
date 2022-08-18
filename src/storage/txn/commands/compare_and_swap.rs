@@ -116,9 +116,10 @@ mod tests {
         test_kv_format_impl!(test_cas_basic_impl);
     }
 
-    /// Note: for API V2, TestEngine don't support MVCC reading, so `pre_propose` observer is ignored,
-    /// and no timestamp will be append to key.
-    /// The full test of `RawCompareAndSwap` is in `src/storage/mod.rs`.
+    /// Note: for API V2, TestEngine don't support MVCC reading, so
+    /// `pre_propose` observer is ignored, and no timestamp will be append
+    /// to key. The full test of `RawCompareAndSwap` is in
+    /// `src/storage/mod.rs`.
     fn test_cas_basic_impl<F: KvFormat>() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let cm = concurrency_manager::ConcurrencyManager::new(1.into());

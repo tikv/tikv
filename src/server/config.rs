@@ -26,6 +26,8 @@ const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
 const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
+const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
+const DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS: usize = 4096;
 
 // Number of rows in each chunk.
 const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
@@ -98,6 +100,10 @@ pub struct Config {
     #[online_config(skip)]
     pub grpc_compression_type: GrpcCompressionType,
     #[online_config(skip)]
+    pub grpc_gzip_compression_level: usize,
+    #[online_config(skip)]
+    pub grpc_min_message_size_to_compress: usize,
+    #[online_config(skip)]
     pub grpc_concurrency: usize,
     #[online_config(skip)]
     pub grpc_concurrent_stream: i32,
@@ -158,9 +164,10 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to limit memory
-    /// increasing. For server layer some messages will be rejected or droped, if they utilize
-    /// memory more than `reject_messages_on_memory_ratio` * total.
+    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// limit memory increasing. For server layer some messages will be rejected
+    /// or dropped, if they utilize memory more than
+    /// `reject_messages_on_memory_ratio` * total.
     ///
     /// Set it to 0 can disable message rejecting.
     // By default it's 0.2. So for different memory capacity, messages are rejected when:
@@ -213,6 +220,8 @@ impl Default for Config {
             raft_client_queue_size: 8192,
             raft_msg_max_batch_size: 128,
             grpc_compression_type: GrpcCompressionType::None,
+            grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
+            grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
@@ -376,8 +385,8 @@ impl Config {
         }
 
         if self.heavy_load_threshold > 100 {
-            // The configuration has been changed to describe CPU usage of a single thread instead
-            // of all threads. So migrate from the old style.
+            // The configuration has been changed to describe CPU usage of a single thread
+            // instead of all threads. So migrate from the old style.
             self.heavy_load_threshold = 75;
         }
 
@@ -421,7 +430,7 @@ impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = c.clone();
-            self.config.update(move |cfg| cfg.update(change));
+            self.config.update(move |cfg| cfg.update(change))?;
             if let Some(value) = c.get("grpc_memory_pool_quota") {
                 let mem_quota: ReadableSize = value.clone().into();
                 // the resize is done inplace indeed, but grpc-rs's api need self, so we just
@@ -486,27 +495,27 @@ mod tests {
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_send_snap_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.concurrent_recv_snap_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_recursion_limit = 0;
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.grpc_memory_pool_quota = ReadableSize::mb(0);
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         let mut invalid_cfg = cfg.clone();
         invalid_cfg.end_point_request_max_handle_duration = ReadableDuration::secs(0);
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         invalid_cfg = Config::default();
         invalid_cfg.addr = "0.0.0.0:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.validate().unwrap();
 
@@ -517,25 +526,25 @@ mod tests {
         }
         assert!(invalid_cfg.advertise_status_addr.is_empty());
         invalid_cfg.advertise_status_addr = "0.0.0.0:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         invalid_cfg = Config::default();
         invalid_cfg.advertise_addr = "127.0.0.1:1000".to_owned();
         invalid_cfg.advertise_status_addr = "127.0.0.1:1000".to_owned();
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         invalid_cfg = Config::default();
         invalid_cfg.max_grpc_send_msg_len = 0;
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         invalid_cfg = Config::default();
         invalid_cfg.grpc_stream_initial_window_size = ReadableSize(i32::MAX as u64 + 1);
-        assert!(invalid_cfg.validate().is_err());
+        invalid_cfg.validate().unwrap_err();
 
         cfg.labels.insert("k1".to_owned(), "v1".to_owned());
         cfg.validate().unwrap();
         cfg.labels.insert("k2".to_owned(), "v2?".to_owned());
-        assert!(cfg.validate().is_err());
+        cfg.validate().unwrap_err();
     }
 
     #[test]

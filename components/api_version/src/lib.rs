@@ -18,13 +18,15 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     const CLIENT_TAG: ApiVersion;
     const IS_TTL_ENABLED: bool;
 
-    /// Parse the key prefix and infer key mode. It's safe to parse either raw key or encoded key.
+    /// Parse the key prefix and infer key mode. It's safe to parse either raw
+    /// key or encoded key.
     fn parse_key_mode(key: &[u8]) -> KeyMode;
     fn parse_range_mode(range: (Option<&[u8]>, Option<&[u8]>)) -> KeyMode;
 
     /// Parse from the bytes from storage.
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>>;
-    /// This is equivalent to `decode_raw_value()` but returns the owned user value.
+    /// This is equivalent to `decode_raw_value()` but returns the owned user
+    /// value.
     fn decode_raw_value_owned(mut bytes: Vec<u8>) -> Result<RawValue<Vec<u8>>> {
         let (len, expire_ts, is_delete) = {
             let raw_value = Self::decode_raw_value(&bytes)?;
@@ -47,8 +49,8 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     /// This is equivalent to `encode_raw_value` but reduced an allocation.
     fn encode_raw_value_owned(value: RawValue<Vec<u8>>) -> Vec<u8>;
 
-    /// Parse from the txn_types::Key from storage. Default implementation for API V1|V1TTL.
-    /// Return: (user key, optional timestamp)
+    /// Parse from the txn_types::Key from storage. Default implementation for
+    /// API V1|V1TTL. Return: (user key, optional timestamp)
     fn decode_raw_key(encoded_key: &Key, _with_ts: bool) -> Result<(Vec<u8>, Option<TimeStamp>)> {
         Ok((encoded_key.as_encoded().clone(), None))
     }
@@ -59,7 +61,8 @@ pub trait KvFormat: Clone + Copy + 'static + Send + Sync {
     ) -> Result<(Vec<u8>, Option<TimeStamp>)> {
         Ok((encoded_key.into_encoded(), None))
     }
-    /// Encode the user key & optional timestamp into txn_types::Key. Default implementation for API V1|V1TTL.
+    /// Encode the user key & optional timestamp into txn_types::Key. Default
+    /// implementation for API V1|V1TTL.
     fn encode_raw_key(user_key: &[u8], _ts: Option<TimeStamp>) -> Key {
         Key::from_encoded_slice(user_key)
     }
@@ -138,7 +141,8 @@ macro_rules! match_template_api_version {
      }}
 }
 
-/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to corresponding concrete type of `KvFormat`
+/// Dispatch an expression with type `kvproto::kvrpcpb::ApiVersion` to
+/// corresponding concrete type of `KvFormat`
 ///
 /// For example, the following code
 ///
@@ -172,7 +176,7 @@ macro_rules! dispatch_api_version {
 }
 
 /// The key mode inferred from the key prefix.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyMode {
     /// Raw key.
     Raw,
@@ -184,7 +188,7 @@ pub enum KeyMode {
     /// TiDB, but instead, it means that the key matches the definition of
     /// TiDB key in API V2, therefore, the key is treated as TiDB data in
     /// order to fulfill compatibility.
-    TiDB,
+    Tidb,
     /// Unrecognised key mode.
     Unknown,
 }
@@ -197,8 +201,8 @@ pub enum KeyMode {
 ///
 /// ### ApiVersion::V1ttl
 ///
-/// 8 bytes representing the unix timestamp in seconds for expiring time will be append
-/// to the value of all RawKV kv pairs.
+/// 8 bytes representing the unix timestamp in seconds for expiring time will be
+/// append to the value of all RawKV kv pairs.
 ///
 /// ```text
 /// ------------------------------------------------------------
@@ -221,8 +225,8 @@ pub enum KeyMode {
 /// ```
 ///
 /// As shown in the example below, the least significant bit of the meta flag
-/// indicates whether the value contains 8 bytes expire ts at the very left to the
-/// meta flags.
+/// indicates whether the value contains 8 bytes expire ts at the very left to
+/// the meta flags.
 ///
 /// ```text
 /// --------------------------------------------------------------------------------
@@ -231,11 +235,12 @@ pub enum KeyMode {
 /// | 0x12 0x34 0x56 | 0x00 0x00 0x00 0x00 0x00 0x00 0xff 0xff | 0x01 (0b00000001) |
 /// --------------------------------------------------------------------------------
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RawValue<T: AsRef<[u8]>> {
     /// The user value.
     pub user_value: T,
-    /// The unix timestamp in seconds indicating the point of time that this key will be deleted.
+    /// The unix timestamp in seconds indicating the point of time that this key
+    /// will be deleted.
     pub expire_ts: Option<u64>,
     /// Logical deletion flag in ApiV2, should be `false` in ApiV1 and ApiV1Ttl
     pub is_delete: bool,
@@ -266,8 +271,8 @@ mod tests {
         );
         assert_eq!(ApiV2::parse_key_mode(&[RAW_KEY_PREFIX]), KeyMode::Raw);
         assert_eq!(ApiV2::parse_key_mode(&[TXN_KEY_PREFIX]), KeyMode::Txn);
-        assert_eq!(ApiV2::parse_key_mode(&b"t_a"[..]), KeyMode::TiDB);
-        assert_eq!(ApiV2::parse_key_mode(&b"m"[..]), KeyMode::TiDB);
+        assert_eq!(ApiV2::parse_key_mode(&b"t_a"[..]), KeyMode::Tidb);
+        assert_eq!(ApiV2::parse_key_mode(&b"m"[..]), KeyMode::Tidb);
         assert_eq!(ApiV2::parse_key_mode(&b"ot"[..]), KeyMode::Unknown);
     }
 
@@ -284,19 +289,19 @@ mod tests {
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"t_a"), Some(b"t_z"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"t"), Some(b"u"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"m"), Some(b"n"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"m_a"), Some(b"m_z"))),
-            KeyMode::TiDB
+            KeyMode::Tidb
         );
         assert_eq!(
             ApiV2::parse_range_mode((Some(b"x\0a"), Some(b"x\0z"))),

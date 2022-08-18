@@ -311,6 +311,14 @@ run:
 # Run tests under a variety of conditions. This should pass before
 # submitting pull requests.
 test:
+	./scripts/test-all -- --nocapture
+
+# Run tests with nextest.
+ifndef CUSTOM_TEST_COMMAND
+test_with_nextest: export CUSTOM_TEST_COMMAND=nextest run
+endif
+test_with_nextest: export RUSTDOCFLAGS="-Z unstable-options --persist-doctests"
+test_with_nextest:
 	./scripts/test-all
 
 ## Static analysis
@@ -322,7 +330,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@cargo install -q cargo-sort 
+	@which cargo-sort &> /dev/null || cargo install -q cargo-sort 
 
 format: pre-format
 	@cargo fmt
@@ -339,6 +347,7 @@ pre-clippy: unset-override
 clippy: pre-clippy
 	@./scripts/check-redact-log
 	@./scripts/check-docker-build
+	@./scripts/check-license
 	@./scripts/clippy-all
 
 pre-audit:

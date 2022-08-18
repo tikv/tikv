@@ -156,7 +156,7 @@ impl TestSuiteBuilder {
                 Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
             );
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), ApiVersion::V1);
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -188,6 +188,7 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
+                None,
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);

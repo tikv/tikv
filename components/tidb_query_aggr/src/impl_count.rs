@@ -111,9 +111,10 @@ impl AggrFnStateCount {
     }
 }
 
-// Here we manually implement `AggrFunctionStateUpdatePartial` so that `update_repeat` and
-// `update_vector` can be faster. Also note that we support all kind of
-// `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
+// Here we manually implement `AggrFunctionStateUpdatePartial` so that
+// `update_repeat` and `update_vector` can be faster. Also note that we support
+// all kind of `AggrFunctionStateUpdatePartial` for the COUNT aggregate
+// function.
 
 impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
 where

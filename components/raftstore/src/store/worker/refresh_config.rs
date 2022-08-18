@@ -6,8 +6,10 @@ use std::{
 };
 
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
-use file_system::{set_io_type, IOType};
-use tikv_util::{debug, error, info, safe_panic, thd_name, worker::Runnable};
+use file_system::{set_io_type, IoType};
+use tikv_util::{
+    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
+};
 
 use crate::store::fsm::{
     apply::{ApplyFsm, ControlFsm},
@@ -70,9 +72,9 @@ where
                     name_prefix,
                     i + self.state.id_base,
                 )))
-                .spawn(move || {
+                .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    set_io_type(IOType::ForegroundWrite);
+                    set_io_type(IoType::ForegroundWrite);
                     poller.poll();
                 })
                 .unwrap();

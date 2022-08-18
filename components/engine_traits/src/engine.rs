@@ -2,8 +2,13 @@
 
 use std::{
     fmt::Debug,
+    io::Write,
     path::{Path, PathBuf},
+    str,
+    vec::Vec,
 };
+
+use tikv_util::error;
 
 use crate::*;
 
@@ -18,9 +23,9 @@ pub trait KvEngine:
     + SyncMutable
     + Iterable
     + WriteBatchExt
-    + DBOptionsExt
-    + CFNamesExt
-    + CFOptionsExt
+    + DbOptionsExt
+    + CfNamesExt
+    + CfOptionsExt
     + ImportExt
     + SstExt
     + CompactExt
@@ -61,44 +66,182 @@ pub trait KvEngine:
     fn bad_downcast<T: 'static>(&self) -> &T;
 }
 
-/// A factory trait to create new engine.
+/// TabletAccessor is the trait to access all the tablets with provided accessor
 ///
-// It should be named as `EngineFactory` for consistency, but we are about to rename
-// engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK> {
-    /// Create an tablet by id and suffix. If the tablet exists, it will fail.
-    /// The id is likely the region Id, the suffix could be the current raft log index.
-    /// They together could specify a unique path for a region's tablet.
-    /// The reason to have suffix is that we can keep more than one tablet for a region.
-    fn create_tablet(&self, id: u64, suffix: u64) -> Result<EK>;
+/// For single rocksdb instance, it essentially accesses the global kvdb with
+/// the accessor For multi rocksdb instances, it accesses all the tablets with
+/// the accessor
+pub trait TabletAccessor<EK> {
+    /// Loop visit all opened tablets by the specified function.
+    fn for_each_opened_tablet(&self, _f: &mut (dyn FnMut(u64, u64, &EK)));
 
-    /// Open a tablet by id and suffix. If the tablet exists, it will open it.
-    /// If the tablet does not exist, it will create it.
-    fn open_tablet(&self, id: u64, suffix: u64) -> Result<EK> {
-        self.open_tablet_raw(&self.tablet_path(id, suffix), false)
-    }
+    /// return true if it's single engine;
+    /// return false if it's a multi-tablet factory;
+    fn is_single_engine(&self) -> bool;
+}
 
-    /// Open a tablet by id and suffix from cache---that means it should already be opened.
-    fn open_tablet_cache(&self, id: u64, suffix: u64) -> Option<EK> {
-        if let Ok(engine) = self.open_tablet_raw(&self.tablet_path(id, suffix), false) {
-            return Some(engine);
+/// max error count to log
+const MAX_ERROR_COUNT: u32 = 5;
+
+/// TabletErrorCollector is the facility struct to handle errors when using
+/// TabletAccessor::for_each_opened_tablet
+///
+/// It will choose the last failed result as the final result, meanwhile logging
+/// errors up to MAX_ERROR_COUNT.
+pub struct TabletErrorCollector {
+    errors: Vec<u8>,
+    max_error_count: u32,
+    error_count: u32,
+    result: std::result::Result<(), Box<dyn std::error::Error>>,
+}
+
+impl TabletErrorCollector {
+    pub fn new() -> Self {
+        Self {
+            errors: vec![],
+            max_error_count: MAX_ERROR_COUNT,
+            error_count: 0,
+            result: Ok(()),
         }
-        None
     }
 
-    /// Open a tablet by id and any suffix from cache
-    fn open_tablet_cache_any(&self, id: u64) -> Option<EK> {
-        self.open_tablet_cache(id, 0)
+    pub fn add_result(&mut self, region_id: u64, suffix: u64, result: Result<()>) {
+        if result.is_ok() {
+            return;
+        }
+        self.result = Err(Box::from(result.err().unwrap()));
+        self.error_count += 1;
+        if self.error_count > self.max_error_count {
+            return;
+        }
+        writeln!(
+            &mut self.errors,
+            "Tablet {}_{} encountered error: {:?}.",
+            region_id, suffix, self.result
+        )
+        .unwrap();
     }
 
-    /// Open tablet by path and readonly flag
-    fn open_tablet_raw(&self, path: &Path, readonly: bool) -> Result<EK>;
+    fn flush_error(&self) {
+        if self.error_count > 0 {
+            error!(
+                "Total count {}. Sample errors: {}",
+                self.error_count,
+                str::from_utf8(&self.errors).unwrap()
+            );
+        }
+    }
+
+    pub fn take_result(&mut self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        std::mem::replace(&mut self.result, Ok(()))
+    }
+
+    pub fn get_error_count(&self) -> u32 {
+        self.error_count
+    }
+}
+
+impl Default for TabletErrorCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TabletErrorCollector {
+    fn drop(&mut self) {
+        self.flush_error()
+    }
+}
+
+/// OpenOptionsn is used for specifiying the way of opening a tablet.
+#[derive(Default, Clone)]
+pub struct OpenOptions {
+    // create tablet if non-exist
+    create: bool,
+    create_new: bool,
+    read_only: bool,
+    cache_only: bool,
+    skip_cache: bool,
+}
+
+impl OpenOptions {
+    /// Sets the option to create a tablet, or open it if it already exists.
+    pub fn set_create(mut self, create: bool) -> Self {
+        self.create = create;
+        self
+    }
+
+    /// Sets the option to create a new tablet, failing if it already exists.
+    pub fn set_create_new(mut self, create_new: bool) -> Self {
+        self.create_new = create_new;
+        self
+    }
+
+    /// Sets the option for read only
+    pub fn set_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Sets the option for only reading from cache.
+    pub fn set_cache_only(mut self, cache_only: bool) -> Self {
+        self.cache_only = cache_only;
+        self
+    }
+
+    /// Sets the option to open a tablet without updating the cache.
+    pub fn set_skip_cache(mut self, skip_cache: bool) -> Self {
+        self.skip_cache = skip_cache;
+        self
+    }
+
+    pub fn create(&self) -> bool {
+        self.create
+    }
+
+    pub fn create_new(&self) -> bool {
+        self.create_new
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn cache_only(&self) -> bool {
+        self.cache_only
+    }
+
+    pub fn skip_cache(&self) -> bool {
+        self.skip_cache
+    }
+}
+
+/// A factory trait to create new engine.
+// It should be named as `EngineFactory` for consistency, but we are about to
+// rename engine to tablet, so always use tablet for new traits/types.
+pub trait TabletFactory<EK>: TabletAccessor<EK> {
+    /// Open the tablet with id and suffix according to the OpenOptions.
+    ///
+    /// The id is likely the region Id, the suffix could be the current raft log
+    /// index. They together could specify a unique path for a region's
+    /// tablet. The reason to have suffix is that we can keep more than one
+    /// tablet for a region.
+    fn open_tablet(&self, id: u64, suffix: Option<u64>, options: OpenOptions) -> Result<EK>;
+
+    /// Open tablet by raw path without updating cache.
+    fn open_tablet_raw(
+        &self,
+        path: &Path,
+        id: u64,
+        suffix: u64,
+        options: OpenOptions,
+    ) -> Result<EK>;
 
     /// Create the shared db for v1
     fn create_shared_db(&self) -> Result<EK>;
 
     /// Destroy the tablet and its data
-    fn destroy_tablet(&self, id: u64, suffix: u64) -> crate::Result<()>;
+    fn destroy_tablet(&self, id: u64, suffix: u64) -> Result<()>;
 
     /// Check if the tablet with specified id/suffix exists
     #[inline]
@@ -115,15 +258,8 @@ pub trait TabletFactory<EK> {
     /// Tablets root path
     fn tablets_path(&self) -> PathBuf;
 
-    /// Clone the tablet factory instance
-    /// Here we don't use Clone traint because it will break the trait's object safty
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send>;
-
-    /// Loop visit all opened tablets cached by the specified function.
-    /// Once the tablet is opened/created, it will be cached in a hashmap
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>);
-
-    /// Load the tablet from path for id and suffix--for scenarios such as applying snapshot
+    /// Load the tablet from path for id and suffix--for scenarios such as
+    /// applying snapshot
     fn load_tablet(&self, _path: &Path, _id: u64, _suffix: u64) -> Result<EK> {
         unimplemented!();
     }
@@ -137,11 +273,13 @@ pub trait TabletFactory<EK> {
     fn is_tombstoned(&self, _region_id: u64, _suffix: u64) -> bool {
         unimplemented!();
     }
+
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()>;
 }
 
 pub struct DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
     pub engine: Option<EK>,
     pub root_path: String,
@@ -149,59 +287,103 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
-    fn create_tablet(&self, _id: u64, _suffix: u64) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
-    fn open_tablet_raw(&self, _path: &Path, _readonly: bool) -> Result<EK> {
-        Ok(self.engine.as_ref().unwrap().clone())
-    }
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
     }
-    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> crate::Result<()> {
+
+    fn open_tablet(&self, _id: u64, _suffix: Option<u64>, _options: OpenOptions) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn open_tablet_raw(
+        &self,
+        _path: &Path,
+        _id: u64,
+        _suffix: u64,
+        _options: OpenOptions,
+    ) -> Result<EK> {
+        Ok(self.engine.as_ref().unwrap().clone())
+    }
+
+    fn destroy_tablet(&self, _id: u64, _suffix: u64) -> Result<()> {
         Ok(())
     }
+
     fn exists_raw(&self, _path: &Path) -> bool {
         true
     }
+
     fn tablet_path(&self, _id: u64, _suffix: u64) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
+
     fn tablets_path(&self) -> PathBuf {
         PathBuf::from(&self.root_path)
     }
 
-    fn clone(&self) -> Box<dyn TabletFactory<EK> + Send> {
-        if self.engine.is_none() {
-            return Box::<DummyFactory<EK>>::new(DummyFactory {
-                engine: None,
-                root_path: self.root_path.clone(),
-            });
-        }
-        Box::<DummyFactory<EK>>::new(DummyFactory {
-            engine: Some(self.engine.as_ref().unwrap().clone()),
-            root_path: self.root_path.clone(),
-        })
+    fn set_shared_block_cache_capacity(&self, capacity: u64) -> Result<()> {
+        let opt = self
+            .engine
+            .as_ref()
+            .unwrap()
+            .get_options_cf(CF_DEFAULT)
+            .unwrap(); // FIXME unwrap
+        opt.set_block_cache_capacity(capacity)
     }
-    fn loop_tablet_cache(&self, _f: Box<dyn FnMut(u64, u64, &EK) + '_>) {}
+}
+
+impl<EK> TabletAccessor<EK> for DummyFactory<EK>
+where
+    EK: CfOptionsExt + Clone + Send + 'static,
+{
+    fn for_each_opened_tablet(&self, f: &mut dyn FnMut(u64, u64, &EK)) {
+        if let Some(engine) = &self.engine {
+            f(0, 0, engine);
+        }
+    }
+
+    fn is_single_engine(&self) -> bool {
+        true
+    }
 }
 
 impl<EK> DummyFactory<EK>
 where
-    EK: KvEngine,
+    EK: CfOptionsExt + Clone + Send + 'static,
 {
-    pub fn new() -> DummyFactory<EK> {
-        DummyFactory {
-            engine: None,
-            root_path: "/dummy_root".to_string(),
-        }
+    pub fn new(engine: Option<EK>, root_path: String) -> DummyFactory<EK> {
+        DummyFactory { engine, root_path }
     }
 }
 
-impl<EK: KvEngine> Default for DummyFactory<EK> {
+impl<EK: CfOptionsExt + Clone + Send + 'static> Default for DummyFactory<EK> {
     fn default() -> Self {
-        Self::new()
+        Self::new(None, "/tmp".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tablet_error_collector_ok() {
+        let mut err = TabletErrorCollector::new();
+        err.add_result(1, 1, Ok(()));
+        err.take_result().unwrap();
+        assert_eq!(err.get_error_count(), 0);
+    }
+
+    #[test]
+    fn test_tablet_error_collector_err() {
+        let mut err = TabletErrorCollector::new();
+        err.add_result(1, 1, Ok(()));
+        err.add_result(1, 1, Err(Status::with_code(Code::Aborted).into()));
+        err.add_result(1, 1, Err(Status::with_code(Code::NotFound).into()));
+        err.add_result(1, 1, Ok(()));
+        err.take_result().unwrap_err();
+        assert_eq!(err.get_error_count(), 2);
     }
 }

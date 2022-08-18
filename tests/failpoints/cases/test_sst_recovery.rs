@@ -1,22 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io::Write, path::Path, sync::Arc, time::Duration};
+use std::{fmt::Debug, io::Write, path::Path, sync::Arc, time::Duration};
 
-use engine_rocks::{
-    raw::{CompactionOptions, DB},
-    util::get_cf_handle,
-};
+use engine_rocks::RocksEngine;
 use engine_rocks_helper::sst_recovery::*;
-use engine_traits::CF_DEFAULT;
+use engine_traits::{CompactExt, Peekable, CF_DEFAULT};
 use test_raftstore::*;
 
 const CHECK_DURATION: Duration = Duration::from_millis(50);
+
+#[track_caller]
+fn assert_corruption(res: engine_traits::Result<impl Debug>) {
+    match res {
+        Err(engine_traits::Error::Engine(s)) => {
+            // TODO: check code instead after using tirocks.
+            assert!(s.state().contains("Corruption"), "{:?}", s);
+        }
+        _ => panic!("expected corruption, got {:?}", res),
+    }
+}
 
 #[test]
 fn test_sst_recovery_basic() {
     let (mut cluster, pd_client, engine1) = create_tikv_cluster_with_one_node_damaged();
 
-    // Test that only sst recovery can delete the sst file, remove peer don't delete it.
+    // Test that only sst recovery can delete the sst file, remove peer don't delete
+    // it.
     fail::cfg("sst_recovery_before_delete_files", "pause").unwrap();
 
     let store_meta = cluster.store_metas.get(&1).unwrap().clone();
@@ -43,19 +52,19 @@ fn test_sst_recovery_basic() {
 
     std::thread::sleep(CHECK_DURATION);
 
-    assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val");
-    assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val");
-    assert!(engine1.get(b"z4").unwrap_err().contains("Corruption"));
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
+    assert_corruption(engine1.get_value(b"z4"));
 
     fail::remove("sst_recovery_before_delete_files");
     std::thread::sleep(CHECK_DURATION);
 
-    assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val");
-    assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val");
-    assert!(engine1.get(b"z4").unwrap().is_none());
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
+    assert!(engine1.get_value(b"z4").unwrap().is_none());
 
     // Damaged file has been deleted.
-    let files = engine1.get_live_files();
+    let files = engine1.as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 2);
     assert_eq!(store_meta.lock().unwrap().damaged_ranges.len(), 0);
 
@@ -75,7 +84,7 @@ fn test_sst_recovery_overlap_range_sst_exist() {
     cluster.must_put_cf(CF_DEFAULT, b"7", b"val_1");
     cluster.flush_data();
 
-    let files = engine1.get_live_files();
+    let files = engine1.as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 4);
 
     // Remove peers for safe deletion of files in sst recovery.
@@ -90,13 +99,13 @@ fn test_sst_recovery_overlap_range_sst_exist() {
     cluster.must_put_cf(CF_DEFAULT, b"4", b"val_2");
 
     std::thread::sleep(CHECK_DURATION);
-    assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val_1");
-    assert_eq!(&engine1.get(b"z4").unwrap().unwrap().to_owned(), b"val_1");
-    assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val_1");
+    must_get_equal(&engine1, b"1", b"val_1");
+    must_get_equal(&engine1, b"4", b"val_1");
+    must_get_equal(&engine1, b"7", b"val_1");
 
     // Validate the damaged sst has been deleted.
     compact_files_to_target_level(&engine1, true, 3).unwrap();
-    let files = engine1.get_live_files();
+    let files = engine1.as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 1);
 
     must_get_equal(&engine1, b"4", b"val_1");
@@ -119,10 +128,10 @@ fn test_sst_recovery_atomic_when_adding_peer() {
     pd_client.must_remove_peer(region.id, peer.clone());
 
     std::thread::sleep(CHECK_DURATION);
-    assert_eq!(&engine1.get(b"z1").unwrap().unwrap().to_owned(), b"val");
-    assert_eq!(&engine1.get(b"z7").unwrap().unwrap().to_owned(), b"val");
+    must_get_equal(&engine1, b"1", b"val");
+    must_get_equal(&engine1, b"7", b"val");
     // delete file action is paused before.
-    assert!(engine1.get(b"z4").unwrap_err().contains("Corruption"));
+    assert_corruption(engine1.get_value(b"z4"));
 
     let region = cluster.get_region(b"3");
     // add peer back on store 1 to validate atomic of sst recovery.
@@ -148,11 +157,11 @@ fn disturb_sst_file(path: &Path) {
 // To trigger compaction and test background error.
 // set `compact_all` to `false` only compact the latest flushed file.
 fn compact_files_to_target_level(
-    engine: &Arc<DB>,
+    engine: &RocksEngine,
     compact_all: bool,
     level: i32,
-) -> Result<(), String> {
-    let files = engine.get_live_files();
+) -> engine_traits::Result<()> {
+    let files = engine.as_inner().get_live_files();
     let mut file_names = vec![];
     if compact_all {
         for i in 0..files.get_files_count() {
@@ -166,12 +175,11 @@ fn compact_files_to_target_level(
         file_names.push(name);
     }
 
-    let handle = get_cf_handle(engine, CF_DEFAULT).unwrap();
-    engine.compact_files_cf(handle, &CompactionOptions::new(), &file_names, level)
+    engine.compact_files_cf(CF_DEFAULT, file_names, Some(level), 1, false)
 }
 
 fn create_tikv_cluster_with_one_node_damaged()
--> (Cluster<ServerCluster>, Arc<TestPdClient>, Arc<DB>) {
+-> (Cluster<ServerCluster>, Arc<TestPdClient>, RocksEngine) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
@@ -227,7 +235,7 @@ fn create_tikv_cluster_with_one_node_damaged()
     cluster.must_split(&region, b"7");
 
     // after 3 flushing and compacts, now 3 sst files exist.
-    let files = engine1.get_live_files();
+    let files = engine1.as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 3);
 
     // disturb sst file range [3,5]
@@ -243,11 +251,7 @@ fn create_tikv_cluster_with_one_node_damaged()
     disturb_sst_file(&sst_path);
 
     // The sst file is damaged, so this action will fail.
-    assert!(
-        compact_files_to_target_level(&engine1, true, 3)
-            .unwrap_err()
-            .contains("Corruption")
-    );
+    assert_corruption(compact_files_to_target_level(&engine1, true, 3));
 
     (cluster, pd_client, engine1)
 }

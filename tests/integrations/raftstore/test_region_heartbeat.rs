@@ -47,9 +47,9 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(1);
 
     cluster.must_put(b"k1", b"v1");
-    // max peer down duration is 500 millis, but we only report down time in seconds,
-    // so sleep 1 second to make the old down second is always larger than new down second
-    // by at lease 1 second.
+    // max peer down duration is 500 millis, but we only report down time in
+    // seconds, so sleep 1 second to make the old down second is always larger
+    // than new down second by at lease 1 second.
     sleep_ms(1000);
 
     wait_down_peers(cluster, 1, Some(1));

@@ -187,8 +187,8 @@ impl NodeCluster {
             .unwrap()
     }
 
-    // Set a function that will be invoked after creating each CoprocessorHost. The first argument
-    // of `op` is the node_id.
+    // Set a function that will be invoked after creating each CoprocessorHost. The
+    // first argument of `op` is the node_id.
     // Set this before invoking `run_node`.
     #[allow(clippy::type_complexity)]
     pub fn post_create_coprocessor_host(
@@ -247,6 +247,7 @@ impl Simulator for NodeCluster {
             Arc::default(),
             bg_worker.clone(),
             None,
+            None,
         );
 
         let (snap_mgr, snap_mgr_path) = if node_id == 0
@@ -290,7 +291,11 @@ impl Simulator for NodeCluster {
             Arc::new(SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version()).unwrap())
         };
 
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =

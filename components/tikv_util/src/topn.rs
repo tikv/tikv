@@ -58,7 +58,8 @@ impl<T> IntoIterator for TopN<T> {
     #[allow(clippy::type_complexity)]
     type IntoIter = iter::Map<binary_heap::IntoIter<Reverse<T>>, fn(Reverse<T>) -> T>;
 
-    // note: IntoIterator doesn't require the result in order, there is an `IntoIterSorted`, implement that if necessary
+    // note: IntoIterator doesn't require the result in order, there is an
+    // `IntoIterSorted`, implement that if necessary
     fn into_iter(self) -> Self::IntoIter {
         self.heap.into_iter().map(|Reverse(x)| x)
     }

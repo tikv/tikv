@@ -1,18 +1,26 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fmt::Debug};
+use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, time::Duration};
 
-use kvproto::brpb::{StreamBackupError, StreamBackupTaskInfo};
+use kvproto::{
+    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    metapb::Region,
+};
 use tikv_util::{defer, time::Instant, warn};
 use tokio_stream::StreamExt;
+use txn_types::TimeStamp;
 
 use super::{
     keys::{self, KeyValue, MetaKey},
     store::{
-        GetExtra, Keys, KvEvent, KvEventType, MetaStore, Snapshot, Subscription, WithRevision,
+        CondTransaction, Condition, GetExtra, Keys, KvEvent, KvEventType, MetaStore, PutOption,
+        Snapshot, Subscription, Transaction, WithRevision,
     },
 };
-use crate::errors::{Error, Result};
+use crate::{
+    debug,
+    errors::{ContextualResultExt, Error, Result},
+};
 
 /// Some operations over stream backup metadata key space.
 #[derive(Clone)]
@@ -61,6 +69,115 @@ impl PartialEq for MetadataEvent {
             }
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CheckpointProvider {
+    Store(u64),
+    Region { id: u64, version: u64 },
+    Task,
+    Global,
+}
+
+/// The polymorphic checkpoint.
+/// The global checkpoint should be the minimal checkpoint of all checkpoints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Checkpoint {
+    pub provider: CheckpointProvider,
+    pub ts: TimeStamp,
+}
+
+impl Checkpoint {
+    pub fn from_kv(kv: &KeyValue) -> Result<Self> {
+        match std::str::from_utf8(kv.0.0.as_slice()) {
+            Ok(key) => Checkpoint::parse_from(Path::new(key), kv.1.as_slice()),
+            Err(_) => {
+                Ok(Checkpoint {
+                    // The V1 checkpoint, maybe fill the store id?
+                    provider: CheckpointProvider::Store(0),
+                    ts: TimeStamp::new(parse_ts_from_bytes(kv.1.as_slice())?),
+                })
+            }
+        }
+    }
+
+    pub fn parse_from(path: &Path, checkpoint_ts: &[u8]) -> Result<Self> {
+        let segs = path.iter().map(|os| os.to_str()).collect::<Vec<_>>();
+        match segs.as_slice() {
+            [
+                // We always use '/' as the path.
+                // NOTE: Maybe just `split` and don't use `path`?
+                Some("/"),
+                Some("tidb"),
+                Some("br-stream"),
+                Some("checkpoint"),
+                Some(_task_name),
+                Some("region"),
+                Some(id),
+                Some(epoch),
+                ..,
+            ] => Self::from_region_parse_result(id, epoch, checkpoint_ts)
+                .context(format_args!("during parsing key {}", path.display())),
+            [
+                // We always use '/' as the path.
+                // NOTE: Maybe just `split` and don't use `path`?
+                Some("/"),
+                Some("tidb"),
+                Some("br-stream"),
+                Some("checkpoint"),
+                Some(_task_name),
+                Some("store"),
+                Some(id),
+                ..,
+            ] => Self::from_store_parse_result(id, checkpoint_ts)
+                .context(format_args!("during parsing key {}", path.display())),
+            [
+                // We always use '/' as the path.
+                // NOTE: Maybe just `split` and don't use `path`?
+                Some("/"),
+                Some("tidb"),
+                Some("br-stream"),
+                Some("checkpoint"),
+                Some(_task_name),
+                Some("central_global"),
+            ] => Ok(Self {
+                provider: CheckpointProvider::Global,
+                ts: TimeStamp::new(parse_ts_from_bytes(checkpoint_ts)?),
+            }),
+            _ => Err(Error::MalformedMetadata(format!(
+                "cannot parse path {}(segs = {:?}) as checkpoint",
+                path.display(),
+                segs
+            ))),
+        }
+    }
+
+    fn from_store_parse_result(id: &str, checkpoint_ts: &[u8]) -> Result<Self> {
+        let provider_id = id
+            .parse::<u64>()
+            .map_err(|err| Error::MalformedMetadata(err.to_string()))?;
+        let provider = CheckpointProvider::Store(provider_id);
+        let checkpoint = TimeStamp::new(parse_ts_from_bytes(checkpoint_ts)?);
+        Ok(Self {
+            provider,
+            ts: checkpoint,
+        })
+    }
+
+    fn from_region_parse_result(id: &str, version: &str, checkpoint_ts: &[u8]) -> Result<Self> {
+        let id = id
+            .parse::<u64>()
+            .map_err(|err| Error::MalformedMetadata(err.to_string()))?;
+        let version = version
+            .parse::<u64>()
+            .map_err(|err| Error::MalformedMetadata(err.to_string()))?;
+        let checkpoint = TimeStamp::new(parse_ts_from_bytes(checkpoint_ts)?);
+        let provider = CheckpointProvider::Region { id, version };
+        Ok(Self {
+            provider,
+            ts: checkpoint,
+        })
     }
 }
 
@@ -126,6 +243,29 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
     }
 
+    /// Initialize a task: execute some general operations over the keys.
+    /// For now, it sets the checkpoint ts if there isn't one for the current
+    /// store.
+    pub async fn init_task(&self, task: &StreamBackupTaskInfo) -> Result<()> {
+        let if_present = Condition::new(
+            MetaKey::next_backup_ts_of(&task.name, self.store_id),
+            Ordering::Greater,
+            vec![],
+        );
+        let txn = CondTransaction::new(
+            if_present,
+            Transaction::default(),
+            Transaction::default().put(KeyValue(
+                MetaKey::next_backup_ts_of(&task.name, self.store_id),
+                task.get_start_ts().to_be_bytes().to_vec(),
+            )),
+        );
+        self.meta_store.txn_cond(txn).await
+    }
+
+    /// Upload the last error information to the etcd.
+    /// This won't pause the task. Even this method would usually be paired with
+    /// `pause`.
     pub async fn report_last_error(&self, name: &str, last_error: StreamBackupError) -> Result<()> {
         use protobuf::Message;
         let now = Instant::now();
@@ -238,7 +378,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// watch event stream from the revision(exclusive).
-    /// the revision would usually come from a WithRevision struct(which indices the revision of the inner item).
+    /// the revision would usually come from a WithRevision struct(which indices
+    /// the revision of the inner item).
     pub async fn events_from(&self, revision: i64) -> Result<Subscription<MetadataEvent>> {
         let watcher = self
             .meta_store
@@ -283,8 +424,43 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
+    /// Set the storage checkpoint to metadata.
+    pub async fn set_storage_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["storage_checkpoint"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        self.meta_store
+            .set(KeyValue(
+                MetaKey::storage_checkpoint_of(task_name, self.store_id),
+                ts.to_be_bytes().to_vec(),
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// Get the storage checkpoint from metadata. This function is justly used
+    /// for test.
+    pub async fn get_storage_checkpoint(&self, task_name: &str) -> Result<TimeStamp> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        let snap = self.meta_store.snapshot().await?;
+        let ts = snap
+            .get(Keys::Key(MetaKey::storage_checkpoint_of(
+                task_name,
+                self.store_id,
+            )))
+            .await?;
+
+        match ts.as_slice() {
+            [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
+            [] => Ok(self.get_task_start_ts_checkpoint(task_name).await?.ts),
+        }
+    }
     /// forward the progress of some task.
-    pub async fn step_task(&self, task_name: &str, ts: u64) -> Result<()> {
+    pub async fn set_local_task_checkpoint(&self, task_name: &str, ts: u64) -> Result<()> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
@@ -296,6 +472,25 @@ impl<Store: MetaStore> MetadataClient<Store> {
             ))
             .await?;
         Ok(())
+    }
+
+    pub async fn get_local_task_checkpoint(&self, task_name: &str) -> Result<TimeStamp> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_step"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        let snap = self.meta_store.snapshot().await?;
+        let ts = snap
+            .get(Keys::Key(MetaKey::next_backup_ts_of(
+                task_name,
+                self.store_id,
+            )))
+            .await?;
+
+        match ts.as_slice() {
+            [ts, ..] => Ok(TimeStamp::new(parse_ts_from_bytes(ts.value())?)),
+            [] => Ok(self.get_task_start_ts_checkpoint(task_name).await?.ts),
+        }
     }
 
     /// get all target ranges of some task.
@@ -317,8 +512,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
         })
     }
 
-    /// Perform a two-phase bisection search algorithm for the intersection of all ranges
-    /// and the specificated range (usually region range.)
+    /// Perform a two-phase bisection search algorithm for the intersection of
+    /// all ranges and the specificated range (usually region range.)
     /// TODO: explain the algorithm?
     pub async fn range_overlap_of_task(
         &self,
@@ -391,52 +586,63 @@ impl<Store: MetaStore> MetadataClient<Store> {
             Ok(task.unwrap().info.start_ts)
         } else {
             assert_eq!(items.len(), 1);
-            Self::parse_ts_from_bytes(items[0].1.as_slice())
+            parse_ts_from_bytes(items[0].1.as_slice())
         }
+    }
+
+    pub async fn checkpoints_of(&self, task_name: &str) -> Result<Vec<Checkpoint>> {
+        let now = Instant::now();
+        defer! {
+            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["checkpoints_of"]).observe(now.saturating_elapsed().as_secs_f64())
+        }
+        let snap = self.meta_store.snapshot().await?;
+        let checkpoints = snap
+            .get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
+            .await?
+            .iter()
+            .filter_map(|kv| {
+                Checkpoint::from_kv(kv)
+                    .map_err(|err| warn!("br-stream: failed to parse next_backup_ts."; "key" => ?kv.0, "err" => %err))
+                    .ok()
+            })
+            .collect();
+        Ok(checkpoints)
+    }
+
+    async fn get_task_start_ts_checkpoint(&self, task_name: &str) -> Result<Checkpoint> {
+        let task = self
+            .get_task(task_name)
+            .await?
+            .ok_or_else(|| Error::NoSuchTask {
+                task_name: task_name.to_owned(),
+            })?;
+        Ok(Checkpoint {
+            ts: TimeStamp::new(task.info.start_ts),
+            provider: CheckpointProvider::Task,
+        })
+    }
+
+    /// Get the global checkpoint of a task.
+    /// It is the smallest checkpoint of all types of checkpoint.
+    pub async fn global_checkpoint_of_task(&self, task_name: &str) -> Result<Checkpoint> {
+        let cp = match self.global_checkpoint_of(task_name).await? {
+            Some(cp) => cp,
+            None => self.get_task_start_ts_checkpoint(task_name).await?,
+        };
+        Ok(cp)
     }
 
     /// get the global progress (the min next_backup_ts among all stores).
     pub async fn global_progress_of_task(&self, task_name: &str) -> Result<u64> {
-        let now = Instant::now();
-        defer! {
-            super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get_global"]).observe(now.saturating_elapsed().as_secs_f64())
-        }
-        let task = self.get_task(task_name).await?;
-        if task.is_none() {
-            return Err(Error::NoSuchTask {
-                task_name: task_name.to_owned(),
-            });
-        }
-
-        let snap = self.meta_store.snapshot().await?;
-        let global_ts = snap.get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
-            .await?
-            .iter()
-            .filter_map(|kv| {
-                Self::parse_ts_from_bytes(kv.1.as_slice())
-                    .map_err(|err| warn!("br-stream: failed to parse next_backup_ts."; "key" => ?kv.0, "err" => %err))
-                    .ok()
-            })
-            .min()
-            .unwrap_or(task.unwrap().info.start_ts);
-        Ok(global_ts)
-    }
-
-    fn parse_ts_from_bytes(next_backup_ts: &[u8]) -> Result<u64> {
-        if next_backup_ts.len() != 8 {
-            return Err(Error::MalformedMetadata(format!(
-                "the length of next_backup_ts is {} bytes, require 8 bytes",
-                next_backup_ts.len()
-            )));
-        }
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(next_backup_ts);
-        Ok(u64::from_be_bytes(buf))
+        let cp = self.global_checkpoint_of_task(task_name).await?;
+        debug!("getting global progress of task"; "checkpoint" => ?cp);
+        let ts = cp.ts.into_inner();
+        Ok(ts)
     }
 
     /// insert a task with ranges into the metadata store.
-    /// the current abstraction of metadata store doesn't support transaction API.
-    /// Hence this function is non-transactional and only for testing.
+    /// the current abstraction of metadata store doesn't support transaction
+    /// API. Hence this function is non-transactional and only for testing.
     pub async fn insert_task_with_range(
         &self,
         task: &StreamTask,
@@ -463,5 +669,156 @@ impl<Store: MetaStore> MetadataClient<Store> {
         self.meta_store
             .delete(Keys::Key(MetaKey::task_of(name)))
             .await
+    }
+
+    /// upload a region-level checkpoint.
+    pub async fn upload_region_checkpoint(
+        &self,
+        task_name: &str,
+        checkpoints: &[(Region, TimeStamp)],
+    ) -> Result<()> {
+        let txn = checkpoints
+            .iter()
+            .fold(Transaction::default(), |txn, (region, cp)| {
+                txn.put_opt(
+                    KeyValue(
+                        MetaKey::next_bakcup_ts_of_region(task_name, region),
+                        (*cp).into_inner().to_be_bytes().to_vec(),
+                    ),
+                    PutOption {
+                        ttl: Duration::from_secs(600),
+                    },
+                )
+            });
+        self.meta_store.txn(txn).await
+    }
+
+    pub async fn clear_region_checkpoint(&self, task_name: &str, regions: &[Region]) -> Result<()> {
+        let txn = regions.iter().fold(Transaction::default(), |txn, region| {
+            txn.delete(Keys::Key(MetaKey::next_bakcup_ts_of_region(
+                task_name, region,
+            )))
+        });
+        self.meta_store.txn(txn).await
+    }
+
+    pub async fn global_checkpoint_of(&self, task: &str) -> Result<Option<Checkpoint>> {
+        let cps = self.checkpoints_of(task).await?;
+        let mut min_checkpoint = None;
+        for cp in cps {
+            match cp.provider {
+                CheckpointProvider::Store(..) => {
+                    if min_checkpoint
+                        .as_ref()
+                        .map(|c: &Checkpoint| c.ts > cp.ts)
+                        .unwrap_or(true)
+                    {
+                        min_checkpoint = Some(cp);
+                    }
+                }
+                // The global checkpoint has higher priority than store checkpoint.
+                CheckpointProvider::Task | CheckpointProvider::Global => return Ok(Some(cp)),
+                CheckpointProvider::Region { .. } => continue,
+            }
+        }
+        Ok(min_checkpoint)
+    }
+
+    pub async fn get_region_checkpoint(&self, task: &str, region: &Region) -> Result<Checkpoint> {
+        let key = MetaKey::next_bakcup_ts_of_region(task, region);
+        let s = self.meta_store.snapshot().await?;
+        let r = s.get(Keys::Key(key.clone())).await?;
+        match r.len() {
+            0 => {
+                let global_cp = self.global_checkpoint_of(task).await?;
+                let cp = match global_cp {
+                    None => self.get_task_start_ts_checkpoint(task).await?,
+                    Some(cp) => cp,
+                };
+                Ok(cp)
+            }
+            _ => Ok(Checkpoint::from_kv(&r[0])?),
+        }
+    }
+}
+
+fn parse_ts_from_bytes(next_backup_ts: &[u8]) -> Result<u64> {
+    if next_backup_ts.len() != 8 {
+        return Err(Error::MalformedMetadata(format!(
+            "the length of next_backup_ts is {} bytes, require 8 bytes",
+            next_backup_ts.len()
+        )));
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(next_backup_ts);
+    Ok(u64::from_be_bytes(buf))
+}
+
+#[cfg(test)]
+mod test {
+    use kvproto::metapb::{Region as RegionInfo, RegionEpoch};
+    use txn_types::TimeStamp;
+
+    use super::Checkpoint;
+    use crate::metadata::{
+        client::CheckpointProvider,
+        keys::{KeyValue, MetaKey},
+    };
+
+    #[test]
+    fn test_parse() {
+        struct Case {
+            provider: CheckpointProvider,
+            checkpoint: u64,
+        }
+
+        fn run_case(c: Case) {
+            let key = match c.provider {
+                CheckpointProvider::Region { id, version } => {
+                    let mut r = RegionInfo::new();
+                    let mut v = RegionEpoch::new();
+                    v.set_version(version);
+                    r.set_region_epoch(v);
+                    r.set_id(id);
+                    MetaKey::next_bakcup_ts_of_region("test", &r)
+                }
+                CheckpointProvider::Store(id) => MetaKey::next_backup_ts_of("test", id),
+                _ => unreachable!(),
+            };
+            let checkpoint = c.checkpoint;
+            let cp_bytes = checkpoint.to_be_bytes();
+            let kv = KeyValue(key, cp_bytes.to_vec());
+            let parsed = Checkpoint::from_kv(&kv).unwrap();
+            assert_eq!(
+                parsed,
+                Checkpoint {
+                    provider: c.provider,
+                    ts: TimeStamp::new(c.checkpoint),
+                }
+            );
+        }
+        use CheckpointProvider::*;
+
+        let cases = vec![
+            Case {
+                checkpoint: TimeStamp::compose(TimeStamp::physical_now(), 10).into_inner(),
+                provider: Region { id: 42, version: 8 },
+            },
+            Case {
+                checkpoint: u64::from_be_bytes(*b"let i=0;"),
+                provider: Store(3),
+            },
+            Case {
+                checkpoint: u64::from_be_bytes(*b"(callcc)"),
+                provider: Region {
+                    id: 16961,
+                    version: 16,
+                },
+            },
+        ];
+
+        for case in cases {
+            run_case(case)
+        }
     }
 }

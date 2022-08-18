@@ -6,27 +6,27 @@ mod stub {
 
     use strum::EnumCount;
 
-    use crate::{IOBytes, IOType};
+    use crate::{IoBytes, IoType};
 
     pub fn init() -> Result<(), String> {
         Err("No I/O tracing tool available".to_owned())
     }
 
     thread_local! {
-        static IO_TYPE: Cell<IOType> = Cell::new(IOType::Other);
+        static IO_TYPE: Cell<IoType> = Cell::new(IoType::Other);
     }
 
-    pub fn set_io_type(new_io_type: IOType) {
+    pub fn set_io_type(new_io_type: IoType) {
         IO_TYPE.with(|io_type| {
             io_type.set(new_io_type);
         });
     }
 
-    pub fn get_io_type() -> IOType {
+    pub fn get_io_type() -> IoType {
         IO_TYPE.with(|io_type| io_type.get())
     }
 
-    pub fn fetch_io_bytes() -> [IOBytes; IOType::COUNT] {
+    pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
         Default::default()
     }
 }
@@ -45,8 +45,10 @@ pub use proc::*;
 
 #[cfg(test)]
 mod tests {
+    use tikv_util::sys::thread::StdThreadBuildWrapper;
+
     use super::*;
-    use crate::IOType;
+    use crate::IoType;
 
     #[bench]
     fn bench_fetch_io_bytes(b: &mut test::Bencher) {
@@ -54,8 +56,8 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
-                    set_io_type(IOType::ForegroundWrite);
+                std::thread::Builder::new().spawn_wrapper(move || {
+                    set_io_type(IoType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })
             })
@@ -72,15 +74,15 @@ mod tests {
         let _ths = (0..8)
             .map(|_| {
                 let tx_clone = tx.clone();
-                std::thread::Builder::new().spawn(move || {
-                    set_io_type(IOType::ForegroundWrite);
+                std::thread::Builder::new().spawn_wrapper(move || {
+                    set_io_type(IoType::ForegroundWrite);
                     tx_clone.send(()).unwrap();
                 })
             })
             .collect::<Vec<_>>();
         b.iter(|| match get_io_type() {
-            IOType::ForegroundWrite => set_io_type(IOType::ForegroundRead),
-            _ => set_io_type(IOType::ForegroundWrite),
+            IoType::ForegroundWrite => set_io_type(IoType::ForegroundRead),
+            _ => set_io_type(IoType::ForegroundWrite),
         });
         for _ in 0..8 {
             rx.recv().unwrap();

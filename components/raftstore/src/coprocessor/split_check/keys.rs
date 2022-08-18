@@ -62,7 +62,8 @@ where
         if self.current_count > self.split_threshold && !over_limit {
             self.split_keys.push(keys::origin_key(key.key()).to_vec());
             // if for previous on_kv() self.current_count == self.split_threshold,
-            // the split key would be pushed this time, but the entry for this time should not be ignored.
+            // the split key would be pushed this time, but the entry for this time should
+            // not be ignored.
             self.current_count = 1;
             over_limit = self.split_keys.len() as u64 >= self.batch_split_limit;
         }
@@ -184,7 +185,8 @@ where
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
         // if bucket checker using scan is added, to utilize the scan,
         // add keys checker as well for free
-        // It has the assumption that the size's checker is before the keys's check in the host
+        // It has the assumption that the size's checker is before the keys's check in
+        // the host
         let need_split_region = region_keys >= host.cfg.region_max_keys();
         if need_split_region {
             info!(
@@ -230,7 +232,7 @@ pub fn get_region_approximate_keys(
 mod tests {
     use std::{cmp, sync::mpsc, u64};
 
-    use engine_test::ctor::{CFOptions, ColumnFamilyOptions, DBOptions};
+    use engine_test::ctor::{CfOptions, DbOptions};
     use engine_traits::{KvEngine, MiscExt, SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::{
         metapb::{Peer, Region},
@@ -290,13 +292,7 @@ mod tests {
     fn test_split_check() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -400,13 +396,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -463,13 +453,10 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
@@ -575,13 +562,7 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let cf_opts = ColumnFamilyOptions::new();
-        let cfs_opts = ALL_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
-        let engine = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+        let engine = engine_test::kv::new_engine(path_str, ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.set_id(1);
@@ -629,8 +610,8 @@ mod tests {
         let region_size =
             get_region_approximate_size(&engine, &region, ReadableSize::mb(1000).0).unwrap();
         // to make the region_max_size < region_split_size + region_size
-        // The split by keys should still work. But if the bug in on_kv() in size.rs exists,
-        // it will result in split by keys failed.
+        // The split by keys should still work. But if the bug in on_kv() in size.rs
+        // exists, it will result in split by keys failed.
         cfg.region_max_size = Some(ReadableSize(region_size * 6 / 5));
         cfg.region_split_size = ReadableSize(region_size * 4 / 5);
         runnable = SplitCheckRunner::new(engine, tx.clone(), CoprocessorHost::new(tx, cfg));
@@ -652,13 +633,10 @@ mod tests {
             .tempdir()
             .unwrap();
         let path_str = path.path().to_str().unwrap();
-        let db_opts = DBOptions::default();
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let db_opts = DbOptions::default();
+        let mut cf_opts = CfOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(10);
-        let cfs_opts = LARGE_CFS
-            .iter()
-            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
-            .collect();
+        let cfs_opts = LARGE_CFS.iter().map(|cf| (*cf, cf_opts.clone())).collect();
         let db = engine_test::kv::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
 
         // size >= 4194304 will insert a new point in range properties

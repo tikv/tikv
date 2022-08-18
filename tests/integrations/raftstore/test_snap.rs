@@ -12,7 +12,7 @@ use std::{
 };
 
 use engine_traits::{KvEngine, RaftEngineReadOnly};
-use file_system::{IOOp, IOType};
+use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::Environment;
 use kvproto::raft_serverpb::*;
@@ -25,6 +25,7 @@ use tikv::server::snap::send_snap;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
+    cluster.cfg.rocksdb.titan.enabled = true;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -164,11 +165,13 @@ fn test_server_snap_gc_internal(version: &str) {
 
     let actual_max_per_file_size = cluster.get_snap_mgr(1).get_actual_max_per_file_size(true);
 
-    // version > 6.0.0 should enable multi_snapshot_file feature, which means actual max_per_file_size equals the config
+    // version > 6.0.0 should enable multi_snapshot_file feature, which means actual
+    // max_per_file_size equals the config
     if version == "6.5.0" {
         assert!(actual_max_per_file_size == cluster.cfg.raft_store.max_snapshot_file_raw_size.0);
     } else {
-        // the feature is disabled, and the actual_max_per_file_size should be u64::MAX (so that only one file is generated)
+        // the feature is disabled, and the actual_max_per_file_size should be u64::MAX
+        // (so that only one file is generated)
         assert!(actual_max_per_file_size == u64::MAX);
     }
 
@@ -211,6 +214,7 @@ fn test_server_snap_gc() {
 /// when there are multiple snapshots which have overlapped region ranges
 /// arrive at the same raftstore.
 fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = true;
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
 
@@ -241,7 +245,8 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
         panic!("the snapshot is not sent before split, e: {:?}", e);
     }
-    // Split the region range and then there should be another snapshot for the split ranges.
+    // Split the region range and then there should be another snapshot for the
+    // split ranges.
     cluster.must_split(&region, b"k2");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
     // Ensure the regions work after split.
@@ -498,31 +503,32 @@ fn test_inspected_snapshot() {
         .unwrap()
         .statistics()
         .unwrap();
-    assert_eq!(stats.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_eq!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IoType::Replication, IoOp::Read), 0);
+    assert_eq!(stats.fetch(IoType::Replication, IoOp::Write), 0);
     // Make sure snapshot read hits disk
     cluster.flush_data();
     // Let store 3 inform leader to generate a snapshot.
     cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    assert_ne!(stats.fetch(IOType::Replication, IOOp::Read), 0);
-    assert_ne!(stats.fetch(IOType::Replication, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IoType::Replication, IoOp::Read), 0);
+    assert_ne!(stats.fetch(IoType::Replication, IoOp::Write), 0);
 
     pd_client.must_remove_peer(1, new_peer(2, 2));
-    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_eq!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
+    assert_eq!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
     pd_client.must_add_peer(1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
-    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Read), 0);
-    assert_ne!(stats.fetch(IOType::LoadBalance, IOOp::Write), 0);
+    assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Read), 0);
+    assert_ne!(stats.fetch(IoType::LoadBalance, IoOp::Write), 0);
 }
 
 // Test snapshot generating and receiving can share one I/O limiter fairly.
 // 1. Bootstrap a 1 Region, 1 replica cluster;
-// 2. Add a peer on store 2 for the Region, so that there is a snapshot received on store 2;
-// 3. Rename the received snapshot on store 2, and then keep sending it back to store 1;
-// 4. Add another peer for the Region, so store 1 will generate a new snapshot;
-// 5. Test the generating can success while the store keeps receiving snapshots from store 2.
+// 2. Add a peer on store 2 for the Region, so that there is a snapshot received
+// on store 2; 3. Rename the received snapshot on store 2, and then keep sending
+// it back to store 1; 4. Add another peer for the Region, so store 1 will
+// generate a new snapshot; 5. Test the generating can success while the store
+// keeps receiving snapshots from store 2.
 #[test]
 fn test_gen_during_heavy_recv() {
     let mut cluster = new_server_cluster(0, 3);
@@ -606,7 +612,8 @@ fn test_gen_during_heavy_recv() {
         }
     });
 
-    // While store 1 keeps receiving snapshots, it should still can generate a snapshot on time.
+    // While store 1 keeps receiving snapshots, it should still can generate a
+    // snapshot on time.
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     sleep_ms(500);
     must_get_equal(&cluster.get_engine(3), b"zzz-0000", b"value");
@@ -651,8 +658,8 @@ fn random_long_vec(length: usize) -> Vec<u8> {
     value
 }
 
-/// Snapshot is generated using apply term from apply thread, which should be set
-/// correctly otherwise lead to unconsistency.
+/// Snapshot is generated using apply term from apply thread, which should be
+/// set correctly otherwise lead to inconsistency.
 #[test]
 fn test_correct_snapshot_term() {
     // Use five replicas so leader can send a snapshot to a new peer without
@@ -695,8 +702,8 @@ fn test_correct_snapshot_term() {
     // Clears send filters so peer 4 can accept snapshot from peer 5. If peer 5
     // didn't set apply index correctly using snapshot in apply worker, the snapshot
     // will be generated as term 0. Raft consider term of missing index as 0, so
-    // peer 4 will accept the snapshot and think it has already applied it, hence fast
-    // forward it then panic.
+    // peer 4 will accept the snapshot and think it has already applied it, hence
+    // fast forward it then panic.
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(4), b"k0", b"v0");
     cluster.clear_send_filters();

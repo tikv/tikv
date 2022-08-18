@@ -26,7 +26,7 @@ pub trait ScanExecutorBuilder: 'static {
     ) -> Self::E;
 }
 
-pub trait ScanExecutorDAGHandlerBuilder: 'static {
+pub trait ScanExecutorDagHandlerBuilder: 'static {
     type T: TxnStore + 'static;
     type P: Copy + 'static;
     fn build(
@@ -118,13 +118,13 @@ where
     }
 }
 
-pub struct ScanDAGBencher<B: ScanExecutorDAGHandlerBuilder> {
+pub struct ScanDagBencher<B: ScanExecutorDagHandlerBuilder> {
     batch: bool,
     display_table_rows: usize,
     _phantom: PhantomData<B>,
 }
 
-impl<B: ScanExecutorDAGHandlerBuilder> ScanDAGBencher<B> {
+impl<B: ScanExecutorDagHandlerBuilder> ScanDagBencher<B> {
     pub fn new(batch: bool, display_table_rows: usize) -> Self {
         Self {
             batch,
@@ -134,9 +134,9 @@ impl<B: ScanExecutorDAGHandlerBuilder> ScanDAGBencher<B> {
     }
 }
 
-impl<B, M> ScanBencher<B::P, M> for ScanDAGBencher<B>
+impl<B, M> ScanBencher<B::P, M> for ScanDagBencher<B>
 where
-    B: ScanExecutorDAGHandlerBuilder,
+    B: ScanExecutorDagHandlerBuilder,
     M: Measurement,
 {
     fn name(&self) -> String {
@@ -157,7 +157,7 @@ where
         store: &Store<RocksEngine>,
         parameters: B::P,
     ) {
-        crate::util::bencher::DAGHandleBencher::new(|| {
+        crate::util::bencher::DagHandleBencher::new(|| {
             B::build(self.batch, columns, ranges, store, parameters)
         })
         .bench(b);

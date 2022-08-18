@@ -59,7 +59,8 @@ impl Key {
         Key(encoded)
     }
 
-    /// Creates a key from raw bytes but returns None if the key is an empty slice.
+    /// Creates a key from raw bytes but returns None if the key is an empty
+    /// slice.
     #[inline]
     pub fn from_raw_maybe_unbounded(key: &[u8]) -> Option<Key> {
         if key.is_empty() {
@@ -89,7 +90,8 @@ impl Key {
         Key(encoded_key)
     }
 
-    /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
+    /// Creates a key with reserved capacity for timestamp from encoded bytes
+    /// slice.
     #[inline]
     pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
         let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
@@ -128,7 +130,8 @@ impl Key {
 
     /// Creates a new key by truncating the timestamp from this key.
     ///
-    /// Preconditions: the caller must ensure this is actually a timestamped key.
+    /// Preconditions: the caller must ensure this is actually a timestamped
+    /// key.
     #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
@@ -183,14 +186,14 @@ impl Key {
         Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
-    /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
-    /// user key `user_key`.
+    /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to
+    /// the encoded user key `user_key`.
     ///
-    /// There is an optimization in this function, which is to compare the last 8 encoded bytes
-    /// first before comparing the rest. It is because in TiDB many records are ended with an 8
-    /// byte row id and in many situations only this part is different when calling this function.
-    //
-    // TODO: If the last 8 byte is memory aligned, it would be better.
+    /// There is an optimization in this function, which is to compare the last
+    /// 8 encoded bytes first before comparing the rest. It is because in TiDB
+    /// many records are ended with an 8 byte row id and in many situations only
+    /// this part is different when calling this function. TODO: If the last
+    /// 8 byte is memory aligned, it would be better.
     #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
@@ -199,8 +202,8 @@ impl Key {
         }
         if user_key_len >= number::U64_SIZE {
             // We compare last 8 bytes as u64 first, then compare the rest.
-            // TODO: Can we just use == to check the left part and right part? `memcmp` might
-            //       be smart enough.
+            // TODO: Can we just use == to check the left part and right part? `memcmp`
+            // might be smart enough.
             let left = NativeEndian::read_u64(&ts_encoded_key[user_key_len - 8..]);
             let right = NativeEndian::read_u64(&user_key[user_key_len - 8..]);
             if left != right {
@@ -262,10 +265,11 @@ pub enum MutationType {
 
 /// A row mutation.
 ///
-/// It may also carry an `Assertion` field, which means it has such an *assertion* to the data
-/// (the key already exist or not exist). The assertion should pass if the mutation (in a prewrite
-/// request) is going to be finished successfully, otherwise it indicates there should be some bug
-/// causing the attempt to write wrong data.
+/// It may also carry an `Assertion` field, which means it has such an
+/// *assertion* to the data (the key already exist or not exist). The assertion
+/// should pass if the mutation (in a prewrite request) is going to be finished
+/// successfully, otherwise it indicates there should be some bug causing the
+/// attempt to write wrong data.
 #[derive(Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
@@ -429,8 +433,8 @@ impl From<kvrpcpb::Mutation> for Mutation {
     }
 }
 
-/// `OldValue` is used by cdc to read the previous value associated with some key during the
-/// prewrite process.
+/// `OldValue` is used by cdc to read the previous value associated with some
+/// key during the prewrite process.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OldValue {
     /// A real `OldValue`.
@@ -441,8 +445,8 @@ pub enum OldValue {
     None,
     /// The user doesn't care about the previous value.
     Unspecified,
-    /// Not sure whether the old value exists or not. users can seek CF_WRITE to the give position
-    /// to take a look.
+    /// Not sure whether the old value exists or not. users can seek CF_WRITE to
+    /// the give position to take a look.
     SeekWrite(Key),
 }
 
@@ -470,7 +474,8 @@ impl OldValue {
         }
     }
 
-    /// The finalized `OldValue::Value` content, or `None` for `OldValue::Unspecified`.
+    /// The finalized `OldValue::Value` content, or `None` for
+    /// `OldValue::Unspecified`.
     ///
     /// # Panics
     ///
@@ -496,8 +501,8 @@ impl OldValue {
 }
 
 // Returned by MvccTxn when extra_op is set to kvrpcpb::ExtraOp::ReadOldValue.
-// key with current ts -> (short value of the prev txn, start ts of the prev txn).
-// The value of the map will be None when the mutation is `Insert`.
+// key with current ts -> (short value of the prev txn, start ts of the prev
+// txn). The value of the map will be None when the mutation is `Insert`.
 // MutationType is the type of mutation of the current write.
 pub type OldValues = HashMap<Key, (OldValue, Option<MutationType>)>;
 
@@ -567,17 +572,15 @@ mod tests {
     #[test]
     fn test_flags_panic() {
         for _ in 0..100 {
-            assert!(
-                panic_hook::recover_safe(|| {
-                    // r must be an invalid flags if it is not zero
-                    let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
-                    WriteBatchFlags::from_bits_check(r);
-                    if r == 0 {
-                        panic!("panic for zero");
-                    }
-                })
-                .is_err()
-            );
+            panic_hook::recover_safe(|| {
+                // r must be an invalid flags if it is not zero
+                let r = rand::random::<u64>() & !WriteBatchFlags::all().bits();
+                WriteBatchFlags::from_bits_check(r);
+                if r == 0 {
+                    panic!("panic for zero");
+                }
+            })
+            .unwrap_err();
         }
     }
 
