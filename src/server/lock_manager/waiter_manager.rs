@@ -775,6 +775,7 @@ pub mod tests {
             lock,
             Instant::now() + Duration::from_millis(3000),
             DiagnosticContext::default(),
+            Instant::now(),
         );
         (waiter, info, f)
     }

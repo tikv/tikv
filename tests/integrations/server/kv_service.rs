@@ -2158,7 +2158,7 @@ fn test_pessimistic_lock_execution_tracking() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
 
     let block_duration = Duration::from_millis(300);
@@ -2170,7 +2170,7 @@ fn test_pessimistic_lock_execution_tracking() {
         must_kv_commit(&client_clone, ctx_clone, vec![k_clone], 10, 30, 30);
     });
 
-    let resp = kv_pessimistic_lock(&client, ctx.clone(), vec![k.clone()], 20, 20, false);
+    let resp = kv_pessimistic_lock(&client, ctx, vec![k], 20, 20, false);
     assert!(
         resp.get_exec_details_v2()
             .get_write_detail()
