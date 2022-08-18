@@ -673,13 +673,21 @@ pub fn write_modifies_multi_rocks(
 ) -> Result<()> {
     fail_point!("rockskv_write_modifies", |_| Err(box_err!("write failed")));
 
-    let mut wbs = HashMap::new();
+    if modifies.is_empty() {
+        return Ok(());
+    }
+
+    let mut region_id = *key_to_id.get(modifies[0].key()).unwrap();
+    let mut wbs = vec![engine.get_tablet(Some(region_id)).write_batch()];
+    let mut wb = wbs.last_mut().unwrap();
 
     for rev in modifies {
-        let region_id: u64 = *key_to_id.get(rev.key()).unwrap();
-        let wb = wbs
-            .entry(region_id)
-            .or_insert_with(|| engine.get_tablet(Some(region_id)).write_batch());
+        let current_region_id = *key_to_id.get(rev.key()).unwrap();
+        if region_id != current_region_id {
+            region_id = current_region_id;
+            wbs.push(engine.get_tablet(Some(region_id)).write_batch());
+            wb = wbs.last_mut().unwrap();
+        }
 
         let res = match rev {
             Modify::Delete(cf, k) => {
@@ -727,7 +735,7 @@ pub fn write_modifies_multi_rocks(
         }
     }
 
-    for mut wb in wbs.into_values() {
+    for mut wb in wbs.into_iter() {
         wb.write()?;
     }
     Ok(())
