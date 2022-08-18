@@ -733,6 +733,7 @@ dependencies = [
  "parking_lot 0.12.0",
  "pd_client",
  "prometheus",
+ "prometheus-static-metric",
  "raft",
  "raftstore",
  "serde",
@@ -1620,8 +1621,7 @@ dependencies = [
 [[package]]
 name = "etcd-client"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76b9f5b0b4f53cf836bef05b22cd5239479700bc8d44a04c3c77f1ba6c2c73e9"
+source = "git+https://github.com/pingcap/etcd-client?rev=e0321a1990ee561cf042973666c0db61c8d82364#e0321a1990ee561cf042973666c0db61c8d82364"
 dependencies = [
  "http",
  "prost",
@@ -3683,18 +3683,18 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58ad3879ad3baf4e44784bc6a718a8698867bb991f8ce24d1bcbe2cfb4c3a75e"
+checksum = "78203e83c48cffbe01e4a2d35d566ca4de445d79a85372fc64e378bfc812a260"
 dependencies = [
  "pin-project-internal",
 ]
 
 [[package]]
 name = "pin-project-internal"
-version = "1.0.10"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "744b6f092ba29c3650faf274db506afd39944f48420f6c86b17cfe0ee1cb36bb"
+checksum = "710faf75e1b33345361201d36d04e98ac1ed8909151a017ed384700836104c74"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4197,9 +4197,12 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
- "futures-util",
+ "futures 0.3.15",
+ "keys",
  "kvproto",
+ "log_wrappers",
  "pd_client",
+ "protobuf",
  "raft",
  "raft-proto",
  "raftstore",
@@ -4210,6 +4213,8 @@ dependencies = [
  "test_pd",
  "test_util",
  "tikv_util",
+ "time",
+ "txn_types",
 ]
 
 [[package]]
@@ -5406,7 +5411,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
 dependencies = [
- "strum_macros 0.24.3",
+ "strum_macros 0.24.2",
 ]
 
 [[package]]
@@ -5423,9 +5428,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.3"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
 dependencies = [
  "heck 0.4.0",
  "proc-macro2",
@@ -6260,6 +6265,7 @@ dependencies = [
  "backtrace",
  "engine_panic",
  "engine_rocks",
+ "engine_test",
  "engine_traits",
  "error_code",
  "fail",

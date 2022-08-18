@@ -57,7 +57,7 @@ impl LockTable {
     ) -> Result<(), E> {
         if let Some(lock_ref) = self.get(key) {
             return lock_ref.with_lock(|lock| {
-                if let Some(lock) = &*lock {
+                if let Some(lock) = lock {
                     return check_fn(lock);
                 }
                 Ok(())

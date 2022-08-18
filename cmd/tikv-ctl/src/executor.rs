@@ -27,7 +27,7 @@ use raftstore::store::INIT_EPOCH_CONF_VER;
 use security::SecurityManager;
 use serde_json::json;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, TikvConfig},
     server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
 };
 use tikv_util::escape;
@@ -43,7 +43,7 @@ pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 type MvccInfoStream = Pin<Box<dyn Stream<Item = Result<(Vec<u8>, MvccInfo), String>>>>;
 
 pub fn new_debug_executor(
-    cfg: &TiKvConfig,
+    cfg: &TikvConfig,
     data_dir: Option<&str>,
     skip_paranoid_checks: bool,
     host: Option<&str>,
@@ -359,7 +359,7 @@ pub trait DebugExecutor {
         region: u64,
         to_host: Option<&str>,
         to_data_dir: Option<&str>,
-        to_config: &TiKvConfig,
+        to_config: &TikvConfig,
         mgr: Arc<SecurityManager>,
     ) {
         let rhs_debug_executor = new_debug_executor(to_config, to_data_dir, false, to_host, mgr);

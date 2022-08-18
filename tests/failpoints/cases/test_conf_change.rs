@@ -270,7 +270,7 @@ fn test_redundant_conf_change_by_snapshot() {
     fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
-    assert!(rx.try_recv().is_err());
+    rx.try_recv().unwrap_err();
 
     fail::remove("apply_on_conf_change_3_1");
 }

@@ -29,7 +29,7 @@ use crate::{
     yatp_pool::{DefaultTicker, YatpPoolBuilder},
 };
 
-#[derive(Eq, PartialEq)]
+#[derive(PartialEq)]
 pub enum ScheduleError<T> {
     Stopped(T),
     Full(T),

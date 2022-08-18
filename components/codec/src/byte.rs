@@ -971,7 +971,7 @@ mod tests {
             let result = panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
-            assert!(result.is_err());
+            result.unwrap_err();
 
             let mut src_in_place = vec![0; dest_len];
             let result = panic_hook::recover_safe(move || {
@@ -980,7 +980,7 @@ mod tests {
                     src_len,
                 );
             });
-            assert!(result.is_err());
+            result.unwrap_err();
         }
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
                 invalid_src.as_slice(),
                 dest.as_mut_slice(),
             );
-            assert!(result.is_err());
+            result.unwrap_err();
         }
     }
 
@@ -1162,7 +1162,7 @@ mod tests {
                         dest.as_mut_slice(),
                     );
                 });
-                assert!(result.is_err());
+                result.unwrap_err();
             }
             {
                 let mut dest = vec![0; src.len()];

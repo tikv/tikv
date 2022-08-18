@@ -185,10 +185,10 @@ impl PerfContextStatistics {
         if self.perf_level == PerfLevel::Uninitialized {
             match self.kind {
                 PerfContextKind::Storage(_) | PerfContextKind::Coprocessor(_) => {
-                    set_perf_flags(&*DEFAULT_READ_PERF_FLAGS)
+                    set_perf_flags(&DEFAULT_READ_PERF_FLAGS)
                 }
                 PerfContextKind::RaftstoreStore | PerfContextKind::RaftstoreApply => {
-                    set_perf_flags(&*DEFAULT_WRITE_PERF_FLAGS)
+                    set_perf_flags(&DEFAULT_WRITE_PERF_FLAGS)
                 }
             }
         } else {

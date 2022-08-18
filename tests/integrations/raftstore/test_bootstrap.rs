@@ -61,6 +61,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::default(),
         bg_worker,
         None,
+        None,
     );
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap());
     let pd_worker = LazyWorker::new("test-pd-worker");
@@ -181,7 +182,7 @@ fn test_node_switch_api_version() {
                 cluster.shutdown();
             } else {
                 // Should not be able to switch to `to_api`.
-                assert!(cluster.start().is_err());
+                cluster.start().unwrap_err();
             }
         }
     }

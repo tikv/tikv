@@ -154,7 +154,7 @@ fn test_delete_lock_proposed_after_proposing_locks_impl(transfer_msg_count: usiz
     thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     for _ in 0..transfer_msg_count {
         cluster.transfer_leader(1, new_peer(2, 2));
@@ -231,7 +231,7 @@ fn test_delete_lock_proposed_before_proposing_locks() {
     thread::spawn(move || tx.send(client.kv_cleanup(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     cluster.transfer_leader(1, new_peer(2, 2));
     thread::sleep(Duration::from_millis(200));
@@ -318,7 +318,7 @@ fn test_read_lock_after_become_follower() {
     thread::spawn(move || tx.send(client.kv_prewrite(&req).unwrap()).unwrap());
 
     thread::sleep(Duration::from_millis(200));
-    assert!(resp_rx.try_recv().is_err());
+    resp_rx.try_recv().unwrap_err();
 
     // And pause applying the write on the leader.
     fail::cfg("on_apply_write_cmd", "pause").unwrap();

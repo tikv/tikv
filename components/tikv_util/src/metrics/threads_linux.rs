@@ -706,7 +706,7 @@ mod tests {
 
         let (raw_name, _) = get_thread_name("(@#)").unwrap();
         assert_eq!(sanitize_thread_name(1, raw_name), "1");
-        assert!(get_thread_name("invalid_stat").is_err());
+        get_thread_name("invalid_stat").unwrap_err();
     }
 
     #[test]

@@ -324,7 +324,7 @@ fn test_scale_scheduler_pool() {
     scale_pool(1);
     fail::cfg(snapshot_fp, "1*pause").unwrap();
     // propose one prewrite to block the only worker
-    assert!(do_prewrite(b"k1", b"v1").is_err());
+    do_prewrite(b"k1", b"v1").unwrap_err();
 
     scale_pool(2);
 

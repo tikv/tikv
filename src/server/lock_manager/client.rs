@@ -59,14 +59,13 @@ impl Client {
         let (sink, receiver) = self.client.detect().unwrap();
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_map_err(Error::Grpc);
-            let res = sink
-                .send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+
+            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
                 .await
                 .map(|_| {
                     info!("cancel detect sender");
                     sink.get_mut().cancel();
-                });
-            res
+                })
         });
         self.sender = Some(tx);
 

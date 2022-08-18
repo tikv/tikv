@@ -38,7 +38,7 @@ const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(PartialEq, Debug)]
 enum Trend {
     Increasing,
     Decreasing,

@@ -14,11 +14,5 @@ pub fn name_to_cf(name: &str) -> Option<CfName> {
     if name.is_empty() {
         return Some(CF_DEFAULT);
     }
-    for c in ALL_CFS {
-        if name == *c {
-            return Some(c);
-        }
-    }
-
-    None
+    ALL_CFS.iter().copied().find(|c| name == *c)
 }

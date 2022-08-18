@@ -128,9 +128,7 @@ fn on_write_result<S>(mut write_resp: WriteResponse) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
-        return Err(e);
-    }
+    check_raft_cmd_response(&mut write_resp.response)?;
     let resps = write_resp.response.take_responses();
     Ok(CmdRes::Resp(resps.into()))
 }
@@ -139,9 +137,7 @@ fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
-        return Err(e);
-    }
+    check_raft_cmd_response(&mut read_resp.response)?;
     let resps = read_resp.response.take_responses();
     if let Some(mut snapshot) = read_resp.snapshot {
         snapshot.term = NonZeroU64::new(read_resp.response.get_header().get_current_term());
@@ -201,7 +197,7 @@ where
         req: Request,
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
-        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
             let mut data = [0u8; 8];
             (&mut data[..])

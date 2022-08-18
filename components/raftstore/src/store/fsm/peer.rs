@@ -93,7 +93,7 @@ use crate::{
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
         PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
-        SignificantMsg, SnapKey, StoreMsg,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -490,13 +490,7 @@ where
             let mut cbs = std::mem::take(&mut self.callbacks);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { proposed_cb, .. } = cb {
-                        proposed_cb.take()
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.take_proposed_cb())
                 .collect();
             let proposed_cb: Option<ExtCallback> = if proposed_cbs.is_empty() {
                 None
@@ -509,13 +503,7 @@ where
             };
             let committed_cbs: Vec<_> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { committed_cb, .. } = cb {
-                        committed_cb.take()
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.take_committed_cb())
                 .collect();
             let committed_cb: Option<ExtCallback> = if committed_cbs.is_empty() {
                 None
@@ -529,13 +517,7 @@ where
 
             let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| {
-                    if let Callback::Write { trackers, .. } = cb {
-                        Some(trackers[0])
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|cb| cb.trackers().map(|t| t[0]))
                 .collect();
 
             let mut cb = Callback::write_ext(
@@ -550,7 +532,7 @@ where
                 committed_cb,
             );
 
-            if let Callback::Write { trackers, .. } = &mut cb {
+            if let Some(trackers) = cb.trackers_mut() {
                 *trackers = tokens;
             }
 
@@ -572,7 +554,7 @@ where
         self.stopped
     }
 
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
+    /// Set a mailbox to FSM, which should be used to send message to itself.
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
@@ -581,7 +563,7 @@ where
         self.mailbox = Some(mailbox.into_owned());
     }
 
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
+    /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
@@ -631,6 +613,7 @@ where
                         .propose
                         .request_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
@@ -648,14 +631,14 @@ where
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
-                            self.propose_batch_raft_command(true);
+                            self.propose_pending_batch_raft_command();
                         }
                     } else {
                         self.propose_raft_command(
                             cmd.request,
                             cmd.callback,
                             cmd.extra_opts.disk_full_opt,
-                        )
+                        );
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -688,53 +671,57 @@ where
                 }
             }
         }
+        self.on_loop_finished();
+    }
+
+    #[inline]
+    fn on_loop_finished(&mut self) {
+        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        let should_propose = self.ctx.sync_write_worker.is_some()
+            || ready_concurrency == 0
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+        let force_delay_fp = || {
+            fail_point!(
+                "force_delay_propose_batch_raft_command",
+                self.ctx.sync_write_worker.is_none(),
+                |_| true
+            );
+            false
+        };
         // Propose batch request which may be still waiting for more raft-command
-        if self.ctx.sync_write_worker.is_some() {
-            self.propose_batch_raft_command(true);
-        } else {
-            self.propose_batch_raft_command(false);
-            self.check_batch_cmd_and_proposed_cb();
+        if should_propose && !force_delay_fp() {
+            self.propose_pending_batch_raft_command();
+        } else if self.fsm.batch_req_builder.has_proposed_cb
+            && self.fsm.batch_req_builder.propose_checked.is_none()
+            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
+        {
+            // We are delaying these requests to next loop. Try to fulfill their
+            // proposed callback early.
+            self.fsm.batch_req_builder.propose_checked = Some(false);
+            if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+                if self.fsm.peer.will_likely_propose(&cmd) {
+                    self.fsm.batch_req_builder.propose_checked = Some(true);
+                    for cb in &mut self.fsm.batch_req_builder.callbacks {
+                        cb.invoke_proposed();
+                    }
+                }
+            }
+            self.fsm.batch_req_builder.request = Some(cmd);
         }
     }
 
-    fn propose_batch_raft_command(&mut self, force: bool) {
+    /// Flushes all pending raft commands for immediate execution.
+    #[inline]
+    fn propose_pending_batch_raft_command(&mut self) {
         if self.fsm.batch_req_builder.request.is_none() {
             return;
         }
-        if !force
-            && self.ctx.cfg.cmd_batch_concurrent_ready_max_count != 0
-            && self.fsm.peer.unpersisted_ready_len()
-                >= self.ctx.cfg.cmd_batch_concurrent_ready_max_count
-        {
-            return;
-        }
-        fail_point!("propose_batch_raft_command", !force, |_| {});
         let (request, callback) = self
             .fsm
             .batch_req_builder
             .build(&mut self.ctx.raft_metrics)
             .unwrap();
-        self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull)
-    }
-
-    fn check_batch_cmd_and_proposed_cb(&mut self) {
-        if self.fsm.batch_req_builder.request.is_none()
-            || !self.fsm.batch_req_builder.has_proposed_cb
-            || self.fsm.batch_req_builder.propose_checked.is_some()
-        {
-            return;
-        }
-        let cmd = self.fsm.batch_req_builder.request.take().unwrap();
-        self.fsm.batch_req_builder.propose_checked = Some(false);
-        if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-            if self.fsm.peer.will_likely_propose(&cmd) {
-                self.fsm.batch_req_builder.propose_checked = Some(true);
-                for cb in &mut self.fsm.batch_req_builder.callbacks {
-                    cb.invoke_proposed();
-                }
-            }
-        }
-        self.fsm.batch_req_builder.request = Some(cmd);
+        self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
     }
 
     fn on_update_replication_mode(&mut self) {
@@ -1076,6 +1063,7 @@ where
             PeerTick::CheckLeaderLease => self.on_check_leader_lease_tick(),
             PeerTick::ReactivateMemoryLock => self.on_reactivate_memory_lock_tick(),
             PeerTick::ReportBuckets => self.on_report_region_buckets_tick(),
+            PeerTick::CheckLongUncommitted => self.on_check_long_uncommitted_tick(),
         }
     }
 
@@ -1300,8 +1288,8 @@ where
             SignificantMsg::RaftLogGcFlushed => {
                 self.on_raft_log_gc_flushed();
             }
-            SignificantMsg::RaftlogFetched { context, res } => {
-                self.on_raft_log_fetched(context, res);
+            SignificantMsg::RaftlogFetched(fetched_logs) => {
+                self.on_raft_log_fetched(fetched_logs.context, fetched_logs.logs);
             }
             SignificantMsg::EnterForceLeaderState {
                 syncer,
@@ -3015,9 +3003,7 @@ where
                     );
                 }
                 None => {
-                    if self.fsm.batch_req_builder.request.is_some() {
-                        self.propose_batch_raft_command(true);
-                    }
+                    self.propose_pending_batch_raft_command();
                     if self.propose_locks_before_transfer_leader(msg) {
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
@@ -3741,7 +3727,7 @@ where
                 }
             };
             let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-            new_peer.peer.init_replication_mode(&mut *replication_state);
+            new_peer.peer.init_replication_mode(&mut replication_state);
             drop(replication_state);
 
             let meta_peer = new_peer.peer.peer.clone();
@@ -4795,20 +4781,17 @@ where
         }
     }
 
-    /// Propose batched raft commands(if any) first, then propose the given raft
-    /// command.
+    /// Proposes pending batch raft commands (if any), then proposes the
+    /// provided raft command.
+    #[inline]
     fn propose_raft_command(
         &mut self,
         msg: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
         diskfullopt: DiskFullOpt,
     ) {
-        if let Some((request, callback)) =
-            self.fsm.batch_req_builder.build(&mut self.ctx.raft_metrics)
-        {
-            self.propose_raft_command_internal(request, callback, DiskFullOpt::NotAllowedOnFull);
-        }
-
+        // Propose pending commands before processing new one.
+        self.propose_pending_batch_raft_command();
         self.propose_raft_command_internal(msg, cb, diskfullopt);
     }
 
@@ -4828,7 +4811,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
@@ -5089,6 +5072,19 @@ where
         {
             self.register_entry_cache_evict_tick();
         }
+    }
+
+    fn register_check_long_uncommitted_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckLongUncommitted)
+    }
+
+    fn on_check_long_uncommitted_tick(&mut self) {
+        if !self.fsm.peer.is_leader() || self.fsm.hibernate_state.group_state() == GroupState::Idle
+        {
+            return;
+        }
+        self.fsm.peer.check_long_uncommitted_proposals(self.ctx);
+        self.register_check_long_uncommitted_tick();
     }
 
     fn register_check_leader_lease_tick(&mut self) {

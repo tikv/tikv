@@ -474,7 +474,6 @@ impl<'client> S3Uploader<'client> {
                 sleep(delay_duration).await;
             }
 
-            #[cfg(feature = "failpoints")]
             fail_point!("s3_put_obj_err", |_| {
                 Err(RusotoError::ParseError("failed to put object".to_owned()))
             });
@@ -707,15 +706,14 @@ mod tests {
         // inject put error
         let s3_put_obj_err_fp = "s3_put_obj_err";
         fail::cfg(s3_put_obj_err_fp, "return").unwrap();
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap_err();
         fail::remove(s3_put_obj_err_fp);
-        assert!(resp.is_err());
 
         // test timeout
         let s3_timeout_injected_fp = "s3_timeout_injected";
@@ -725,16 +723,15 @@ mod tests {
         fail::cfg(s3_timeout_injected_fp, "return(100)").unwrap();
         // inject 200ms delay
         fail::cfg(s3_sleep_injected_fp, "return(200)").unwrap();
-        let resp = s
-            .put(
-                "mykey",
-                PutResource(Box::new(magic_contents.as_bytes())),
-                magic_contents.len() as u64,
-            )
-            .await;
-        fail::remove(s3_sleep_injected_fp);
         // timeout occur due to delay 200ms
-        assert!(resp.is_err());
+        s.put(
+            "mykey",
+            PutResource(Box::new(magic_contents.as_bytes())),
+            magic_contents.len() as u64,
+        )
+        .await
+        .unwrap_err();
+        fail::remove(s3_sleep_injected_fp);
 
         // inject 50ms delay
         fail::cfg(s3_sleep_injected_fp, "return(50)").unwrap();

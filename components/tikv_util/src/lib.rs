@@ -728,7 +728,7 @@ mod tests {
             match foo(&mu.rl()) {
                 Some(_) | None => {
                     let res = mu.try_write();
-                    assert!(res.is_err());
+                    res.unwrap_err();
                 }
             }
         }

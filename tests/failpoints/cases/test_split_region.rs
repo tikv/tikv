@@ -131,7 +131,7 @@ fn test_split_lost_request_vote() {
     assert_eq!(range.1, b"k2");
 
     // Make sure the message has sent to peer 3.
-    let _sent = after_sent_rx
+    after_sent_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap();
 

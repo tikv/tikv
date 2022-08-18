@@ -449,7 +449,7 @@ pub struct Lease {
     remote: Option<RemoteLease>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LeaseState {
     /// The lease is suspicious, may be invalid.
     Suspect,
@@ -692,7 +692,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
 ///
 /// # Panics
 ///
-/// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
+/// If nsec (nano seconds pre second) is not in [0, 1_000_000_000) range.
 #[inline]
 pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
@@ -794,7 +794,7 @@ impl<
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub enum ConfChangeKind {
     // Only contains one configuration change
     Simple,

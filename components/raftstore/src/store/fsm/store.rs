@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -24,7 +21,7 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -71,7 +68,10 @@ use crate::{
         RegionChangeReason,
     },
     store::{
-        async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+        async_io::{
+            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write_router::WriteSenders,
+        },
         config::Config,
         fsm::{
             create_apply_batch_system,
@@ -115,7 +115,6 @@ pub struct StoreInfo<EK, ER> {
 }
 
 pub struct StoreMeta {
-    /// store id
     pub store_id: Option<u64>,
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
@@ -519,9 +518,8 @@ where
     /// Disk usage for other stores. The store itself is not included.
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
-    pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
-    pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
 
@@ -555,6 +553,8 @@ where
             self.cfg.reactive_memory_lock_tick_interval.0;
         self.tick_batch[PeerTick::ReportBuckets as usize].wait_duration =
             self.cfg.report_region_buckets_tick_interval.0;
+        self.tick_batch[PeerTick::CheckLongUncommitted as usize].wait_duration =
+            self.cfg.check_long_uncommitted_interval.0;
     }
 }
 
@@ -1071,8 +1071,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-    io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    write_senders: WriteSenders<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1136,7 +1135,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 region,
             ));
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -1176,7 +1175,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 &region,
             )?;
-            peer.peer.init_replication_mode(&mut *replication_state);
+            peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
             meta.region_ranges
                 .insert(enc_end_key(&region), region.get_id());
@@ -1259,7 +1258,8 @@ where
             Some(WriteWorker::new(
                 self.store.get_id(),
                 "sync-writer".to_string(),
-                self.engines.clone(),
+                self.engines.raft.clone(),
+                Some(self.engines.kv.clone()),
                 rx,
                 self.router.clone(),
                 self.trans.clone(),
@@ -1311,7 +1311,6 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             sync_write_worker,
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
         };
         ctx.update_ticks_timeout();
@@ -1362,7 +1361,6 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
         }
     }
 }
@@ -1524,8 +1522,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .background_worker
             .start("consistency-check", consistency_check_runner);
 
-        self.store_writers
-            .spawn(meta.get_id(), &engines, &self.router, &trans, &cfg)?;
+        self.store_writers.spawn(
+            meta.get_id(),
+            engines.raft.clone(),
+            Some(engines.kv.clone()),
+            &self.router,
+            &trans,
+            &cfg,
+        )?;
 
         let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         let mut builder = RaftPollerBuilder {
@@ -1550,8 +1554,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
-            write_senders: self.store_writers.senders().clone(),
-            io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+            write_senders: self.store_writers.senders(),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1613,6 +1616,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
         let tag = format!("raftstore-{}", store.get_id());
+        let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
         let mut mailboxes = Vec::with_capacity(region_peers.len());
         let mut address = Vec::with_capacity(region_peers.len());
@@ -1660,6 +1664,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
+            coprocessor_host,
         );
         assert!(workers.pd_worker.start_with_timer(pd_runner));
 
@@ -1715,7 +1720,7 @@ pub fn create_raft_batch_system<EK: KvEngine, ER: RaftEngine>(
         apply_router,
         apply_system,
         router: raft_router.clone(),
-        store_writers: StoreWriters::new(),
+        store_writers: StoreWriters::default(),
     };
     (raft_router, system)
 }
@@ -2157,7 +2162,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // Now all checking passed
 
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
 
         peer.peer.local_first_replicate = is_local_first;
@@ -2779,7 +2784,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             }
         };
         let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
-        peer.peer.init_replication_mode(&mut *replication_state);
+        peer.peer.init_replication_mode(&mut replication_state);
         drop(replication_state);
         peer.peer.activate(self.ctx);
 

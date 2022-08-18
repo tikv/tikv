@@ -605,6 +605,14 @@ lazy_static! {
     pub static ref RAFT_ENTRY_FETCHES: RaftEntryFetches =
         auto_flush_from!(RAFT_ENTRY_FETCHES_VEC, RaftEntryFetches);
 
+    // The max task duration can be a few minutes.
+    pub static ref RAFT_ENTRY_FETCHES_TASK_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_entry_fetches_task_duration_seconds",
+            "Bucketed histogram of raft entry fetches task duration.",
+            exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
+        ).unwrap();
+
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",
@@ -769,4 +777,10 @@ lazy_static! {
     .unwrap();
     pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
         auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
+
+    pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raft_applying_sst",
+        "Sum of applying sst.",
+        &["type"]
+        ).unwrap();
 }
