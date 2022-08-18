@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
-use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
+use causal_ts::CausalTsProvider;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -380,8 +380,7 @@ impl ServerCluster {
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
-            let causal_ob =
-                causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
+            let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
             causal_ob.register_to(&mut coprocessor_host);
         }
 
@@ -415,6 +414,7 @@ impl ServerCluster {
             res_tag_factory.clone(),
             quota_limiter.clone(),
             self.pd_client.feature_gate().clone(),
+            None,
         )?;
         self.storages.insert(node_id, raft_engine);
 

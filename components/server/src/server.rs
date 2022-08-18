@@ -748,6 +748,9 @@ where
             resource_tag_factory.clone(),
             Arc::clone(&self.quota_limiter),
             self.pd_client.feature_gate().clone(),
+            self.causal_ts_provider
+                .clone()
+                .map(|provider| provider as Arc<dyn CausalTsProvider>),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -813,7 +816,7 @@ where
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), F::TAG);
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -841,7 +844,7 @@ where
 
         // Register causal observer for RawKV API V2
         if let Some(provider) = self.causal_ts_provider.clone() {
-            let causal_ob = causal_ts::CausalObserver::new(provider, cdc_ob.clone());
+            let causal_ob = causal_ts::CausalObserver::new(provider);
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         };
 

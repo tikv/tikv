@@ -1150,6 +1150,23 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
 
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+            }
+
+            // causal_ts_provider is some only if apiv2 is enabled.
+            // update min_ts with causal ts, as CausalTsProvider cache more tso from pd.
+            match causal_ts_provider.map_or(Ok(min_ts), |provider| provider.get_ts()) {
+                Err(e) => {
+                    error!("cdc flush causal timestamp failed"; "err" => ?e);
+                    return;
+                }
+                Ok(causal_ts) => min_ts = causal_ts,
+            }
+
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
@@ -1160,20 +1177,6 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     min_ts = min_mem_lock_ts;
                 }
                 min_ts_min_lock = min_mem_lock_ts;
-            }
-
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
-
-            // If flush_causal_timestamp fails, cannot schedule MinTs task
-            // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
-                error!("cdc flush causal timestamp failed"; "err" => ?e);
-                return;
             }
 
             let gate = pd_client.feature_gate();
@@ -1529,7 +1532,7 @@ mod tests {
                     .unwrap()
                     .kv_engine()
             }),
-            CdcObserver::new(task_sched, api_version),
+            CdcObserver::new(task_sched),
             Arc::new(StdMutex::new(StoreMeta::new(0))),
             ConcurrencyManager::new(1.into()),
             Arc::new(Environment::new(1)),
@@ -2310,7 +2313,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_causal_ts_flush() {
+    fn test_raw_causal_min_ts() {
         let sleep_interval = Duration::from_secs(1);
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(sleep_interval),
@@ -2327,7 +2330,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let end_ts = ts_provider.get_ts().unwrap();
-        assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 100); // may trigger more than once.
+        assert!(end_ts.into_inner() >= start_ts.next().into_inner() + 1); // may trigger more than once.
     }
 
     #[test]

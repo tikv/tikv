@@ -30,7 +30,7 @@ use std::{
 };
 
 pub use acquire_pessimistic_lock::AcquirePessimisticLock;
-pub use atomic_store::RawAtomicStore;
+pub use atomic_store::{get_causal_ts_from_provider, RawAtomicStore};
 pub use check_secondary_locks::CheckSecondaryLocks;
 pub use check_txn_status::CheckTxnStatus;
 pub use cleanup::Cleanup;
