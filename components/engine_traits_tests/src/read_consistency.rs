@@ -2,7 +2,7 @@
 
 //! Testing iterator and snapshot behavior in the presence of intermixed writes
 
-use engine_traits::{Iterable, Iterator, KvEngine, Peekable, SyncMutable};
+use engine_traits::{Iterable, Iterator, KvEngine, Peekable, SyncMutable, CF_DEFAULT};
 
 use super::default_engine;
 
@@ -71,11 +71,11 @@ where
 #[test]
 fn iterator_with_writes_engine() {
     let db = default_engine();
-    iterator_with_writes(&db.engine, |e| e.iterator().unwrap());
+    iterator_with_writes(&db.engine, |e| e.iterator(CF_DEFAULT).unwrap());
 }
 
 #[test]
 fn iterator_with_writes_snapshot() {
     let db = default_engine();
-    iterator_with_writes(&db.engine, |e| e.snapshot().iterator().unwrap());
+    iterator_with_writes(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
 }

@@ -91,8 +91,8 @@ impl SysQuota {
     }
 }
 
-/// Get the current global memory usage in bytes. Users need to call `record_global_memory_usage`
-/// to refresh it periodically.
+/// Get the current global memory usage in bytes. Users need to call
+/// `record_global_memory_usage` to refresh it periodically.
 pub fn get_global_memory_usage() -> u64 {
     GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
 }
@@ -110,7 +110,8 @@ pub fn record_global_memory_usage() {
     GLOBAL_MEMORY_USAGE.store(0, Ordering::Release);
 }
 
-/// Register the high water mark so that `memory_usage_reaches_high_water` is available.
+/// Register the high water mark so that `memory_usage_reaches_high_water` is
+/// available.
 pub fn register_memory_usage_high_water(mark: u64) {
     MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
 }

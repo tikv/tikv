@@ -7,8 +7,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::Compat;
-use engine_traits::{Iterable, Peekable, CF_WRITE};
+use engine_traits::{Iterable, Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
@@ -202,11 +201,17 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut size = 0;
     cluster.engines[&store_id]
         .kv
-        .scan(&data_key(b""), &data_key(middle_key), false, |k, v| {
-            size += k.len() as u64;
-            size += v.len() as u64;
-            Ok(true)
-        })
+        .scan(
+            CF_DEFAULT,
+            &data_key(b""),
+            &data_key(middle_key),
+            false,
+            |k, v| {
+                size += k.len() as u64;
+                size += v.len() as u64;
+                Ok(true)
+            },
+        )
         .expect("");
     assert!(size <= REGION_SPLIT_SIZE);
     // although size may be smaller than REGION_SPLIT_SIZE, but the diff should
@@ -289,7 +294,7 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
             // Note that a follower can still commit the log by an empty MsgAppend
             // when bcast commit is disabled. A heartbeat response comes to leader
             // before MsgAppendResponse will trigger MsgAppend.
-            match engine.c().get_value(&keys::data_key(k)).unwrap() {
+            match engine.get_value(&keys::data_key(k)).unwrap() {
                 Some(res) => assert_eq!(v, &res[..]),
                 None => missing_count += 1,
             }
@@ -567,16 +572,17 @@ fn test_split_region_diff_check<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    // The default size index distance is too large for small data,
-    // we flush multiple times to generate more size index handles.
+    // The default size index distance is too large for small data, we flush
+    // multiple times to generate more size index handles.
     for _ in 0..10 {
         put_till_size(cluster, region_max_size, &mut range);
     }
 
-    // Peer will split when size of region meet region_max_size,
-    // so assume the last region_max_size of data is not involved in split,
-    // there will be at least (region_max_size * 10 - region_max_size) / region_split_size regions.
-    // But region_max_size of data should be split too, so there will be at least 2 more regions.
+    // Peer will split when size of region meet region_max_size, so assume the last
+    // region_max_size of data is not involved in split, there will be at least
+    // `(region_max_size * 10 - region_max_size) / region_split_size` regions.
+    // But region_max_size of data should be split too, so there will be at
+    // least 2 more regions.
     let min_region_cnt = (region_max_size * 10 - region_max_size) / region_split_size + 2;
 
     let mut try_cnt = 0;
@@ -683,7 +689,7 @@ fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_deri
     cluster.must_split(&r, b"k4");
     let regions: Vec<_> = [b"k0", b"k2", b"k3", b"k4"]
         .iter()
-        .map(|k| pd_client.get_region(*k).unwrap())
+        .map(|&k| pd_client.get_region(k).unwrap())
         .collect();
 
     let new = regions[3].clone();
@@ -752,9 +758,10 @@ fn test_node_split_epoch_not_match_right_derive() {
     test_split_epoch_not_match(&mut cluster, true);
 }
 
-// For the peer which is the leader of the region before split,
-// it should campaigns immediately. and then this peer may take the leadership earlier.
-// `test_quick_election_after_split` is a helper function for testing this feature.
+// For the peer which is the leader of the region before split, it should
+// campaigns immediately. and then this peer may take the leadership
+// earlier. `test_quick_election_after_split` is a helper function for testing
+// this feature.
 fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
     // Calculate the reserved time before a new campaign after split.
     let reserved_time =
@@ -773,8 +780,8 @@ fn test_quick_election_after_split<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // The campaign should always succeeds in the ideal test environment.
     let new_region = cluster.get_region(b"k3");
-    // Ensure the new leader is established for the newly split region, and it shares the
-    // same store with the leader of old region.
+    // Ensure the new leader is established for the newly split region, and it
+    // shares the same store with the leader of old region.
     let new_leader = cluster.query_leader(
         old_leader.get_store_id(),
         new_region.get_id(),
@@ -966,14 +973,12 @@ fn test_split_with_in_memory_pessimistic_locks() {
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
-        assert!(
-            locks
-                .insert(vec![
-                    (Key::from_raw(b"a"), lock_a.clone()),
-                    (Key::from_raw(b"c"), lock_c.clone())
-                ])
-                .is_ok()
-        );
+        locks
+            .insert(vec![
+                (Key::from_raw(b"a"), lock_a.clone()),
+                (Key::from_raw(b"c"), lock_c.clone()),
+            ])
+            .unwrap();
     }
 
     let region = cluster.get_region(b"");
@@ -1065,7 +1070,8 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version3, bucket_version2);
 
-    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""] buckets into more buckets
+    // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""]
+    // buckets into more buckets
     let region = pd_client.get_region(b"k11").unwrap();
     let bucket_ranges = vec![
         BucketRange(vec![], b"k12".to_vec()),
@@ -1197,7 +1203,8 @@ fn test_gen_split_check_bucket_ranges() {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
     cluster.cfg.coprocessor.enable_region_bucket = true;
-    // disable report buckets; as it will reset the user traffic stats to randmize the test result
+    // disable report buckets; as it will reset the user traffic stats to randomize
+    // the test result
     cluster.cfg.raft_store.check_leader_lease_interval = ReadableDuration::secs(5);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
@@ -1243,7 +1250,8 @@ fn test_gen_split_check_bucket_ranges() {
         Option::None,
         Some(expected_buckets.clone()),
     );
-    // because the diff between last_bucket_regions and bucket_regions is zero, bucket range for split check should be empty.
+    // because the diff between last_bucket_regions and bucket_regions is zero,
+    // bucket range for split check should be empty.
     let expected_bucket_ranges = vec![];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 

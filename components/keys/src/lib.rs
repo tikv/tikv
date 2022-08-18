@@ -226,16 +226,16 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
 
 /// Get the `start_key` of current region in encoded form.
 pub fn enc_start_key(region: &Region) -> Vec<u8> {
-    // only initialized region's start_key can be encoded, otherwise there must be bugs
-    // somewhere.
+    // only initialized region's start_key can be encoded, otherwise there must be
+    // bugs somewhere.
     assert!(!region.get_peers().is_empty());
     data_key(region.get_start_key())
 }
 
 /// Get the `end_key` of current region in encoded form.
 pub fn enc_end_key(region: &Region) -> Vec<u8> {
-    // only initialized region's end_key can be encoded, otherwise there must be bugs
-    // somewhere.
+    // only initialized region's end_key can be encoded, otherwise there must be
+    // bugs somewhere.
     assert!(!region.get_peers().is_empty());
     data_end_key(region.get_end_key())
 }
@@ -415,17 +415,17 @@ mod tests {
 
         let state_key = raft_state_key(1);
         // invalid length
-        assert!(decode_raft_log_key(&state_key).is_err());
+        decode_raft_log_key(&state_key).unwrap_err();
 
         let mut state_key = state_key.to_vec();
         state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid suffix
-        assert!(decode_raft_log_key(&state_key).is_err());
+        decode_raft_log_key(&state_key).unwrap_err();
 
         let mut region_state_key = region_state_key(1).to_vec();
         region_state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid prefix
-        assert!(decode_raft_log_key(&region_state_key).is_err());
+        decode_raft_log_key(&region_state_key).unwrap_err();
     }
 
     #[test]
@@ -439,9 +439,10 @@ mod tests {
         assert_eq!(buffer, data_key(b"cde"));
 
         let mut region = Region::default();
-        // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
-        assert!(::panic_hook::recover_safe(|| enc_start_key(&region)).is_err());
-        assert!(::panic_hook::recover_safe(|| enc_end_key(&region)).is_err());
+        // uninitialised region should not be passed in `enc_start_key` and
+        // `enc_end_key`.
+        ::panic_hook::recover_safe(|| enc_start_key(&region)).unwrap_err();
+        ::panic_hook::recover_safe(|| enc_end_key(&region)).unwrap_err();
 
         region.mut_peers().push(Peer::default());
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);

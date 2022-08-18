@@ -13,7 +13,7 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::FlowInfo;
-use engine_traits::{CFNamesExt, FlowControlFactorsExt, TabletFactory};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt, OpenOptions, TabletFactory};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
@@ -47,7 +47,7 @@ impl Drop for TabletFlowController {
 }
 
 impl TabletFlowController {
-    pub fn new<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    pub fn new<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         config: &FlowControlConfig,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
         flow_info_receiver: Receiver<FlowInfo>,
@@ -86,7 +86,7 @@ impl TabletFlowController {
 struct FlowInfoDispatcher;
 
 impl FlowInfoDispatcher {
-    fn start<E: CFNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
+    fn start<E: CfNamesExt + FlowControlFactorsExt + Send + Sync + 'static>(
         rx: Receiver<Msg>,
         flow_info_receiver: Receiver<FlowInfo>,
         tablet_factory: Arc<dyn TabletFactory<E> + Send + Sync>,
@@ -117,7 +117,13 @@ impl FlowInfoDispatcher {
                     }
 
                     let insert_limiter_and_checker = |region_id, suffix| -> FlowChecker<E> {
-                        let engine = tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
+                        let engine = tablet_factory
+                            .open_tablet(
+                                region_id,
+                                Some(suffix),
+                                OpenOptions::default().set_cache_only(true),
+                            )
+                            .unwrap();
                         let mut v = limiters.as_ref().write().unwrap();
                         let discard_ratio = Arc::new(AtomicU32::new(0));
                         let limiter = v.entry(region_id).or_insert((
@@ -163,10 +169,16 @@ impl FlowInfoDispatcher {
                                 .entry(region_id)
                                 .or_insert_with(|| insert_limiter_and_checker(region_id, suffix));
                             // check if the checker's engine is exactly (region_id, suffix)
-                            // if  checker.suffix < suffix, it means its tablet is old and needs the refresh
+                            // if checker.suffix < suffix, it means its tablet is old and needs the
+                            // refresh
                             if checker.tablet_suffix() < suffix {
-                                let engine =
-                                    tablet_factory.open_tablet_cache(region_id, suffix).unwrap();
+                                let engine = tablet_factory
+                                    .open_tablet(
+                                        region_id,
+                                        Some(suffix),
+                                        OpenOptions::default().set_cache_only(true),
+                                    )
+                                    .unwrap();
                                 checker.set_engine(engine);
                                 checker.set_tablet_suffix(suffix);
                             }
@@ -332,7 +344,6 @@ mod tests {
             tablet_suffix,
         ))
         .unwrap();
-        //assert!(!flow_controller.tablet_exist(region_id));
     }
 
     #[test]

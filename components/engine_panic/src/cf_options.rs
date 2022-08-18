@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CFOptionsExt, ColumnFamilyOptions, Result, SstPartitionerFactory};
+use engine_traits::{CfOptions, CfOptionsExt, Result, SstPartitionerFactory};
 
-use crate::{db_options::PanicTitanDBOptions, engine::PanicEngine};
+use crate::{db_options::PanicTitanDbOptions, engine::PanicEngine};
 
-impl CFOptionsExt for PanicEngine {
-    type ColumnFamilyOptions = PanicColumnFamilyOptions;
+impl CfOptionsExt for PanicEngine {
+    type CfOptions = PanicCfOptions;
 
-    fn get_options_cf(&self, cf: &str) -> Result<Self::ColumnFamilyOptions> {
+    fn get_options_cf(&self, cf: &str) -> Result<Self::CfOptions> {
         panic!()
     }
     fn set_options_cf(&self, cf: &str, options: &[(&str, &str)]) -> Result<()> {
@@ -15,10 +15,10 @@ impl CFOptionsExt for PanicEngine {
     }
 }
 
-pub struct PanicColumnFamilyOptions;
+pub struct PanicCfOptions;
 
-impl ColumnFamilyOptions for PanicColumnFamilyOptions {
-    type TitanDBOptions = PanicTitanDBOptions;
+impl CfOptions for PanicCfOptions {
+    type TitanDbOptions = PanicTitanDbOptions;
 
     fn new() -> Self {
         panic!()
@@ -44,10 +44,10 @@ impl ColumnFamilyOptions for PanicColumnFamilyOptions {
     fn get_block_cache_capacity(&self) -> u64 {
         panic!()
     }
-    fn set_block_cache_capacity(&self, capacity: u64) -> std::result::Result<(), String> {
+    fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         panic!()
     }
-    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         panic!()
     }
     fn get_target_file_size_base(&self) -> u64 {

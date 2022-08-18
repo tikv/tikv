@@ -112,8 +112,12 @@ where
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
         health_service: Option<HealthService>,
+        default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
-        let mut store = metapb::Store::default();
+        let mut store = match default_store {
+            None => metapb::Store::default(),
+            Some(s) => s,
+        };
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
@@ -125,7 +129,9 @@ where
         } else {
             store.set_status_address(cfg.advertise_status_addr.clone())
         }
-        store.set_version(env!("CARGO_PKG_VERSION").to_string());
+        if store.get_version() == "" {
+            store.set_version(env!("CARGO_PKG_VERSION").to_string());
+        }
 
         if let Ok(path) = std::env::current_exe() {
             if let Some(path) = path.parent() {
@@ -134,11 +140,13 @@ where
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
-        store.set_git_hash(
-            option_env!("TIKV_BUILD_GIT_HASH")
-                .unwrap_or("Unknown git hash")
-                .to_string(),
-        );
+        if store.get_git_hash() == "" {
+            store.set_git_hash(
+                option_env!("TIKV_BUILD_GIT_HASH")
+                    .unwrap_or("Unknown git hash")
+                    .to_string(),
+            );
+        }
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {
@@ -241,7 +249,8 @@ where
         self.store.get_id()
     }
 
-    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
     }
@@ -251,7 +260,8 @@ where
     pub fn get_router(&self) -> RaftRouter<EK, ER> {
         self.system.router()
     }
-    /// Gets a transmission end of a channel which is used send messages to apply worker.
+    /// Gets a transmission end of a channel which is used send messages to
+    /// apply worker.
     pub fn get_apply_router(&self) -> ApplyRouter<EK> {
         self.system.apply_router()
     }
@@ -289,11 +299,12 @@ where
             .kv
             .get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)?
             .expect("Store should have bootstrapped");
-        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be V1 in
-        // `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading from legacy V1
-        // TiKV, the config switch between V1 and V1ttl are not checked here.
-        // It's safe to do so because `storage.enable_ttl` is impossible to change thanks to the
-        // config check.
+        // API version is not written into `StoreIdent` in legacy TiKV, thus it will be
+        // V1 in `StoreIdent` regardless of `storage.enable_ttl`. To allow upgrading
+        // from legacy V1 TiKV, the config switch between V1 and V1ttl are not checked
+        // here. It's safe to do so because `storage.enable_ttl` is impossible to change
+        // thanks to the config check. let should_check = match (ident.api_version,
+        // self.api_version) {
         let should_check = match (ident.api_version, self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,
@@ -304,7 +315,7 @@ where
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
-                    snapshot.scan_cf(
+                    snapshot.scan(
                         cf,
                         &keys::data_key(start),
                         &keys::data_key(end),

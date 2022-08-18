@@ -1,13 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 define_error_codes!(
-    "KV:SSTImporter:",
+    "KV:SstImporter:",
 
     IO => ("Io", "", ""),
-    GRPC => ("gRPC", "", ""),
+    GRPC => ("Grpc", "", ""),
     UUID => ("Uuid", "", ""),
     FUTURE => ("Future", "", ""),
-    ROCKSDB => ("RocksDB", "", ""),
+    ROCKSDB => ("RocksDb", "", ""),
     PARSE_INT_ERROR => ("ParseIntError", "", ""),
     FILE_EXISTS => ("FileExists", "", ""),
     FILE_CORRUPTED => ("FileCorrupted", "", ""),

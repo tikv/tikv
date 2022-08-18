@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
+use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures::executor::ThreadPool;
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
@@ -16,19 +16,19 @@ use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use super::{Config, Result};
 
-pub type RocksDBMetricsFn = fn(cf: &str, name: &str, v: f64);
+pub type RocksDbMetricsFn = fn(cf: &str, name: &str, v: f64);
 
 struct ImportModeSwitcherInner {
     is_import: Arc<AtomicBool>,
-    backup_db_options: ImportModeDBOptions,
-    backup_cf_options: Vec<(String, ImportModeCFOptions)>,
+    backup_db_options: ImportModeDbOptions,
+    backup_cf_options: Vec<(String, ImportModeCfOptions)>,
     timeout: Duration,
     next_check: Instant,
-    metrics_fn: RocksDBMetricsFn,
+    metrics_fn: RocksDbMetricsFn,
 }
 
 impl ImportModeSwitcherInner {
-    fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+    fn enter_normal_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
         if !self.is_import.load(Ordering::Acquire) {
             return Ok(false);
         }
@@ -43,18 +43,18 @@ impl ImportModeSwitcherInner {
         Ok(true)
     }
 
-    fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+    fn enter_import_mode<E: KvEngine>(&mut self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
         if self.is_import.load(Ordering::Acquire) {
             return Ok(false);
         }
 
-        self.backup_db_options = ImportModeDBOptions::new_options(db);
+        self.backup_db_options = ImportModeDbOptions::new_options(db);
         self.backup_cf_options.clear();
 
         let import_db_options = self.backup_db_options.optimized_for_import_mode();
         import_db_options.set_options(db)?;
         for cf_name in db.cf_names() {
-            let cf_opts = ImportModeCFOptions::new_options(db, cf_name);
+            let cf_opts = ImportModeCfOptions::new_options(db, cf_name);
             let import_cf_options = cf_opts.optimized_for_import_mode();
             self.backup_cf_options.push((cf_name.to_owned(), cf_opts));
             import_cf_options.set_options(db, cf_name, mf)?;
@@ -79,7 +79,7 @@ impl ImportModeSwitcher {
         let is_import = Arc::new(AtomicBool::new(false));
         let inner = Arc::new(Mutex::new(ImportModeSwitcherInner {
             is_import: is_import.clone(),
-            backup_db_options: ImportModeDBOptions::new(),
+            backup_db_options: ImportModeDbOptions::new(),
             backup_cf_options: Vec::new(),
             timeout,
             next_check: Instant::now() + timeout,
@@ -120,14 +120,14 @@ impl ImportModeSwitcher {
         executor.spawn_ok(timer_loop);
     }
 
-    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_normal_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
         if !self.is_import.load(Ordering::Acquire) {
             return Ok(false);
         }
         self.inner.lock().unwrap().enter_normal_mode(db, mf)
     }
 
-    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDBMetricsFn) -> Result<bool> {
+    pub fn enter_import_mode<E: KvEngine>(&self, db: &E, mf: RocksDbMetricsFn) -> Result<bool> {
         let mut inner = self.inner.lock().unwrap();
         let ret = inner.enter_import_mode(db, mf)?;
         inner.next_check = Instant::now() + inner.timeout;
@@ -144,11 +144,11 @@ impl ImportModeSwitcher {
     }
 }
 
-struct ImportModeDBOptions {
+struct ImportModeDbOptions {
     max_background_jobs: i32,
 }
 
-impl ImportModeDBOptions {
+impl ImportModeDbOptions {
     fn new() -> Self {
         Self {
             max_background_jobs: 32,
@@ -161,9 +161,9 @@ impl ImportModeDBOptions {
         }
     }
 
-    fn new_options(db: &impl KvEngine) -> ImportModeDBOptions {
+    fn new_options(db: &impl KvEngine) -> ImportModeDbOptions {
         let db_opts = db.get_db_options();
-        ImportModeDBOptions {
+        ImportModeDbOptions {
             max_background_jobs: db_opts.get_max_background_jobs(),
         }
     }
@@ -179,14 +179,14 @@ impl ImportModeDBOptions {
     }
 }
 
-struct ImportModeCFOptions {
+struct ImportModeCfOptions {
     level0_stop_writes_trigger: u32,
     level0_slowdown_writes_trigger: u32,
     soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
 }
 
-impl ImportModeCFOptions {
+impl ImportModeCfOptions {
     fn optimized_for_import_mode(&self) -> Self {
         Self {
             level0_stop_writes_trigger: self.level0_stop_writes_trigger.max(1 << 30),
@@ -196,10 +196,10 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
+    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCfOptions {
         let cf_opts = db.get_options_cf(cf_name).unwrap(); //FIXME unwrap
 
-        ImportModeCFOptions {
+        ImportModeCfOptions {
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
             level0_slowdown_writes_trigger: cf_opts.get_level_zero_slowdown_writes_trigger(),
             soft_pending_compaction_bytes_limit: cf_opts.get_soft_pending_compaction_bytes_limit(),
@@ -207,7 +207,7 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
+    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDbMetricsFn) -> Result<()> {
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -242,7 +242,7 @@ impl ImportModeCFOptions {
 mod tests {
     use std::thread;
 
-    use engine_traits::KvEngine;
+    use engine_traits::{KvEngine, CF_DEFAULT};
     use futures::executor::ThreadPoolBuilder;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
@@ -252,8 +252,8 @@ mod tests {
 
     fn check_import_options<E>(
         db: &E,
-        expected_db_opts: &ImportModeDBOptions,
-        expected_cf_opts: &ImportModeCFOptions,
+        expected_db_opts: &ImportModeDbOptions,
+        expected_cf_opts: &ImportModeCfOptions,
     ) where
         E: KvEngine,
     {
@@ -290,11 +290,11 @@ mod tests {
             .prefix("test_import_mode_switcher")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
-        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let normal_db_options = ImportModeDbOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
 
         assert!(
@@ -331,11 +331,11 @@ mod tests {
             .prefix("test_import_mode_timeout")
             .tempdir()
             .unwrap();
-        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &[CF_DEFAULT, "a", "b"]);
 
-        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let normal_db_options = ImportModeDbOptions::new_options(&db);
         let import_db_options = normal_db_options.optimized_for_import_mode();
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
 
         fn mf(_cf: &str, _name: &str, _v: f64) {}
@@ -374,7 +374,7 @@ mod tests {
             |_, opt| opt.set_level_zero_stop_writes_trigger(2_000_000_000),
         );
 
-        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
+        let normal_cf_options = ImportModeCfOptions::new_options(&db, "default");
         assert_eq!(normal_cf_options.level0_stop_writes_trigger, 2_000_000_000);
         let import_cf_options = normal_cf_options.optimized_for_import_mode();
         assert_eq!(import_cf_options.level0_stop_writes_trigger, 2_000_000_000);

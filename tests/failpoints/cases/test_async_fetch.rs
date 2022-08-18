@@ -32,7 +32,7 @@ fn test_node_async_fetch() {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(engines.kv.as_inner(), b"k1", b"v1");
+        must_get_equal(&engines.kv, b"k1", b"v1");
         let mut state: RaftApplyState = engines
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
@@ -88,7 +88,7 @@ fn test_node_async_fetch() {
     for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(cluster.engines[&1].kv.as_inner(), &k, &v);
+        must_get_equal(&cluster.engines[&1].kv, &k, &v);
     }
 
     for i in 60..500u32 {
@@ -103,7 +103,7 @@ fn test_node_async_fetch() {
                 &cluster.engines,
                 &before_states,
                 1,
-                false, /*must_compacted*/
+                false, // must_compacted
             )
         {
             return;
@@ -113,7 +113,7 @@ fn test_node_async_fetch() {
         &cluster.engines,
         &before_states,
         1,
-        true, /*must_compacted*/
+        true, // must_compacted
     );
 }
 
@@ -233,4 +233,41 @@ fn test_node_async_fetch_leader_change() {
         let v = k.clone();
         must_get_equal(&cluster.get_engine(1), &k, &v);
     }
+}
+
+// Test the case whether entry cache is reserved for the newly added peer.
+#[test]
+fn test_node_compact_entry_cache() {
+    let count = 5;
+    let mut cluster = new_node_cluster(0, count);
+    cluster.pd_client.disable_default_operator();
+
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_remove_peer(1, new_peer(5, 5));
+
+    // pause snapshot applied
+    fail::cfg("before_region_gen_snap", "pause").unwrap();
+    fail::cfg("worker_async_fetch_raft_log", "pause").unwrap();
+    // change one peer to learner
+    cluster.pd_client.add_peer(1, new_learner_peer(5, 5));
+
+    // cause log lag and pause async fetch to check if entry cache is reserved for
+    // the learner
+    for i in 1..6 {
+        let k = i.to_string().into_bytes();
+        let v = k.clone();
+        cluster.must_put(&k, &v);
+    }
+    std::thread::sleep(Duration::from_millis(100));
+
+    fail::remove("before_region_gen_snap");
+    cluster.pd_client.must_have_peer(1, new_learner_peer(5, 5));
+
+    // if entry cache is not reserved, the learner will not be able to catch up.
+    must_get_equal(&cluster.get_engine(5), b"5", b"5");
 }

@@ -288,8 +288,9 @@ impl ConfigChangeNotifier {
     }
 }
 
-/// Constructs a default [Recorder], spawn it and return the corresponding [ConfigChangeNotifier],
-/// [CollectorRegHandle], [ResourceTagFactory] and [LazyWorker].
+/// Constructs a default [Recorder], spawn it and return the corresponding
+/// [ConfigChangeNotifier], [CollectorRegHandle], [ResourceTagFactory] and
+/// [LazyWorker].
 ///
 /// This function is intended to simplify external use.
 pub fn init_recorder(

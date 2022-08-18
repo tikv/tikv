@@ -4,8 +4,8 @@ use std::iter::*;
 
 use codec::prelude::BufferWriter;
 
-/// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
-/// arbitrary length.
+/// A vector like container storing multiple buffers. Each buffer is a `[u8]`
+/// slice in arbitrary length.
 #[derive(Default, Clone)]
 pub struct BufferVec {
     data: Vec<u8>,
@@ -38,7 +38,8 @@ impl BufferVec {
         Self::default()
     }
 
-    /// Constructs a new, empty `BufferVec` with the specified element capacity and data capacity.
+    /// Constructs a new, empty `BufferVec` with the specified element capacity
+    /// and data capacity.
     #[inline]
     pub fn with_capacity(elements_capacity: usize, data_capacity: usize) -> Self {
         Self {
@@ -47,15 +48,15 @@ impl BufferVec {
         }
     }
 
-    /// Returns the number of buffers this `BufferVec` can hold without reallocating the
-    /// offsets array.
+    /// Returns the number of buffers this `BufferVec` can hold without
+    /// reallocating the offsets array.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.offsets.capacity()
     }
 
-    /// Returns the number of buffers this `BufferVec` can hold without reallocating the
-    /// data array.
+    /// Returns the number of buffers this `BufferVec` can hold without
+    /// reallocating the data array.
     #[inline]
     pub fn data_capacity(&self) -> usize {
         self.data.capacity()
@@ -100,11 +101,12 @@ impl BufferVec {
         }
     }
 
-    /// Returns a delegator that provides `extend` appends buffers together as one buffer
-    /// to the back.
+    /// Returns a delegator that provides `extend` appends buffers together as
+    /// one buffer to the back.
     ///
-    /// Note that this function always creates a new buffer even if you don't call `extend`
-    /// on the delegator later, which simply results in appending a new empty buffer.
+    /// Note that this function always creates a new buffer even if you don't
+    /// call `extend` on the delegator later, which simply results in
+    /// appending a new empty buffer.
     #[inline]
     pub fn begin_concat_extend(&mut self) -> WithConcatExtend<'_> {
         WithConcatExtend::init(self)
@@ -171,7 +173,8 @@ impl BufferVec {
         }
     }
 
-    /// Shortens the `BufferVec`, keeping the first `n` buffers and dropping the rest.
+    /// Shortens the `BufferVec`, keeping the first `n` buffers and dropping the
+    /// rest.
     ///
     /// If `n` >= current length, this has no effect.
     #[inline]

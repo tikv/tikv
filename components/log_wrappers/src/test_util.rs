@@ -4,7 +4,8 @@
 
 use std::{io, sync};
 
-/// A buffer which can be served as a logging destination while being able to access its content.
+/// A buffer which can be served as a logging destination while being able to
+/// access its content.
 #[derive(Clone, Default)]
 pub struct SyncLoggerBuffer(sync::Arc<sync::Mutex<Vec<u8>>>);
 
@@ -14,8 +15,8 @@ impl SyncLoggerBuffer {
         Self::default()
     }
 
-    /// Builds a `slog::Logger` over this buffer which uses compact format and always output `TIME`
-    /// in the time field.
+    /// Builds a `slog::Logger` over this buffer which uses compact format and
+    /// always output `TIME` in the time field.
     pub fn build_logger(&self) -> slog::Logger {
         use slog::Drain;
 

@@ -8,9 +8,9 @@ use prometheus::*;
 use prometheus_static_metric::*;
 use tikv::storage::Statistics;
 
-/// Installing a new capture contains 2 phases, one for incremental scanning and one for
-/// fetching delta changes from raftstore. They can share some similar metrics, in which
-/// case we can use this tag to distinct them.
+/// Installing a new capture contains 2 phases, one for incremental scanning and
+/// one for fetching delta changes from raftstore. They can share some similar
+/// metrics, in which case we can use this tag to distinct them.
 pub const TAG_DELTA_CHANGE: &str = "delta_change";
 pub const TAG_INCREMENTAL_SCAN: &str = "incremental_scan";
 
@@ -202,6 +202,13 @@ lazy_static! {
         "tikv_cdc_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
         &["metric"]
+    )
+    .unwrap();
+
+    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+        exponential_buckets(1.0, 2.0, 15).unwrap() // outlier threshold is 60s by default.
     )
     .unwrap();
 

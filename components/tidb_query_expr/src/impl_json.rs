@@ -66,7 +66,8 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))
 }
 
-/// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>, Option<Json>)])`
+/// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
+/// Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
     assert!(children.len() >= 2);
@@ -583,7 +584,7 @@ mod tests {
                 .push_params(err_args)
                 .evaluate(ScalarFuncSig::JsonObjectSig);
 
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 
@@ -947,7 +948,7 @@ mod tests {
             if is_success {
                 assert_eq!(output.unwrap(), expected, "{:?}", vargs);
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }

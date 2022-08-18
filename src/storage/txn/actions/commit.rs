@@ -41,11 +41,11 @@ pub fn commit<S: Snapshot>(
                 .into());
             }
 
-            // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-            // transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire
-            // this lock again(due to WriteConflict). If the transaction is committed, we
-            // should commit this pessimistic lock too.
+            // It's an abnormal routine since pessimistic locks shouldn't be committed in
+            // our transaction model. But a pessimistic lock will be left if the pessimistic
+            // rollback request fails to send and the transaction need not to acquire this
+            // lock again(due to WriteConflict). If the transaction is committed, we should
+            // commit this pessimistic lock too.
             if lock.lock_type == LockType::Pessimistic {
                 warn!(
                     "commit a pessimistic lock with Lock type";
@@ -151,7 +151,7 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        assert!(commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).is_err());
+        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap_err();
     }
 
     #[cfg(test)]
@@ -254,7 +254,8 @@ pub mod tests {
         );
         must_succeed(&engine, k, ts(30, 0), ts(50, 0));
 
-        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use it.
+        // If the min_commit_ts of the pessimistic lock is greater than prewrite's, use
+        // it.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(60, 0), ts(60, 0), 100);
         check_txn_status::tests::must_success(
             &engine,

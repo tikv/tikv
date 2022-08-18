@@ -65,7 +65,7 @@ prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 raft_log_engine = { path = "../raft_log_engine", default-features = false }
-raftstore = { path = "../raftstore", default-features = false }
+raftstore = { path = "../raftstore", default-features = false, features = ["engine_rocks"] }
 rand = "0.8"
 resolved_ts = { path = "../../components/resolved_ts", default-features = false }
 resource_metering = { path = "../resource_metering" }

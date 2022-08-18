@@ -5,9 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use engine_rocks::{raw::ColumnFamilyOptions, raw_util::CFOptions};
+use causal_ts::tests::DummyRawTsTracker;
+use engine_rocks::RocksCfOptions;
 use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use file_system::IORateLimiter;
+use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
 
@@ -26,7 +27,7 @@ const TEMP_DIR: &str = "";
 pub struct TestEngineBuilder {
     path: Option<PathBuf>,
     cfs: Option<Vec<CfName>>,
-    io_rate_limiter: Option<Arc<IORateLimiter>>,
+    io_rate_limiter: Option<Arc<IoRateLimiter>>,
     api_version: ApiVersion,
 }
 
@@ -61,17 +62,18 @@ impl TestEngineBuilder {
         self
     }
 
-    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IORateLimiter>>) -> Self {
+    pub fn io_rate_limiter(mut self, limiter: Option<Arc<IoRateLimiter>>) -> Self {
         self.io_rate_limiter = limiter;
         self
     }
 
     /// Register causal observer for RawKV API V2.
-    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction filter) & CausalObserver.
-    // Consider decoupling them.
+    // TODO: `RocksEngine` is coupling with RawKV features including GC (compaction
+    // filter) & CausalObserver. Consider decoupling them.
     fn register_causal_observer(engine: &mut RocksEngine) {
         let causal_ts_provider = Arc::new(causal_ts::tests::TestProvider::default());
-        let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
+        let causal_ob =
+            causal_ts::CausalObserver::new(causal_ts_provider, DummyRawTsTracker::default());
         engine.register_observer(|host| {
             causal_ob.register_to(host);
         });
@@ -111,24 +113,18 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(
+                CF_DEFAULT => (
                     CF_DEFAULT,
                     cfg_rocksdb.defaultcf.build_opt(&cache, None, api_version),
                 ),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
-                _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
+                CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let mut engine = RocksEngine::new(
-            &path,
-            &cfs,
-            Some(cfs_opts),
-            cache.is_some(),
-            self.io_rate_limiter,
-            None, /* CFOptions */
-        )?;
+        let mut engine =
+            RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
 
         if let ApiVersion::V2 = api_version {
             Self::register_causal_observer(&mut engine);
@@ -230,7 +226,11 @@ mod tests {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter_opt = IterOptions::default();
         iter_opt.set_max_skippable_internal_keys(1);
-        let mut iter = Cursor::new(snapshot.iter(iter_opt).unwrap(), ScanMode::Forward, false);
+        let mut iter = Cursor::new(
+            snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         let mut statistics = CfStatistics::default();
         let res = iter.seek(&Key::from_raw(b"foo"), &mut statistics);
@@ -256,7 +256,7 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot.iter(IterOptions::default()).unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
             false,
         );

@@ -12,44 +12,37 @@ use std::{
 
 use crate::mailbox::BasicMailbox;
 
-// The FSM is notified.
-const NOTIFYSTATE_NOTIFIED: usize = 0;
-// The FSM is idle.
-const NOTIFYSTATE_IDLE: usize = 1;
-// The FSM is expected to be dropped.
-const NOTIFYSTATE_DROP: usize = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Priority {
     Low,
     Normal,
 }
 
-/// `FsmScheduler` schedules `Fsm` for later handles.
+/// `FsmScheduler` schedules `Fsm` for later handling.
 pub trait FsmScheduler {
     type Fsm: Fsm;
 
-    /// Schedule a Fsm for later handles.
+    /// Schedule a Fsm for later handling.
     fn schedule(&self, fsm: Box<Self::Fsm>);
     /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 }
 
-/// A Fsm is a finite state machine. It should be able to be notified for
+/// A `Fsm` is a finite state machine. It should be able to be notified for
 /// updating internal state according to incoming messages.
 pub trait Fsm {
     type Message: Send;
 
     fn is_stopped(&self) -> bool;
 
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
+    /// Set a mailbox to FSM, which should be used to send message to itself.
     fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
     }
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
+    /// Take the mailbox from FSM. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
@@ -63,17 +56,30 @@ pub trait Fsm {
     }
 }
 
+/// A holder of FSM.
+///
+/// There are three possible states:
+///
+/// 1. NOTIFYSTATE_NOTIFIED: The FSM is taken by an external executor. `data`
+///    holds a null pointer.
+/// 2. NOTIFYSTATE_IDLE: No actor is using the FSM. `data` owns the FSM.
+/// 3. NOTIFYSTATE_DROP: The FSM is dropped. `data` holds a null pointer.
 pub struct FsmState<N> {
     status: AtomicUsize,
     data: AtomicPtr<N>,
+    /// A counter shared with other `FsmState`s.
     state_cnt: Arc<AtomicUsize>,
 }
 
 impl<N: Fsm> FsmState<N> {
+    const NOTIFYSTATE_NOTIFIED: usize = 0;
+    const NOTIFYSTATE_IDLE: usize = 1;
+    const NOTIFYSTATE_DROP: usize = 2;
+
     pub fn new(data: Box<N>, state_cnt: Arc<AtomicUsize>) -> FsmState<N> {
         state_cnt.fetch_add(1, Ordering::Relaxed);
         FsmState {
-            status: AtomicUsize::new(NOTIFYSTATE_IDLE),
+            status: AtomicUsize::new(Self::NOTIFYSTATE_IDLE),
             data: AtomicPtr::new(Box::into_raw(data)),
             state_cnt,
         }
@@ -82,8 +88,8 @@ impl<N: Fsm> FsmState<N> {
     /// Take the fsm if it's IDLE.
     pub fn take_fsm(&self) -> Option<Box<N>> {
         let res = self.status.compare_exchange(
-            NOTIFYSTATE_IDLE,
-            NOTIFYSTATE_NOTIFIED,
+            Self::NOTIFYSTATE_IDLE,
+            Self::NOTIFYSTATE_NOTIFIED,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
@@ -99,7 +105,7 @@ impl<N: Fsm> FsmState<N> {
         }
     }
 
-    /// Notify fsm via a `FsmScheduler`.
+    /// Notifies FSM via a `FsmScheduler`.
     #[inline]
     pub fn notify<S: FsmScheduler<Fsm = N>>(
         &self,
@@ -115,25 +121,25 @@ impl<N: Fsm> FsmState<N> {
         }
     }
 
-    /// Put the owner back to the state.
+    /// Releases the FSM ownership back to this state.
     ///
     /// It's not required that all messages should be consumed before
-    /// releasing a fsm. However, a fsm is guaranteed to be notified only
+    /// releasing a FSM. However, a FSM is guaranteed to be notified only
     /// when new messages arrives after it's released.
     #[inline]
     pub fn release(&self, fsm: Box<N>) {
         let previous = self.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
-        let mut previous_status = NOTIFYSTATE_NOTIFIED;
+        let mut previous_status = Self::NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
             let res = self.status.compare_exchange(
-                NOTIFYSTATE_NOTIFIED,
-                NOTIFYSTATE_IDLE,
+                Self::NOTIFYSTATE_NOTIFIED,
+                Self::NOTIFYSTATE_IDLE,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
             previous_status = match res {
                 Ok(_) => return,
-                Err(NOTIFYSTATE_DROP) => {
+                Err(Self::NOTIFYSTATE_DROP) => {
                     let ptr = self.data.swap(ptr::null_mut(), Ordering::AcqRel);
                     unsafe { Box::from_raw(ptr) };
                     return;
@@ -144,18 +150,18 @@ impl<N: Fsm> FsmState<N> {
         panic!("invalid release state: {:?} {}", previous, previous_status);
     }
 
-    /// Clear the fsm.
+    /// Clears the FSM.
     #[inline]
     pub fn clear(&self) {
-        match self.status.swap(NOTIFYSTATE_DROP, Ordering::AcqRel) {
-            NOTIFYSTATE_NOTIFIED | NOTIFYSTATE_DROP => return,
+        match self.status.swap(Self::NOTIFYSTATE_DROP, Ordering::AcqRel) {
+            Self::NOTIFYSTATE_NOTIFIED | Self::NOTIFYSTATE_DROP => return,
             _ => {}
         }
 
         let ptr = self.data.swap(ptr::null_mut(), Ordering::SeqCst);
         if !ptr.is_null() {
             unsafe {
-                Box::from_raw(ptr);
+                let _ = Box::from_raw(ptr);
             }
         }
     }

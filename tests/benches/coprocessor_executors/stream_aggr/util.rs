@@ -37,8 +37,8 @@ where
     }
 }
 
-/// A bencher that will use batch stream aggregation executor to bench the giving aggregate
-/// expression.
+/// A bencher that will use batch stream aggregation executor to bench the
+/// giving aggregate expression.
 pub struct BatchBencher;
 
 impl<M> StreamAggrBencher<M> for BatchBencher

@@ -461,13 +461,13 @@ lazy_static! {
         register_histogram!(
             "tikv_scheduler_throttle_duration_seconds",
             "Bucketed histogram of peer commits logs duration.",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
@@ -476,7 +476,7 @@ lazy_static! {
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
@@ -485,7 +485,7 @@ lazy_static! {
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_STATIC: ProcessingReadVec =
@@ -494,7 +494,7 @@ lazy_static! {
         "tikv_scheduler_processing_write_duration_seconds",
         "Bucketed histogram of processing write duration",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref SCHED_TOO_BUSY_COUNTER: IntCounterVec = register_int_counter_vec!(
