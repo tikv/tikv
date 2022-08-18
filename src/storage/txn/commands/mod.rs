@@ -163,12 +163,12 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
             )
         } else {
             // the inconsistent naming is for compatibility with the old version :-(
-            let pessimistic_lock_type = req.take_is_pessimistic_lock();
+            let pessimistic_actions = req.take_pessimistic_actions();
             let mutations = req
                 .take_mutations()
                 .into_iter()
                 .map(Into::into)
-                .zip(pessimistic_lock_type.into_iter())
+                .zip(pessimistic_actions.into_iter())
                 .collect();
             PrewritePessimistic::new(
                 mutations,
@@ -804,7 +804,7 @@ pub mod test_util {
     pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -827,7 +827,7 @@ pub mod test_util {
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,

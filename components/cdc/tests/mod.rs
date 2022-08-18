@@ -418,7 +418,9 @@ impl TestSuite {
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         prewrite_req.for_update_ts = for_update_ts.into_inner();
-        prewrite_req.mut_pessimistic_lock_type().push(PessimisticLocked);
+        prewrite_req
+            .mut_pessimistic_actions()
+            .push(PrewriteRequestPessimisticAction::DoPessimisticCheck);
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)

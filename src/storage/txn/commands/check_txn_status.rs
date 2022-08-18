@@ -147,7 +147,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction};
     use tikv_util::deadline::Deadline;
     use txn_types::{Key, WriteType};
 
@@ -388,7 +388,7 @@ pub mod tests {
                 &Some(vec![]),
                 15,
                 16,
-                true,
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
                 17,
             );
             // All following check_txn_status should return the unchanged lock information
@@ -491,7 +491,7 @@ pub mod tests {
                 &Some(vec![]),
                 20,
                 25,
-                true,
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
                 28,
             );
             // the client must call check_txn_status with caller_start_ts == current_ts ==
@@ -520,7 +520,7 @@ pub mod tests {
                 &Some(vec![]),
                 30,
                 35,
-                true,
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
                 36,
             );
             // the client must call check_txn_status with caller_start_ts == current_ts ==
@@ -791,7 +791,15 @@ pub mod tests {
         must_large_txn_locked(&engine, k, ts(4, 0), 200, ts(135, 1), true);
 
         // Commit the key.
-        must_pessimistic_prewrite_put(&engine, k, v, k, ts(4, 0), ts(130, 0), true);
+        must_pessimistic_prewrite_put(
+            &engine,
+            k,
+            v,
+            k,
+            ts(4, 0),
+            ts(130, 0),
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+        );
         must_commit(&engine, k, ts(4, 0), ts(140, 0));
         must_unlocked(&engine, k);
         must_get_commit_ts(&engine, k, ts(4, 0), ts(140, 0));
@@ -940,7 +948,7 @@ pub mod tests {
             k,
             &None,
             ts(300, 0),
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             100,
             TimeStamp::zero(),
             1,
@@ -1069,7 +1077,7 @@ pub mod tests {
             k,
             &None,
             ts(30, 0),
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             10,
             TimeStamp::zero(),
             1,

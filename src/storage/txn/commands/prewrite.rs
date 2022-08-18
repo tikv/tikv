@@ -9,7 +9,7 @@
 use std::mem;
 
 use engine_traits::CF_WRITE;
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PessimisticLockType};
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 use tikv_kv::SnapshotExt;
 use txn_types::{Key, Mutation, OldValue, OldValues, TimeStamp, TxnExtra, Write, WriteType};
 
@@ -254,7 +254,7 @@ command! {
         cmd_ty => PrewriteResult,
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
-            mutations: Vec<(Mutation, PessimisticLockType)>,
+            mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
             /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
             primary: Vec<u8>,
             /// The transaction timestamp.
@@ -308,7 +308,7 @@ impl std::fmt::Debug for PrewritePessimistic {
 impl PrewritePessimistic {
     #[cfg(test)]
     pub fn with_defaults(
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
@@ -331,7 +331,7 @@ impl PrewritePessimistic {
 
     #[cfg(test)]
     pub fn with_1pc(
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
@@ -549,7 +549,7 @@ impl<K: PrewriteKind> Prewriter<K> {
         let mut assertion_failure = None;
 
         for m in mem::take(&mut self.mutations) {
-            let pessimistic_lock_type = m.pessimistic_lock_type();
+            let pessimistic_action = m.pessimistic_action();
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
@@ -560,8 +560,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             }
 
             let need_min_commit_ts = secondaries.is_some() || self.try_one_pc;
-            let prewrite_result =
-                prewrite(txn, reader, &props, m, secondaries, pessimistic_lock_type);
+            let prewrite_result = prewrite(txn, reader, &props, m, secondaries, pessimistic_action);
             match prewrite_result {
                 Ok((ts, old_value)) if !(need_min_commit_ts && ts.is_zero()) => {
                     if need_min_commit_ts && final_min_commit_ts < ts {
@@ -781,7 +780,7 @@ struct Pessimistic {
 }
 
 impl PrewriteKind for Pessimistic {
-    type Mutation = (Mutation, PessimisticLockType);
+    type Mutation = (Mutation, PrewriteRequestPessimisticAction);
 
     fn txn_kind(&self) -> TransactionKind {
         TransactionKind::Pessimistic(self.for_update_ts)
@@ -794,13 +793,13 @@ impl PrewriteKind for Pessimistic {
 /// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
 /// whether the mutation takes a pessimistic lock or not.
 trait MutationLock {
-    fn pessimistic_lock_type(&self) -> PessimisticLockType;
+    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn into_mutation(self) -> Mutation;
 }
 
 impl MutationLock for Mutation {
-    fn pessimistic_lock_type(&self) -> PessimisticLockType {
-        PessimisticLockType::NonPessimisticLocked
+    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck
     }
 
     fn into_mutation(self) -> Mutation {
@@ -808,8 +807,8 @@ impl MutationLock for Mutation {
     }
 }
 
-impl MutationLock for (Mutation, PessimisticLockType) {
-    fn pessimistic_lock_type(&self) -> PessimisticLockType {
+impl MutationLock for (Mutation, PrewriteRequestPessimisticAction) {
+    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
         self.1
     }
 
@@ -1185,7 +1184,10 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
 
-        let mutations = vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)];
+        let mutations = vec![(
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+        )];
         let mut statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
             &engine,
@@ -1209,8 +1211,14 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k1, k1, 8, 12);
 
         let mutations = vec![
-            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
-            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), false),
+            (
+                Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            ),
         ];
         statistics = Statistics::default();
         pessimistic_prewrite_with_cm(
@@ -1235,7 +1243,10 @@ mod tests {
         cm.update_max_ts(50.into());
         must_acquire_pessimistic_lock(&engine, k1, k1, 20, 20);
 
-        let mutations = vec![(Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true)];
+        let mutations = vec![(
+            Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+        )];
         statistics = Statistics::default();
         let res = pessimistic_prewrite_with_cm(
             &engine,
@@ -1272,8 +1283,14 @@ mod tests {
         .unwrap();
         // Try 1PC on the two keys and it will fail on the second one.
         let mutations = vec![
-            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
-            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), false),
+            (
+                Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            ),
         ];
         must_acquire_pessimistic_lock(&engine, k1, k1, 60, 60);
         pessimistic_prewrite_with_cm(
@@ -1369,7 +1386,10 @@ mod tests {
 
         must_acquire_pessimistic_lock(&engine, key, key, 10, 10);
 
-        let mutations = vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)];
+        let mutations = vec![(
+            Mutation::make_put(Key::from_raw(key), value.to_vec()),
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+        )];
         let mut statistics = Statistics::default();
         let cmd = super::PrewritePessimistic::new(
             mutations,
@@ -1400,8 +1420,14 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k2, k1, 20, 20);
 
         let mutations = vec![
-            (Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true),
-            (Mutation::make_put(Key::from_raw(k2), v2.to_vec()), true),
+            (
+                Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            ),
+            (
+                Mutation::make_put(Key::from_raw(k2), v2.to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            ),
         ];
         let mut statistics = Statistics::default();
         // calculated_ts > max_commit_ts
@@ -1605,7 +1631,15 @@ mod tests {
             };
             let cmd = if case.pessimistic {
                 PrewritePessimistic::new(
-                    mutations.iter().map(|it| (it.clone(), false)).collect(),
+                    mutations
+                        .iter()
+                        .map(|it| {
+                            (
+                                it.clone(),
+                                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                            )
+                        })
+                        .collect(),
                     keys[0].to_vec(),
                     start_ts,
                     0,
@@ -1813,7 +1847,7 @@ mod tests {
             &Some(vec![]),
             5,
             5,
-            true,
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
             10,
         );
         must_commit(&engine, key, 5, 10);
@@ -1821,7 +1855,10 @@ mod tests {
         // T2: start_ts = 15, commit_ts = 16, 1PC
         must_acquire_pessimistic_lock(&engine, key, key, 15, 15);
         let cmd = PrewritePessimistic::with_1pc(
-            vec![(Mutation::make_put(Key::from_raw(key), b"v2".to_vec()), true)],
+            vec![(
+                Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            )],
             key.to_vec(),
             15.into(),
             15.into(),
@@ -1836,7 +1873,10 @@ mod tests {
 
         // Repeating the T1 prewrite request
         let cmd = PrewritePessimistic::new(
-            vec![(Mutation::make_put(Key::from_raw(key), b"v1".to_vec()), true)],
+            vec![(
+                Mutation::make_put(Key::from_raw(key), b"v1".to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            )],
             key.to_vec(),
             5.into(),
             200,
@@ -1871,7 +1911,10 @@ mod tests {
 
         // Repeating the T2 prewrite request
         let cmd = PrewritePessimistic::with_1pc(
-            vec![(Mutation::make_put(Key::from_raw(key), b"v2".to_vec()), true)],
+            vec![(
+                Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            )],
             key.to_vec(),
             15.into(),
             15.into(),
@@ -1909,11 +1952,11 @@ mod tests {
         let mutations = vec![
             (
                 Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
-                false,
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             ),
             (
                 Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
-                true,
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
             ),
         ];
         let res = pessimistic_prewrite_with_cm(
@@ -1960,13 +2003,13 @@ mod tests {
              pk: &[u8],
              secondary_keys,
              ts: u64,
-             pessimistic_lock_type,
+             pessimistic_action,
              is_retry_request| {
                 let mutation = Mutation::make_put(Key::from_raw(key), value.to_vec());
                 let mut ctx = Context::default();
                 ctx.set_is_retry_request(is_retry_request);
                 let cmd = PrewritePessimistic::new(
-                    vec![(mutation, pessimistic_lock_type)],
+                    vec![(mutation, pessimistic_action)],
                     pk.to_vec(),
                     ts.into(),
                     100,
@@ -1991,7 +2034,7 @@ mod tests {
             &Some(vec![b"k2".to_vec()]),
             10,
             10,
-            true,
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
             15,
         );
         must_pessimistic_prewrite_put_async_commit(
@@ -2002,7 +2045,7 @@ mod tests {
             &Some(vec![]),
             10,
             10,
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             15,
         );
 
@@ -2011,7 +2054,16 @@ mod tests {
         must_commit(&engine, b"k2", 10, 20);
 
         // This is a re-sent prewrite.
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            Some(vec![]),
+            10,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            true,
+        )
+        .unwrap();
         // Commit repeatedly, these operations should have no effect.
         must_commit(&engine, b"k1", 10, 25);
         must_commit(&engine, b"k2", 10, 25);
@@ -2029,16 +2081,43 @@ mod tests {
         // A retrying non-pessimistic-lock prewrite request should not skip constraint
         // checks. Here it should take no effect, even there's already a newer version
         // after it. (No matter if it's async commit).
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", Some(vec![]), 10, false, true).unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            Some(vec![]),
+            10,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            true,
+        )
+        .unwrap();
         must_unlocked(&engine, b"k2");
 
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, false, true).unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            10,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            true,
+        )
+        .unwrap();
         must_unlocked(&engine, b"k2");
         // Committing still does nothing.
         must_commit(&engine, b"k2", 10, 25);
         // Try a different txn start ts (which haven't been successfully committed
         // before). It should report a PessimisticLockNotFound.
-        let err = prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 11, false, true).unwrap_err();
+        let err = prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            11,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            true,
+        )
+        .unwrap_err();
         assert!(matches!(
             err,
             Error(box ErrorInner::Mvcc(MvccError(
@@ -2048,7 +2127,16 @@ mod tests {
         must_unlocked(&engine, b"k2");
         // However conflict still won't be checked if there's a non-retry request
         // arriving.
-        prewrite_with_retry_flag(b"k2", b"v2", b"k1", None, 10, false, false).unwrap();
+        prewrite_with_retry_flag(
+            b"k2",
+            b"v2",
+            b"k1",
+            None,
+            10,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            false,
+        )
+        .unwrap();
         must_locked(&engine, b"k2", 10);
     }
 
@@ -2096,7 +2184,10 @@ mod tests {
         must_rollback(&engine, k1, 10, true);
         must_acquire_pessimistic_lock(&engine, k1, v1, 15, 15);
         let prewrite_cmd = PrewritePessimistic::with_defaults(
-            vec![(Mutation::make_put(Key::from_raw(k1), v1.to_vec()), true)],
+            vec![(
+                Mutation::make_put(Key::from_raw(k1), v1.to_vec()),
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            )],
             k1.to_vec(),
             10.into(),
             10.into(),
@@ -2149,7 +2240,7 @@ mod tests {
             b"row",
             &None,
             t2_start_ts,
-            true,
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
             1000,
             t2_start_ts,
             1,
@@ -2166,7 +2257,7 @@ mod tests {
             b"row",
             &None,
             t2_start_ts,
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             1000,
             t2_start_ts,
             1,
@@ -2188,11 +2279,11 @@ mod tests {
             vec![
                 (
                     Mutation::make_put(Key::from_raw(b"row"), b"value".to_vec()),
-                    true,
+                    PrewriteRequestPessimisticAction::DoPessimisticCheck,
                 ),
                 (
                     Mutation::make_put(Key::from_raw(b"index"), b"value".to_vec()),
-                    false,
+                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
                 ),
             ],
             b"row".to_vec(),
@@ -2211,11 +2302,11 @@ mod tests {
             vec![
                 (
                     Mutation::make_put(Key::from_raw(b"index"), b"value".to_vec()),
-                    false,
+                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
                 ),
                 (
                     Mutation::make_put(Key::from_raw(b"row"), b"value".to_vec()),
-                    true,
+                    PrewriteRequestPessimisticAction::DoPessimisticCheck,
                 ),
             ],
             b"row".to_vec(),
@@ -2240,7 +2331,7 @@ mod tests {
             &None,
             t1_start_ts,
             t1_start_ts,
-            true,
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
             0,
             false,
             Assertion::NotExist,
@@ -2258,7 +2349,7 @@ mod tests {
             &None,
             t1_start_ts,
             t1_start_ts,
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             0,
             false,
             Assertion::NotExist,
@@ -2335,7 +2426,7 @@ mod tests {
             &Some(vec![b"k2".to_vec()]),
             5,
             10,
-            true,
+            PrewriteRequestPessimisticAction::DoPessimisticCheck,
             15,
         );
         must_prewrite_put_impl(
@@ -2345,7 +2436,7 @@ mod tests {
             b"k1",
             &Some(vec![]),
             5.into(),
-            false,
+            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             100,
             10.into(),
             1,
@@ -2365,7 +2456,10 @@ mod tests {
         // (is_retry_request flag is not set, here we don't rely on it.)
         let mutation = Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec());
         let cmd = PrewritePessimistic::new(
-            vec![(mutation, false)],
+            vec![(
+                mutation,
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            )],
             b"k1".to_vec(),
             5.into(),
             100,

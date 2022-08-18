@@ -3,7 +3,7 @@
 //! This file contains tests and testing tools which affects multiple actions
 
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, PessimisticLockType};
+use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, PrewriteRequestPessimisticAction};
 use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
 
 use super::*;
@@ -20,7 +20,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     pk: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: TimeStamp,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     lock_ttl: u64,
     for_update_ts: TimeStamp,
     txn_size: u64,
@@ -64,7 +64,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
         },
         mutation,
         secondary_keys,
-        pessimistic_lock_type,
+        pessimistic_action,
     )
     .unwrap();
     write(engine, &ctx, txn.into_modifies());
@@ -84,7 +84,7 @@ pub fn must_prewrite_put<E: Engine>(
         pk,
         &None,
         ts.into(),
-        PessimisticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
         0,
         TimeStamp::default(),
         0,
@@ -103,7 +103,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_put_impl(
         engine,
@@ -112,7 +112,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
         pk,
         &None,
         ts.into(),
-        pessimistic_lock_type,
+        pessimistic_action,
         0,
         for_update_ts.into(),
         0,
@@ -131,7 +131,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     lock_ttl: u64,
 ) {
     must_prewrite_put_impl(
@@ -141,7 +141,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
         pk,
         &None,
         ts.into(),
-        pessimistic_lock_type,
+        pessimistic_action,
         lock_ttl,
         for_update_ts.into(),
         0,
@@ -166,10 +166,10 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
     let ts = ts.into();
     let min_commit_ts = (ts.into_inner() + 1).into();
     let for_update_ts = for_update_ts.into();
-    let pessimistic_lock_type = if !for_update_ts.is_zero() {
-        PessimisticLockType::PessimisticLocked
+    let pessimistic_action = if !for_update_ts.is_zero() {
+        PrewriteRequestPessimisticAction::DoPessimisticCheck
     } else {
-        PessimisticLockType::NonPessimisticLocked
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck
     };
     must_prewrite_put_impl(
         engine,
@@ -178,7 +178,7 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
         pk,
         &None,
         ts,
-        pessimistic_lock_type,
+        pessimistic_action,
         lock_ttl,
         for_update_ts,
         0,
@@ -207,7 +207,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         pk,
         secondary_keys,
         ts.into(),
-        PessimisticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
         100,
         TimeStamp::default(),
         0,
@@ -227,7 +227,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     min_commit_ts: impl Into<TimeStamp>,
 ) {
     assert!(secondary_keys.is_some());
@@ -238,7 +238,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
         pk,
         secondary_keys,
         ts.into(),
-        pessimistic_lock_type,
+        pessimistic_action,
         100,
         for_update_ts.into(),
         0,
@@ -282,7 +282,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     max_commit_ts: impl Into<TimeStamp>,
     is_retry_request: bool,
     assertion: Assertion,
@@ -311,7 +311,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
         &props,
         mutation,
         &None,
-        pessimistic_lock_type,
+        pessimistic_action,
     )
     .unwrap_err()
 }
@@ -331,7 +331,7 @@ pub fn must_prewrite_put_err<E: Engine>(
         &None,
         ts,
         TimeStamp::zero(),
-        PessimisticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
         0,
         false,
         Assertion::None,
@@ -346,7 +346,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) -> Error {
     must_prewrite_put_err_impl(
         engine,
@@ -356,7 +356,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
         &None,
         ts,
         for_update_ts,
-        pessimistic_lock_type,
+        pessimistic_action,
         0,
         false,
         Assertion::None,
@@ -372,7 +372,7 @@ pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     max_commit_ts: impl Into<TimeStamp>,
 ) -> Error {
     must_prewrite_put_err_impl(
@@ -383,7 +383,7 @@ pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
         secondary_keys,
         ts,
         for_update_ts,
-        pessimistic_lock_type,
+        pessimistic_action,
         max_commit_ts,
         true,
         Assertion::None,
@@ -397,7 +397,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -414,7 +414,7 @@ fn must_prewrite_delete_impl<E: Engine>(
         &default_txn_props(ts, pk, for_update_ts),
         mutation,
         &None,
-        pessimistic_lock_type,
+        pessimistic_action,
     )
     .unwrap();
 
@@ -435,7 +435,7 @@ pub fn must_prewrite_delete<E: Engine>(
         pk,
         ts,
         TimeStamp::zero(),
-        PessimisticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
     );
 }
 
@@ -445,9 +445,9 @@ pub fn must_pessimistic_prewrite_delete<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
-    must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, pessimistic_lock_type);
+    must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, pessimistic_action);
 }
 
 fn must_prewrite_lock_impl<E: Engine>(
@@ -456,7 +456,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -473,7 +473,7 @@ fn must_prewrite_lock_impl<E: Engine>(
         &default_txn_props(ts, pk, for_update_ts),
         mutation,
         &None,
-        pessimistic_lock_type,
+        pessimistic_action,
     )
     .unwrap();
 
@@ -489,7 +489,7 @@ pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: impl
         pk,
         ts,
         TimeStamp::zero(),
-        PessimisticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
     );
 }
 
@@ -511,7 +511,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
         &default_txn_props(ts, pk, TimeStamp::zero()),
         Mutation::make_lock(Key::from_raw(key)),
         &None,
-        PessimiticLockType::NonPessimisticLocked,
+        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
     )
     .unwrap_err();
 }
@@ -522,9 +522,9 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_lock_type: PessimisticLockType,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
-    must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, pessimistic_lock_type);
+    must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, pessimistic_action);
 }
 
 pub fn must_rollback<E: Engine>(

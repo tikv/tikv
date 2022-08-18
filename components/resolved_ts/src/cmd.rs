@@ -405,7 +405,7 @@ mod tests {
             },
             Mutation::make_put(k1.clone(), b"v4".to_vec()),
             &None,
-            false,
+            kvproto::kvrpcpb::PrewriteRequestPessimisticAction::SkipPessimisticCheck,
         )
         .unwrap();
         one_pc_commit_ts(true, &mut txn, 10.into(), &DummyLockManager);

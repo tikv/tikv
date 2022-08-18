@@ -640,7 +640,7 @@ pub mod tests {
         CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
-        kvrpcpb::{AssertionLevel, Context, PessimisticLockType},
+        kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction},
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
@@ -749,7 +749,7 @@ pub mod tests {
                 &Self::txn_props(start_ts, pk, false),
                 m,
                 &None,
-                PessimisticLockType::NonPessimisticLocked,
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
             )
             .unwrap();
             self.write(txn.into_modifies());
@@ -773,7 +773,7 @@ pub mod tests {
                 &Self::txn_props(start_ts, pk, true),
                 m,
                 &None,
-                PessimisticLockType::PessimisticLocked,
+                PrewriteRequestPessimisticAction::DoPessimisticCheck,
             )
             .unwrap();
             self.write(txn.into_modifies());

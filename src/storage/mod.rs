@@ -3141,7 +3141,7 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PessimisticLockType};
+    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction};
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType};
@@ -7113,8 +7113,14 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(key.clone(), val.clone()), PessimisticLockType::PessimisticLocked),
-                        (Mutation::make_put(key2.clone(), val2.clone()), PessimisticLockType::NonPessimisticLocked),
+                        (
+                            Mutation::make_put(key.clone(), val.clone()),
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        ),
+                        (
+                            Mutation::make_put(key2.clone(), val2.clone()),
+                            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                        ),
                     ],
                     key.to_raw().unwrap(),
                     10.into(),
@@ -7973,8 +7979,14 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(Key::from_raw(b"d"), b"v".to_vec()), true),
-                        (Mutation::make_put(Key::from_raw(b"e"), b"v".to_vec()), true),
+                        (
+                            Mutation::make_put(Key::from_raw(b"d"), b"v".to_vec()),
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"e"), b"v".to_vec()),
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        ),
                     ],
                     b"d".to_vec(),
                     200.into(),
@@ -8066,7 +8078,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(key2.clone(), value2.clone()), true)],
+                    vec![(
+                        Mutation::make_put(key2.clone(), value2.clone()),
+                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                    )],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -8111,8 +8126,14 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(key1.clone(), value1), true),
-                        (Mutation::make_put(key2.clone(), value2), false),
+                        (
+                            Mutation::make_put(key1.clone(), value1),
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        ),
+                        (
+                            Mutation::make_put(key2.clone(), value2),
+                            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                        ),
                     ],
                     k1.to_vec(),
                     1.into(),
@@ -8349,23 +8370,23 @@ mod tests {
                     vec![
                         (
                             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
-                            true,
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k3"), b"v2".to_vec()),
-                            true,
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec()),
-                            true,
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec()),
-                            true,
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k6"), b"v6".to_vec()),
-                            true,
+                            PrewriteRequestPessimisticAction::DoPessimisticCheck,
                         ),
                     ],
                     b"k1".to_vec(),
@@ -8937,7 +8958,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(k1.clone(), b"v".to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                    )],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
@@ -8995,7 +9019,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(k1, b"v".to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(k1, b"v".to_vec()),
+                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                    )],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
