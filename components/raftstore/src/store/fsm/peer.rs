@@ -676,7 +676,6 @@ where
                     ready_number,
                 } => self.on_persisted_msg(peer_id, ready_number),
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
-                // PeerMsg::UpdateZoneInfo(update) => self.on_update_zone_info(&update),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
                         match self.fsm.peer.maybe_destroy(self.ctx) {
@@ -746,11 +745,6 @@ where
             self.reset_raft_tick(GroupState::Ordered);
             self.register_pd_heartbeat_tick();
         }
-    }
-
-    fn on_update_zone_info(&mut self, update: HashMap<u64, String>) {
-        info!("Update zone info: {:?}", update);
-        self.fsm.peer.update_peers_zone(update);
     }
 
     fn on_unsafe_recovery_pre_demote_failed_voters(
@@ -1295,9 +1289,6 @@ where
                     .raft_group
                     .raft
                     .assign_commit_groups(&[(self.fsm.peer_id(), group_id)]);
-            }
-            SignificantMsg::UpdateZoneInfo { zone_info } => {
-                self.on_update_zone_info(zone_info);
             }
             SignificantMsg::CaptureChange {
                 cmd,

@@ -348,10 +348,6 @@ where
         store_id: u64,
         group_id: u64,
     },
-    /// Update Zone Information for follower replication.
-    UpdateZoneInfo {
-        zone_info: HashMap<u64, String>,
-    },
     /// Capture the changes of the region.
     CaptureChange {
         cmd: ChangeObserver,
@@ -644,7 +640,6 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
-            // PeerMsg::UpdateZoneInfo(_) => write!(fmt, "UpdateZoneInfo"),
             PeerMsg::Destroy(peer_id) => write!(fmt, "Destroy {}", peer_id),
         }
     }
@@ -692,6 +687,9 @@ where
     /// Asks the store to update replication mode.
     UpdateReplicationMode(ReplicationStatus),
 
+    /// Asks the store to update zone information.
+    UpdateZoneInformation(HashMap<u64, String>),
+
     /// Inspect the latency of raftstore.
     LatencyInspect {
         send_time: Instant,
@@ -736,6 +734,7 @@ where
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
+            StoreMsg::UpdateZoneInformation(_) => write!(fmt, "UpdateZoneInformation"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => {

@@ -10,7 +10,10 @@ use collections::HashMap;
 use engine_traits::KvEngine;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
-use raftstore::{router::RaftStoreRouter, store::GlobalReplicationState};
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{GlobalReplicationState, StoreMsg},
+};
 use tikv_util::{
     time::Instant,
     worker::{Runnable, Scheduler, Worker},
@@ -114,11 +117,14 @@ where
             state.group.backup_store_labels(&mut s);
         }
         let zone_info = state.group.build_update_zone_info();
+        let _ = self
+            .router
+            .send_store_msg(StoreMsg::UpdateZoneInformation(zone_info));
         drop(state);
         if let Some(group_id) = group_id {
             self.router.report_resolved(store_id, group_id);
         }
-        self.router.report_zone_info_update(zone_info);
+        // self.router.report_zone_info_update(zone_info);
 
         let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,

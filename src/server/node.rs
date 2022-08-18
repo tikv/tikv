@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
@@ -21,7 +22,7 @@ use raftstore::{
         self,
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         initial_region, AutoSplitController, Config as StoreConfig, GlobalReplicationState, PdTask,
-        RefreshConfigTask, SnapManager, SplitCheckTask, Transport,
+        RefreshConfigTask, SnapManager, SplitCheckTask, StoreMsg, Transport,
     },
 };
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -94,6 +95,8 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
     health_service: Option<HealthService>,
+    // Store zone information for follower replication.
+    zone_info: Arc<RwLock<HashMap<u64, String>>>,
     zone_label_key: String,
 }
 
@@ -151,6 +154,8 @@ where
         }
         store.set_labels(labels.into());
 
+        let zone_info = Arc::new(RwLock::new(HashMap::default()));
+
         Node {
             cluster_id: cfg.cluster_id,
             store,
@@ -162,6 +167,7 @@ where
             state,
             bg_worker,
             health_service,
+            zone_info,
             zone_label_key,
         }
     }
@@ -363,8 +369,11 @@ where
                 .register_store(store.id, store.take_labels().into());
         }
         state.set_zone_label_key(self.zone_label_key.clone());
-        self.get_router()
-            .report_zone_info_update(state.group.build_update_zone_info());
+        let _ = self
+            .get_router()
+            .send_store_msg(StoreMsg::UpdateZoneInformation(
+                state.group.build_update_zone_info(),
+            ));
     }
 
     // Exported for tests.
@@ -501,6 +510,7 @@ where
             snap_mgr,
             pd_worker,
             store_meta,
+            self.zone_info.clone(),
             coprocessor_host,
             importer,
             split_check_scheduler,

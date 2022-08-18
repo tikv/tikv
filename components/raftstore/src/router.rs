@@ -3,13 +3,11 @@
 // #[PerformanceCriticalPath]
 use std::cell::RefCell;
 
-use collections::HashMap;
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::SnapshotStatus;
 use tikv_util::time::ThreadReadId;
-use tikv_util::info;
 
 use crate::{
     store::{
@@ -94,15 +92,15 @@ where
         })
     }
 
-    /// Update Zone Information to all peers.
-    fn report_zone_info_update(&self, zone_info: HashMap<u64, String>) {
-        self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::UpdateZoneInfo {
-                zone_info: zone_info.clone(),
-            })
-        });
-        info!("Report Zone Info Update");
-    }
+    // /// Update Zone Information to all peers.
+    // fn report_zone_info_update(&self, zone_info: HashMap<u64, String>) {
+    //     self.broadcast_normal(|| {
+    //         PeerMsg::SignificantMsg(SignificantMsg::UpdateZoneInfo {
+    //             zone_info: zone_info.clone(),
+    //         })
+    //     });
+    //     info!("Report Zone Info Update");
+    // }
 }
 
 fn send_command_impl<EK, PR>(

@@ -100,7 +100,7 @@ impl StoreGroup {
         let mut update: HashMap<u64, String> = HashMap::default();
         for (store_id, label_vec) in &self.labels {
             if let Some(zone_label) = label_vec.iter().find(|l| l.key == self.zone_label_key) {
-                update.insert(store_id.clone(), zone_label.value.clone());
+                update.insert(*store_id, zone_label.value.clone());
             }
         }
         update

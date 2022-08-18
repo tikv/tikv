@@ -12,7 +12,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
     time::{Duration, Instant},
     u64,
@@ -502,6 +502,7 @@ where
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
+    pub zone_info: Arc<RwLock<HashMap<u64, String>>>,
     pub engines: Engines<EK, ER>,
     pub pending_count: usize,
     pub ready_count: usize,
@@ -725,6 +726,9 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
                 StoreMsg::Start { store } => self.start(store),
                 StoreMsg::UpdateReplicationMode(status) => self.on_update_replication_mode(status),
+                StoreMsg::UpdateZoneInformation(zone_info) => {
+                    self.on_update_zone_information(zone_info)
+                }
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::LatencyInspect {
@@ -1069,6 +1073,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub coprocessor_host: CoprocessorHost<EK>,
     trans: T,
     global_stat: GlobalStoreStat,
+    pub zone_info: Arc<RwLock<HashMap<u64, String>>>,
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
@@ -1293,6 +1298,7 @@ where
             global_replication_state: self.global_replication_state.clone(),
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
+            zone_info: self.zone_info.clone(),
             engines: self.engines.clone(),
             pending_count: 0,
             ready_count: 0,
@@ -1360,6 +1366,7 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
             trans: self.trans.clone(),
             global_stat: self.global_stat.clone(),
+            zone_info: self.zone_info.clone(),
             engines: self.engines.clone(),
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
@@ -1427,6 +1434,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
+        zone_info: Arc<RwLock<HashMap<u64, String>>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -1556,6 +1564,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             global_replication_state,
             global_stat: GlobalStoreStat::default(),
             store_meta,
+            zone_info,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders().clone(),
@@ -2738,6 +2747,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         drop(state);
         self.ctx.trans.set_store_allowlist(store_allowlist);
         self.ctx.router.report_status_update()
+    }
+
+    fn on_update_zone_information(&self, zone_info: HashMap<u64, String>) {
+        let mut ctx_zone = self.ctx.zone_info.write().unwrap();
+        for (store_id, zone) in zone_info {
+            ctx_zone.insert(store_id, zone);
+        }
+        info!("Update Zone Information: {:?}", ctx_zone);
     }
 
     fn on_unsafe_recovery_create_peer(&self, region: Region) {

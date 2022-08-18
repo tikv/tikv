@@ -730,9 +730,6 @@ where
     /// Record the last instant of each peer's heartbeat response.
     pub peer_heartbeats: HashMap<u64, Instant>,
 
-    /// Record the zones this Region's Peers belong to.
-    peer_zone: HashMap<u64, String>,
-
     proposals: ProposalQueue<EK::Snapshot>,
     leader_missing_time: Option<Instant>,
     #[getset(get = "pub")]
@@ -954,7 +951,6 @@ where
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
-            peer_zone: HashMap::default(),
             peers_start_pending_time: vec![],
             down_peer_ids: vec![],
             size_diff_hint: 0,
@@ -1385,10 +1381,6 @@ where
         self.get_store().region()
     }
 
-    pub fn get_peer_zone(&self, id: u64) -> Option<&String> {
-        self.peer_zone.get(&id)
-    }
-
     /// Check whether the peer can be hibernated.
     ///
     /// This should be used with `check_after_tick` to get a correct conclusion.
@@ -1718,7 +1710,7 @@ where
     fn merge_msg_append(
         &self,
         group: &Vec<usize>,
-        msgs: &mut Vec<eraftpb::Message>,
+        msgs: &mut [eraftpb::Message],
         discard: &mut HashSet<usize>,
     ) {
         // If no appropriate agent, do not use follower replication.
@@ -1741,7 +1733,7 @@ where
                 if msg.get_to() == agent_id {
                     msg.set_forwards(forwards.into());
                     msg.set_msg_type(MessageType::MsgGroupBroadcast);
-                    info!("Follower replication via agent {}. Msg:{:?}", agent_id, msg);
+                    info!("Follower replication: Peer {} via agent {}. Forwards:{:?}", self.peer.id, agent_id, msg.get_forwards());
                     break;
                 }
             }
@@ -1759,7 +1751,7 @@ where
 
         let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
         let leader_store_id = self.peer.get_store_id();
-
+        let zone_info = ctx.zone_info.read().unwrap();
         // Filter MsgAppend.
         for (pos, msg) in msgs.iter().enumerate() {
             // Follower replication is enabled and msg is append.
@@ -1767,8 +1759,8 @@ where
                 if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                     let to_peer_store_id = to_peer.get_store_id();
                     // Leader and to_peer is not in the same zone.
-                    if let Some(to_peer_zone) = self.get_peer_zone(to_peer_store_id)
-                        && to_peer_zone != self.get_peer_zone(leader_store_id).unwrap()
+                    if let Some(to_peer_zone) = zone_info.get(&to_peer_store_id)
+                        && to_peer_zone != zone_info.get(&leader_store_id).unwrap()
                     {
                         if msg_append_group.contains_key(to_peer_zone) {
                             let msg_group =
@@ -1782,12 +1774,16 @@ where
             }
         }
 
+        info!("Group info: {:?}", msg_append_group);
+
         // Record message that should be discarded after merge_msg_append.
         let mut discard: HashSet<usize> = HashSet::default();
 
         // Build MsgGroupBroadcast.
         for (_, group) in msg_append_group.iter() {
-            self.merge_msg_append(group, &mut msgs, &mut discard);
+            if group.len() > 1 {
+                self.merge_msg_append(group, &mut msgs, &mut discard);
+            }
         }
 
         let mut pos: usize = 0;
@@ -5107,10 +5103,6 @@ where
         }
 
         None
-    }
-
-    pub fn update_peers_zone(&mut self, update: HashMap<u64, String>) {
-        self.peer_zone = update;
     }
 
     fn region_replication_status(&mut self) -> Option<RegionReplicationStatus> {
