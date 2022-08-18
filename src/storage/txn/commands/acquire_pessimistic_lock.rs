@@ -27,7 +27,7 @@ command! {
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockRes>,
         display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
-        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_if_exists, ctx),
+        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -47,7 +47,7 @@ command! {
             min_commit_ts: TimeStamp,
             old_values: OldValues,
             check_existence: bool,
-            lock_if_exists: bool,
+            lock_only_if_exists: bool,
         }
 }
 
@@ -111,7 +111,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
-                self.lock_if_exists,
+                self.lock_only_if_exists,
             ) {
                 Ok((val, old_value)) => {
                     if self.return_values || self.check_existence {
