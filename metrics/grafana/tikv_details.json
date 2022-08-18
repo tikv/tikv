@@ -22194,10 +22194,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_storage_mvcc_gc_delete_versions_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 2,
-              "legendFormat": "{{key_mode}}_keys/s",
+              "legendFormat": "keys/s",
               "refId": "E"
             }
           ],
@@ -22518,7 +22518,7 @@
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
           "decimals": 0,
-          "description": "SafePoint used for TiKV's Auto GC",
+          "description": "Keys handled in GC compaction filter",
           "fill": 0,
           "gridPos": {
             "h": 7,
@@ -22555,70 +22555,70 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by {key_mode}",
+              "expr": "sum(rate(tikv_gc_compaction_filtered{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "instant": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{key_mode}}_filtered",
+              "legendFormat": "filtered",
               "metric": "tikv_storage_command_total",
               "refId": "A",
               "step": 4
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_skip{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_skip{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_skip",
+              "legendFormat": "skipped",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_mvcc_rollback{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_rollback/lock",
+              "legendFormat": "mvcc-rollback/mvcc-lock",
               "refId": "C"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_orphan_versions{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_orphan_versions{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_orphan-versions",
+              "legendFormat": "orphan-versions",
               "refId": "D"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_perform{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_perform{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_perform",
+              "legendFormat": "performed-times",
               "refId": "E"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode,type)",
+              "expr": "sum(rate(tikv_gc_compaction_failure{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_failure-{{type}}",
+              "legendFormat": "failure-{{type}}",
               "refId": "F"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_met{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_mvcc-deletion-met",
+              "legendFormat": "mvcc-deletion-met",
               "refId": "G"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_handled{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_mvcc-deletion-handled",
+              "legendFormat": "mvcc-deletion-handled",
               "refId": "H"
             },
             {
-              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (key_mode)",
+              "expr": "sum(rate(tikv_gc_compaction_filter_mvcc_deletion_wasted{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_mvcc-deletion-wasted",
+              "legendFormat": "mvcc-deletion-wasted",
               "refId": "I"
             }
           ],
@@ -22708,10 +22708,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (key_mode,tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"write\"}[1m])) by (tag)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_{{tag}}",
+              "legendFormat": "{{tag}}",
               "refId": "A"
             }
           ],
@@ -22801,10 +22801,10 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (key_mode,tag)",
+              "expr": "sum(rate(tikv_gcworker_gc_keys{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\", cf=\"default\"}[1m])) by (tag)",
               "format": "time_series",
               "intervalFactor": 1,
-              "legendFormat": "{{key_mode}}_{{tag}}",
+              "legendFormat": "{{tag}}",
               "refId": "A"
             }
           ],
