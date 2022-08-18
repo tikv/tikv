@@ -71,7 +71,8 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use concurrency_manager::ConcurrencyManager;
+use causal_ts::CausalTsProvider;
+use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
 use kvproto::{
@@ -94,7 +95,7 @@ use tikv_util::{
 use tracker::{
     clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
 };
-use txn_types::{Key, KvPair, Lock, OldValues, TimeStamp, TsSet, Value};
+use txn_types::{Key, KvPair, Lock, LockType, OldValues, TimeStamp, TsSet, Value};
 
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
@@ -118,7 +119,9 @@ use crate::{
         metrics::{CommandKind, *},
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
-            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
+            commands::{
+                get_causal_ts_from_provider, RawAtomicStore, RawCompareAndSwap, TypedCommand,
+            },
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
             Command,
@@ -178,6 +181,8 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
+    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+
     quota_limiter: Arc<QuotaLimiter>,
 
     _phantom: PhantomData<F>,
@@ -204,6 +209,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
             max_key_size: self.max_key_size,
             concurrency_manager: self.concurrency_manager.clone(),
             api_version: self.api_version,
+            causal_ts_provider: self.causal_ts_provider.clone(),
             resource_tag_factory: self.resource_tag_factory.clone(),
             quota_limiter: Arc::clone(&self.quota_limiter),
             _phantom: PhantomData,
@@ -257,6 +263,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
+        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -283,6 +290,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             api_version: config.api_version(),
+            causal_ts_provider,
             resource_tag_factory,
             quota_limiter,
             _phantom: PhantomData,
@@ -1447,6 +1455,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Ok(())
     }
 
+    // The entry point of the raw atomic command scheduler.
+    pub fn sched_raw_atomic_command<T: StorageCallbackType>(
+        sched: TxnScheduler<E, L>,
+        cmd: TypedCommand<T>,
+        callback: Callback<T>,
+    ) {
+        let cmd: Command = cmd.into();
+        cmd.incr_cmd_metric();
+        sched.run_cmd(cmd, T::callback(callback));
+    }
+
     // Schedule raw modify commands, which reuse the scheduler worker pool.
     // TODO: separate the txn and raw commands if needed in the future.
     fn sched_raw_command<T>(&self, tag: CommandKind, future: T) -> Result<()>
@@ -1821,6 +1840,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
+    async fn get_raw_key_guard(
+        ts_provider: &Option<Arc<dyn CausalTsProvider>>,
+        concurrency_manager: ConcurrencyManager,
+    ) -> Result<Option<KeyHandleGuard>> {
+        let ts = get_causal_ts_from_provider(ts_provider)?;
+        if let Some(ts) = ts {
+            let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
+            let key_guard = concurrency_manager.lock_key(&Key::from_raw(&raw_key)).await;
+            let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
+            key_guard.with_lock(|l| *l = Some(lock));
+            Ok(Some(key_guard))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Write a raw key to the storage.
     pub fn raw_put(
         &self,
@@ -1843,9 +1878,19 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
         let deadline = Self::get_deadline(&ctx);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
         self.sched_raw_command(CMD, async move {
             if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            let ts = get_causal_ts_from_provider(&provider);
+            if let Err(e) = ts {
                 return callback(Err(Error::from(e)));
             }
             let command_duration = tikv_util::time::Instant::now();
@@ -1856,7 +1901,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             };
             let m = Modify::Put(
                 cf,
-                F::encode_raw_key_owned(key, None),
+                F::encode_raw_key_owned(key, ts.unwrap()),
                 F::encode_raw_value_owned(raw_value),
             );
 
@@ -1893,6 +1938,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         cf: CfName,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
+        ts: Option<TimeStamp>,
     ) -> Vec<Modify> {
         pairs
             .into_iter()
@@ -1905,7 +1951,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 };
                 Modify::Put(
                     cf,
-                    F::encode_raw_key_owned(k, None),
+                    F::encode_raw_key_owned(k, ts),
                     F::encode_raw_value_owned(raw_value),
                 )
             })
@@ -1938,14 +1984,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         );
         Self::check_ttl_valid(pairs.len(), &ttls)?;
 
+        let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         self.sched_raw_command(CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
             let command_duration = tikv_util::time::Instant::now();
-            let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls);
+
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            let ts = get_causal_ts_from_provider(&provider);
+            if let Err(e) = ts {
+                return callback(Err(Error::from(e)));
+            }
+
+            let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts.unwrap());
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
             let (cb, f) = tikv_util::future::paired_future_callback();
@@ -1964,8 +2022,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         })
     }
 
-    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
-        let key = F::encode_raw_key_owned(key, None);
+    fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>, ts: Option<TimeStamp>) -> Modify {
+        let key = F::encode_raw_key_owned(key, ts);
         match F::TAG {
             ApiVersion::V2 => Modify::Put(cf, key, ApiV2::ENCODED_LOGICAL_DELETE.to_vec()),
             _ => Modify::Delete(cf, key),
@@ -1987,14 +2045,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         self.sched_raw_command(CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
             let command_duration = tikv_util::time::Instant::now();
-            let m = Self::raw_delete_request_to_modify(cf, key);
+
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            let ts = get_causal_ts_from_provider(&provider);
+            if let Err(e) = ts {
+                return callback(Err(Error::from(e)));
+            }
+            let m = Self::raw_delete_request_to_modify(cf, key, ts.unwrap());
             let mut batch = WriteData::from_modifies(vec![m]);
             batch.set_allowed_on_disk_almost_full();
             let (cb, f) = tikv_util::future::paired_future_callback();
@@ -2081,16 +2150,28 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
+        let provider = self.causal_ts_provider.clone();
         let engine = self.engine.clone();
+        let concurrency_manager = self.concurrency_manager.clone();
         let deadline = Self::get_deadline(&ctx);
         self.sched_raw_command(CMD, async move {
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
             let command_duration = tikv_util::time::Instant::now();
-            let modifies = keys
+
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            let ts = get_causal_ts_from_provider(&provider);
+            if let Err(e) = ts {
+                return callback(Err(Error::from(e)));
+            }
+            let ts = ts.unwrap();
+            let modifies: Vec<Modify> = keys
                 .into_iter()
-                .map(|k| Self::raw_delete_request_to_modify(cf, k))
+                .map(|k| Self::raw_delete_request_to_modify(cf, k, ts))
                 .collect();
             let mut batch = WriteData::from_modifies(modifies);
             batch.set_allowed_on_disk_almost_full();
@@ -2495,22 +2576,43 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ttl: u64,
         cb: Callback<(Option<Value>, bool)>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_compare_and_swap,
-            [&key],
-        )?;
-        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        const CMD: CommandKind = CommandKind::raw_compare_and_swap;
+        let api_version = self.api_version;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
+        let cf = Self::rawkv_cf(&cf, api_version)?;
 
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
-
-        let key = F::encode_raw_key_owned(key, None);
-        let cmd =
-            RawCompareAndSwap::new(cf, key, previous_value, value, ttl, self.api_version, ctx);
-        self.sched_txn_command(cmd, cb)
+        let provider = self.causal_ts_provider.clone();
+        let sched = self.get_scheduler();
+        let concurrency_manager = self.get_concurrency_manager();
+        self.sched_raw_command(CMD, async move {
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return cb(Err(e));
+            }
+            // do not encode ts here as RawCompareAndSwap use key to gen lock.
+            let key = F::encode_raw_key_owned(key, None);
+            let cmd = RawCompareAndSwap::new(
+                cf,
+                key,
+                previous_value,
+                value,
+                ttl,
+                api_version,
+                provider,
+                ctx,
+            );
+            Self::sched_raw_atomic_command(
+                sched,
+                cmd,
+                Box::new(|res| {
+                    cb(res.map_err(Error::from));
+                    drop(key_guard)
+                }),
+            );
+        })
     }
 
     pub fn raw_batch_put_atomic(
@@ -2521,18 +2623,37 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_atomic_store;
         Self::check_api_version(
             self.api_version,
             ctx.api_version,
-            CommandKind::raw_atomic_store,
+            CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         Self::check_ttl_valid(pairs.len(), &ttls)?;
-        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls);
-        let cmd = RawAtomicStore::new(cf, modifies, ctx);
-        self.sched_txn_command(cmd, callback)
+
+        let provider = self.causal_ts_provider.clone();
+        let sched = self.get_scheduler();
+        let concurrency_manager = self.get_concurrency_manager();
+        self.sched_raw_command(CMD, async move {
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            // donot encode ts here as RawAtomicStore use key to gen lock
+            let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
+            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            Self::sched_raw_atomic_command(
+                sched,
+                cmd,
+                Box::new(|res| {
+                    callback(res.map_err(Error::from));
+                    drop(key_guard)
+                }),
+            );
+        })
     }
 
     pub fn raw_batch_delete_atomic(
@@ -2542,20 +2663,33 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_atomic_store,
-            &keys,
-        )?;
+        const CMD: CommandKind = CommandKind::raw_atomic_store;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = keys
-            .into_iter()
-            .map(|k| Self::raw_delete_request_to_modify(cf, k))
-            .collect();
-        let cmd = RawAtomicStore::new(cf, modifies, ctx);
-        self.sched_txn_command(cmd, callback)
+        let provider = self.causal_ts_provider.clone();
+        let sched = self.get_scheduler();
+        let concurrency_manager = self.get_concurrency_manager();
+        self.sched_raw_command(CMD, async move {
+            let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
+            if let Err(e) = key_guard {
+                return callback(Err(e));
+            }
+            // donot encode ts here as RawAtomicStore use key to gen lock
+            let modifies = keys
+                .into_iter()
+                .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
+                .collect();
+            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            Self::sched_raw_atomic_command(
+                sched,
+                cmd,
+                Box::new(|res| {
+                    callback(res.map_err(Error::from));
+                    drop(key_guard)
+                }),
+            );
+        })
     }
 
     pub fn raw_checksum(
@@ -2935,6 +3069,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
+        let ts_provider = if F::TAG == ApiVersion::V2 {
+            Some(Arc::new(causal_ts::tests::TestProvider::default()))
+        } else {
+            None
+        };
 
         Storage::from_engine(
             self.engine,
@@ -2951,6 +3090,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
+            ts_provider.map(|provider| provider as Arc<dyn CausalTsProvider>),
         )
     }
 
@@ -2979,6 +3119,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             ResourceTagFactory::new_for_test(),
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
+            None,
         )
     }
 }

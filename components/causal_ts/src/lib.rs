@@ -32,10 +32,6 @@ pub trait CausalTsProvider: Send + Sync {
     }
 }
 
-pub trait RawTsTracker: Send + Sync + Clone {
-    fn track_ts(&self, region_id: u64, ts: TimeStamp) -> Result<()>;
-}
-
 pub mod tests {
     use std::sync::{
         atomic::{AtomicU64, Ordering},
@@ -67,15 +63,6 @@ pub mod tests {
         // Do not modify this value as several test cases depend on it.
         fn flush(&self) -> Result<()> {
             self.ts.fetch_add(100, Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    #[derive(Clone, Default)]
-    pub struct DummyRawTsTracker {}
-
-    impl RawTsTracker for DummyRawTsTracker {
-        fn track_ts(&self, _region_id: u64, _ts: TimeStamp) -> Result<()> {
             Ok(())
         }
     }
