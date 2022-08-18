@@ -1044,6 +1044,11 @@ impl<'a> StoreMsgHandler<'a> {
                         "{} peer avoid replace by split, has pending snap {}, initialized {}",
                         tag, pending_snap, initialized
                     );
+                    self.ctx
+                        .global
+                        .engines
+                        .raft
+                        .remove_dependent(region_id, new_region_id);
                     continue;
                 }
             }

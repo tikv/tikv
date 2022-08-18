@@ -40,6 +40,10 @@ impl WriteBatch {
         self.get_region(region_id).set_state(key, val);
     }
 
+    pub fn get_state(&mut self, region_id: u64, key: &[u8]) -> Option<&[u8]> {
+        self.get_region(region_id).get_state(key)
+    }
+
     pub fn clear_region(&mut self, region_id: u64) {
         self.get_region(region_id).clear();
     }
@@ -91,6 +95,10 @@ impl RegionBatch {
     pub fn set_state(&mut self, key: &[u8], val: &[u8]) {
         self.states
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(val));
+    }
+
+    pub fn get_state(&self, key: &[u8]) -> Option<&[u8]> {
+        self.states.get(key).map(|v| v.chunk())
     }
 
     pub fn append_raft_log(&mut self, op: RaftLogOp) {

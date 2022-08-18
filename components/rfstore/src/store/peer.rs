@@ -1442,10 +1442,20 @@ impl Peer {
                 self.preprocessed_region = Some(new_region.clone());
             } else {
                 let raft = &ctx.global.engines.raft;
-                if raft.get_state(new_meta.id, KV_ENGINE_META_KEY).is_none() {
-                    ctx.raft_wb
-                        .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
+                if raft.get_state(new_meta.id, KV_ENGINE_META_KEY).is_some()
+                    // The new region may apply snapshot in the same batch, so we should check
+                    // raft_wb too.
+                    || ctx
+                        .raft_wb
+                        .get_state(new_meta.id, KV_ENGINE_META_KEY)
+                        .is_some()
+                {
+                    // The region has already been created and initialized, so skip to write
+                    // initial state and add dependent.
+                    continue;
                 }
+                ctx.raft_wb
+                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
                 let region_version = new_region.get_region_epoch().get_version();
                 write_initial_raft_state(&mut ctx.raft_wb, new_region.get_id(), region_version);
             }

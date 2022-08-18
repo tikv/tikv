@@ -456,7 +456,8 @@ impl PeerStorage {
         let tag = PeerTag::new(ctx.store_id(), id_ver);
         debug!("{} write raft state {:?}", tag, self.raft_state);
         let key = raft_state_key(meta.ver);
-        ctx.raft_wb.set_state(meta.id, &key, &self.raft_state.marshal());
+        ctx.raft_wb
+            .set_state(meta.id, &key, &self.raft_state.marshal());
     }
 
     fn apply_snapshot(
