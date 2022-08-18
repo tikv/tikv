@@ -19,10 +19,9 @@ use futures::{
     task::{Context, Poll},
 };
 use kvproto::deadlock::WaitForEntry;
-use prometheus::HistogramTimer;
 use tikv_util::{
     config::ReadableDuration,
-    time::InstantExt,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
@@ -184,7 +183,6 @@ pub(crate) struct Waiter {
     pub(crate) lock: Lock,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
-    _lifetime_timer: HistogramTimer,
     wait_timer: Instant,
 }
 
@@ -205,7 +203,6 @@ impl Waiter {
             lock,
             delay: Delay::new(deadline),
             diag_ctx,
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
             wait_timer,
         }
     }
@@ -234,6 +231,7 @@ impl Waiter {
         GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
             tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
         });
+        WAITER_LIFETIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         self.cb.execute(self.pr);
@@ -675,7 +673,7 @@ pub mod tests {
             lock: Lock { ts: lock_ts, hash },
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            wait_timer: Instant::now(),
         }
     }
 
@@ -990,7 +988,7 @@ pub mod tests {
                 .remove_waiter(
                     Lock {
                         ts: TimeStamp::zero(),
-                        hash: 0
+                        hash: 0,
                     },
                     TimeStamp::zero(),
                 )
