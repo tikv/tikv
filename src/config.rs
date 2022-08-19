@@ -1849,7 +1849,7 @@ pub struct UnifiedReadPoolConfig {
     pub stack_size: ReadableSize,
     #[online_config(skip)]
     pub max_tasks_per_worker: usize,
-    auto_adjust_pool_size: bool,
+    pub auto_adjust_pool_size: bool,
     // FIXME: Add more configs when they are effective in yatp
 }
 
@@ -2260,6 +2260,7 @@ mod readpool_tests {
             max_thread_count: 0,
             stack_size: ReadableSize::mb(0),
             max_tasks_per_worker: 0,
+            auto_adjust_pool_size: false,
         };
         unified.validate().unwrap_err();
         let storage = StorageReadPoolConfig {

@@ -28,7 +28,7 @@ use crate::{
 };
 
 // the duration to check auto-scale unified-thread-pool's thread
-const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(1);
+const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(5);
 // total cpu usage percentage that indicate process is overloaded, do not scale
 // up thread pool size.
 const CPU_BUSY_THRESHOLD: f64 = 0.9;
@@ -332,7 +332,7 @@ impl Runnable for ReadPoolConfigRunner {
                 if s != self.core_thread_count {
                     self.handle.scale_pool_size(s);
                     self.core_thread_count = s;
-                    self.notify_pool_size_change(new_thread_count);
+                    self.notify_pool_size_change(s);
                 }
             }
             Task::AutoAdjust(s) => {
@@ -485,7 +485,7 @@ impl ConfigManager for ReadPoolConfigManager {
                 self.scheduler.schedule(Task::PoolSize(*max_thread_count))?;
             }
             if let Some(ConfigValue::Bool(b)) = unified.get("auto_adjust_pool_size") {
-                self.scheduler.schedule(Task::AutoAdjust(*b));
+                self.scheduler.schedule(Task::AutoAdjust(*b))?;
             }
         }
         info!(
