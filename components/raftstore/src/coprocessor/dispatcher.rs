@@ -917,12 +917,11 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn should_pre_apply_snapshot(&self, ctx: &mut ObserverContext<'_>) -> bool {
+        fn should_pre_apply_snapshot(&self) -> bool {
             self.called.fetch_add(
                 ObserverIndex::ShouldPreApplySnapshot as usize,
                 Ordering::SeqCst,
             );
-            ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
     }

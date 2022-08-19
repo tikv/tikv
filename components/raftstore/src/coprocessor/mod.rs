@@ -205,7 +205,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
     }
 
     /// We call pre_apply_snapshot only when one of the observer returns true.
-    fn should_pre_apply_snapshot(&self, _: &mut ObserverContext<'_>) -> bool {
+    fn should_pre_apply_snapshot(&self) -> bool {
         false
     }
 }
