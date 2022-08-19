@@ -11,6 +11,7 @@ pub(crate) mod check_txn_status;
 pub(crate) mod cleanup;
 pub(crate) mod commit;
 pub(crate) mod compare_and_swap;
+pub(crate) mod flashback_to_version;
 pub(crate) mod mvcc_by_key;
 pub(crate) mod mvcc_by_start_ts;
 pub(crate) mod pause;
@@ -37,6 +38,7 @@ pub use cleanup::Cleanup;
 pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
+pub use flashback_to_version::FlashbackToVersion;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
@@ -92,6 +94,7 @@ pub enum Command {
     MvccByStartTs(MvccByStartTs),
     RawCompareAndSwap(RawCompareAndSwap),
     RawAtomicStore(RawAtomicStore),
+    FlashbackToVersion(FlashbackToVersion),
 }
 
 /// A `Command` with its return type, reified as the generic parameter `T`.
@@ -344,6 +347,17 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+impl From<FlashbackToVersionRequest> for TypedCommand<(TimeStamp, Key, Key)> {
+    fn from(mut req: FlashbackToVersionRequest) -> Self {
+        FlashbackToVersion::new(
+            req.get_version().into(),
+            Key::from_raw(req.get_start_key()),
+            Key::from_raw(req.get_end_key()),
+            req.take_context(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
@@ -567,6 +581,7 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::FlashbackToVersion(t) => t,
         }
     }
 
@@ -590,6 +605,7 @@ impl Command {
             Command::MvccByStartTs(t) => t,
             Command::RawCompareAndSwap(t) => t,
             Command::RawAtomicStore(t) => t,
+            Command::FlashbackToVersion(t) => t,
         }
     }
 
@@ -627,6 +643,7 @@ impl Command {
             Command::Pause(t) => t.process_write(snapshot, context),
             Command::RawCompareAndSwap(t) => t.process_write(snapshot, context),
             Command::RawAtomicStore(t) => t.process_write(snapshot, context),
+            Command::FlashbackToVersion(t) => t.process_write(snapshot, context),
             _ => panic!("unsupported write command"),
         }
     }

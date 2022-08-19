@@ -215,6 +215,7 @@ storage_callback! {
     PessimisticLock(Result<PessimisticLockRes>) ProcessResult::PessimisticLockRes { res } => res,
     SecondaryLocksStatus(SecondaryLocksStatus) ProcessResult::SecondaryLocksStatus { status } => status,
     RawCompareAndSwap((Option<Value>, bool)) ProcessResult::RawCompareAndSwapRes { previous_value, succeed } => (previous_value, succeed),
+    FlashbackToVersion((TimeStamp, Key, Key)) ProcessResult::FlashbackToVersionRes { version, start_key, end_key } => (version, start_key, end_key),
 }
 
 pub trait StorageCallbackType: Sized {

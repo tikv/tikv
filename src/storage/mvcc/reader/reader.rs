@@ -626,6 +626,60 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 }
 
+// MvccScaner is used to scan all the MVCC versions of keys within the given key
+// range.
+pub struct MvccScaner<S: EngineSnapshot> {
+    snapshot: S,
+    lock_cursor: Option<Cursor<S::Iter>>,
+    write_cursor: Option<Cursor<S::Iter>>,
+    min_version: TimeStamp,
+    start_key: Key,
+    end_key: Key,
+}
+
+impl<S: EngineSnapshot> MvccScaner<S> {
+    pub fn new(
+        snapshot: S,
+        min_version: TimeStamp,
+        start_key: Key,
+        end_key: Key,
+    ) -> Result<MvccScaner<S>> {
+        Ok(MvccScaner {
+            snapshot,
+            lock_cursor: None,
+            write_cursor: None,
+            min_version,
+            start_key,
+            end_key,
+        })
+    }
+
+    fn create_write_cursor(&mut self) -> Result<()> {
+        if self.write_cursor.is_none() {
+            let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+                .fill_cache(false)
+                .scan_mode(ScanMode::Forward)
+                // Scan the MVCC versions after the `self.min_version` as possible.
+                .hint_min_ts(Some(self.min_version))
+                .build()?;
+            self.write_cursor = Some(cursor);
+        }
+        Ok(())
+    }
+
+    fn create_lock_cursor(&mut self) -> Result<()> {
+        if self.lock_cursor.is_none() {
+            let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
+                .fill_cache(false)
+                .scan_mode(ScanMode::Forward)
+                .hint_min_ts(Some(self.min_version))
+                .build()?;
+            self.lock_cursor = Some(cursor);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{ops::Bound, u64};

@@ -1694,17 +1694,10 @@ fn future_flashback_to_version<
 >(
     storage: &Storage<E, L, F>,
     raft_router: &R,
-    mut req: FlashbackToVersionRequest,
+    req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.flashback_to_version(
-        req.take_context(),
-        raft_router,
-        req.get_version(),
-        Key::from_raw(req.get_start_key()),
-        Key::from_raw(req.get_end_key()),
-        cb,
-    );
+    let res = storage.flashback_to_version(req, raft_router, cb);
 
     async move {
         let v = match res {
