@@ -277,15 +277,31 @@ impl ServerCluster {
             }
         }
 
+<<<<<<< HEAD
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
 
         let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+=======
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+        );
+>>>>>>> 58fa80e0d... storage: precheck whether the peer is leader when acquiring latches failed (#13254)
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+        let sim_router = SimulateTransport::new(raft_router.clone());
+        let raft_engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -302,7 +318,11 @@ impl ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }
