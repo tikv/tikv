@@ -961,7 +961,6 @@ impl Peer {
         pending_peers
     }
 
-    #[allow(dead_code)]
     pub fn check_stale_state(&mut self, cfg: &Config) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.

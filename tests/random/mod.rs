@@ -14,7 +14,11 @@ use pd_client::PdClient;
 use rand::{Rng, RngCore};
 use test_cloud_server::{try_wait, ServerCluster};
 use tikv::config::TiKvConfig;
-use tikv_util::{config::ReadableSize, info, time::Instant};
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    info,
+    time::Instant,
+};
 
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
 
@@ -36,6 +40,9 @@ fn test_random_workload() {
     ];
     let update_conf_fn = |_, conf: &mut TiKvConfig| {
         conf.coprocessor.region_split_size = ReadableSize::kb(128);
+        conf.raft_store.peer_stale_state_check_interval = ReadableDuration::secs(1);
+        conf.raft_store.abnormal_leader_missing_duration = ReadableDuration::secs(3);
+        conf.raft_store.max_leader_missing_duration = ReadableDuration::secs(5);
     };
     let mut cluster = ServerCluster::new(nodes.clone(), update_conf_fn);
     cluster.wait_region_replicated(&[], 3);

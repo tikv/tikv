@@ -33,11 +33,12 @@ use crate::{
         ingest::convert_sst,
         msg::Callback,
         notify_req_region_removed,
-        peer::Peer,
+        peer::{Peer, StaleState},
         util as _util, ApplyMetrics, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines,
         MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftApplyState, RaftContext, SignificantMsg,
-        SnapState, StoreMsg, Ticker, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC,
-        PEER_TICK_SPLIT_CHECK, PEER_TICK_SWITCH_MEM_TABLE_CHECK,
+        SnapState, StoreMsg, Ticker, PEER_TICK_CHECK_STALE_STATE, PEER_TICK_PD_HEARTBEAT,
+        PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
+        PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
     DiscardReason, Error, RaftStoreRouter, Result,
 };
@@ -258,6 +259,9 @@ impl<'a> PeerMsgHandler<'a> {
         if self.ticker.is_on_tick(PEER_TICK_RAFT_LOG_GC) {
             self.on_raft_log_gc_tick();
         }
+        if self.ticker.is_on_tick(PEER_TICK_CHECK_STALE_STATE) {
+            self.on_check_peer_stale_state_tick();
+        }
     }
 
     fn start(&mut self) {
@@ -266,6 +270,7 @@ impl<'a> PeerMsgHandler<'a> {
         self.ticker.schedule(PEER_TICK_SPLIT_CHECK);
         self.ticker.schedule(PEER_TICK_SWITCH_MEM_TABLE_CHECK);
         self.ticker.schedule(PEER_TICK_RAFT_LOG_GC);
+        self.ticker.schedule(PEER_TICK_CHECK_STALE_STATE);
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -1177,6 +1182,76 @@ impl<'a> PeerMsgHandler<'a> {
                 to_truncate_idx,
                 to_truncate_term,
             );
+        }
+    }
+
+    fn on_check_peer_stale_state_tick(&mut self) {
+        if self.fsm.peer.pending_remove {
+            return;
+        }
+
+        self.ticker.schedule(PEER_TICK_CHECK_STALE_STATE);
+
+        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
+            return;
+        }
+
+        // If this peer detects the leader is missing for a long long time,
+        // it should consider itself as a stale peer which is removed from
+        // the original cluster.
+        // This most likely happens in the following scenario:
+        // At first, there are three peer A, B, C in the cluster, and A is leader.
+        // Peer B gets down. And then A adds D, E, F into the cluster.
+        // Peer D becomes leader of the new cluster, and then removes peer A, B, C.
+        // After all these peer in and out, now the cluster has peer D, E, F.
+        // If peer B goes up at this moment, it still thinks it is one of the cluster
+        // and has peers A, C. However, it could not reach A, C since they are removed
+        // from the cluster or probably destroyed.
+        // Meantime, D, E, F would not reach B, since it's not in the cluster anymore.
+        // In this case, peer B would notice that the leader is missing for a long time,
+        // and it would check with pd to confirm whether it's still a member of the cluster.
+        // If not, it destroys itself as a stale peer which is removed out already.
+        let state = self.fsm.peer.check_stale_state(&self.ctx.cfg);
+        fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
+        match state {
+            StaleState::Valid => (),
+            StaleState::LeaderMissing => {
+                warn!(
+                    "leader missing longer than abnormal_leader_missing_duration";
+                    "tag" => self.peer.tag(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
+                );
+                self.ctx
+                    .raft_metrics
+                    .leader_missing
+                    .lock()
+                    .unwrap()
+                    .insert(self.region_id());
+            }
+            StaleState::ToValidate => {
+                // for peer B in case 1 above
+                warn!(
+                    "leader missing longer than max_leader_missing_duration. \
+                     To check with pd and other peers whether it's still valid";
+                    "tag" => self.peer.tag(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "expect" => %self.ctx.cfg.max_leader_missing_duration,
+                );
+
+                let task = PdTask::ValidatePeer {
+                    peer: self.fsm.peer.peer.clone(),
+                    region: self.fsm.peer.region().clone(),
+                };
+                if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    )
+                }
+            }
         }
     }
 }
