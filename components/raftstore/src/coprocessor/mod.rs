@@ -203,6 +203,11 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _snapshot: Option<&crate::store::Snapshot>,
     ) {
     }
+
+    /// We call pre_apply_snapshot only when one of the observer returns true.
+    fn should_pre_apply_snapshot(&self) -> bool {
+        false
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

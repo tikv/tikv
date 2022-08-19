@@ -643,6 +643,8 @@ where
         Ok(())
     }
 
+    /// Calls observer `pre_apply_snapshot` for every task.
+    /// Multiple task can be `pre_apply_snapshot` at the same time.
     fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
         let (region_id, abort, peer_id) = match task {
             Task::Apply {
@@ -823,11 +825,13 @@ where
             }
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
-                if let Err(e) = self.ctx.pre_apply_snapshot(&task) {
-                    info!(
-                        "pre apply snapshot failed";
-                        "e" => ?e,
-                    );
+                if self.ctx.coprocessor_host.should_pre_apply_snapshot() {
+                    if let Err(e) = self.ctx.pre_apply_snapshot(&task) {
+                        info!(
+                            "pre apply snapshot failed";
+                            "e" => ?e,
+                        );
+                    }
                 }
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
@@ -891,7 +895,7 @@ mod tests {
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
-        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        CfName, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
         RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
@@ -1400,6 +1404,10 @@ mod tests {
             self.post_apply_count.fetch_add(1, Ordering::SeqCst);
             self.post_apply_hash
                 .fetch_add(code as usize, Ordering::SeqCst);
+        }
+
+        fn should_pre_apply_snapshot(&self) -> bool {
+            true
         }
     }
 }

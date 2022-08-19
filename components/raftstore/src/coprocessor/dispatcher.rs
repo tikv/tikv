@@ -506,6 +506,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn should_pre_apply_snapshot(&self) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            should_pre_apply_snapshot,
+        );
+    }
+
     pub fn pre_apply_snapshot(
         &self,
         region: &Region,
@@ -714,6 +722,7 @@ mod tests {
         OnComputeEngineSize = 19,
         PreApplySnapshot = 20,
         PostApplySnapshot = 21,
+        ShouldPreApplySnapshot = 22,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -889,7 +898,8 @@ mod tests {
             _: &SnapKey,
             _: Option<&Snapshot>,
         ) {
-            self.called.fetch_add(17, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PreApplySnapshot, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
@@ -900,8 +910,16 @@ mod tests {
             _: &crate::store::SnapKey,
             _: Option<&Snapshot>,
         ) {
-            self.called.fetch_add(18, Ordering::SeqCst);
+            self.called
+                .fetch_add(ObserverIndex::PostApplySnapshot, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn should_pre_apply_snapshot(&self) -> bool {
+            self.called
+                .fetch_add(ObserverIndex::ShouldPreApplySnapshot, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            false
         }
     }
 
@@ -1055,6 +1073,10 @@ mod tests {
 
         host.post_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PostApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.shoule_pre_apply_snapshot(&region, 0);
+        index += ObserverIndex::ShoulePreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
 
