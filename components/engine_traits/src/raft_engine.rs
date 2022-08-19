@@ -139,6 +139,10 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
 
+    /// Indicate whether region states should be recovered from raftdb and
+    /// replay raft logs.
+    /// Generally it would be true when write-ahead-log of kvdb was disabled
+    /// before.
     fn recover_from_raft_db(&self) -> Result<bool>;
 
     fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()>;
