@@ -12,7 +12,7 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result, STORE_VERSION_RECOVER_FROM_RAFTDB,
+    RaftLogGcTask, Result,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
