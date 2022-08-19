@@ -179,7 +179,7 @@ impl RegionChangeObserver for BackupStreamObserver {
                     })
                 );
             }
-            RegionChangeEvent::Update => {
+            RegionChangeEvent::Update(_) => {
                 try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::RefreshResolver {
