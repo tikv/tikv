@@ -1696,9 +1696,11 @@ where
         for idx in group {
             let peer_id = msgs[*idx].get_to();
             let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
+            let is_replicate_state = self.raft_group.raft.is_replicate_state(peer_id);
             if self.raft_group.is_recent_active(peer_id)
                 && self.raft_group.get_next_idx(peer_id).unwrap() > next_idx
                 && is_voter
+                && is_replicate_state
             {
                 agent_id = Some(peer_id);
                 next_idx = self.raft_group.get_next_idx(peer_id).unwrap();
@@ -1733,7 +1735,12 @@ where
                 if msg.get_to() == agent_id {
                     msg.set_forwards(forwards.into());
                     msg.set_msg_type(MessageType::MsgGroupBroadcast);
-                    info!("Follower replication: Peer {} via agent {}. Forwards:{:?}", self.peer.id, agent_id, msg.get_forwards());
+                    info!(
+                        "Follower replication: Peer {} via agent {}. Forwards:{:?}",
+                        self.peer.id,
+                        agent_id,
+                        msg.get_forwards()
+                    );
                     break;
                 }
             }
@@ -1774,13 +1781,12 @@ where
             }
         }
 
-        info!("Group info: {:?}", msg_append_group);
-
         // Record message that should be discarded after merge_msg_append.
         let mut discard: HashSet<usize> = HashSet::default();
 
         // Build MsgGroupBroadcast.
-        for (_, group) in msg_append_group.iter() {
+        for (zone, group) in msg_append_group.iter() {
+            info!("Zone name: {}, group info: {:?}", zone, group);
             if group.len() > 1 {
                 self.merge_msg_append(group, &mut msgs, &mut discard);
             }
