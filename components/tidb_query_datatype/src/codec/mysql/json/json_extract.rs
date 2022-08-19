@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use collections::HashSet;
+
 use super::{
     super::Result,
     path_expr::{PathExpression, PathLeg, PATH_EXPR_ARRAY_INDEX_ASTERISK, PATH_EXPR_ASTERISK},
@@ -33,26 +35,40 @@ impl<'a> JsonRef<'a> {
     }
 }
 
+#[derive(Eq)]
+struct RefEqualJsonWrapper<'a>(JsonRef<'a>);
+
+impl<'a> PartialEq for RefEqualJsonWrapper<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ref_eq(&other.0)
+    }
+}
+
+impl<'a> std::hash::Hash for RefEqualJsonWrapper<'a> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.value.as_ptr().hash(state)
+    }
+}
+
 // append the elem_list vector, if the referenced json object doesn't exist
 // unlike the append in std, this function **doesn't** set the `other` length to
 // 0
 //
 // To use this function, you have to ensure both `elem_list` and `other` are
-// unique, with this assumption, we optimize the performance from O((n+m)*m) to
-// O(n*m).
+// unique.
 fn append_if_ref_unique<'a>(elem_list: &mut Vec<JsonRef<'a>>, other: &Vec<JsonRef<'a>>) {
-    let initial_length = elem_list.len();
+    elem_list.reserve(other.len());
 
-    'outer: for new_elem in other {
-        // only need to compare with the initial part of the elem_list
-        // as the other is
-        for elem in elem_list[0..initial_length].iter() {
-            if elem.ref_eq(new_elem) {
-                continue 'outer;
-            }
+    let mut unique_verifier = HashSet::<RefEqualJsonWrapper<'a>>::with_hasher(Default::default());
+    for elem in elem_list.iter() {
+        unique_verifier.insert(RefEqualJsonWrapper(elem.clone()));
+    }
+
+    for elem in other {
+        let elem = RefEqualJsonWrapper(elem.clone());
+        if !unique_verifier.contains(&elem) {
+            elem_list.push(elem.0);
         }
-
-        elem_list.push(*new_elem)
     }
 }
 
