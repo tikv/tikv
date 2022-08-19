@@ -621,7 +621,7 @@ impl RegionInfoAccessor {
     }
 
     /// Get a set of region leader ids.
-    pub fn get_region_leaders(&self) -> Arc<RwLock<HashSet<u64>>> {
+    pub fn region_leaders(&self) -> Arc<RwLock<HashSet<u64>>> {
         self.region_leaders.clone()
     }
 
