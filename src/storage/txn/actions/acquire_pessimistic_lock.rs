@@ -474,7 +474,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             false,
-            fasle,
+            false,
         )
         .unwrap_err()
     }
