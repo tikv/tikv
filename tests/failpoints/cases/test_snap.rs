@@ -818,9 +818,7 @@ fn test_snapshot_migrate_states_to_raft_db() {
     let state = engines.raft.get_snapshot_raft_state(r).unwrap().unwrap();
     let mut raft_wb = engines.raft.log_batch(0);
     raft_wb.delete_snapshot_raft_state(r).unwrap();
-    if !raft_wb.is_empty() {
-        engines.raft.consume(&mut raft_wb, true).unwrap();
-    }
+    engines.raft.consume(&mut raft_wb, true).unwrap();
     engines
         .kv
         .put_msg_cf(CF_RAFT, &keys::snapshot_raft_state_key(r), &state)

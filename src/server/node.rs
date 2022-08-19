@@ -118,7 +118,7 @@ fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine
     if !kv_wb.is_empty() {
         kv_wb.write().unwrap();
     }
-    return count;
+    count
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
