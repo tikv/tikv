@@ -1134,12 +1134,61 @@ fn test_refresh_region_bucket_keys() {
         ]
         .into(),
     );
-    cluster.refresh_region_bucket_keys(
+    let bucket_version5 = cluster.refresh_region_bucket_keys(
         &region,
         buckets,
         Some(bucket_ranges),
         Some(expected_buckets.clone()),
     );
+
+    assert_eq!(bucket_version5, bucket_version4 + 1);
+
+    // split the region
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
+    let mut buckets = vec![Bucket {
+        keys: vec![b"k10".to_vec()],
+        size: 1024 * 1024 * 65, // not small enough to merge with left
+    }];
+
+    expected_buckets.set_keys(vec![vec![], b"k10".to_vec(), b"k11".to_vec()].into());
+
+    let mut region = pd_client.get_region(b"k10").unwrap();
+    let left_id = region.get_id();
+    let right = pd_client.get_region(b"k12").unwrap();
+    if region.get_id() != 1 {
+        region = right.clone();
+        buckets = vec![Bucket {
+            keys: vec![b"k12".to_vec()],
+            size: 1024 * 1024 * 65, // not small enough to merge with left
+        }];
+        expected_buckets.set_keys(vec![b"k11".to_vec(), b"k12".to_vec(), vec![]].into());
+    }
+
+    let bucket_version6 =
+        cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
+    assert_eq!(bucket_version6, bucket_version5 + 1);
+
+    // merge the region
+    pd_client.must_merge(left_id, right.get_id());
+    let region = pd_client.get_region(b"k10").unwrap();
+    let buckets = vec![Bucket {
+        keys: vec![b"k10".to_vec()],
+        size: 1024 * 1024 * 65, // not small enough to merge with left
+    }];
+
+    expected_buckets.set_keys(vec![vec![], b"k10".to_vec(), vec![]].into());
+    let bucket_version7 =
+        cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
+    assert_eq!(bucket_version7, bucket_version6 + 1);
+
+    let bucket_version8 = cluster.refresh_region_bucket_keys(
+        &region,
+        vec![],
+        Some(vec![]),
+        Some(expected_buckets.clone()),
+    );
+    // no change on buckets, the bucket version is not changed.
+    assert_eq!(bucket_version8, bucket_version7)
 }
 
 #[test]
