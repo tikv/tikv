@@ -245,7 +245,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.raft_group_mut().advance_append_async(ready);
         }
 
-        ctx.raft_metrics.ready.has_ready_region += 1;
+        ctx.raft_metrics.ready.has_ready_region.inc();
     }
 
     /// Called when an asynchronously write finishes.
