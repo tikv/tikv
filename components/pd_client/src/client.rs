@@ -37,11 +37,7 @@ use yatp::{task::future::TaskCell, ThreadPool};
 
 use super::{
     metrics::*,
-<<<<<<< HEAD
-    util::{check_resp_header, sync_request, Client, PdConnector},
-=======
     util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
     BucketStat, Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result,
     UnixSecs, REQUEST_TIMEOUT,
 };
@@ -193,20 +189,6 @@ impl RpcClient {
         block_on(self.pd_client.reconnect(true))
     }
 
-<<<<<<< HEAD
-    /// Creates a new call option with default request timeout.
-    #[inline]
-    pub fn call_option(client: &Client) -> CallOption {
-        client
-            .inner
-            .rl()
-            .target_info()
-            .call_option()
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
-    }
-
-=======
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
     /// Gets given key's Region and Region's leader from PD.
     fn get_region_and_leader(
         &self,
@@ -221,16 +203,6 @@ impl RpcClient {
         req.set_region_key(key.to_vec());
 
         let executor = move |client: &Client, req: pdpb::GetRegionRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -240,7 +212,6 @@ impl RpcClient {
                         panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
 
             Box::pin(async move {
                 let mut resp = handler.await?;
@@ -272,14 +243,6 @@ impl RpcClient {
         req.set_store_id(store_id);
 
         let executor = move |client: &Client, req: pdpb::GetStoreRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_store_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_store_async", e));
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -289,7 +252,6 @@ impl RpcClient {
                         panic!("fail to request PD {} err {:?}", "get_store_async", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
 
             Box::pin(async move {
                 let mut resp = handler.await?;
@@ -527,16 +489,6 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -546,7 +498,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -577,16 +528,6 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -596,7 +537,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -722,14 +662,6 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let executor = move |client: &Client, req: pdpb::AskSplitRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .ask_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -737,7 +669,6 @@ impl PdClient for RpcClient {
                     .ask_split_async_opt(&req, call_option_inner(&inner))
                     .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e))
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
 
             Box::pin(async move {
                 let resp = handler.await?;
@@ -767,14 +698,6 @@ impl PdClient for RpcClient {
         req.set_split_count(count as u32);
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .ask_batch_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -784,7 +707,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "ask_batch_split", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
 
             Box::pin(async move {
                 let resp = handler.await?;
@@ -823,14 +745,6 @@ impl PdClient for RpcClient {
         }
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .store_heartbeat_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -840,7 +754,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "store_heartbeat", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -869,16 +782,6 @@ impl PdClient for RpcClient {
         req.set_regions(regions.into());
 
         let executor = move |client: &Client, req: pdpb::ReportBatchSplitRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .report_batch_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "report_batch_split", e)
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -888,7 +791,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "report_batch_split", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -934,17 +836,6 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let executor = move |client: &Client, req: pdpb::GetGcSafePointRequest| {
-<<<<<<< HEAD
-            let option = Self::call_option(client);
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_gc_safe_point_async_opt(&req, option)
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -954,7 +845,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -1034,19 +924,6 @@ impl PdClient for RpcClient {
         req.set_ttl(ttl.as_secs() as _);
         req.set_safe_point(safe_point.into_inner());
         let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .update_service_gc_safe_point_async_opt(&r, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "fail to request PD {} err {:?}",
-                        "update_service_safe_point", e
-                    )
-                });
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -1059,7 +936,6 @@ impl PdClient for RpcClient {
                         )
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -1087,14 +963,6 @@ impl PdClient for RpcClient {
         req.set_min_resolved_ts(min_resolved_ts);
 
         let executor = move |client: &Client, req: pdpb::ReportMinResolvedTsRequest| {
-<<<<<<< HEAD
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .report_min_resolved_ts_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "min_resolved_ts", e));
-=======
             let handler = {
                 let inner = client.inner.rl();
                 inner
@@ -1104,7 +972,6 @@ impl PdClient for RpcClient {
                         panic!("fail to request PD {} err {:?}", "min_resolved_ts", e)
                     })
             };
->>>>>>> 1ffa3034b... pd-client:  remove `call_option` to avoid  deadlock(RWR). (#13249)
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
