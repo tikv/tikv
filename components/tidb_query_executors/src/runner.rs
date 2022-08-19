@@ -461,6 +461,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut chunk = Chunk::default();
 
             let mut sample = self.quota_limiter.new_sample(true);
+            let start = Instant::now();
             let (drained, record_len) = {
                 let _guard = sample.observe_cpu();
                 self.internal_handle_request(
@@ -471,6 +472,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     &mut ctx,
                 )?
             };
+            let exec_duration = start.saturating_elapsed();
 
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
@@ -526,8 +528,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 return Ok((sel_resp, range));
             }
 
-            // Grow batch size
-            grow_batch_size(&mut batch_size);
+            // adjust batch size
+            batch_size = adjust_batch_size(batch_size, exec_duration);
         }
     }
 
@@ -679,13 +681,15 @@ fn batch_grow_factor() -> usize {
 }
 
 #[inline]
-fn grow_batch_size(batch_size: &mut usize) {
-    if *batch_size < BATCH_MAX_SIZE {
-        *batch_size *= batch_grow_factor();
-        if *batch_size > BATCH_MAX_SIZE {
-            *batch_size = BATCH_MAX_SIZE
-        }
-    }
+fn adjust_batch_size(batch_size: usize, duration: Duration) -> usize {
+    let new_batch = if duration * 2 <= MAX_TIME_SLICE {
+        batch_size * batch_grow_factor()
+    } else if duration > MAX_TIME_SLICE {
+        batch_size / batch_grow_factor()
+    } else {
+        batch_size
+    };
+    std::cmp::max(BATCH_INITIAL_SIZE, std::cmp::min(new_batch, BATCH_MAX_SIZE))
 }
 
 #[inline]
