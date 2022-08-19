@@ -13,4 +13,12 @@ impl SeqnoPropertiesExt for PanicEngine {
     ) -> Result<Option<SeqnoProperties>> {
         panic!()
     }
+
+    fn get_range_seqno_properties_data_cf(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<Option<SeqnoProperties>> {
+        panic!()
+    }
 }

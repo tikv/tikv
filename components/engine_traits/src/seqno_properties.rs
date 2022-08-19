@@ -24,4 +24,10 @@ pub trait SeqnoPropertiesExt {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Option<SeqnoProperties>>;
+
+    fn get_range_seqno_properties_data_cf(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> Result<Option<SeqnoProperties>>;
 }
