@@ -647,7 +647,7 @@ mod test {
 
     #[test]
     fn inflight_messages() {
-        test_util::init_log_for_test();
+        // test_util::init_log_for_test();
         // We should remove the failpoints when paniked or we may get stucked.
         defer! {{
             fail::remove("delay_on_start_observe");
