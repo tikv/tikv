@@ -489,6 +489,7 @@ fn test_pd_client_ok_when_cluster_not_ready() {
     fail::remove(pd_client_cluster_id_zero);
 }
 
+#[test]
 fn test_pd_client_heartbeat_send_failed() {
     let pd_client_send_fail_fp = "region_heartbeat_send_failed";
     fail::cfg(pd_client_send_fail_fp, "return()").unwrap();
