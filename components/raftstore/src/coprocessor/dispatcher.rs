@@ -917,7 +917,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn should_pre_apply_snapshot(&self) -> bool {
+        fn should_pre_apply_snapshot(&self, ctx: &mut ObserverContext<'_>) -> bool {
             self.called.fetch_add(
                 ObserverIndex::ShouldPreApplySnapshot as usize,
                 Ordering::SeqCst,
@@ -1079,7 +1079,7 @@ mod tests {
         index += ObserverIndex::PostApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.should_pre_apply_snapshot(&region, 0);
+        host.should_pre_apply_snapshot();
         index += ObserverIndex::ShouldPreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
