@@ -40,6 +40,11 @@ pub enum SubCode {
     MemoryLimit = 7,
     SpaceLimit = 8,
     PathNotFound = 9,
+    MergeOperandsInsufficientCapacity = 10,
+    ManualCompactionPaused = 11,
+    Overwritten = 12,
+    TxnNotPrepared = 13,
+    IoFenced = 14,
 }
 
 #[repr(u8)]

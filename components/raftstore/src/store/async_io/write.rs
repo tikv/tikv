@@ -33,6 +33,7 @@ use tikv_util::{
     warn,
 };
 
+use super::write_router::WriteSenders;
 use crate::{
     store::{
         config::Config,
@@ -563,7 +564,7 @@ where
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
-            message_metrics: Default::default(),
+            message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
         }
@@ -854,8 +855,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>> {
-        &self.writers
+    pub fn senders(&self) -> WriteSenders<EK, ER> {
+        WriteSenders::new(self.writers.clone())
     }
 
     pub fn spawn<T: Transport + 'static, N: PersistedNotifier>(
