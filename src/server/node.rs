@@ -87,9 +87,10 @@ where
     Ok(store)
 }
 
-fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine>) {
+fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine>) -> u64 {
     let mut raft_wb = engines.raft.log_batch(0);
     let mut kv_wb = engines.kv.write_batch();
+    let mut count = 0;
     engines
         .kv
         .scan(
@@ -100,6 +101,7 @@ fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine
             |key, value| {
                 if let Ok((region_id, suffix)) = keys::decode_raft_key(key) {
                     if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
+                        count += 1;
                         let mut state = RaftLocalState::default();
                         state.merge_from_bytes(value)?;
                         raft_wb.put_snapshot_raft_state(region_id, &state)?;
@@ -116,6 +118,7 @@ fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine
     if !kv_wb.is_empty() {
         kv_wb.write().unwrap();
     }
+    return count;
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
@@ -264,8 +267,8 @@ where
         let status = self.pd_client.put_store(self.store.clone())?;
         self.load_all_stores(status);
 
-        info!("try to migrate snapshot raft states from kvdb to raftdb");
-        migrate_snapshot_raft_states(&engines);
+        let count = migrate_snapshot_raft_states(&engines);
+        info!("migrate snapshot raft states from kvdb to raftdb"; "count" => count);
 
         self.start_store(
             store_id,
