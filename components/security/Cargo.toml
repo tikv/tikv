@@ -4,9 +4,6 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-tonic = ["dep:tonic"]
-
 [dependencies]
 collections = { path = "../collections" }
 encryption = { path = "../encryption", default-features = false }
