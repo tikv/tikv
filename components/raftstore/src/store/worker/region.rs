@@ -895,7 +895,7 @@ mod tests {
         kv::{KvTestEngine, KvTestSnapshot},
     };
     use engine_traits::{
-        CfName, CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
+        CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
         RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
