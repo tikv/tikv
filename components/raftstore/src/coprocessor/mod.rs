@@ -182,6 +182,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
 
     /// Hook when receiving Task::Apply.
     /// Should pass valid snapshot, the option is only for testing.
+    /// Notice that we can call `pre_apply_snapshot` to multiple snapshots at
+    /// the same time.
     fn pre_apply_snapshot(
         &self,
         _: &mut ObserverContext<'_>,
