@@ -1541,7 +1541,6 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "bitflags",
  "case_macros",
  "error_code",
  "fail",

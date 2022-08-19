@@ -146,11 +146,11 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn recover_from_raftdb(&self) -> Result<bool> {
+    fn recover_from_raft_db(&self) -> Result<bool> {
         panic!()
     }
 
-    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()> {
+    fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
         panic!()
     }
 }

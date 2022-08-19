@@ -7,7 +7,6 @@ use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
     RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
-    STORE_VERSION_RECOVER_FROM_RAFTDB,
 };
 use kvproto::{
     metapb::Region,
@@ -370,23 +369,19 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn recover_from_raftdb(&self) -> Result<bool> {
+    fn recover_from_raft_db(&self) -> Result<bool> {
         let recover_from_raftdb = matches!(self
-            .get_value(keys::STORE_VERSION_KEY)?
-            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap())),
-            Some(val) if val == STORE_VERSION_RECOVER_FROM_RAFTDB);
+            .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
+            .map(|v| u8::from_be_bytes(v.deref().try_into().unwrap())),
+            Some(val) if val == 1);
         Ok(recover_from_raftdb)
     }
 
-    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()> {
-        let recover_from_raftdb = if recover_from_raftdb {
-            STORE_VERSION_RECOVER_FROM_RAFTDB
-        } else {
-            0
-        };
+    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()> {
+        let recover_from_raft_db = if recover_from_raft_db { 1 } else { 0 };
         self.put(
-            keys::STORE_VERSION_KEY,
-            &u64::to_be_bytes(recover_from_raftdb),
+            keys::RECOVER_FROM_RAFT_DB_KEY,
+            &u8::to_be_bytes(recover_from_raft_db),
         )
     }
 }

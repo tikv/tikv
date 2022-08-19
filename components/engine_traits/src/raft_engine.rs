@@ -10,8 +10,6 @@ use crate::*;
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
-pub const STORE_VERSION_RECOVER_FROM_RAFTDB: u64 = 0b00000001;
-
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn is_empty(&self) -> Result<bool>;
 
@@ -141,9 +139,9 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         F: FnMut(u64) -> std::result::Result<(), E>,
         E: From<Error>;
 
-    fn recover_from_raftdb(&self) -> Result<bool>;
+    fn recover_from_raft_db(&self) -> Result<bool>;
 
-    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()>;
+    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {

@@ -345,7 +345,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
-const STORE_VERSION_KEY: &[u8] = &[0x05];
+const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -620,26 +620,22 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn recover_from_raftdb(&self) -> Result<bool> {
-        let recover_from_raftdb = matches!(self
+    fn recover_from_raft_db(&self) -> Result<bool> {
+        let recover_from_raft_db = matches!(self
             .0
-            .get(STORE_STATE_ID, STORE_VERSION_KEY)
-            .map(|v| u64::from_be_bytes(v.try_into().unwrap())),
-            Some(val) if val == STORE_VERSION_RECOVER_FROM_RAFTDB);
-        Ok(recover_from_raftdb)
+            .get(STORE_STATE_ID, RECOVER_FROM_RAFT_DB_KEY)
+            .map(|v| u8::from_be_bytes(v.try_into().unwrap())),
+            Some(val) if val == 1);
+        Ok(recover_from_raft_db)
     }
 
-    fn put_recover_from_raftdb(&self, recover_from_raftdb: bool) -> Result<()> {
-        let recover_from_raftdb = if recover_from_raftdb {
-            STORE_VERSION_RECOVER_FROM_RAFTDB
-        } else {
-            0
-        };
+    fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
+        let recover_from_raftdb = if recover_from_raftdb { 1 } else { 0 };
         let mut batch = Self::LogBatch::default();
         batch.0.put(
             STORE_STATE_ID,
-            STORE_VERSION_KEY.to_vec(),
-            u64::to_be_bytes(recover_from_raftdb).to_vec(),
+            RECOVER_FROM_RAFT_DB_KEY.to_vec(),
+            u8::to_be_bytes(recover_from_raftdb).to_vec(),
         );
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
