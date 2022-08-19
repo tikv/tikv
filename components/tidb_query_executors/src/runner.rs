@@ -431,12 +431,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    fn batch_initial_size() -> usize {
-        fail_point!("copr_batch_initial_size", |r| r
-            .map_or(1, |e| e.parse().unwrap()));
-        BATCH_INITIAL_SIZE
-    }
-
     /// handle_request returns the response of selection and an optional range,
     /// only paging request will return Some(IntervalRange),
     /// this should be used when calculating ranges of the next batch.
@@ -445,7 +439,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
-        let mut batch_size = Self::batch_initial_size();
+        let mut batch_size = batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
@@ -680,6 +674,13 @@ fn batch_grow_factor() -> usize {
     BATCH_GROW_FACTOR
 }
 
+
+fn batch_initial_size() -> usize {
+    fail_point!("copr_batch_initial_size", |r| r
+        .map_or(1, |e| e.parse().unwrap()));
+    BATCH_INITIAL_SIZE
+}
+
 #[inline]
 fn adjust_batch_size(batch_size: usize, duration: Duration) -> usize {
     let new_batch = if duration * 2 <= MAX_TIME_SLICE {
@@ -689,7 +690,7 @@ fn adjust_batch_size(batch_size: usize, duration: Duration) -> usize {
     } else {
         batch_size
     };
-    std::cmp::max(BATCH_INITIAL_SIZE, std::cmp::min(new_batch, BATCH_MAX_SIZE))
+    std::cmp::max(batch_initial_size(), std::cmp::min(new_batch, BATCH_MAX_SIZE))
 }
 
 #[inline]
