@@ -184,6 +184,19 @@ fn main() {
                 DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
             }
         },
+        Cmd::CleanupEncryptionMeta {} => {
+            let key_manager =
+                match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
+                    .expect("data_key_manager_from_config should success")
+                {
+                    Some(mgr) => mgr,
+                    None => {
+                        println!("Encryption is disabled");
+                        return;
+                    }
+                };
+            key_manager.retain_encrypted_files(|fname| Path::new(fname).exists())
+        }
         Cmd::CompactCluster {
             db,
             cf,
@@ -661,7 +674,8 @@ fn run_sst_dump_command(args: Vec<String>, cfg: &TiKvConfig) {
     engine_rocks::raw::run_sst_dump_tool(&args, &opts);
 }
 
-fn run_raft_engine_ctl_command(args: Vec<String>) {
+fn run_raft_engine_ctl_command(mut args: Vec<String>) {
+    args.remove(0);
     raft_engine_ctl::run_command(args);
 }
 
