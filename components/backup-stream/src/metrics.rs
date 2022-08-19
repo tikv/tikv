@@ -3,6 +3,10 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 
+/// The status of a task.
+/// The ordering of this imples the priority for presenting to the user.
+/// max(TASK_STATUS) of all stores would be probably the state of the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Running = 0,
     Paused,
@@ -10,7 +14,15 @@ pub enum TaskStatus {
 }
 
 pub fn update_task_status(status: TaskStatus, task: &str) {
-    TASK_STATUS.with_label_values(&[task]).set(status as _);
+    let g = TASK_STATUS.with_label_values(&[task]);
+    // The state transform graph:
+    // ┌─────────┐      ┌────────┐      ┌───────┐
+    // │ RUNNING ├──────► PAUSED ├──────► ERROR │
+    // └────▲────┘      └───┬────┘      └───┬───┘
+    //      └───────────────┴───────────────┘
+    if g.get() < status as _ || status == TaskStatus::Running {
+        g.set(status as _);
+    }
 }
 
 lazy_static! {

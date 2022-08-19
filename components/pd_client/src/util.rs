@@ -441,11 +441,14 @@ where
     fn should_not_retry(resp: &Result<Resp>) -> bool {
         match resp {
             Ok(_) => true,
-            // Error::Incompatible is returned by response header from PD, no need to retry
-            Err(Error::Incompatible) => true,
             Err(err) => {
-                error!(?*err; "request failed, retry");
-                false
+                // these errors are not caused by network, no need to retry
+                if err.retryable() {
+                    error!(?*err; "request failed, retry");
+                    false
+                } else {
+                    true
+                }
             }
         }
     }
@@ -579,6 +582,12 @@ impl PdConnector {
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)
         };
+        fail_point!("cluster_id_is_not_ready", |_| {
+            Ok((
+                PdClientStub::new(channel.clone()),
+                GetMembersResponse::default(),
+            ))
+        });
         let client = PdClientStub::new(channel);
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
@@ -591,6 +600,13 @@ impl PdConnector {
         }
     }
 
+    // load_members returns the PD members by calling getMember, there are two
+    // abnormal scenes for the reponse:
+    // 1. header has an error: the PD is not ready to serve.
+    // 2. cluster id is zero: etcd start server but the follower did not get
+    // cluster id yet.
+    // In this case, load_members should return an error, so the client
+    // will not update client address.
     pub async fn load_members(&self, previous: &GetMembersResponse) -> Result<GetMembersResponse> {
         let previous_leader = previous.get_leader();
         let members = previous.get_members();
@@ -605,17 +621,30 @@ impl PdConnector {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
-                        let new_cluster_id = r.get_header().get_cluster_id();
-                        if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to loop the rest members
-                            if r.has_leader() {
-                                return Ok(r);
-                            }
+                        let header = r.get_header();
+                        // Try next follower endpoint if the cluster has not ready since this pr:
+                        // pd#5412.
+                        if let Err(e) = check_resp_header(header) {
+                            error!("connect pd failed";"endpoints" => ep, "error" => ?e);
                         } else {
-                            panic!(
-                                "{} no longer belongs to cluster {}, it is in {}",
-                                ep, cluster_id, new_cluster_id
-                            );
+                            let new_cluster_id = header.get_cluster_id();
+                            // it is new cluster if the new cluster id is zero.
+                            if cluster_id == 0 || new_cluster_id == cluster_id {
+                                // check whether the response have leader info, otherwise continue
+                                // to loop the rest members
+                                if r.has_leader() {
+                                    return Ok(r);
+                                }
+                            // Try next endpoint if PD server returns the
+                            // cluster id is zero without any error.
+                            } else if new_cluster_id == 0 {
+                                error!("{} connect success, but cluster id is not ready", ep);
+                            } else {
+                                panic!(
+                                    "{} no longer belongs to cluster {}, it is in {}",
+                                    ep, cluster_id, new_cluster_id
+                                );
+                            }
                         }
                     }
                     Err(e) => {

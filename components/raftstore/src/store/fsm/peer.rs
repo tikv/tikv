@@ -63,7 +63,7 @@ use self::memtrace::*;
 #[cfg(any(test, feature = "testexport"))]
 use crate::store::PeerInternalStat;
 use crate::{
-    coprocessor::RegionChangeEvent,
+    coprocessor::{RegionChangeEvent, RegionChangeReason},
     store::{
         cmd_resp::{bind_term, new_error},
         fsm::{
@@ -92,8 +92,8 @@ use crate::{
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg, SnapKey,
-        StoreMsg,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        SignificantMsg, SnapKey, StoreMsg,
     },
     Error, Result,
 };
@@ -841,6 +841,8 @@ where
         } else {
             warn!(
                 "Unsafe recovery, no need to demote failed voters";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.fsm.peer_id(),
                 "region" => ?self.region(),
             );
         }
@@ -893,12 +895,32 @@ where
     }
 
     fn on_unsafe_recovery_fill_out_report(&mut self, syncer: UnsafeRecoveryFillOutReportSyncer) {
+        if self.fsm.peer.pending_remove || self.fsm.stopped {
+            return;
+        }
         let mut self_report = pdpb::PeerReport::default();
         self_report.set_raft_state(self.fsm.peer.get_store().raft_state().clone());
         let mut region_local_state = RegionLocalState::default();
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        match self.fsm.peer.get_store().entries(
+            self.fsm.peer.raft_group.store().commit_index() + 1,
+            self.fsm.peer.get_store().last_index() + 1,
+            NO_LIMIT,
+            GetEntriesContext::empty(false),
+        ) {
+            Ok(entries) => {
+                for entry in entries {
+                    let ctx = ProposalContext::from_bytes(&entry.context);
+                    if ctx.contains(ProposalContext::COMMIT_MERGE) {
+                        self_report.set_has_commit_merge(true);
+                        break;
+                    }
+                }
+            }
+            Err(e) => panic!("Unsafe recovery, fail to get uncommitted entries, {:?}", e),
+        }
         syncer.report_for_self(self_report);
     }
 
@@ -1885,7 +1907,7 @@ where
         );
 
         if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_cache_metrics();
+            self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
         // When having pending snapshot, if election timeout is met, it can't pass
@@ -1952,7 +1974,7 @@ where
         }
         self.fsm.peer.post_raft_group_tick();
 
-        self.fsm.peer.mut_store().flush_cache_metrics();
+        self.fsm.peer.mut_store().flush_entry_cache_metrics();
 
         // Keep ticking if there are still pending read requests or this node is within hibernate timeout.
         if res.is_none() /* hibernate_region is false */ ||
@@ -1999,15 +2021,17 @@ where
             }) => {
                 if self.fsm.peer.raft_group.raft.raft_log.applied >= *target_index {
                     if *demote_after_exit {
+                        let syncer_clone = syncer.clone();
+                        let failed_voters_clone = failed_voters.clone();
+                        self.fsm.peer.unsafe_recovery_state = None;
                         if !self.fsm.peer.is_force_leader() {
                             error!(
                                 "Unsafe recovery, lost forced leadership after exiting joint state";
                                 "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             return;
                         }
-                        let syncer_clone = syncer.clone();
-                        let failed_voters_clone = failed_voters.clone();
                         self.unsafe_recovery_demote_failed_voters(
                             syncer_clone,
                             failed_voters_clone,
@@ -2016,7 +2040,8 @@ where
                         if self.fsm.peer.in_joint_state() {
                             info!(
                                 "Unsafe recovery, exiting joint state";
-                                "region_id" => self.region().get_id()
+                                "region_id" => self.region().get_id(),
+                                "peer_id" => self.fsm.peer_id(),
                             );
                             if self.fsm.peer.is_force_leader() {
                                 self.propose_raft_command_internal(
@@ -2035,6 +2060,7 @@ where
                                 error!(
                                     "Unsafe recovery, lost forced leadership while trying to exit joint state";
                                     "region_id" => self.region().get_id(),
+                                    "peer_id" => self.fsm.peer_id(),
                                 );
                             }
                         }
@@ -3338,6 +3364,7 @@ where
                 &self.ctx.coprocessor_host,
                 region.clone(),
                 &mut self.fsm.peer,
+                RegionChangeReason::ChangePeer,
             );
         }
         for peer in region.take_peers().into_iter() {
@@ -3513,7 +3540,7 @@ where
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
-        self.fsm.peer.mut_store().compact_to(compact_to);
+        self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
     }
 
     fn on_ready_split_region(
@@ -3544,7 +3571,12 @@ where
         let estimated_size = self.fsm.peer.approximate_size.map(|v| v / new_region_count);
         let estimated_keys = self.fsm.peer.approximate_keys.map(|v| v / new_region_count);
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
+        meta.set_region(
+            &self.ctx.coprocessor_host,
+            derived,
+            &mut self.fsm.peer,
+            RegionChangeReason::Split,
+        );
         self.fsm.peer.post_split();
 
         // It's not correct anymore, so set it to false to schedule a split check task.
@@ -4026,7 +4058,12 @@ where
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                region,
+                &mut self.fsm.peer,
+                RegionChangeReason::PrepareMerge,
+            );
         }
 
         self.fsm.peer.pending_merge_state = Some(state);
@@ -4137,7 +4174,12 @@ where
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
-        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+        meta.set_region(
+            &self.ctx.coprocessor_host,
+            region,
+            &mut self.fsm.peer,
+            RegionChangeReason::CommitMerge,
+        );
         if let Some(d) = meta.readers.get_mut(&source.get_id()) {
             d.mark_pending_remove();
         }
@@ -4163,8 +4205,7 @@ where
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff().0;
-        self.fsm.peer.region_buckets = None;
-        self.fsm.peer.last_region_buckets = None;
+        self.fsm.peer.reset_region_buckets();
         if self.fsm.peer.is_leader() {
             info!(
                 "notify pd with merge";
@@ -4220,7 +4261,12 @@ where
 
         if let Some(r) = region {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
+            meta.set_region(
+                &self.ctx.coprocessor_host,
+                r,
+                &mut self.fsm.peer,
+                RegionChangeReason::RollbackMerge,
+            );
         }
         if self.fsm.peer.is_leader() {
             info!(
@@ -4837,7 +4883,7 @@ where
             // snapshot generating has already been cancelled when the role becomes follower.
             return;
         }
-        if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
+        if !self.fsm.peer.get_store().is_entry_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
@@ -4867,21 +4913,26 @@ where
         // `alive_cache_idx` is only used to gc cache.
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let truncated_idx = self.fsm.peer.get_store().truncated_index();
+        let first_idx = self.fsm.peer.get_store().first_index();
         let last_idx = self.fsm.peer.get_store().last_index();
+
         let (mut replicated_idx, mut alive_cache_idx) = (last_idx, last_idx);
         for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
             if replicated_idx > p.matched {
                 replicated_idx = p.matched;
             }
             if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
-                if alive_cache_idx > p.matched
-                    && p.matched >= truncated_idx
-                    && *last_heartbeat > cache_alive_limit
-                {
-                    alive_cache_idx = p.matched;
+                if *last_heartbeat > cache_alive_limit {
+                    if alive_cache_idx > p.matched && p.matched >= truncated_idx {
+                        alive_cache_idx = p.matched;
+                    } else if p.matched == 0 {
+                        // the new peer is still applying snapshot, do not compact cache now
+                        alive_cache_idx = 0;
+                    }
                 }
             }
         }
+
         // When an election happened or a new peer is added, replicated_idx can be 0.
         if replicated_idx > 0 {
             assert!(
@@ -4892,20 +4943,19 @@ where
             );
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
+
+        // leader may call `get_term()` on the latest replicated index, so compact
+        // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
         self.fsm
             .peer
             .mut_store()
-            .maybe_gc_cache(alive_cache_idx, applied_idx);
+            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
-            if !self.fsm.peer.get_store().cache_is_empty() {
+            self.fsm.peer.mut_store().evict_entry_cache(true);
+            if !self.fsm.peer.get_store().is_entry_cache_empty() {
                 self.register_entry_cache_evict_tick();
             }
         }
-
-        let mut total_gc_logs = 0;
-
-        let first_idx = self.fsm.peer.get_store().first_index();
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx
@@ -4944,7 +4994,6 @@ where
                 .compact_idx_too_small += 1;
             return;
         }
-        total_gc_logs += compact_idx - first_idx;
 
         // Create a compact log request and notify directly.
         let region_id = self.fsm.peer.region().get_id();
@@ -4959,7 +5008,7 @@ where
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
-        PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs);
+        PEER_GC_RAFT_LOG_COUNTER.inc_by(compact_idx - first_idx);
     }
 
     fn register_entry_cache_evict_tick(&mut self) {
@@ -4969,11 +5018,11 @@ where
     fn on_entry_cache_evict_tick(&mut self) {
         fail_point!("on_entry_cache_evict_tick", |_| {});
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
-            self.fsm.peer.mut_store().evict_cache(true);
+            self.fsm.peer.mut_store().evict_entry_cache(true);
         }
         let mut _usage = 0;
         if memory_usage_reaches_high_water(&mut _usage)
-            && !self.fsm.peer.get_store().cache_is_empty()
+            && !self.fsm.peer.get_store().is_entry_cache_empty()
         {
             self.register_entry_cache_evict_tick();
         }
@@ -5221,6 +5270,12 @@ where
             let bucket_version: u64 = if current_version_term == term {
                 current_version + 1
             } else {
+                if term > u32::MAX.into() {
+                    error!(
+                        "unexpected term {} more than u32::MAX. Bucket version will be backward.",
+                        term
+                    );
+                }
                 term << 32
             };
             bucket_version
@@ -5254,19 +5309,32 @@ where
             return;
         }
 
-        let current_version = self
+        let mut current_version = self
             .fsm
             .peer
             .region_buckets
             .as_ref()
             .map(|b| b.meta.version)
             .unwrap_or_default();
+        if current_version == 0 {
+            current_version = self
+                .fsm
+                .peer
+                .last_region_buckets
+                .as_ref()
+                .map(|b| b.meta.version)
+                .unwrap_or_default();
+        }
         let mut region_buckets: BucketStat;
         if let Some(bucket_ranges) = bucket_ranges {
             assert_eq!(buckets.len(), bucket_ranges.len());
             let mut i = 0;
             region_buckets = self.fsm.peer.region_buckets.clone().unwrap();
             let mut meta = (*region_buckets.meta).clone();
+            if !buckets.is_empty() {
+                meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
+            }
+            meta.region_epoch = region_epoch;
             for (bucket, bucket_range) in buckets.into_iter().zip(bucket_ranges) {
                 while i < meta.keys.len() && meta.keys[i] != bucket_range.0 {
                     i += 1;
@@ -5305,8 +5373,6 @@ where
                 }
                 i += 1;
             }
-            meta.region_epoch = region_epoch;
-            meta.version = gen_bucket_version(self.fsm.peer.term(), current_version);
             region_buckets.meta = Arc::new(meta);
         } else {
             debug!(

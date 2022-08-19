@@ -339,7 +339,6 @@ struct PdCluster {
     // for merging
     pub check_merge_target_integrity: bool,
 
-    unsafe_recovery_require_report: bool,
     unsafe_recovery_store_reports: HashMap<u64, pdpb::StoreReport>,
     unsafe_recovery_plan: HashMap<u64, pdpb::RecoveryPlan>,
 }
@@ -375,7 +374,6 @@ impl PdCluster {
             replication_status: None,
             region_replication_status: HashMap::default(),
             check_merge_target_integrity: true,
-            unsafe_recovery_require_report: false,
             unsafe_recovery_store_reports: HashMap::default(),
             unsafe_recovery_plan: HashMap::default(),
             buckets: HashMap::default(),
@@ -746,19 +744,14 @@ impl PdCluster {
     }
 
     fn handle_store_heartbeat(&mut self, store_id: u64) -> Result<pdpb::StoreHeartbeatResponse> {
+        debug!("Unsafe recovery, a heartbeat"; "store_id" => store_id, "plan" => ?self.unsafe_recovery_plan);
         let mut resp = pdpb::StoreHeartbeatResponse::default();
-        resp.set_require_detailed_report(self.unsafe_recovery_require_report);
-        self.unsafe_recovery_require_report = false;
         if let Some((_, plan)) = self.unsafe_recovery_plan.remove_entry(&store_id) {
             debug!("Unsafe recovery, sending recovery plan"; "store_id" => store_id, "plan" => ?plan);
             resp.set_recovery_plan(plan);
         }
 
         Ok(resp)
-    }
-
-    fn set_require_report(&mut self, require_report: bool) {
-        self.unsafe_recovery_require_report = require_report;
     }
 
     fn set_unsafe_recovery_plan(&mut self, store_id: u64, recovery_plan: pdpb::RecoveryPlan) {
@@ -814,6 +807,15 @@ pub struct TestPdClient {
     trigger_tso_failure: AtomicBool,
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
+
+    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct GcSafePoint {
+    pub serivce: String,
+    pub ttl: Duration,
+    pub safepoint: TimeStamp,
 }
 
 impl TestPdClient {
@@ -830,6 +832,7 @@ impl TestPdClient {
             trigger_tso_failure: AtomicBool::new(false),
             trigger_leader_info_loss: AtomicBool::new(false),
             feature_gate,
+            gc_safepoints: Default::default(),
         }
     }
 
@@ -1330,10 +1333,6 @@ impl TestPdClient {
         unsafe { self.feature_gate.reset_version(version).unwrap() }
     }
 
-    pub fn must_set_require_report(&self, require_report: bool) {
-        self.cluster.wl().set_require_report(require_report);
-    }
-
     pub fn must_get_store_report(&self, store_id: u64) -> Option<pdpb::StoreReport> {
         self.cluster.wl().get_store_report(store_id)
     }
@@ -1704,10 +1703,17 @@ impl PdClient for TestPdClient {
 
     fn update_service_safe_point(
         &self,
-        _name: String,
-        _safepoint: TimeStamp,
-        _ttl: Duration,
+        name: String,
+        safepoint: TimeStamp,
+        ttl: Duration,
     ) -> PdFuture<()> {
+        if ttl.as_secs() > 0 {
+            self.gc_safepoints.wl().push(GcSafePoint {
+                serivce: name,
+                ttl,
+                safepoint,
+            });
+        }
         Box::pin(ok(()))
     }
 

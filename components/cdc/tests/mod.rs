@@ -231,6 +231,8 @@ impl TestSuite {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster, Some(100), None);
+        // Disable background renew to make timestamp predictable.
+        configure_for_causal_ts(&mut cluster, "0s", 1);
 
         let builder = TestSuiteBuilder::new();
         builder.cluster(cluster).build()
@@ -502,5 +504,16 @@ impl TestSuite {
 
     pub fn set_tso(&self, ts: impl Into<TimeStamp>) {
         self.cluster.pd_client.set_tso(ts.into());
+    }
+
+    pub fn flush_causal_timestamp_for_region(&mut self, region_id: u64) {
+        let leader = self.cluster.leader_of_region(region_id).unwrap();
+        self.cluster
+            .sim
+            .rl()
+            .get_causal_ts_provider(leader.get_store_id())
+            .unwrap()
+            .flush()
+            .unwrap();
     }
 }

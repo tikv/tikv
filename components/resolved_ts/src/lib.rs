@@ -10,6 +10,7 @@
 //!   3. Resolved TS must be advanced by the region leader after it has applied on its term.
 
 #![feature(box_patterns)]
+#![feature(result_flattening)]
 
 #[macro_use]
 extern crate tikv_util;
