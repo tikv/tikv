@@ -13,13 +13,16 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResul
 use prometheus::IntGauge;
 use thiserror::Error;
 use tikv_util::{
-    metrics::ThreadInfoStatistics,
     sys::SysQuota,
+    time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
 };
+use time::Timespec;
 use tracker::TrackedFuture;
-use yatp::{pool::Remote, queue::Extras, task::future::TaskCell};
+use yatp::{
+    metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
+};
 
 use self::metrics::*;
 use crate::{
@@ -29,17 +32,9 @@ use crate::{
 
 // the duration to check auto-scale unified-thread-pool's thread
 const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(5);
-// total cpu usage percentage that indicate process is overloaded, do not scale
-// up thread pool size.
-const CPU_BUSY_THRESHOLD: f64 = 0.9;
-// total cpu usage percentage that indicate process is high loaded.
-const CPU_HIGH_THRESHOLD: f64 = 0.7;
 // consider scale up read pool size if the average thread cpu usage is higher
 // than this threahold.
-const READ_POOL_THREAD_HIGH_THREAHOLD: f64 = 0.7;
-// consider scale down read pool size if the average thread cpu usage is lower
-// than this threahold.
-const READ_POOL_THREAD_LOW_THREAHOLD: f64 = 0.5;
+const READ_POOL_THREAD_HIGH_THREAHOLD: f64 = 0.8;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
 
@@ -310,11 +305,51 @@ impl From<Vec<FuturePool>> for ReadPool {
         }
     }
 }
+
+struct ReadPoolCpuTimeTracker {
+    pool_name: String,
+    prev_total_cpu_time_us: u64,
+    prev_check_time: Instant,
+    prev_cpu_per_sec: f64,
+}
+
+impl ReadPoolCpuTimeTracker {
+    fn new(pool_name: String) -> Self {
+        let prev_check_time = Instant::now();
+        let prev_total_cpu_time_us = MULTILEVEL_LEVEL_ELAPSED
+            .with_label_values(&[&pool_name, "total"])
+            .get();
+        Self {
+            pool_name,
+            prev_total_cpu_time_us,
+            prev_check_time,
+            prev_cpu_per_sec: 0.0,
+        }
+    }
+
+    fn prev_avg_cpu_used(&mut self) -> f64 {
+        let check_time = Instant::now();
+        let duration = check_time.saturating_duration_since(self.prev_check_time);
+        // if the check duration is too small, just return the latest cached value.
+        if duration < Duration::from_millis(100) {
+            return self.prev_cpu_per_sec;
+        }
+        let total_cpu_time = MULTILEVEL_LEVEL_ELAPSED
+            .with_label_values(&[&self.pool_name, "total"])
+            .get();
+        let total_cpu_per_sec =
+            (total_cpu_time - self.prev_total_cpu_time_us) as f64 / duration.as_micros() as f64;
+        self.prev_total_cpu_time_us = total_cpu_time;
+        self.prev_check_time = check_time;
+        self.prev_cpu_per_sec = total_cpu_per_sec;
+        total_cpu_per_sec
+    }
+}
 struct ReadPoolConfigRunner {
     interval: Duration,
     sender: SyncSender<usize>,
     handle: ReadPoolHandle,
-    thread_stats: ThreadInfoStatistics,
+    cpu_time_tracker: ReadPoolCpuTimeTracker,
     // configed thread pool size, it's the min thread count to be scale
     core_thread_count: usize,
     // the max thread count can be scaled
@@ -372,34 +407,17 @@ impl ReadPoolConfigRunner {
         {
             return;
         }
-        let cpu_quota = SysQuota::cpu_cores_quota();
-        self.thread_stats.record();
-        let thread_stats = self.thread_stats.get_cpu_usages();
-        let total_cpu = thread_stats.values().sum::<u64>() as f64 / 100.0;
-        let read_pool_cpu = thread_stats
-            .iter()
-            .filter_map(|(t, u)| {
-                if t.contains("unified-read-po") {
-                    Some(*u)
-                } else {
-                    None
-                }
-            })
-            .sum::<u64>() as f64
-            / 100.0;
 
+        let read_pool_cpu = self.cpu_time_tracker.prev_avg_cpu_used();
         let running_tasks = self.running_tasks();
 
         let new_thread_count = if self.cur_thread_count < self.max_thread_count
-            && total_cpu / cpu_quota < CPU_BUSY_THRESHOLD
-            && read_pool_cpu
-                >= (total_cpu * CPU_HIGH_THRESHOLD)
-                    .max(self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THREAHOLD)
+            && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THREAHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
             self.cur_thread_count + 1
         } else if self.cur_thread_count > self.core_thread_count
-            && read_pool_cpu <= self.cur_thread_count as f64 * READ_POOL_THREAD_LOW_THREAHOLD
+            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_HIGH_THREAHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
             self.cur_thread_count - 1
@@ -409,8 +427,7 @@ impl ReadPoolConfigRunner {
 
         if new_thread_count != self.cur_thread_count {
             self.handle.scale_pool_size(new_thread_count);
-            info!("auto adjust read pool thread"; "cpu_quota" => cpu_quota, 
-                "total_cpu" => total_cpu, "read_pool_cpu" => read_pool_cpu, 
+            info!("auto adjust read pool thread"; "read_pool_cpu" => read_pool_cpu, 
                 "running_tasks" => running_tasks, "current" => self.cur_thread_count, 
                 "new" => new_thread_count);
             self.notify_pool_size_change(new_thread_count);
@@ -460,7 +477,7 @@ impl ReadPoolConfigManager {
             interval: READ_POOL_THREAD_CHECK_DURATION,
             sender,
             handle,
-            thread_stats: ThreadInfoStatistics::new(),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new(get_unified_read_pool_name()),
             core_thread_count: thread_count,
             cur_thread_count: thread_count,
             max_thread_count,

@@ -674,7 +674,6 @@ fn batch_grow_factor() -> usize {
     BATCH_GROW_FACTOR
 }
 
-
 fn batch_initial_size() -> usize {
     fail_point!("copr_batch_initial_size", |r| r
         .map_or(1, |e| e.parse().unwrap()));
@@ -690,7 +689,10 @@ fn adjust_batch_size(batch_size: usize, duration: Duration) -> usize {
     } else {
         batch_size
     };
-    std::cmp::max(batch_initial_size(), std::cmp::min(new_batch, BATCH_MAX_SIZE))
+    std::cmp::max(
+        batch_initial_size(),
+        std::cmp::min(new_batch, BATCH_MAX_SIZE),
+    )
 }
 
 #[inline]
