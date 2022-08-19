@@ -190,11 +190,7 @@ mod tests {
             .prefix("test-local-reader")
             .tempdir()
             .unwrap();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path().to_str().unwrap(),
-            ops,
-            cf_opts,
-        ));
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new())));
