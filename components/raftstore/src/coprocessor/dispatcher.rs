@@ -506,12 +506,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn should_pre_apply_snapshot(&self) {
-        loop_ob!(
-            region,
-            &self.registry.apply_snapshot_observers,
-            should_pre_apply_snapshot,
-        );
+    pub fn should_pre_apply_snapshot(&self) -> bool {
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            if observer.should_pre_apply_snapshot() {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn pre_apply_snapshot(
@@ -899,7 +901,7 @@ mod tests {
             _: Option<&Snapshot>,
         ) {
             self.called
-                .fetch_add(ObserverIndex::PreApplySnapshot, Ordering::SeqCst);
+                .fetch_add(ObserverIndex::PreApplySnapshot as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
@@ -911,13 +913,15 @@ mod tests {
             _: Option<&Snapshot>,
         ) {
             self.called
-                .fetch_add(ObserverIndex::PostApplySnapshot, Ordering::SeqCst);
+                .fetch_add(ObserverIndex::PostApplySnapshot as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
         fn should_pre_apply_snapshot(&self) -> bool {
-            self.called
-                .fetch_add(ObserverIndex::ShouldPreApplySnapshot, Ordering::SeqCst);
+            self.called.fetch_add(
+                ObserverIndex::ShouldPreApplySnapshot as usize,
+                Ordering::SeqCst,
+            );
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             false
         }
@@ -1075,8 +1079,8 @@ mod tests {
         index += ObserverIndex::PostApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.shoule_pre_apply_snapshot(&region, 0);
-        index += ObserverIndex::ShoulePreApplySnapshot as usize;
+        host.should_pre_apply_snapshot(&region, 0);
+        index += ObserverIndex::ShouldPreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
 
