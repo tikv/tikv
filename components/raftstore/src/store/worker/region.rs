@@ -379,7 +379,7 @@ where
     }
 
     /// Applies snapshot data of the Region.
-    fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>, peer_id: u64) -> Result<()> {
+    fn apply_snap(&mut self, region_id: u64, peer_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
@@ -447,7 +447,7 @@ where
 
     /// Tries to apply the snapshot of the specified Region. It calls
     /// `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>, peer_id: u64) {
+    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
         let _ = status.compare_exchange(
             JOB_STATUS_PENDING,
             JOB_STATUS_RUNNING,
@@ -459,7 +459,7 @@ where
         // let timer = apply_histogram.start_coarse_timer();
         let start = Instant::now();
 
-        match self.apply_snap(region_id, Arc::clone(&status), peer_id) {
+        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
@@ -753,7 +753,7 @@ where
                 peer_id,
             }) = self.pending_applies.pop_front()
             {
-                self.ctx.handle_apply(region_id, status, peer_id);
+                self.ctx.handle_apply(region_id, peer_id, status);
             }
         }
     }
