@@ -16,7 +16,10 @@ use std::{
     u64,
 };
 
-use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    DeleteStrategy, Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, Range, WriteBatch,
+    CF_LOCK, CF_RAFT,
+};
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
@@ -243,11 +246,12 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext<EK, R>
+struct SnapContext<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
-    engine: EK,
+    engines: Engines<EK, ER>,
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
@@ -256,9 +260,10 @@ where
     router: R,
 }
 
-impl<EK, R> SnapContext<EK, R>
+impl<EK, ER, R> SnapContext<EK, ER, R>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
 {
     /// Generates the snapshot of the Region.
@@ -275,7 +280,7 @@ where
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
             self.mgr.clone(),
-            &self.engine,
+            &self.engines.kv,
             kv_snap,
             region_id,
             last_applied_term,
@@ -354,7 +359,7 @@ where
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -384,7 +389,7 @@ where
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -407,7 +412,7 @@ where
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: self.engine.clone(),
+            db: self.engines.kv.clone(),
             region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -415,13 +420,26 @@ where
         };
         s.apply(options)?;
 
-        let mut wb = self.engine.write_batch();
+        let mut wb = self.engines.kv.write_batch();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
-        box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         wb.write().unwrap_or_else(|e| {
-            panic!("{} failed to save apply_snap result: {:?}", region_id, e);
+            panic!(
+                "{} failed to save apply_snap result to kvdb: {:?}",
+                region_id, e
+            );
         });
+        let mut raft_wb = self.engines.raft.log_batch(1);
+        box_try!(raft_wb.delete_snapshot_raft_state(region_id));
+        self.engines
+            .raft
+            .consume(&mut raft_wb, true)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save apply_snap result to raftdb: {:?}",
+                    region_id, e
+                );
+            });
         info!(
             "apply new data";
             "region_id" => region_id,
@@ -472,13 +490,15 @@ where
 
     /// Cleans up the data within the range.
     fn cleanup_range(&self, ranges: &[Range<'_>]) -> Result<()> {
-        self.engine
+        self.engines
+            .kv
             .delete_all_in_range(DeleteStrategy::DeleteFiles, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
         self.delete_all_in_range(ranges)?;
-        self.engine
+        self.engines
+            .kv
             .delete_all_in_range(DeleteStrategy::DeleteBlobs, ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -492,7 +512,8 @@ where
         overlap_ranges: Vec<(u64, Vec<u8>, Vec<u8>, u64)>,
     ) -> Result<()> {
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut ranges = Vec::with_capacity(overlap_ranges.len());
@@ -513,7 +534,8 @@ where
                   "end_key" => log_wrappers::Value::key(end_key));
             ranges.push(Range::new(start_key, end_key));
         }
-        self.engine
+        self.engines
+            .kv
             .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
@@ -545,7 +567,7 @@ where
             "start_key" => log_wrappers::Value::key(start_key),
             "end_key" => log_wrappers::Value::key(end_key),
         );
-        let seq = self.engine.get_latest_sequence_number();
+        let seq = self.engines.kv.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
     }
@@ -557,7 +579,8 @@ where
             return;
         }
         let oldest_sequence = self
-            .engine
+            .engines
+            .kv
             .get_oldest_snapshot_sequence_number()
             .unwrap_or(u64::MAX);
         let mut cleanup_ranges: Vec<(u64, Vec<u8>, Vec<u8>)> = self
@@ -603,7 +626,12 @@ where
             if plain_file_used(cf) {
                 continue;
             }
-            if self.engine.ingest_maybe_slowdown_writes(cf).expect("cf") {
+            if self
+                .engines
+                .kv
+                .ingest_maybe_slowdown_writes(cf)
+                .expect("cf")
+            {
                 return true;
             }
         }
@@ -611,7 +639,7 @@ where
     }
 
     fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
-        for cf in self.engine.cf_names() {
+        for cf in self.engines.kv.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
                 DeleteStrategy::DeleteByKey
@@ -622,20 +650,21 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
+            box_try!(self.engines.kv.delete_ranges_cf(cf, strategy, ranges));
         }
 
         Ok(())
     }
 }
 
-pub struct Runner<EK, R, T>
+pub struct Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient + 'static,
 {
     pool: ThreadPool<TaskCell>,
-    ctx: SnapContext<EK, R>,
+    ctx: SnapContext<EK, ER, R>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
@@ -645,14 +674,15 @@ where
     pd_client: Option<Arc<T>>,
 }
 
-impl<EK, R, T> Runner<EK, R, T>
+impl<EK, ER, R, T> Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
     T: PdClient + 'static,
 {
     pub fn new(
-        engine: EK,
+        engines: Engines<EK, ER>,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
@@ -660,13 +690,13 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
         pd_client: Option<Arc<T>>,
-    ) -> Runner<EK, R, T> {
+    ) -> Runner<EK, ER, R, T> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(snap_generator_pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
-                engine,
+                engines,
                 mgr,
                 batch_size,
                 use_delete_range,
@@ -699,9 +729,10 @@ where
     }
 }
 
-impl<EK, R, T> Runnable for Runner<EK, R, T>
+impl<EK, ER, R, T> Runnable for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient,
 {
@@ -791,9 +822,10 @@ where
     }
 }
 
-impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
+impl<EK, ER, R, T> RunnableWithTimer for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient + 'static,
 {
@@ -934,7 +966,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
         let mut runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             0,
             false,
@@ -1038,7 +1070,7 @@ mod tests {
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
         let runner = RegionRunner::new(
-            engine.kv.clone(),
+            engine.clone(),
             mgr,
             0,
             true,

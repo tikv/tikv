@@ -8,12 +8,19 @@ use std::{
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
+use engine_traits::{
+    Engines, Iterable, KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, CF_RAFT, DATA_CFS,
+    DATA_KEY_PREFIX_LEN,
+};
 use grpcio_health::HealthService;
 use kvproto::{
-    kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
+    kvrpcpb::ApiVersion,
+    metapb,
+    raft_serverpb::{RaftLocalState, StoreIdent},
+    replication_modepb::ReplicationStatus,
 };
 use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
+use protobuf::Message;
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     router::{LocalReadRouter, RaftStoreRouter},
@@ -78,6 +85,37 @@ where
         feature_gate,
     )?;
     Ok(store)
+}
+
+fn migrate_snapshot_raft_states(engines: &Engines<impl KvEngine, impl RaftEngine>) {
+    let mut raft_wb = engines.raft.log_batch(0);
+    let mut kv_wb = engines.kv.write_batch();
+    engines
+        .kv
+        .scan(
+            CF_RAFT,
+            keys::REGION_RAFT_MIN_KEY,
+            keys::REGION_RAFT_MAX_KEY,
+            false,
+            |key, value| {
+                if let Ok((region_id, suffix)) = keys::decode_raft_key(key) {
+                    if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
+                        let mut state = RaftLocalState::default();
+                        state.merge_from_bytes(value)?;
+                        raft_wb.put_snapshot_raft_state(region_id, &state)?;
+                        kv_wb.delete_cf(CF_RAFT, key).unwrap();
+                    }
+                }
+                Ok(true)
+            },
+        )
+        .unwrap();
+    if !raft_wb.is_empty() {
+        engines.raft.consume(&mut raft_wb, true).unwrap();
+    }
+    if !kv_wb.is_empty() {
+        kv_wb.write().unwrap();
+    }
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
@@ -225,6 +263,9 @@ where
         info!("put store to PD"; "store" => ?&self.store);
         let status = self.pd_client.put_store(self.store.clone())?;
         self.load_all_stores(status);
+
+        info!("try to migrate snapshot raft states from kvdb to raftdb");
+        migrate_snapshot_raft_states(&engines);
 
         self.start_store(
             store_id,

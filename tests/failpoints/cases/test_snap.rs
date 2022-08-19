@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::RaftEngineReadOnly;
+use engine_traits::{RaftEngine, RaftEngineReadOnly, RaftLogBatch, SyncMutable, CF_RAFT};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
@@ -792,4 +792,46 @@ fn test_snapshot_recover_from_raft_write_failure() {
     for i in 20..25 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
+}
+
+#[test]
+fn test_snapshot_migrate_states_to_raft_db() {
+    let mut cluster = new_node_cluster(0, 2);
+    let pd_client = cluster.pd_client.clone();
+
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    cluster.must_put(b"k", b"v");
+    // Skip applying snapshot into RocksDB to keep peer status in Applying.
+    let apply_snapshot_fp = "apply_pending_snapshot";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    let engines = cluster.get_all_engines(2);
+    loop {
+        let state = engines.raft.get_snapshot_raft_state(r).unwrap();
+        if state.is_some() {
+            break;
+        }
+    }
+    cluster.stop_node(2);
+    let state = engines.raft.get_snapshot_raft_state(r).unwrap().unwrap();
+    let mut raft_wb = engines.raft.log_batch(0);
+    raft_wb.delete_snapshot_raft_state(r).unwrap();
+    if !raft_wb.is_empty() {
+        engines.raft.consume(&mut raft_wb, true).unwrap();
+    }
+    engines
+        .kv
+        .put_msg_cf(CF_RAFT, &keys::snapshot_raft_state_key(r), &state)
+        .unwrap();
+    cluster.run_node(2).unwrap();
+    loop {
+        let state = engines.raft.get_snapshot_raft_state(r).unwrap();
+        if state.is_some() {
+            break;
+        }
+    }
+    fail::remove(apply_snapshot_fp);
+    must_get_equal(&engines.kv, b"k", b"v");
 }

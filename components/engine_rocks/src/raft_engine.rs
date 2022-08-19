@@ -151,6 +151,11 @@ impl RaftEngineReadOnly for RocksEngine {
         let key = keys::apply_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
     }
+
+    fn get_snapshot_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
+        let key = keys::snapshot_raft_state_key(raft_group_id);
+        self.get_msg_cf(CF_DEFAULT, &key)
+    }
 }
 
 impl RaftEngineDebug for RocksEngine {
@@ -418,6 +423,18 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
+
+    fn put_snapshot_raft_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &RaftLocalState,
+    ) -> Result<()> {
+        self.put_msg(&keys::snapshot_raft_state_key(raft_group_id), state)
+    }
+
+    fn delete_snapshot_raft_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::snapshot_raft_state_key(raft_group_id))
     }
 }
 

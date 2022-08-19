@@ -344,6 +344,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
+const SNAPSHOT_RAFT_STATE_KEY: &[u8] = &[0x06];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -408,6 +409,22 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .put_message(raft_group_id, APPLY_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)
     }
+
+    fn put_snapshot_raft_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &RaftLocalState,
+    ) -> Result<()> {
+        self.0
+            .put_message(raft_group_id, SNAPSHOT_RAFT_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)
+    }
+
+    fn delete_snapshot_raft_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0
+            .delete(raft_group_id, SNAPSHOT_RAFT_STATE_KEY.to_vec());
+        Ok(())
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
@@ -470,6 +487,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         self.0
             .get_message(raft_group_id, APPLY_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_snapshot_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
+        self.0
+            .get_message(raft_group_id, SNAPSHOT_RAFT_STATE_KEY)
             .map_err(transfer_error)
     }
 }
