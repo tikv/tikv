@@ -348,7 +348,7 @@ where
             .observe(start.saturating_elapsed_secs());
     }
 
-    fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
+    fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_key = keys::region_state_key(region_id);
         let region_state: RegionLocalState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
@@ -363,7 +363,7 @@ where
         Ok(region_state)
     }
 
-    fn get_apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
+    fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
             match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
@@ -384,7 +384,7 @@ where
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
-        let mut region_state = self.get_region_state(region_id)?;
+        let mut region_state = self.region_state(region_id)?;
 
         // clear up origin data.
         let region = region_state.get_region().clone();
@@ -404,7 +404,7 @@ where
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
-        let apply_state = self.get_apply_state(region_id)?;
+        let apply_state = self.apply_state(region_id)?;
 
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
@@ -655,8 +655,8 @@ where
             _ => panic!("invalid apply snapshot task"),
         };
 
-        let region_state = self.get_region_state(*region_id)?;
-        let apply_state = self.get_apply_state(*region_id)?;
+        let region_state = self.region_state(*region_id)?;
+        let apply_state = self.apply_state(*region_id)?;
 
         let timer = Instant::now();
         check_abort(&abort)?;
