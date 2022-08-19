@@ -76,8 +76,8 @@ use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_W
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
-        ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
-        LockInfo, RawGetRequest,
+        ApiVersion, ChecksumAlgorithm, CommandPri, Context, FlashbackToVersionRequest, GetRequest,
+        IsolationLevel, KeyRange, LockInfo, RawGetRequest,
     },
     pdpb::QueryKind,
 };
@@ -1520,18 +1520,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     pub fn flashback_to_version<R: RaftStoreRouter<E::Local> + 'static>(
         &self,
-        ctx: Context,
+        mut req: FlashbackToVersionRequest,
         raft_router: &R,
-        _version: u64,
-        start_key: Key,
-        end_key: Key,
         _callback: Callback<()>,
     ) -> Result<()> {
+        let ctx = req.take_context();
         Self::check_api_version_ranges(
             self.api_version,
             ctx.api_version,
             CommandKind::flashback_to_version,
-            [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
+            [(Some(req.get_start_key()), Some(req.get_end_key()))],
         )?;
 
         let region_id = ctx.get_region_id();
@@ -1540,6 +1538,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback);
 
         // TODO: flashback to the specified version.
+        self.sched_txn_command(
+            req.into(),
+            Box::new(|x| {
+                todo!("should block here until the flashback is finished");
+            }),
+        )?;
 
         // Resume the scheduling, reading and writing.
         let _ = raft_router.significant_send(region_id, SignificantMsg::FinishFlashback);

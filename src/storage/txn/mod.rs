@@ -23,6 +23,7 @@ pub use self::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,
         cleanup::cleanup,
         commit::commit,
+        flashback_to_version::flashback_to_version,
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
     },
@@ -77,6 +78,11 @@ pub enum ProcessResult {
     RawCompareAndSwapRes {
         previous_value: Option<Value>,
         succeed: bool,
+    },
+    FlashbackToVersionRes {
+        version: TimeStamp,
+        start_key: Key,
+        end_key: Key,
     },
 }
 
