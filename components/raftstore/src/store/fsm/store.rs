@@ -252,22 +252,6 @@ impl StoreMeta {
     }
 }
 
-pub trait RaftSender<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn send_raft_message(
-        &self,
-        msg: RaftMessage,
-    ) -> std::result::Result<(), TrySendError<RaftMessage>>;
-
-    fn send_raft_command(
-        &self,
-        cmd: RaftCommand<EK::Snapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>>;
-}
-
 pub struct RaftRouter<EK, ER>
 where
     EK: KvEngine,
@@ -329,12 +313,12 @@ where
     }
 }
 
-impl<EK, ER> RaftSender<EK, ER> for RaftRouter<EK, ER>
+impl<EK, ER> RaftRouter<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn send_raft_message(
+    pub fn send_raft_message(
         &self,
         msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
@@ -386,7 +370,7 @@ where
     }
 
     #[inline]
-    fn send_raft_command(
+    pub fn send_raft_command(
         &self,
         cmd: RaftCommand<EK::Snapshot>,
     ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {

@@ -88,7 +88,7 @@ use crate::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
-            store::{PollContext, RaftRouter, RaftSender, StoreMeta},
+            store::{PollContext, RaftRouter, StoreMeta},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
@@ -733,6 +733,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Callback: ErrorCallback;
+
     fn region(&self) -> &metapb::Region;
     fn peer_id(&self) -> u64;
     fn is_splitting(&self) -> bool;
@@ -748,15 +750,16 @@ where
     fn peer(&self) -> &metapb::Peer;
     fn bucket_meta(&self) -> Option<Arc<BucketMeta>>;
     fn txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>>;
-    fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<EK::Snapshot>;
+    fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<Self::Callback>;
     fn mut_bcast_wake_up_time(&mut self) -> &mut Option<TiInstant>;
     fn set_should_wake_up(&mut self, should_wake_up: bool);
-    fn mut_proposals(&mut self) -> &mut ProposalQueue<EK::Snapshot>;
     fn pending_remove(&self) -> bool;
     fn has_force_leader(&self) -> bool;
     fn mut_leader_lease(&mut self) -> &mut Lease;
     fn store_applied_term(&self) -> u64;
     fn store_applied_index(&self) -> u64;
+    fn has_pending_merge_state(&self) -> bool;
+    fn is_handling_snapshot(&self) -> bool;
 
     #[inline]
     fn ready_to_handle_read(&self) -> bool {
@@ -942,150 +945,6 @@ where
         false
     }
 
-    fn send_read_command<S: RaftSender<EK, ER>>(
-        &self,
-        sender: &S,
-        read_cmd: RaftCommand<EK::Snapshot>,
-    ) {
-        let mut err = errorpb::Error::default();
-        let read_cb = match sender.send_raft_command(read_cmd) {
-            Ok(()) => return,
-            Err(TrySendError::Full(cmd)) => {
-                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
-                err.mut_server_is_busy()
-                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
-                cmd.callback
-            }
-            Err(TrySendError::Disconnected(cmd)) => {
-                err.set_message(format!("region {} is missing", self.region_id()));
-                err.mut_region_not_found().set_region_id(self.region_id());
-                cmd.callback
-            }
-        };
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        let read_resp = ReadResponse {
-            response: resp,
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        read_cb.invoke_read(read_resp);
-    }
-
-    fn response_read<E: ReadExecutor<EK>>(
-        &self,
-        read_index_req: &mut ReadIndexRequest<EK::Snapshot>,
-        reader: &mut E,
-        replica_read: bool,
-    ) {
-        debug!(
-            "handle reads with a read index";
-            "request_id" => ?read_index_req.id,
-            "region_id" => self.region_id(),
-            "peer_id" => self.peer_id(),
-        );
-        RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
-        for (req, cb, mut read_index) in read_index_req.take_cmds().drain(..) {
-            // leader reports key is locked
-            if let Some(locked) = read_index_req.locked.take() {
-                let mut response = raft_cmdpb::Response::default();
-                response.mut_read_index().set_locked(*locked);
-                let mut cmd_resp = RaftCmdResponse::default();
-                cmd_resp.mut_responses().push(response);
-                cb.invoke_read(ReadResponse {
-                    response: cmd_resp,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                });
-                continue;
-            }
-            if !replica_read {
-                match (read_index, read_index_req.read_index) {
-                    (Some(local_responsed_index), Some(batch_index)) => {
-                        // `read_index` could be less than `read_index_req.read_index` because the
-                        // former is filled with `committed index` when
-                        // proposed, and the latter is filled
-                        // after a read-index procedure finished.
-                        read_index = Some(cmp::max(local_responsed_index, batch_index));
-                    }
-                    (None, _) => {
-                        // Actually, the read_index is none if and only if it's the first one in
-                        // read_index_req.cmds. Starting from the second, all the following ones'
-                        // read_index is not none.
-                        read_index = read_index_req.read_index;
-                    }
-                    _ => {}
-                }
-                cb.invoke_read(self.handle_read(reader, req, true, read_index));
-                continue;
-            }
-            if req.get_header().get_replica_read() {
-                // We should check epoch since the range could be changed.
-                cb.invoke_read(self.handle_read(reader, req, true, read_index_req.read_index));
-            } else {
-                // The request could be proposed when the peer was leader.
-                // TODO: figure out that it's necessary to notify stale or not.
-                let term = self.term();
-                apply::notify_stale_req(term, cb);
-            }
-        }
-    }
-
-    fn handle_read<E: ReadExecutor<EK>>(
-        &self,
-        reader: &mut E,
-        req: RaftCmdRequest,
-        check_epoch: bool,
-        read_index: Option<u64>,
-    ) -> ReadResponse<EK::Snapshot> {
-        let region = self.region().clone();
-        if check_epoch {
-            if let Err(e) = check_region_epoch(&req, &region, true) {
-                debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
-                let mut response = cmd_resp::new_error(e);
-                cmd_resp::bind_term(&mut response, self.term());
-                return ReadResponse {
-                    response,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-            }
-        }
-        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
-        if flags.contains(WriteBatchFlags::STALE_READ) {
-            let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-            let safe_ts = self.read_progress().safe_ts();
-            if safe_ts < read_ts {
-                warn!(
-                    "read rejected by safe timestamp";
-                    "safe ts" => safe_ts,
-                    "read ts" => read_ts,
-                    "tag" => self.tag(),
-                );
-                let mut response = cmd_resp::new_error(Error::DataIsNotReady {
-                    region_id: region.get_id(),
-                    peer_id: self.peer_id(),
-                    safe_ts,
-                });
-                cmd_resp::bind_term(&mut response, self.term());
-                return ReadResponse {
-                    response,
-                    snapshot: None,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-            }
-        }
-
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None, None);
-        if let Some(snap) = resp.snapshot.as_mut() {
-            snap.txn_ext = Some(self.txn_ext());
-            snap.bucket_meta = self.bucket_meta();
-        }
-        resp.txn_extra_op = self.txn_extra_op().load();
-        cmd_resp::bind_term(&mut resp.response, self.term());
-        resp
-    }
-
     /// Try to renew leader lease.
     fn maybe_renew_leader_lease(
         &mut self,
@@ -1163,7 +1022,7 @@ where
         self.store_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
-            && self.pending_merge_state.is_none()
+            && !self.has_pending_merge_state()
             // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
             // during between the two operations a replica read could read empty data.
             && !self.is_handling_snapshot()
@@ -1996,13 +1855,6 @@ where
         self.raft_group.mut_store()
     }
 
-    /// Whether the snapshot is handling.
-    /// See the comments of `check_snap_status` for more details.
-    #[inline]
-    pub fn is_handling_snapshot(&self) -> bool {
-        self.apply_snap_ctx.is_some() || self.get_store().is_applying_snapshot()
-    }
-
     /// Returns `true` if the raft group has replicated a snapshot but not
     /// committed it yet.
     #[inline]
@@ -2512,7 +2364,11 @@ where
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress_term = ReadProgress::term(self.term());
-                    self.maybe_renew_leader_lease(monotonic_raw_now(), &mut ctx.store_meta, Some(progress_term));
+                    self.maybe_renew_leader_lease(
+                        monotonic_raw_now(),
+                        &mut ctx.store_meta,
+                        Some(progress_term),
+                    );
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
@@ -3529,7 +3385,7 @@ where
                     "peer_id" => self.peer_id(),
                 );
                 RAFT_READ_INDEX_PENDING_COUNT.sub(1);
-                self.send_read_command(&ctx.router, read_cmd);
+                self.send_read_command(ctx, read_cmd);
                 continue;
             }
 
@@ -3548,6 +3404,36 @@ where
                 break;
             }
         }
+    }
+
+    fn send_read_command<T>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        read_cmd: RaftCommand<EK::Snapshot>,
+    ) {
+        let mut err = errorpb::Error::default();
+        let read_cb = match ctx.router.send_raft_command(read_cmd) {
+            Ok(()) => return,
+            Err(TrySendError::Full(cmd)) => {
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                cmd.callback
+            }
+            Err(TrySendError::Disconnected(cmd)) => {
+                err.set_message(format!("region {} is missing", self.region_id));
+                err.mut_region_not_found().set_region_id(self.region_id);
+                cmd.callback
+            }
+        };
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        let read_resp = ReadResponse {
+            response: resp,
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        read_cb.invoke_read(read_resp);
     }
 
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
@@ -3671,7 +3557,6 @@ where
         }
     }
 
-
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
         if self.region().get_peers().len() <= 1 {
             // The peer campaigned when it was created, no need to do it again.
@@ -3778,7 +3663,7 @@ where
                     self.cmd_epoch_checker
                         .post_propose(cmd_type, idx, self.term());
                 }
-                self.post_propose(&mut ctx.current_time, p);
+                self.post_propose(ctx, p);
                 true
             }
         }
@@ -4178,7 +4063,7 @@ where
                     propose_time: Some(now),
                     must_pass_epoch_check: false,
                 };
-                self.post_propose(&mut poll_ctx.current_time, p);
+                self.post_propose(poll_ctx, p);
             }
         }
 
@@ -4786,6 +4671,61 @@ where
         Ok(propose_index)
     }
 
+    fn handle_read<E: ReadExecutor<EK>>(
+        &self,
+        reader: &mut E,
+        req: RaftCmdRequest,
+        check_epoch: bool,
+        read_index: Option<u64>,
+    ) -> ReadResponse<EK::Snapshot> {
+        let region = self.region().clone();
+        if check_epoch {
+            if let Err(e) = check_region_epoch(&req, &region, true) {
+                debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+            let safe_ts = self.read_progress().safe_ts();
+            if safe_ts < read_ts {
+                warn!(
+                    "read rejected by safe timestamp";
+                    "safe ts" => safe_ts,
+                    "read ts" => read_ts,
+                    "tag" => self.tag(),
+                );
+                let mut response = cmd_resp::new_error(Error::DataIsNotReady {
+                    region_id: region.get_id(),
+                    peer_id: self.peer_id(),
+                    safe_ts,
+                });
+                cmd_resp::bind_term(&mut response, self.term());
+                return ReadResponse {
+                    response,
+                    snapshot: None,
+                    txn_extra_op: TxnExtraOp::Noop,
+                };
+            }
+        }
+
+        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None, None);
+        if let Some(snap) = resp.snapshot.as_mut() {
+            snap.txn_ext = Some(self.txn_ext());
+            snap.bucket_meta = self.bucket_meta();
+        }
+        resp.txn_extra_op = self.txn_extra_op().load();
+        cmd_resp::bind_term(&mut resp.response, self.term());
+        resp
+    }
+
     pub fn voters(&self) -> raft::util::Union<'_> {
         self.raft_group.raft.prs().conf().voters().ids()
     }
@@ -5090,6 +5030,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Callback = Callback<EK::Snapshot>;
+
     #[inline]
     fn region(&self) -> &metapb::Region {
         self.get_store().region()
@@ -5167,7 +5109,7 @@ where
     }
 
     #[inline]
-    fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<EK::Snapshot> {
+    fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<Self::Callback> {
         &mut self.pending_reads
     }
 
@@ -5178,10 +5120,6 @@ where
     #[inline]
     fn set_should_wake_up(&mut self, should_wake_up: bool) {
         self.should_wake_up = should_wake_up;
-    }
-    #[inline]
-    fn mut_proposals(&mut self) -> &mut ProposalQueue<EK::Snapshot> {
-        &mut self.proposals
     }
     #[inline]
     fn pending_remove(&self) -> bool {
@@ -5202,6 +5140,16 @@ where
     #[inline]
     fn store_applied_index(&self) -> u64 {
         self.get_store().applied_index()
+    }
+    #[inline]
+    fn has_pending_merge_state(&self) -> bool {
+        !self.pending_merge_state.is_none()
+    }
+    /// Whether the snapshot is handling.
+    /// See the comments of `check_snap_status` for more details.
+    #[inline]
+    fn is_handling_snapshot(&self) -> bool {
+        self.apply_snap_ctx.is_some() || self.get_store().is_applying_snapshot()
     }
 }
 

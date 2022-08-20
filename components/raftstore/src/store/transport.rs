@@ -10,10 +10,7 @@ use tikv_util::{error, warn};
 
 use super::worker::{FetchedLogs, LogFetchedNotifier};
 use crate::{
-    store::{
-        fsm::store::RaftSender, CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg,
-        StoreMsg,
-    },
+    store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,
 };
 

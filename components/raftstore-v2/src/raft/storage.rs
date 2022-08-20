@@ -12,8 +12,6 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
-    util::find_peer, worker::RaftlogFetchTask, EntryStorage, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
     util::{self, find_peer},
     EntryStorage, RaftlogFetchTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
@@ -57,18 +55,6 @@ pub struct Storage<ER> {
     peer: metapb::Peer,
     region_state: RegionLocalState,
     logger: Logger,
-    entry_storage: EntryStorage<ER>,
-}
-
-impl<ER> Debug for Storage<ER> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Storage of [region {}] {}",
-            self.region().get_id(),
-            self.peer.get_id()
-        )
-    }
 }
 
 impl<ER> Storage<ER> {
@@ -114,7 +100,6 @@ impl<ER: RaftEngine> Storage<ER> {
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         logger: &Logger,
-        raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     ) -> Result<Option<Storage<ER>>> {
         let region_state: RegionLocalState = match engine.get_region_state(region_id) {
             Ok(Some(s)) => s,

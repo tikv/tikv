@@ -52,7 +52,6 @@ use crate::{
     coprocessor::CoprocessorHost,
     store::{
         cmd_resp::new_error,
-        fsm::store::RaftSender,
         metrics::*,
         peer::{UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer},
         transport::SignificantRouter,

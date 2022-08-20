@@ -27,7 +27,10 @@ use std::{
 
 use engine_traits::Snapshot;
 use futures::task::AtomicWaker;
-use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
+use kvproto::{
+    kvrpcpb::ExtraOp as TxnExtraOp,
+    raft_cmdpb::{RaftCmdResponse, Response},
+};
 use raftstore::store::{
     local_metrics::TimeTracker, msg::ErrorCallback, ReadCallback, RegionSnapshot, WriteCallback,
 };
@@ -320,7 +323,21 @@ unsafe impl Sync for CmdResChannel {}
 /// need to be a field of the struct.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ReadResponse {
+    pub response: RaftCmdResponse,
     pub txn_extra_op: TxnExtraOp,
+}
+
+impl ReadResponse {
+    pub fn new(read_index: u64) -> Self {
+        let mut response = Response::default();
+        response.mut_read_index().set_read_index(read_index);
+        let mut cmd_resp = RaftCmdResponse::default();
+        cmd_resp.mut_responses().push(response);
+        ReadResponse {
+            response: cmd_resp,
+            txn_extra_op: TxnExtraOp::Noop,
+        }
+    }
 }
 
 /// Possible result of a raft query.

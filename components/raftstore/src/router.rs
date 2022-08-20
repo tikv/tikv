@@ -11,7 +11,7 @@ use tikv_util::time::ThreadReadId;
 
 use crate::{
     store::{
-        fsm::{store::RaftSender, RaftRouter},
+        fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
         CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
         RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,

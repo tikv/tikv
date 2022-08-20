@@ -14,8 +14,6 @@ use batch_system::{
 use collections::HashMap;
 use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
-use futures::{compat::Future01CompatExt, FutureExt};
-use futures_util::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
     metapb::Store,
     raft_serverpb::{PeerState, RaftMessage},
@@ -24,10 +22,9 @@ use raft::INVALID_ID;
 use raftstore::{
     bytes_capacity,
     store::{
-        fsm::store::{PeerTickBatch, RaftSender, StoreMeta},
+        fsm::store::{PeerTickBatch, StoreMeta},
         local_metrics::RaftMetrics,
         memory::*,
-        worker::{RaftlogFetchRunner, RaftlogFetchTask},
         Config, InspectedRaftMessage, PdTask, RaftRouter, RaftlogFetchRunner, RaftlogFetchTask,
         StoreWriters, Transport, WriteMsg, WriteSenders,
     },
@@ -50,6 +47,7 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
+    router::{RaftQuery, RaftCommand},
     Error, PeerMsg, PeerTick, Result, StoreMsg,
 };
 
@@ -74,10 +72,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta>>,
-    /// raft metrics
-    pub raft_metrics: RaftMetrics,
     pub current_time: Option<Timespec>,
-    router: RaftRouter<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -341,7 +336,6 @@ where
             self.logger.clone(),
             self.pd_scheduler.clone(),
             self.store_meta.clone(),
-            self.raft_router.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)
@@ -474,6 +468,22 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
+    }
+
+    #[inline]
+    pub fn send_read_command(
+        &self,
+        cmd: RaftQuery,
+    ) -> std::result::Result<(), TrySendError<RaftQuery>> {
+        let region_id = cmd.req.request.get_header().get_region_id();
+        match self.send(region_id, PeerMsg::RaftQuery(cmd)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => Err(TrySendError::Full(cmd)),
+            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
+                Err(TrySendError::Disconnected(cmd))
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
