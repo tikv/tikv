@@ -271,6 +271,7 @@ impl Engine for RocksEngine {
 }
 
 impl Snapshot for Arc<RocksSnapshot> {
+    type E = BaseRocksEngine;
     type Iter = RocksEngineIterator;
     type Ext<'a> = DummySnapshotExt;
 
@@ -295,6 +296,10 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
         Ok(self.iterator_opt(cf, iter_opt)?)
+    }
+
+    fn inner_engine(&self) -> Self::E {
+        BaseRocksEngine::from_db(self.db())
     }
 
     fn ext(&self) -> DummySnapshotExt {

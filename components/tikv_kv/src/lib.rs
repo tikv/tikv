@@ -349,6 +349,7 @@ pub trait Engine: Send + Clone + 'static {
 /// of a view of TiKV at a specific timestamp. This snapshot is lower-level, a
 /// view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
+    type E: LocalEngine;
     type Iter: Iterator;
     type Ext<'a>: SnapshotExt
     where
@@ -363,7 +364,9 @@ pub trait Snapshot: Sync + Send + Clone {
     /// Get the value associated with `key` in `cf` column family, with Options
     /// in `opts`
     fn get_cf_opt(&self, opts: ReadOptions, cf: CfName, key: &Key) -> Result<Option<Value>>;
+
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter>;
+
     // The minimum key this snapshot can retrieve.
     #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
@@ -374,6 +377,11 @@ pub trait Snapshot: Sync + Send + Clone {
     #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
         None
+    }
+
+    #[inline]
+    fn inner_engine(&self) -> Self::E {
+        unimplemented!()
     }
 
     fn ext(&self) -> Self::Ext<'_>;

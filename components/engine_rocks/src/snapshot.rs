@@ -30,13 +30,18 @@ impl RocksSnapshot {
             }
         }
     }
+
+    pub fn db(&self) -> Arc<DB> {
+        self.db.clone()
+    }
 }
 
 impl Snapshot for RocksSnapshot {
     type E = RocksEngine;
 
+    #[inline]
     fn inner_engine(&self) -> Self::E {
-        RocksEngine::from_db(self.db.clone())
+        RocksEngine::from_db(self.db())
     }
 }
 

@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub struct StorageConfigManger<E: Engine, L: LockManager> {
-    tablet_factory: Arc<dyn TabletFactory<E::Local> + Send + Sync>,
+    tablet_factory: Arc<dyn TabletFactory<E::Tablet> + Send + Sync>,
     shared_block_cache: bool,
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
@@ -32,7 +32,7 @@ unsafe impl<E: Engine, L: LockManager> Sync for StorageConfigManger<E, L> {}
 
 impl<E: Engine, L: LockManager> StorageConfigManger<E, L> {
     pub fn new(
-        tablet_factory: Arc<dyn TabletFactory<E::Local> + Send + Sync>,
+        tablet_factory: Arc<dyn TabletFactory<E::Tablet> + Send + Sync>,
         shared_block_cache: bool,
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
         flow_controller: Arc<FlowController>,
@@ -74,7 +74,7 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
                 let enable: bool = v.into();
                 let enable_str = if enable { "true" } else { "false" };
                 self.tablet_factory.for_each_opened_tablet(
-                    &mut |_region_id, _suffix, tablet: &EK::Local| {
+                    &mut |_region_id, _suffix, tablet: &EK::Tablet| {
                         for cf in tablet.cf_names() {
                             tablet
                                 .set_options_cf(cf, &[("disable_write_stall", enable_str)])

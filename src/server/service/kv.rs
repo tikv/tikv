@@ -69,7 +69,7 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
-pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> {
+pub struct Service<T: RaftStoreRouter<E::Tablet> + 'static, E: Engine, L: LockManager, F: KvFormat> {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
@@ -97,7 +97,7 @@ pub struct Service<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockMan
 }
 
 impl<
-    T: RaftStoreRouter<E::Local> + Clone + 'static,
+    T: RaftStoreRouter<E::Tablet> + Clone + 'static,
     E: Engine + Clone,
     L: LockManager + Clone,
     F: KvFormat,
@@ -121,7 +121,7 @@ impl<
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat>
+impl<T: RaftStoreRouter<E::Tablet> + 'static, E: Engine, L: LockManager, F: KvFormat>
     Service<T, E, L, F>
 {
     /// Constructs a new `Service` which provides the `Tikv` service.
@@ -228,7 +228,7 @@ macro_rules! set_total_time {
     };
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat> Tikv
+impl<T: RaftStoreRouter<E::Tablet> + 'static, E: Engine, L: LockManager, F: KvFormat> Tikv
     for Service<T, E, L, F>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);

@@ -763,6 +763,8 @@ mod tests {
     #[derive(Default)]
     struct MockRangeSnapshotIter {}
 
+    struct MockEngine {}
+
     impl Iterator for MockRangeSnapshotIter {
         fn next(&mut self) -> EngineResult<bool> {
             Ok(true)
@@ -803,27 +805,38 @@ mod tests {
     }
 
     impl Snapshot for MockRangeSnapshot {
+        type E = MockEngine;
         type Iter = MockRangeSnapshotIter;
         type Ext<'a> = DummySnapshotExt;
 
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn iter(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
             Ok(MockRangeSnapshotIter::default())
         }
+
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
         }
+
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
         }
+
+        fn inner_engine(&self) -> Self::E {
+            MockEngine {}
+        }
+
         fn ext(&self) -> DummySnapshotExt {
             DummySnapshotExt
         }

@@ -2691,9 +2691,9 @@ pub struct TxnTestEngine<E: Engine> {
 
 impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
-    type Local = E::Local;
+    type Tablet = E::Tablet;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Self::Tablet {
         self.engine.kv_engine()
     }
 
