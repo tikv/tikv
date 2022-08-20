@@ -1305,7 +1305,7 @@ mod tests {
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
         type Snap = RegionSnapshot<RocksSnapshot>;
-        type Tablet = RocksEngine;
+        type Local = RocksEngine;
 
         fn kv_engine(&self) -> RocksEngine {
             self.0.kv_engine()

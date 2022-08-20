@@ -871,8 +871,9 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 #[cfg(test)]
 mod tests {
     use concurrency_manager::ConcurrencyManager;
+    use engine_panic::PanicEngine;
     use engine_rocks::ReadPerfInstant;
-    use engine_traits::CF_WRITE;
+    use engine_traits::{CF_WRITE};
     use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
     use txn_types::{Key, Mutation, TimeStamp};
 
@@ -1446,6 +1447,7 @@ mod tests {
         }
 
         impl Snapshot for MockSnapshot {
+            type E = PanicEngine;
             type Iter = KvTestEngineIterator;
             type Ext<'a> = MockSnapshotExt;
 
