@@ -9,7 +9,7 @@ use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, 
 use rocksdb::{rocksdb_options::UnsafeSnap, DBIterator, DB};
 
 use crate::{
-    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
+    db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle, RocksEngine,
     RocksEngineIterator,
 };
 
@@ -32,7 +32,13 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot for RocksSnapshot {}
+impl Snapshot for RocksSnapshot {
+    type E = RocksEngine;
+
+    fn inner_engine(&self) -> Self::E {
+        RocksEngine::from_db(self.db.clone())
+    }
+}
 
 impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {

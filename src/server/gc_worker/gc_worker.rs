@@ -31,7 +31,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{CfStatistics, CursorBuilder, Modify};
+use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -411,9 +411,11 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let snapshot = self
-            .engine
-            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
+        let snap_ctx = SnapContext::default();
+        let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
+        // let snapshot = self
+        //     .engine
+        //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
         let mut keys = get_keys_in_regions(keys, regions_provider)?;
 
         let mut txn = Self::new_txn();

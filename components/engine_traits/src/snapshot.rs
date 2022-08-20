@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use crate::{iterable::Iterable, peekable::Peekable};
+use crate::{iterable::Iterable, peekable::Peekable, KvEngine};
 
 /// A consistent read-only view of the database.
 ///
@@ -12,4 +12,7 @@ pub trait Snapshot
 where
     Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
 {
+    type E: KvEngine;
+
+    fn inner_engine(&self) -> Self::E;
 }

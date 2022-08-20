@@ -9,7 +9,13 @@ use crate::{db_vector::PanicDbVector, engine::PanicEngine};
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
 
-impl Snapshot for PanicSnapshot {}
+impl Snapshot for PanicSnapshot {
+    type E = PanicEngine;
+
+    fn inner_engine(&self) -> Self::E {
+        PanicEngine {}
+    }
+}
 
 impl Peekable for PanicSnapshot {
     type DbVector = PanicDbVector;
