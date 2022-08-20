@@ -231,6 +231,7 @@ impl Iterator for BTreeEngineIterator {
 }
 
 impl Snapshot for BTreeEngineSnapshot {
+    type E = PanicEngine;
     type Iter = BTreeEngineIterator;
     type Ext<'a> = DummySnapshotExt;
 

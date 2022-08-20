@@ -2691,9 +2691,9 @@ pub struct TxnTestEngine<E: Engine> {
 
 impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
-    type Tablet = E::Tablet;
+    type Local = E::Local;
 
-    fn kv_engine(&self) -> Self::Tablet {
+    fn kv_engine(&self) -> Self::Local {
         self.engine.kv_engine()
     }
 
@@ -2744,6 +2744,7 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 }
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
+    type E = S::E;
     type Iter = S::Iter;
     type Ext<'a> = TxnTestSnapshotExt<'a> where S: 'a;
 
@@ -2770,6 +2771,10 @@ impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
         iter_opt: engine_traits::IterOptions,
     ) -> tikv_kv::Result<Self::Iter> {
         self.snapshot.iter(cf, iter_opt)
+    }
+
+    fn inner_engine(&self) -> Self::E {
+        self.snapshot.inner_engine()
     }
 
     fn ext(&self) -> Self::Ext<'_> {

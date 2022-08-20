@@ -39,6 +39,7 @@ impl<S: Snapshot> RawMvccSnapshot<S> {
 }
 
 impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
+    type E = S::E;
     type Iter = RawMvccIterator<S::Iter>;
     type Ext<'a> = S::Ext<'a> where S: 'a;
 
@@ -66,6 +67,11 @@ impl<S: Snapshot> Snapshot for RawMvccSnapshot<S> {
     #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
         self.snap.upper_bound()
+    }
+
+    #[inline]
+    fn inner_engine(&self) -> Self::E {
+        self.snap.inner_engine()
     }
 
     fn ext(&self) -> S::Ext<'_> {

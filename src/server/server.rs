@@ -58,7 +58,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter<E::Tablet> + 'static, S: StoreAddrResolver + 'static, E: Engine>
+pub struct Server<T: RaftStoreRouter<E::Local> + 'static, S: StoreAddrResolver + 'static, E: Engine>
 {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
@@ -68,7 +68,7 @@ pub struct Server<T: RaftStoreRouter<E::Tablet> + 'static, S: StoreAddrResolver 
     grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
     // Transport.
-    trans: ServerTransport<T, S, E::Tablet>,
+    trans: ServerTransport<T, S, E::Local>,
     raft_router: T,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
@@ -83,7 +83,7 @@ pub struct Server<T: RaftStoreRouter<E::Tablet> + 'static, S: StoreAddrResolver 
     timer: Handle,
 }
 
-impl<T: RaftStoreRouter<E::Tablet> + Unpin, S: StoreAddrResolver + 'static, E: Engine>
+impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: Engine>
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
@@ -207,7 +207,7 @@ impl<T: RaftStoreRouter<E::Tablet> + Unpin, S: StoreAddrResolver + 'static, E: E
         self.snap_worker.scheduler()
     }
 
-    pub fn transport(&self) -> ServerTransport<T, S, E::Tablet> {
+    pub fn transport(&self) -> ServerTransport<T, S, E::Local> {
         self.trans.clone()
     }
 

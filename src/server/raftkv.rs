@@ -312,7 +312,7 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     type Snap = RegionSnapshot<E::Snapshot>;
-    type Tablet = E;
+    type Local = E;
 
     fn kv_engine(&self) -> E {
         self.engine.clone()

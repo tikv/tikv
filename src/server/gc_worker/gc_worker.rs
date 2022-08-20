@@ -199,7 +199,7 @@ where
 struct GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet>,
+    RR: RaftStoreRouter<E::Local>,
 {
     engine: E,
 
@@ -283,7 +283,7 @@ fn get_keys_in_regions(
 impl<E, RR> GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -763,12 +763,12 @@ where
 impl<E, RR> Runnable for GcRunner<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet>,
+    RR: RaftStoreRouter<E::Local>,
 {
-    type Task = GcTask<E::Tablet>;
+    type Task = GcTask<E::Local>;
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Tablet>) {
+    fn run(&mut self, task: GcTask<E::Local>) {
         let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
 
@@ -969,7 +969,7 @@ pub fn sync_gc(
 pub struct GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     engine: E,
 
@@ -984,8 +984,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<LazyWorker<GcTask<E::Tablet>>>>,
-    worker_scheduler: Scheduler<GcTask<E::Tablet>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
+    worker_scheduler: Scheduler<GcTask<E::Local>>,
 
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
@@ -996,7 +996,7 @@ where
 impl<E, RR> Clone for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet>,
+    RR: RaftStoreRouter<E::Local>,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -1020,7 +1020,7 @@ where
 impl<E, RR> Drop for GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet> + 'static,
+    RR: RaftStoreRouter<E::Local> + 'static,
 {
     #[inline]
     fn drop(&mut self) {
@@ -1040,7 +1040,7 @@ where
 impl<E, RR> GcWorker<E, RR>
 where
     E: Engine,
-    RR: RaftStoreRouter<E::Tablet>,
+    RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
         engine: E,
@@ -1115,7 +1115,7 @@ where
 
     pub fn start_observe_lock_apply(
         &mut self,
-        coprocessor_host: &mut CoprocessorHost<E::Tablet>,
+        coprocessor_host: &mut CoprocessorHost<E::Local>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
@@ -1137,7 +1137,7 @@ where
         Ok(())
     }
 
-    pub fn scheduler(&self) -> Scheduler<GcTask<E::Tablet>> {
+    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
         self.worker_scheduler.clone()
     }
 

@@ -2,7 +2,6 @@
 
 use std::{num::NonZeroU64, sync::Arc};
 
-use engine_rocks::RocksEngine;
 use engine_traits::{CfName, IterOptions, Peekable, ReadOptions, Snapshot};
 use kvproto::kvrpcpb::ExtraOp as TxnExtraOp;
 use pd_client::BucketMeta;
@@ -59,7 +58,7 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
 }
 
 impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
-    type E = Snapshot::E;
+    type E = S::E;
     type Iter = RegionIterator<S>;
     type Ext<'a> = RegionSnapshotExt<'a, S>;
 
