@@ -128,8 +128,11 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
+    // deprecated.
     #[online_config(skip)]
-    pub sample_ratio: f64,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub sample_ratio: Option<f64>,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
@@ -139,7 +142,10 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+    // deprecated.
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub gc_merge_rewrite: bool,
 }
 
@@ -152,7 +158,7 @@ impl Default for TitanCfConfig {
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
             discardable_ratio: 0.5,
-            sample_ratio: 0.1,
+            sample_ratio: None,
             merge_small_file_threshold: ReadableSize::mb(8),
             blob_run_mode: BlobRunMode::Normal,
             level_merge: false,
@@ -172,14 +178,30 @@ impl TitanCfConfig {
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
-        opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
         opts.set_level_merge(self.level_merge);
         opts.set_range_merge(self.range_merge);
         opts.set_max_sorted_runs(self.max_sorted_runs);
-        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.gc_merge_rewrite {
+            return Err(
+                "gc-merge-rewrite is deprecated. The data produced when this \
+                option is enabled cannot be read by this version. Therefore, if \
+                this option has been applied to an existing node, you must downgrade \
+                it to the previous version and fully clean up the old data. See more \
+                details of how to do that in the documentation for the blob-run-mode \
+                confuguration."
+                    .into(),
+            );
+        }
+        if self.sample_ratio.is_some() {
+            warn!("sample-ratio is deprecated. Ignoring the value.");
+        }
+        Ok(())
     }
 }
 
@@ -332,6 +354,7 @@ macro_rules! cf_config {
                     )
                     .into());
                 }
+                self.titan.validate()?;
                 Ok(())
             }
         }
@@ -446,9 +469,6 @@ macro_rules! write_into_metrics {
         $metrics
             .with_label_values(&[$tag, "titan_discardable_ratio"])
             .set($cf.titan.discardable_ratio);
-        $metrics
-            .with_label_values(&[$tag, "titan_sample_ratio"])
-            .set($cf.titan.sample_ratio);
         $metrics
             .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
             .set($cf.titan.merge_small_file_threshold.0 as f64);
@@ -975,7 +995,6 @@ pub struct DbConfig {
     pub rate_limiter_auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
-    #[online_config(skip)]
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
     #[online_config(skip)]
@@ -1098,8 +1117,8 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
-        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
-        opts.enable_pipelined_commit(enable_pipelined_commit);
+        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
@@ -1156,6 +1175,16 @@ impl DbConfig {
             )
             .into());
         }
+        if self.max_sub_compactions == 0
+            || self.max_sub_compactions as i32 > self.max_background_jobs
+        {
+            return Err(format!(
+                "max_sub_compactions should be greater than 0 and less than or equal to {:?}",
+                self.max_background_jobs,
+            )
+            .into());
+        }
+
         if self.max_background_flushes <= 0 || self.max_background_flushes > limit {
             return Err(format!(
                 "max_background_flushes should be greater than 0 and less than or equal to {:?}",
@@ -1545,6 +1574,11 @@ impl DBConfigManger {
         Ok(())
     }
 
+    fn set_max_subcompactions(&self, max_subcompactions: u32) -> Result<(), Box<dyn Error>> {
+        self.set_db_config(&[("max_subcompactions", &max_subcompactions.to_string())])?;
+        Ok(())
+    }
+
     fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
         match (self.db_type, cf) {
             (DBType::Kv, CF_DEFAULT)
@@ -1613,6 +1647,14 @@ impl ConfigManager for DBConfigManger {
         {
             let max_background_flushes = background_flushes_config.1.into();
             self.set_max_background_flushes(max_background_flushes)?;
+        }
+
+        if let Some(background_subcompactions_config) = change
+            .drain_filter(|(name, _)| name == "max_sub_compactions")
+            .next()
+        {
+            let max_subcompactions = background_subcompactions_config.1.into();
+            self.set_max_subcompactions(max_subcompactions)?;
         }
 
         if !change.is_empty() {
