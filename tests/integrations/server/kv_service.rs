@@ -2148,3 +2148,40 @@ fn test_rpc_wall_time() {
         );
     }
 }
+
+#[test]
+fn test_pessimistic_lock_execution_tracking() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
+
+    // Add a prewrite lock.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    let block_duration = Duration::from_millis(300);
+    let client_clone = client.clone();
+    let ctx_clone = ctx.clone();
+    let k_clone = k.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(block_duration);
+        must_kv_commit(&client_clone, ctx_clone, vec![k_clone], 10, 30, 30);
+    });
+
+    let resp = kv_pessimistic_lock(&client, ctx, vec![k], 20, 20, false);
+    assert!(
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos()
+            > 0,
+        "resp lock wait time={:?}, block_duration={:?}",
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos(),
+        block_duration
+    );
+
+    handle.join().unwrap();
+}
