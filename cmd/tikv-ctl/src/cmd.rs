@@ -529,6 +529,8 @@ pub enum Cmd {
         #[structopt(subcommand)]
         cmd: EncryptionMetaCmd,
     },
+    /// Delete encryption keys that are no longer associated with physical files.
+    CleanupEncryptionMeta {},
     /// Print bad ssts related infos
     BadSsts {
         #[structopt(long)]
