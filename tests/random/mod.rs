@@ -1,10 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{
-        atomic::{AtomicU16, AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU16, AtomicUsize, Ordering},
     thread::{sleep, JoinHandle},
     time::Duration,
 };
@@ -15,7 +12,6 @@ use rand::{Rng, RngCore};
 use test_cloud_server::{
     client::ClusterClient, scheduler::RegionScheduler, try_wait, ServerCluster,
 };
-use test_raftstore::TestPdClient;
 use tikv::config::TiKvConfig;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},

@@ -22,6 +22,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
+use rfstore::store::RegionIDVer;
 use test_raftstore::TestPdClient;
 use tikv::storage::mvcc::TimeStamp;
 use tikv_util::{
@@ -35,7 +36,7 @@ pub struct ClusterClient {
     pub pd_client: Arc<TestPdClient>,
     pub channels: HashMap<u64, Channel>,
     /// region_raw_end_key -> region_id
-    pub(crate) region_ranges: BTreeMap<Vec<u8>, u64>,
+    pub(crate) region_ranges: BTreeMap<Vec<u8>, RegionIDVer>,
     /// region_id -> region
     pub(crate) regions: HashMap<u64, RawRegion>,
     pub(crate) ref_store: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
@@ -80,6 +81,10 @@ impl RawRegion {
     fn get_leader(&self) -> Peer {
         self.peers[self.leader_idx].clone()
     }
+
+    fn id_ver(&self) -> RegionIDVer {
+        RegionIDVer::new(self.id, self.epoch.version)
+    }
 }
 
 impl ClusterClient {
@@ -122,20 +127,25 @@ impl ClusterClient {
 
     pub fn kv_prewrite(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
         let groups = self.group_mutations_by_region(muts);
-        for (region_id, group_muts) in groups {
-            self.kv_prewrite_single_region(region_id, group_muts, pk.clone(), ts);
+        for (id_ver, group_muts) in groups {
+            self.kv_prewrite_single_region(id_ver, group_muts, pk.clone(), ts);
         }
     }
 
     pub fn kv_prewrite_single_region(
         &mut self,
-        region_id: u64,
+        id_ver: RegionIDVer,
         muts: Vec<Mutation>,
         pk: Vec<u8>,
         ts: TimeStamp,
     ) {
+        let region_id = id_ver.id();
         loop {
             let ctx = self.new_rpc_ctx(region_id);
+            if ctx.get_region_epoch().get_version() != id_ver.ver() {
+                self.kv_prewrite(muts, pk, ts);
+                return;
+            }
             let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
             let mut prewrite_req = PrewriteRequest::default();
             prewrite_req.set_context(ctx);
@@ -168,20 +178,25 @@ impl ClusterClient {
 
     pub fn kv_commit(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let groups = self.group_keys_by_region(keys);
-        for (region_id, group_keys) in groups {
-            self.kv_commit_single_region(region_id, group_keys, start_ts, commit_ts);
+        for (id_ver, group_keys) in groups {
+            self.kv_commit_single_region(id_ver, group_keys, start_ts, commit_ts);
         }
     }
 
     pub fn kv_commit_single_region(
         &mut self,
-        region_id: u64,
+        id_ver: RegionIDVer,
         keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
     ) {
+        let region_id = id_ver.id();
         loop {
             let ctx = self.new_rpc_ctx(region_id);
+            if ctx.get_region_epoch().get_version() != id_ver.ver() {
+                self.kv_commit(keys, start_ts, commit_ts);
+                return;
+            }
             let kv_client = self.get_kv_client(ctx.get_peer().get_store_id());
             let mut commit_req = CommitRequest::default();
             commit_req.set_context(ctx);
@@ -213,20 +228,23 @@ impl ClusterClient {
     fn group_mutations_by_region(
         &mut self,
         mut mutations: Vec<Mutation>,
-    ) -> HashMap<u64, Vec<Mutation>> {
-        let mut groups: HashMap<u64, Vec<Mutation>> = HashMap::new();
+    ) -> HashMap<RegionIDVer, Vec<Mutation>> {
+        let mut groups: HashMap<RegionIDVer, Vec<Mutation>> = HashMap::new();
         for m in mutations.drain(..) {
             let region = self.get_region_by_key(m.get_key());
-            groups.entry(region.id).or_insert(vec![]).push(m);
+            groups.entry(region.id_ver()).or_insert(vec![]).push(m);
         }
         groups
     }
 
-    fn group_keys_by_region(&mut self, mut keys: Vec<Vec<u8>>) -> HashMap<u64, Vec<Vec<u8>>> {
-        let mut groups: HashMap<u64, Vec<Vec<u8>>> = HashMap::new();
+    fn group_keys_by_region(
+        &mut self,
+        mut keys: Vec<Vec<u8>>,
+    ) -> HashMap<RegionIDVer, Vec<Vec<u8>>> {
+        let mut groups: HashMap<RegionIDVer, Vec<Vec<u8>>> = HashMap::new();
         for key in keys.drain(..) {
             let region = self.get_region_by_key(&key);
-            groups.entry(region.id).or_insert(vec![]).push(key);
+            groups.entry(region.id_ver()).or_insert(vec![]).push(key);
         }
         groups
     }
@@ -245,7 +263,8 @@ impl ClusterClient {
             .get_region(&encode_bytes(key))
             .unwrap()
             .into();
-        self.region_ranges.insert(region.raw_end.clone(), region.id);
+        self.region_ranges
+            .insert(region.raw_end.clone(), region.id_ver());
         self.regions.insert(region.id, region);
         self.get_region_from_cache(key).unwrap()
     }
@@ -261,18 +280,19 @@ impl ClusterClient {
         } else {
             return;
         };
-        self.region_ranges.insert(region.raw_end.clone(), region.id);
+        self.region_ranges
+            .insert(region.raw_end.clone(), region.id_ver());
         self.regions.insert(region.id, region);
     }
 
     fn get_region_from_cache(&self, key: &[u8]) -> Option<RawRegion> {
-        if let Some((_, id)) = self
+        if let Some((_, &id_ver)) = self
             .region_ranges
             .range((Excluded(key.to_vec()), Unbounded))
             .next()
         {
-            let region = self.regions.get(id).unwrap();
-            if region.raw_start.as_slice() <= key {
+            let region = self.regions.get(&id_ver.id()).unwrap();
+            if region.id_ver() == id_ver && region.raw_start.as_slice() <= key {
                 return Some(region.clone());
             }
         }
