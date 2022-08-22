@@ -873,7 +873,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_panic::PanicEngine;
     use engine_rocks::ReadPerfInstant;
-    use engine_traits::{CF_WRITE};
+    use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::{Assertion, Context, ExtraOp};
     use txn_types::{Key, Mutation, TimeStamp};
 
