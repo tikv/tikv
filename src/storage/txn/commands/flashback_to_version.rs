@@ -48,6 +48,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.version, context.concurrency_manager);
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        // Flashback all keys within [start_key, end_key) to the specified version by
+        // deleting all keys in `CF_WRITE`, `CF_DEFAULT` and `CF_LOCK` that are written
+        // later than this version.
         flashback_to_version(
             &mut txn,
             &mut reader,
