@@ -515,7 +515,7 @@ impl<'client> S3Uploader<'client> {
     }
 }
 
-const STORAGE_NAME: &str = "s3";
+pub const STORAGE_NAME: &str = "s3";
 
 #[async_trait]
 impl BlobStorage for S3Storage {
