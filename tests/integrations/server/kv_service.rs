@@ -19,7 +19,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{self, *},
+    kvrpcpb::{self, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -2073,8 +2073,7 @@ fn test_commands_write_detail() {
     mutation.set_op(Op::Put);
     mutation.set_value(v);
     prewrite_req.set_mutations(vec![mutation].into());
-    prewrite_req
-        .set_pessimistic_actions(vec![PrewriteRequestPessimisticAction::DoPessimisticCheck]);
+    prewrite_req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     prewrite_req.set_context(ctx.clone());
     prewrite_req.set_primary_lock(k.clone());
     prewrite_req.set_start_version(20);

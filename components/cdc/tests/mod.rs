@@ -11,7 +11,7 @@ use grpcio::{
 };
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
-    kvrpcpb::*,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;
@@ -420,7 +420,7 @@ impl TestSuite {
         prewrite_req.for_update_ts = for_update_ts.into_inner();
         prewrite_req
             .mut_pessimistic_actions()
-            .push(PrewriteRequestPessimisticAction::DoPessimisticCheck);
+            .push(DoPessimisticCheck);
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)

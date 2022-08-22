@@ -4,7 +4,10 @@
 use std::cmp;
 
 use fail::fail_point;
-use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction};
+use kvproto::kvrpcpb::{
+    Assertion, AssertionLevel,
+    PrewriteRequestPessimisticAction::{self, *},
+};
 use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
 };
@@ -57,11 +60,7 @@ pub fn prewrite<S: Snapshot>(
 
     let lock_status = match reader.load_lock(&mutation.key)? {
         Some(lock) => mutation.check_lock(lock, pessimistic_action)?,
-        None if matches!(
-            pessimistic_action,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck
-        ) =>
-        {
+        None if matches!(pessimistic_action, DoPessimisticCheck) => {
             amend_pessimistic_lock(&mutation, reader)?;
             lock_amended = true;
             LockStatus::None
@@ -303,10 +302,7 @@ impl<'a> PrewriteMutation<'a> {
         if lock.ts != self.txn_props.start_ts {
             // Abort on lock belonging to other transaction if
             // prewrites a pessimistic lock.
-            if matches!(
-                pessimistic_action,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck
-            ) {
+            if matches!(pessimistic_action, DoPessimisticCheck) {
                 warn!(
                     "prewrite failed (pessimistic lock not found)";
                     "start_ts" => self.txn_props.start_ts,
@@ -582,13 +578,11 @@ impl<'a> PrewriteMutation<'a> {
             TransactionKind::Optimistic(s) => *s,
             TransactionKind::Pessimistic(_) => {
                 match self.pessimistic_action {
-                    PrewriteRequestPessimisticAction::DoPessimisticCheck => true,
+                    DoPessimisticCheck => true,
                     // For non-pessimistic-locked keys, do not skip constraint check when retrying.
                     // This intents to protect idempotency.
                     // Ref: https://github.com/tikv/tikv/issues/11187
-                    PrewriteRequestPessimisticAction::SkipPessimisticCheck => {
-                        !self.txn_props.is_retry_request
-                    }
+                    SkipPessimisticCheck => !self.txn_props.is_retry_request,
                     // For keys that postpones constraint check to prewrite, do not skip constraint
                     // check.
                     PrewriteRequestPessimisticAction::DoConstraintCheck => false,
@@ -801,7 +795,7 @@ pub mod tests {
             &props,
             Mutation::make_insert(Key::from_raw(key), value.to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )?;
         // Insert must be None if the key is not lock, or be Unspecified if the
         // key is already locked.
@@ -832,7 +826,7 @@ pub mod tests {
             &optimistic_txn_props(pk, ts),
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -854,7 +848,7 @@ pub mod tests {
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -867,7 +861,7 @@ pub mod tests {
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, false),
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap_err();
         assert!(matches!(
@@ -902,7 +896,7 @@ pub mod tests {
             &props,
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert!(min_ts > props.start_ts);
@@ -922,7 +916,7 @@ pub mod tests {
             &props,
             Mutation::make_check_not_exists(Key::from_raw(b"k0")),
             &Some(vec![]),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert_eq!(cm.max_ts(), props.start_ts);
@@ -937,7 +931,7 @@ pub mod tests {
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, false),
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert!(min_ts > 42.into());
@@ -960,7 +954,7 @@ pub mod tests {
                 &optimistic_async_props(b"k3", 44.into(), 50.into(), 2, false),
                 mutation.clone(),
                 &Some(vec![b"k4".to_vec()]),
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             )
             .unwrap();
             assert!(min_ts > 44.into());
@@ -982,7 +976,7 @@ pub mod tests {
                     &props,
                     mutation.clone(),
                     &Some(vec![b"k6".to_vec()]),
-                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                    SkipPessimisticCheck,
                 )
                 .unwrap();
                 assert!(min_ts > 45.into());
@@ -1001,7 +995,7 @@ pub mod tests {
                 &props,
                 mutation.clone(),
                 &Some(vec![b"k8".to_vec()]),
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             )
             .unwrap();
             assert!(min_ts >= 46.into());
@@ -1031,7 +1025,7 @@ pub mod tests {
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 2, true),
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1044,7 +1038,7 @@ pub mod tests {
             &optimistic_async_props(b"k1", 10.into(), 50.into(), 1, true),
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap_err();
         assert!(matches!(
@@ -1090,7 +1084,7 @@ pub mod tests {
             },
             Mutation::make_check_not_exists(Key::from_raw(key)),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )?;
         assert_eq!(old_value, OldValue::Unspecified);
         Ok(())
@@ -1127,7 +1121,7 @@ pub mod tests {
             &txn_props,
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &Some(vec![b"k2".to_vec()]),
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1141,7 +1135,7 @@ pub mod tests {
             &txn_props,
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &Some(vec![]),
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
         )
         .unwrap_err();
     }
@@ -1177,7 +1171,7 @@ pub mod tests {
             &txn_props,
             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
         )
         .unwrap();
         // Pessimistic txn skips constraint check, does not read previous write.
@@ -1191,7 +1185,7 @@ pub mod tests {
             &txn_props,
             Mutation::make_put(Key::from_raw(b"k2"), b"v2".to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
         )
         .unwrap_err();
     }
@@ -1297,7 +1291,7 @@ pub mod tests {
                 &txn_props,
                 Mutation::make_check_not_exists(Key::from_raw(key)),
                 &None,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             );
             if success {
                 let res = res.unwrap();
@@ -1312,7 +1306,7 @@ pub mod tests {
                 &txn_props,
                 Mutation::make_insert(Key::from_raw(key), b"value".to_vec()),
                 &None,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             );
             if success {
                 let res = res.unwrap();
@@ -1367,7 +1361,7 @@ pub mod tests {
                 &txn_props,
                 Mutation::make_put(key.clone(), b"value".to_vec()),
                 &None,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             )
             .unwrap();
             assert_eq!(&old_value, expected_value, "key: {}", key);
@@ -1387,7 +1381,7 @@ pub mod tests {
             &Some(vec![b"k2".to_vec()]),
             10,
             10,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
+            DoPessimisticCheck,
             15,
         );
         must_pessimistic_prewrite_put_async_commit(
@@ -1398,7 +1392,7 @@ pub mod tests {
             &Some(vec![]),
             10,
             10,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             15,
         );
 
@@ -1417,7 +1411,7 @@ pub mod tests {
             &Some(vec![]),
             10,
             10,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             0,
         );
         assert!(matches!(
@@ -1448,7 +1442,7 @@ pub mod tests {
             &Some(vec![]),
             10,
             10,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             0,
         );
         assert!(matches!(
@@ -1465,7 +1459,7 @@ pub mod tests {
             &None,
             10,
             10,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             0,
         );
         assert!(matches!(
@@ -1485,7 +1479,7 @@ pub mod tests {
             &None,
             11,
             11,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             0,
         );
         assert!(matches!(
@@ -1502,7 +1496,7 @@ pub mod tests {
             b"k1",
             &None,
             12.into(),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             100,
             12.into(),
             1,
@@ -1525,7 +1519,7 @@ pub mod tests {
             b"k1",
             &None,
             13.into(),
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
             100,
             55.into(),
             1,
@@ -1580,7 +1574,7 @@ pub mod tests {
                 &txn_props,
                 Mutation::make_put(Key::from_raw(b"k1"), b"value".to_vec()),
                 &None,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
             )
             .unwrap();
             assert_eq!(
@@ -1634,7 +1628,7 @@ pub mod tests {
             &txn_props,
             Mutation::make_insert(Key::from_raw(b"k1"), b"v2".to_vec()),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
         assert_eq!(old_value, OldValue::None);
@@ -1771,7 +1765,7 @@ pub mod tests {
                     &txn_props,
                     Mutation::make_put(Key::from_raw(key), b"v2".to_vec()),
                     &None,
-                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                    SkipPessimisticCheck,
                 )?;
                 Ok(old_value)
             })],
@@ -1807,7 +1801,7 @@ pub mod tests {
                     &txn_props,
                     Mutation::make_insert(Key::from_raw(key), b"v2".to_vec()),
                     &None,
-                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                    SkipPessimisticCheck,
                 )?;
                 Ok(old_value)
             })],
@@ -1878,7 +1872,7 @@ pub mod tests {
                 &k1,
                 b"v1",
                 10,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 0,
                 Assertion::NotExist,
                 assertion_level,
@@ -1890,7 +1884,7 @@ pub mod tests {
                 &k1,
                 b"v1",
                 20,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 0,
                 Assertion::Exist,
                 assertion_level,
@@ -1903,7 +1897,7 @@ pub mod tests {
                 &k2,
                 b"v2",
                 10,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 11,
                 Assertion::NotExist,
                 assertion_level,
@@ -1915,7 +1909,7 @@ pub mod tests {
                 &k2,
                 b"v2",
                 20,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 21,
                 Assertion::Exist,
                 assertion_level,
@@ -1929,7 +1923,7 @@ pub mod tests {
                 &k1,
                 b"v1",
                 30,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 0,
                 Assertion::NotExist,
                 assertion_level,
@@ -1939,7 +1933,7 @@ pub mod tests {
                 &k3,
                 b"v3",
                 30,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 0,
                 Assertion::Exist,
                 assertion_level,
@@ -1955,7 +1949,7 @@ pub mod tests {
                 &k2,
                 b"v2",
                 30,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 31,
                 Assertion::NotExist,
                 assertion_level,
@@ -1965,7 +1959,7 @@ pub mod tests {
                 &k4,
                 b"v4",
                 30,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 31,
                 Assertion::Exist,
                 assertion_level,
@@ -1981,7 +1975,7 @@ pub mod tests {
                 &k1,
                 b"v1",
                 40,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 41,
                 Assertion::NotExist,
                 assertion_level,
@@ -1991,7 +1985,7 @@ pub mod tests {
                 &k3,
                 b"v3",
                 40,
-                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                SkipPessimisticCheck,
                 41,
                 Assertion::Exist,
                 assertion_level,
@@ -2006,7 +2000,7 @@ pub mod tests {
                 &k2,
                 b"v2",
                 40,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 41,
                 Assertion::NotExist,
                 assertion_level,
@@ -2016,7 +2010,7 @@ pub mod tests {
                 &k4,
                 b"v4",
                 40,
-                PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                DoPessimisticCheck,
                 41,
                 Assertion::Exist,
                 assertion_level,

@@ -19,7 +19,7 @@ use grpcio::*;
 use kvproto::{
     kvrpcpb::{
         self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, PrewriteRequestPessimisticAction, RawPutRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -400,7 +400,7 @@ fn test_pipelined_pessimistic_lock() {
             commands::PrewritePessimistic::new(
                 vec![(
                     Mutation::make_put(key.clone(), val.clone()),
-                    PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                    DoPessimisticCheck,
                 )],
                 key.to_raw().unwrap(),
                 10.into(),
@@ -574,7 +574,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     )],
                     b"k1".to_vec(),
                     10.into(),
@@ -709,9 +709,9 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     vec![(
                         Mutation::make_put(Key::from_raw(key), value.to_vec()),
                         if need_lock {
-                            PrewriteRequestPessimisticAction::DoPessimisticCheck
+                            DoPessimisticCheck
                         } else {
-                            PrewriteRequestPessimisticAction::SkipPessimisticCheck
+                            SkipPessimisticCheck
                         },
                     )],
                     key.to_vec(),
@@ -1045,7 +1045,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     )],
                     key.to_vec(),
                     start_ts,

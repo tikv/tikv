@@ -3,7 +3,10 @@
 //! This file contains tests and testing tools which affects multiple actions
 
 use concurrency_manager::ConcurrencyManager;
-use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, PrewriteRequestPessimisticAction};
+use kvproto::kvrpcpb::{
+    Assertion, AssertionLevel, Context,
+    PrewriteRequestPessimisticAction::{self, *},
+};
 use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
 
 use super::*;
@@ -84,7 +87,7 @@ pub fn must_prewrite_put<E: Engine>(
         pk,
         &None,
         ts.into(),
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+        SkipPessimisticCheck,
         0,
         TimeStamp::default(),
         0,
@@ -167,9 +170,9 @@ pub fn must_prewrite_put_for_large_txn<E: Engine>(
     let min_commit_ts = (ts.into_inner() + 1).into();
     let for_update_ts = for_update_ts.into();
     let pessimistic_action = if !for_update_ts.is_zero() {
-        PrewriteRequestPessimisticAction::DoPessimisticCheck
+        DoPessimisticCheck
     } else {
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck
+        SkipPessimisticCheck
     };
     must_prewrite_put_impl(
         engine,
@@ -207,7 +210,7 @@ pub fn must_prewrite_put_async_commit<E: Engine>(
         pk,
         secondary_keys,
         ts.into(),
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+        SkipPessimisticCheck,
         100,
         TimeStamp::default(),
         0,
@@ -331,7 +334,7 @@ pub fn must_prewrite_put_err<E: Engine>(
         &None,
         ts,
         TimeStamp::zero(),
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+        SkipPessimisticCheck,
         0,
         false,
         Assertion::None,
@@ -429,14 +432,7 @@ pub fn must_prewrite_delete<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
 ) {
-    must_prewrite_delete_impl(
-        engine,
-        key,
-        pk,
-        ts,
-        TimeStamp::zero(),
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
-    );
+    must_prewrite_delete_impl(engine, key, pk, ts, TimeStamp::zero(), SkipPessimisticCheck);
 }
 
 pub fn must_pessimistic_prewrite_delete<E: Engine>(
@@ -483,14 +479,7 @@ fn must_prewrite_lock_impl<E: Engine>(
 }
 
 pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: impl Into<TimeStamp>) {
-    must_prewrite_lock_impl(
-        engine,
-        key,
-        pk,
-        ts,
-        TimeStamp::zero(),
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
-    );
+    must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), SkipPessimisticCheck);
 }
 
 pub fn must_prewrite_lock_err<E: Engine>(
@@ -511,7 +500,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
         &default_txn_props(ts, pk, TimeStamp::zero()),
         Mutation::make_lock(Key::from_raw(key)),
         &None,
-        PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+        SkipPessimisticCheck,
     )
     .unwrap_err();
 }

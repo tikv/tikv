@@ -2029,7 +2029,7 @@ mod latest_entry_tests {
 #[cfg(test)]
 mod delta_entry_tests {
     use engine_traits::{CF_LOCK, CF_WRITE};
-    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction};
+    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
     use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
 
     use super::{super::ScannerBuilder, test_util::*, *};
@@ -2486,7 +2486,7 @@ mod delta_entry_tests {
                         key,
                         start_ts,
                         commit_ts - 1,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     WriteType::Delete => must_pessimistic_prewrite_delete(
                         &engine,
@@ -2494,7 +2494,7 @@ mod delta_entry_tests {
                         key,
                         start_ts,
                         commit_ts - 1,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     WriteType::Lock => must_pessimistic_prewrite_lock(
                         &engine,
@@ -2502,7 +2502,7 @@ mod delta_entry_tests {
                         key,
                         start_ts,
                         commit_ts - 1,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     WriteType::Rollback => must_rollback(&engine, key, start_ts, false),
                 }
@@ -2528,7 +2528,7 @@ mod delta_entry_tests {
                         key,
                         ts,
                         for_update_ts,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     LockType::Delete => must_pessimistic_prewrite_delete(
                         &engine,
@@ -2536,7 +2536,7 @@ mod delta_entry_tests {
                         key,
                         ts,
                         for_update_ts,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     LockType::Lock => must_pessimistic_prewrite_lock(
                         &engine,
@@ -2544,7 +2544,7 @@ mod delta_entry_tests {
                         key,
                         ts,
                         for_update_ts,
-                        PrewriteRequestPessimisticAction::DoPessimisticCheck,
+                        DoPessimisticCheck,
                     ),
                     LockType::Pessimistic => {}
                 }
@@ -2641,28 +2641,12 @@ mod delta_entry_tests {
 
         // Generate put for [b] at 15.
         must_acquire_pessimistic_lock(&engine, b"b", b"b", 9, 15);
-        must_pessimistic_prewrite_put(
-            &engine,
-            b"b",
-            b"b_15",
-            b"b",
-            9,
-            15,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
-        );
+        must_pessimistic_prewrite_put(&engine, b"b", b"b_15", b"b", 9, 15, DoPessimisticCheck);
 
         must_prewrite_put(&engine, b"c", b"c_4", b"c", 4);
         must_commit(&engine, b"c", 4, 6);
         must_acquire_pessimistic_lock(&engine, b"c", b"c", 5, 15);
-        must_pessimistic_prewrite_put(
-            &engine,
-            b"c",
-            b"c_5",
-            b"c",
-            5,
-            15,
-            PrewriteRequestPessimisticAction::DoPessimisticCheck,
-        );
+        must_pessimistic_prewrite_put(&engine, b"c", b"c_5", b"c", 5, 15, DoPessimisticCheck);
         must_cleanup(&engine, b"c", 20, 0);
 
         let entry_a_1 = EntryBuilder::default()

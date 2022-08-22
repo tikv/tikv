@@ -2,7 +2,7 @@
 
 use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
-use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction};
+use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
 use test_util::KvGenerator;
 use tikv::storage::{
     kv::{Engine, WriteData},
@@ -50,7 +50,7 @@ where
             &txn_props,
             Mutation::make_put(Key::from_raw(k), v.clone()),
             &None,
-            PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+            SkipPessimisticCheck,
         )
         .unwrap();
     }
@@ -97,7 +97,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &Be
                     &txn_props,
                     mutation,
                     &None,
-                    PrewriteRequestPessimisticAction::SkipPessimisticCheck,
+                    SkipPessimisticCheck,
                 )
                 .unwrap();
                 let write_data = WriteData::from_modifies(txn.into_modifies());

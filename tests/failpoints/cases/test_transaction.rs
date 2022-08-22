@@ -14,7 +14,7 @@ use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
         self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
-        PrewriteRequestPessimisticAction,
+        PrewriteRequestPessimisticAction::*,
     },
     tikvpb::TikvClient,
 };
@@ -56,26 +56,10 @@ fn test_txn_failpoints() {
     let (k2, v2) = (b"k2", b"v2");
     must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
-    must_pessimistic_prewrite_put_err(
-        &engine,
-        k,
-        v1,
-        k,
-        30,
-        30,
-        PrewriteRequestPessimisticAction::DoPessimisticCheck,
-    );
+    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
     must_prewrite_put(&engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
-    must_pessimistic_prewrite_put(
-        &engine,
-        k,
-        v1,
-        k,
-        30,
-        30,
-        PrewriteRequestPessimisticAction::DoPessimisticCheck,
-    );
+    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
     must_commit(&engine, k, 30, 40);
     must_commit(&engine, k2, 31, 41);
     must_get(&engine, k, 50, v1);
