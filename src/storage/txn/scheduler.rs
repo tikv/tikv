@@ -827,6 +827,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
+        let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
@@ -913,6 +914,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let diag_ctx = DiagnosticContext {
                 key,
                 resource_group_tag: ctx.get_resource_group_tag().into(),
+                tracker,
             };
             scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
             return;
