@@ -9,7 +9,7 @@
 
 use std::{
     fmt, mem,
-    sync::{atomic::Ordering, Arc},
+    sync::Arc,
     thread::{self, JoinHandle},
 };
 
@@ -26,9 +26,7 @@ use raft::eraftpb::Entry;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
-    debug, info,
-    sequence_number::{SequenceNumber, SYNCED_MAX_SEQUENCE_NUMBER},
-    slow_log,
+    debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, Instant},

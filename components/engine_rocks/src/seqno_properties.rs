@@ -2,7 +2,7 @@
 
 use std::{cmp, collections::HashMap};
 
-use engine_traits::{Range, Result, SeqnoProperties, SeqnoPropertiesExt, DATA_CFS};
+use engine_traits::{Range, Result, SeqnoProperties, SeqnoPropertiesExt};
 use rocksdb::{DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory};
 
 use crate::{decode_properties::DecodeProperties, RocksEngine, UserProperties};
@@ -43,26 +43,16 @@ impl SeqnoPropertiesExt for RocksEngine {
             return Ok(None);
         }
 
-        let mut res = SeqnoProperties::default();
+        let mut res = None;
         for (_, v) in collection.iter() {
             let prop = match RocksSeqnoProperties::decode(v.user_collected_properties()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            res = res.or_else(|| Some(SeqnoProperties::default()));
+            let res = res.as_mut().unwrap();
             res.largest_seqno = cmp::max(res.largest_seqno, prop.largest_seqno);
             res.smallest_seqno = cmp::min(res.smallest_seqno, prop.smallest_seqno);
-        }
-        Ok(Some(res))
-    }
-
-    fn get_range_seqno_properties_data_cf(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> Result<Option<SeqnoProperties>> {
-        let mut res = None;
-        for cf in DATA_CFS {
-            let prop = self.get_range_seqno_properties_cf(cf, start_key, end_key)?;
         }
         Ok(res)
     }

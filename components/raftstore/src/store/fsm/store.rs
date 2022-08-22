@@ -1212,7 +1212,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 &mut meta,
                 &mut kv_wb,
                 &mut raft_wb,
-                &mut *replication_state,
+                &mut replication_state,
             )) {
                 region_peers.push((tx, peer));
             }
