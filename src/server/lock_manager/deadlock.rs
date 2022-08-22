@@ -564,7 +564,7 @@ impl RegionChangeObserver for RoleChangeNotifier {
         let region = ctx.region();
         if Self::is_leader_region(region) {
             match event {
-                RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                RegionChangeEvent::Create | RegionChangeEvent::Update(_) => {
                     *self.leader_region_id.lock().unwrap() = region.get_id();
                     self.scheduler.change_role(role.into());
                 }
@@ -1077,6 +1077,7 @@ impl Deadlock for Service {
 pub mod tests {
     use engine_test::kv::KvTestEngine;
     use futures::executor::block_on;
+    use raftstore::coprocessor::RegionChangeReason;
     use security::SecurityConfig;
     use tikv_util::worker::FutureWorker;
 
@@ -1461,7 +1462,7 @@ pub mod tests {
         ];
         let events = [
             RegionChangeEvent::Create,
-            RegionChangeEvent::Update,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
             RegionChangeEvent::Destroy,
         ];
         let check_role = |role| {
@@ -1497,7 +1498,11 @@ pub mod tests {
         check_role(Role::Follower);
         // Leader region id is changed.
         region.set_id(2);
-        host.on_region_changed(&region, RegionChangeEvent::Update, StateRole::Leader);
+        host.on_region_changed(
+            &region,
+            RegionChangeEvent::Update(RegionChangeReason::ChangePeer),
+            StateRole::Leader,
+        );
         // Destroy the previous leader region.
         region.set_id(1);
         host.on_region_changed(&region, RegionChangeEvent::Destroy, StateRole::Leader);

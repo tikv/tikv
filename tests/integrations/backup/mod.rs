@@ -354,7 +354,9 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
         let key = {
             let mut key = k.into_bytes();
             if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
-                key.insert(0, b'r')
+                let mut apiv2_key = [b'r', 0, 0, 0].to_vec();
+                apiv2_key.extend(key);
+                key = apiv2_key;
             }
             key
         };
@@ -364,9 +366,17 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
 
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
+    let (backup_start, backup_end) = if cur_api_ver != dst_api_ver {
+        (
+            vec![b'r', 0, 0, 0, b'r', b'a'],
+            vec![b'r', 0, 0, 0, b'r', b'z'],
+        )
+    } else {
+        (vec![b'r', b'a'], vec![b'r', b'z'])
+    };
     let rx = target_suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        backup_start, // start
+        backup_end,   // end
         cf,
         &make_unique_dir(tmp.path()),
         dst_api_ver,

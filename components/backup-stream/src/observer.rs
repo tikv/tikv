@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, RwLock,
+};
 
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
@@ -14,6 +17,18 @@ use crate::{
     try_send,
     utils::SegmentSet,
 };
+
+/// The inflight `StartObserve` message count.
+/// Currently, we handle the `StartObserve` message in the main loop(endpoint thread), which may
+/// take longer time than expected. So when we are starting to observe many region (e.g. failover),
+/// there may be many pending messages, those messages won't block the advancing of checkpoint ts.
+/// So the checkpoint ts may be too late and losing some data.
+///
+/// This is a temporary solution for this problem: If this greater than (1), then it implies that there are some
+/// inflight wait-for-initialized regions, we should block the resolved ts from advancing in that condition.
+///
+/// FIXME: Move handler of `ModifyObserve` to another thread, and remove this :(
+pub static IN_FLIGHT_START_OBSERVE_MESSAGE: AtomicUsize = AtomicUsize::new(0);
 
 /// An Observer for Backup Stream.
 ///
@@ -118,13 +133,16 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
         if role == StateRole::Leader && self.should_register_region(region) {
-            try_send!(
+            let success = try_send!(
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
                     needs_initial_scanning: true,
                 })
             );
+            if success {
+                IN_FLIGHT_START_OBSERVE_MESSAGE.fetch_add(1, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -161,7 +179,7 @@ impl RegionChangeObserver for BackupStreamObserver {
                     })
                 );
             }
-            RegionChangeEvent::Update => {
+            RegionChangeEvent::Update(_) => {
                 try_send!(
                     self.scheduler,
                     Task::ModifyObserve(ObserveOp::RefreshResolver {

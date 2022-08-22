@@ -614,6 +614,7 @@ fn test_cdc_rawkv_scan() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
 
     suite.set_tso(10);
+    suite.flush_causal_timestamp_for_region(1);
     let (k1, v1) = (b"rkey1".to_vec(), b"value1".to_vec());
     suite.must_kv_put(1, k1, v1);
 
@@ -621,6 +622,7 @@ fn test_cdc_rawkv_scan() {
     suite.must_kv_put(1, k2, v2);
 
     suite.set_tso(1000);
+    suite.flush_causal_timestamp_for_region(1);
     let (k3, v3) = (b"rkey3".to_vec(), b"value3".to_vec());
     suite.must_kv_put(1, k3.clone(), v3.clone());
 
@@ -933,7 +935,7 @@ fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 2);
+            assert_eq!(es.entries.len(), 2);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk3", "{:?}", e.key);
@@ -2315,4 +2317,40 @@ fn test_resolved_ts_with_learners() {
         }
     }
     panic!("resolved timestamp should be advanced correctly");
+}
+
+#[test]
+fn test_prewrite_without_value() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let ctx = suite.get_context(rid);
+    let client = suite.get_tikv_client(rid).clone();
+    let large_value = vec![b'x'; 2 * txn_types::SHORT_VALUE_MAX_LEN];
+
+    // Perform a pessimistic prewrite with a large value.
+    let mut muts = vec![Mutation::default()];
+    muts[0].set_op(Op::Put);
+    muts[0].key = b"key".to_vec();
+    muts[0].value = large_value.clone();
+    try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
+
+    let req = suite.new_changedata_request(rid);
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // The prewrite can be retrieved from incremental scan.
+    let event = receive_event(false);
+    assert_eq!(
+        event.get_events()[0].get_entries().entries[0].value,
+        large_value
+    );
+
+    // check_txn_status will put the lock again, but without value.
+    must_check_txn_status(&client, ctx.clone(), b"key", 10, 12, 12);
+    must_kv_commit(&client, ctx, vec![b"key".to_vec()], 10, 14, 14);
+    // The lock without value shouldn't be retrieved.
+    let event = receive_event(false);
+    assert_eq!(event.get_events()[0].get_entries().entries[0].commit_ts, 14);
 }
