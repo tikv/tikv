@@ -272,6 +272,11 @@ pub trait Engine: Send + Clone + 'static {
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
+    /// Precheck request which has write with it's context.
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        Ok(())
+    }
+
     fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
 
     /// Writes data to the engine asynchronously with some extensions.

@@ -486,7 +486,7 @@ where
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
             }
-            metric.propose.batch += self.callbacks.len() - 1;
+            metric.propose.batch.inc_by(self.callbacks.len() as u64 - 1);
             let mut cbs = std::mem::take(&mut self.callbacks);
             let proposed_cbs: Vec<ExtCallback> = cbs
                 .iter_mut()
@@ -610,8 +610,7 @@ where
                 PeerMsg::RaftCommand(cmd) => {
                     self.ctx
                         .raft_metrics
-                        .propose
-                        .request_wait_time
+                        .propose_wait_time
                         .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
 
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
@@ -662,7 +661,7 @@ where
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
                         match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
                             Some(job) => {
                                 self.handle_destroy_peer(job);
                             }
@@ -1822,7 +1821,7 @@ where
                 self.register_entry_cache_evict_tick();
             }
             self.ctx.ready_count += 1;
-            self.ctx.raft_metrics.ready.has_ready_region += 1;
+            self.ctx.raft_metrics.ready.has_ready_region.inc();
 
             if self.fsm.peer.leader_unreachable {
                 self.fsm.reset_hibernate_state(GroupState::Chaos);
@@ -2189,7 +2188,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "err" => ?e,
             );
-            self.ctx.raft_metrics.propose.unsafe_read_index += 1;
+            self.ctx.raft_metrics.propose.unsafe_read_index.inc();
             return;
         }
 
@@ -2292,7 +2291,7 @@ where
                 "skip {:?} because of disk full", msg_type;
                 "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id()
             );
-            self.ctx.raft_metrics.message_dropped.disk_full += 1;
+            self.ctx.raft_metrics.message_dropped.disk_full.inc();
             return Ok(());
         }
 
@@ -2362,7 +2361,7 @@ where
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
             {
-                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return Ok(());
             }
             self.fsm.peer.step(self.ctx, msg.take_message())
@@ -2518,7 +2517,11 @@ where
                 "to_store_id" => to.get_store_id(),
                 "my_store_id" => self.store_id(),
             );
-            self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_store_id
+                .inc();
             return false;
         }
 
@@ -2527,7 +2530,11 @@ where
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
-            self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_region_epoch
+                .inc();
             return false;
         }
 
@@ -2579,7 +2586,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "target_peer" => ?target,
                 );
-                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 true
             }
             cmp::Ordering::Greater => {
@@ -2607,7 +2614,7 @@ where
                             }
                         }
                     }
-                    None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+                    None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
                 }
                 true
             }
@@ -2712,7 +2719,7 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
-            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+            self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
         }
         // TODO: ask pd to guarantee we are stale now.
@@ -2782,7 +2789,7 @@ where
                 "snap" => ?snap_region,
                 "to_peer" => ?msg.get_to_peer(),
             );
-            self.ctx.raft_metrics.message_dropped.region_no_peer += 1;
+            self.ctx.raft_metrics.message_dropped.region_no_peer.inc();
             return Ok(Either::Left(key));
         }
 
@@ -2794,7 +2801,7 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                 );
-                self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+                self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return Ok(Either::Left(key));
             } else {
                 panic!(
@@ -2828,7 +2835,7 @@ where
                     "region" => ?region,
                     "snap" => ?snap_region,
                 );
-                self.ctx.raft_metrics.message_dropped.region_overlap += 1;
+                self.ctx.raft_metrics.message_dropped.region_overlap.inc();
                 return Ok(Either::Left(key));
             }
         }
@@ -2891,7 +2898,7 @@ where
             }
         }
         if is_overlapped {
-            self.ctx.raft_metrics.message_dropped.region_overlap += 1;
+            self.ctx.raft_metrics.message_dropped.region_overlap.inc();
             return Ok(Either::Left(key));
         }
 
@@ -4689,7 +4696,11 @@ where
     ) -> Result<Option<RaftCmdResponse>> {
         // Check store_id, make sure that the msg is dispatched to the right place.
         if let Err(e) = util::check_store_id(msg, self.store_id()) {
-            self.ctx.raft_metrics.invalid_proposal.mismatch_store_id += 1;
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .mismatch_store_id
+                .inc();
             return Err(e);
         }
         if msg.has_status_request() {
@@ -4732,7 +4743,7 @@ where
             && !allow_replica_read
             && !allow_stale_read
         {
-            self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
+            self.ctx.raft_metrics.invalid_proposal.not_leader.inc();
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             self.fsm.reset_hibernate_state(GroupState::Chaos);
             self.register_raft_base_tick();
@@ -4740,7 +4751,11 @@ where
         }
         // peer_id must be the same as peer's.
         if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
-            self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .mismatch_peer_id
+                .inc();
             return Err(e);
         }
         // check whether the peer is initialized.
@@ -4748,13 +4763,18 @@ where
             self.ctx
                 .raft_metrics
                 .invalid_proposal
-                .region_not_initialized += 1;
+                .region_not_initialized
+                .inc();
             return Err(Error::RegionNotInitialized(region_id));
         }
         // If the peer is applying snapshot, it may drop some sending messages, that
         // could make clients wait for response until timeout.
         if self.fsm.peer.is_handling_snapshot() {
-            self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .is_applying_snapshot
+                .inc();
             // TODO: replace to a more suitable error.
             return Err(Error::Other(box_err!(
                 "{} peer is applying snapshot",
@@ -4763,7 +4783,7 @@ where
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
-            self.ctx.raft_metrics.invalid_proposal.stale_command += 1;
+            self.ctx.raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 
@@ -4775,7 +4795,7 @@ where
                 // driver, the meta is updated.
                 let requested_version = msg.get_header().get_region_epoch().version;
                 self.collect_sibling_region(requested_version, &mut new_regions);
-                self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                self.ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
                 Err(Error::EpochNotMatch(m, new_regions))
             }
             Err(e) => Err(e),
@@ -5018,12 +5038,16 @@ where
             // [entries...][the entry at `compact_idx`][the last entry][new compaction entry]
             //             |-------------------- entries will be left ----------------------|
             // ```
-            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log += 1;
+            self.ctx.raft_metrics.raft_log_gc_skipped.reserve_log.inc();
             return;
         } else if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold
             && self.fsm.skip_gc_raft_log_ticks < self.ctx.cfg.raft_log_reserve_max_ticks
         {
-            self.ctx.raft_metrics.raft_log_gc_skipped.threshold_limit += 1;
+            self.ctx
+                .raft_metrics
+                .raft_log_gc_skipped
+                .threshold_limit
+                .inc();
             // Logs will only be kept `max_ticks` * `raft_log_gc_tick_interval`.
             self.fsm.skip_gc_raft_log_ticks += 1;
             self.register_raft_gc_log_tick();
@@ -5039,7 +5063,8 @@ where
             self.ctx
                 .raft_metrics
                 .raft_log_gc_skipped
-                .compact_idx_too_small += 1;
+                .compact_idx_too_small
+                .inc();
             return;
         }
 
