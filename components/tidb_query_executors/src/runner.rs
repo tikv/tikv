@@ -462,14 +462,14 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
             let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
-                let _guard = sample.observe_cpu();
+                //let _guard = sample.observe_cpu();
                 self.internal_handle_request(
                     false,
                     batch_size,
                     &mut chunk,
                     &mut warnings,
                     &mut ctx,
-                )?
+                ).await?
             };
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
@@ -534,7 +534,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
-    pub fn handle_streaming_request(
+    pub async fn handle_streaming_request(
         &mut self,
     ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
         let mut warnings = self.config.new_eval_warnings();
@@ -554,7 +554,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 &mut current_chunk,
                 &mut warnings,
                 &mut ctx,
-            )?;
+            ).await?;
             chunk
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());
@@ -586,7 +586,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
     }
 
-    fn internal_handle_request(
+    async fn internal_handle_request(
         &mut self,
         is_streaming: bool,
         batch_size: usize,
@@ -598,7 +598,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         self.deadline.check()?;
 
-        let mut result = self.out_most_executor.next_batch(batch_size);
+        let mut result = self.out_most_executor.next_batch(batch_size).await;
 
         let is_drained = result.is_drained?;
 

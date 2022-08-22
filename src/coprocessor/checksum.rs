@@ -79,7 +79,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
 
         let mut row_count = 0;
         let mut time_slice_start = Instant::now();
-        while let Some((k, v)) = self.scanner.next()? {
+        while let Some((k, v)) = self.scanner.next().await? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {

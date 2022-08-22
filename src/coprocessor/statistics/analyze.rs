@@ -148,7 +148,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         } else {
             ANALYZE_VERSION_V1
         };
-        while let Some((key, _)) = scanner.next()? {
+        while let Some((key, _)) = scanner.next().await? {
             row_count += 1;
             if row_count >= BATCH_MAX_SIZE {
                 if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
@@ -393,8 +393,8 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
-                let _guard = sample.observe_cpu();
-                let result = self.data.next_batch(BATCH_MAX_SIZE);
+                //let _guard = sample.observe_cpu();
+                let result = self.data.next_batch(BATCH_MAX_SIZE).await;
                 is_drained = result.is_drained?;
 
                 let columns_slice = result.physical_columns.as_slice();
@@ -895,7 +895,7 @@ impl<S: Snapshot> SampleBuilder<S> {
                 reschedule().await;
                 time_slice_start = Instant::now();
             }
-            let result = self.data.next_batch(BATCH_MAX_SIZE);
+            let result = self.data.next_batch(BATCH_MAX_SIZE).await;
             is_drained = result.is_drained?;
 
             let mut columns_slice = result.physical_columns.as_slice();

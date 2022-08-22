@@ -551,7 +551,7 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request();
+                    let result = handler.handle_streaming_request().await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -796,8 +796,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFixture {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let is_finished = if self.result_len == 0 {
                 true
             } else {
@@ -841,8 +842,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFromClosure {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let result = (self.result_generator)(self.nth);
             self.nth += 1;
             result

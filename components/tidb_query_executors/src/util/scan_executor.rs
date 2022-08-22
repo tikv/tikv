@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use kvproto::coprocessor::KeyRange;
 use tidb_query_common::{
     storage::{
@@ -98,7 +99,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
     ///
     /// The columns are ensured to be regular even if there are errors during
     /// the process.
-    fn fill_column_vec(
+    async fn fill_column_vec(
         &mut self,
         scan_rows: usize,
         columns: &mut LazyBatchColumnVec,
@@ -106,7 +107,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
         assert!(scan_rows > 0);
 
         for i in 0..scan_rows {
-            let some_row = self.scanner.next_opt(i == scan_rows - 1)?;
+            let some_row = self.scanner.next_opt(i == scan_rows - 1).await?;
             if let Some((key, value)) = some_row {
                 // Retrieved one row from point range or non-point range.
 
@@ -160,6 +161,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     Ok(())
 }
 
+#[async_trait]
 impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     type StorageStats = S::Statistics;
 
@@ -169,12 +171,12 @@ impl<S: Storage, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 
         let mut logical_columns = self.imp.build_column_vec(scan_rows);
-        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns);
+        let is_drained = self.fill_column_vec(scan_rows, &mut logical_columns).await;
 
         logical_columns.assert_columns_equal_length();
         let logical_rows = (0..logical_columns.rows_len()).collect();
