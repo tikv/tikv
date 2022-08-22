@@ -574,6 +574,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders(),
         );
 
         self.engines = Some(TikvEngines {
