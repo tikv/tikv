@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, RaftReadyMetrics, TimeTracker},
+    local_metrics::{RaftMetrics, TimeTracker},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -1569,19 +1569,28 @@ where
         self.raft_group.snap()
     }
 
-    fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
-        metrics.message += ready.messages().len() as u64;
-        metrics.commit += ready.committed_entries().len() as u64;
-        metrics.append += ready.entries().len() as u64;
+    fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftMetrics) {
+        metrics.ready.message.inc_by(ready.messages().len() as u64);
+        metrics
+            .ready
+            .commit
+            .inc_by(ready.committed_entries().len() as u64);
+        metrics.ready.append.inc_by(ready.entries().len() as u64);
 
         if !ready.snapshot().is_empty() {
-            metrics.snapshot += 1;
+            metrics.ready.snapshot.inc();
         }
     }
 
-    fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftReadyMetrics) {
-        metrics.message += light_ready.messages().len() as u64;
-        metrics.commit += light_ready.committed_entries().len() as u64;
+    fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftMetrics) {
+        metrics
+            .ready
+            .message
+            .inc_by(light_ready.messages().len() as u64);
+        metrics
+            .ready
+            .commit
+            .inc_by(light_ready.committed_entries().len() as u64);
     }
 
     #[inline]
@@ -2490,7 +2499,7 @@ where
 
         let mut ready = self.raft_group.ready();
 
-        self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
+        self.add_ready_metric(&ready, &mut ctx.raft_metrics);
 
         // Update it after unstable entries pagination is introduced.
         debug_assert!(ready.entries().last().map_or_else(
@@ -2642,7 +2651,7 @@ where
                     // needs to be persisted.
                     let mut light_rd = self.raft_group.advance_append(ready);
 
-                    self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+                    self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics);
 
                     if let Some(idx) = light_rd.commit_index() {
                         panic!(
@@ -3012,7 +3021,7 @@ where
         }
         self.mut_store().update_cache_persisted(persist_index);
 
-        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics);
 
         if let Some(commit_index) = light_rd.commit_index() {
             let pre_commit_index = self.get_store().commit_index();
@@ -3397,7 +3406,7 @@ where
             return false;
         }
 
-        ctx.raft_metrics.propose.all += 1;
+        ctx.raft_metrics.propose.all.inc();
 
         let req_admin_cmd_type = if !req.has_admin_request() {
             None
@@ -3730,7 +3739,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) {
-        ctx.raft_metrics.propose.local_read += 1;
+        ctx.raft_metrics.propose.local_read.inc();
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().commit_index())))
     }
 
@@ -3821,7 +3830,7 @@ where
                 "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
-            poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
+            poll_ctx.raft_metrics.propose.unsafe_read_index.inc();
             cmd_resp::bind_error(&mut err_resp, e);
             cb.report_error(err_resp);
             self.should_wake_up = true;
@@ -3873,7 +3882,11 @@ where
         // which would cause a long time waiting for a read response. Then we
         // should return an error directly in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
-            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            poll_ctx
+                .raft_metrics
+                .invalid_proposal
+                .read_index_no_leader
+                .inc();
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
                 || self
@@ -3904,7 +3917,7 @@ where
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
+        poll_ctx.raft_metrics.propose.read_index.inc();
         self.bcast_wake_up_time = None;
 
         let request = req
@@ -3916,7 +3929,7 @@ where
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
-            poll_ctx.raft_metrics.propose.dropped_read_index += 1;
+            poll_ctx.raft_metrics.propose.dropped_read_index.inc();
             return false;
         }
 
@@ -4264,7 +4277,7 @@ where
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
 
-        poll_ctx.raft_metrics.propose.normal += 1;
+        poll_ctx.raft_metrics.propose.normal.inc();
 
         if self.has_applied_to_current_term() {
             // Only when applied index's term is equal to current leader's term, the
@@ -4425,7 +4438,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
-        ctx.raft_metrics.propose.transfer_leader += 1;
+        ctx.raft_metrics.propose.transfer_leader.inc();
 
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
@@ -4544,7 +4557,7 @@ where
 
         self.check_conf_change(ctx, changes.as_ref(), &cc)?;
 
-        ctx.raft_metrics.propose.conf_change += 1;
+        ctx.raft_metrics.propose.conf_change.inc();
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
         info!(
