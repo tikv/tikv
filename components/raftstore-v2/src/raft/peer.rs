@@ -39,10 +39,7 @@ use super::storage::Storage;
 use crate::{
     batch::StoreContext,
     operation::AsyncWriter,
-    router::{
-        QueryResChannel, QueryResult, ReadResponse,
-        RaftCommand, RaftQuery,
-    },
+    router::{QueryResChannel, QueryResult, RaftCommand, RaftQuery, ReadResponse},
     tablet::{self, CachedTablet},
     Result,
 };
@@ -171,7 +168,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn storage(&self) -> &Storage<ER> {
         self.raft_group.store()
-    } 
+    }
 
     #[inline]
     pub fn logger(&self) -> &Logger {
@@ -275,7 +272,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.get_id() == peer_id)
             .cloned()
-    } 
+    }
 
     /// Term of the state machine.
     #[inline]

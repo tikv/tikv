@@ -486,7 +486,7 @@ mod tests {
 
         let (mut chan, mut sub) = QueryResChannel::pair();
         let read = QueryResult::Read(ReadResponse {
-            response: RaftCmdResponse::default(), 
+            response: RaftCmdResponse::default(),
             txn_extra_op: TxnExtraOp::ReadOldValue,
         });
         chan.set_result(read.clone());

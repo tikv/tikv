@@ -47,7 +47,7 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
-    router::{RaftQuery, RaftCommand},
+    router::{RaftCommand, RaftQuery},
     Error, PeerMsg, PeerTick, Result, StoreMsg,
 };
 

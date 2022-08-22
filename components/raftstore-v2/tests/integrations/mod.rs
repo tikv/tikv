@@ -10,8 +10,7 @@
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
-    Mutex,
+    Arc, Mutex,
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -111,7 +110,7 @@ impl TestNode {
             self.store.clone(),
             self.logger.clone(),
         );
-        
+
         let pd_worker = LazyWorker::new("test-pd-worker");
         let raft_log_worker = Worker::new("raftlog-fetch-worker");
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(10)));
@@ -123,7 +122,7 @@ impl TestNode {
                 self.factory.clone().unwrap(),
                 trans,
                 &router,
-                pd_worker, 
+                pd_worker,
                 raft_log_worker,
                 store_meta,
             )
