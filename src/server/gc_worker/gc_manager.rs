@@ -11,6 +11,7 @@ use std::{
 };
 
 use engine_traits::KvEngine;
+use kvproto::metapb::Region;
 use pd_client::FeatureGate;
 use raftstore::{coprocessor::RegionInfoProvider, store::util::find_peer};
 use tikv_util::{time::Instant, worker::Scheduler};
@@ -545,21 +546,20 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         processed_regions: &mut usize,
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
-        let (range, next_key) = self.get_next_gc_context(from_key);
-        let (region_id, start, end) = match range {
-            Some((r, s, e)) => (r, s, e),
-            None => return Ok(None),
+        let (region, next_key) = self.get_next_gc_context(from_key);
+        if region.is_none() {
+            return Ok(None);
         };
+        let region = region.unwrap();
 
-        let hex_start = format!("{:?}", log_wrappers::Value::key(&start));
-        let hex_end = format!("{:?}", log_wrappers::Value::key(&end));
+        let hex_start = format!("{:?}", log_wrappers::Value::key(region.get_start_key()));
+        let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));
         debug!("trying gc"; "start_key" => &hex_start, "end_key" => &hex_end);
 
         if let Err(e) = sync_gc(
             &self.worker_scheduler,
-            region_id,
-            start,
-            end,
+            self.cfg.self_store_id,
+            region,
             self.curr_safe_point(),
         ) {
             // Ignore the error and continue, since it's useless to retry this.
@@ -580,7 +580,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     /// the first is the next region can be sent to GC worker;
     /// the second is the next key which can be passed into this method later.
     #[allow(clippy::type_complexity)]
-    fn get_next_gc_context(&mut self, key: Key) -> (Option<(u64, Vec<u8>, Vec<u8>)>, Option<Key>) {
+    fn get_next_gc_context(&mut self, key: Key) -> (Option<Region>, Option<Key>) {
         let (tx, rx) = mpsc::channel();
         let store_id = self.cfg.self_store_id;
 
@@ -612,15 +612,14 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         });
 
         match seek_region_res {
-            Ok(Some(mut region)) => {
-                let r = region.get_id();
-                let (s, e) = (region.take_start_key(), region.take_end_key());
-                let next_key = if e.is_empty() {
+            Ok(Some(region)) => {
+                let end_key = region.get_end_key();
+                let next_key = if end_key.is_empty() {
                     None
                 } else {
-                    Some(Key::from_encoded_slice(&e))
+                    Some(Key::from_encoded_slice(end_key))
                 };
-                (Some((r, s, e)), next_key)
+                (Some(region), next_key)
             }
             Ok(None) => (None, None),
             Err(e) => {

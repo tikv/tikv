@@ -26,12 +26,13 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::{FeatureGate, PdClient};
+use protobuf::SingularPtrField;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
+use tikv_kv::{write_modifies, CfStatistics, CursorBuilder, Modify, SnapContext, Snapshot};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -89,9 +90,8 @@ where
     E: KvEngine,
 {
     Gc {
-        region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
+        store_id: u64,
+        region: Region,
         safe_point: TimeStamp,
         callback: Callback<()>,
     },
@@ -161,14 +161,14 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             GcTask::Gc {
-                start_key,
-                end_key,
-                safe_point,
-                ..
+                region, safe_point, ..
             } => f
                 .debug_struct("Gc")
-                .field("start_key", &log_wrappers::Value::key(start_key))
-                .field("end_key", &log_wrappers::Value::key(end_key))
+                .field(
+                    "start_key",
+                    &log_wrappers::Value::key(region.get_start_key()),
+                )
+                .field("end_key", &log_wrappers::Value::key(region.get_end_key()))
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
@@ -261,23 +261,79 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
 }
 
 fn get_keys_in_regions(
+    store_id: u64,
     keys: Vec<Key>,
-    regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
-) -> Result<Box<dyn Iterator<Item = Key>>> {
-    if keys.len() >= 2 {
-        if let Some((store_id, region_info_provider)) = regions_provider {
+    regions_provider: Option<Arc<dyn RegionInfoProvider>>,
+) -> Result<(Box<dyn Iterator<Item = Key>>, Option<Region>)> {
+    assert!(keys.len() >= 1);
+
+    if let Some(region_info_provider) = regions_provider {
+        if keys.len() >= 2 {
             let start = keys.first().unwrap().as_encoded();
             let end = keys.last().unwrap().as_encoded();
-            let regions = box_try!(region_info_provider.get_regions_in_range(start, end))
+            let mut regions = box_try!(region_info_provider.get_regions_in_range(start, end))
                 .into_iter()
                 .filter(move |r| find_peer(r, store_id).is_some())
                 .peekable();
 
+            // todo(SpadeA): what if no region has been returned
+            let region = regions.peek().unwrap().clone();
             let keys = keys.into_iter().peekable();
-            return Ok(Box::new(KeysInRegions { keys, regions }));
+            return Ok((Box::new(KeysInRegions { keys, regions }), Some(region)));
+        } else {
+            // region_info_provider.seek_region
+            unimplemented!()
         }
     }
-    Ok(Box::new(keys.into_iter()))
+
+    Ok((Box::new(keys.into_iter()), None))
+}
+
+fn modify_on_kv_engine<EK: KvEngine>(
+    kv_engine: &EK,
+    mut modifies: Vec<Modify>,
+) -> tikv_kv::Result<()> {
+    for modify in &mut modifies {
+        match modify {
+            Modify::Delete(_, ref mut key) => {
+                let bytes = keys::data_key(key.as_encoded());
+                *key = Key::from_encoded(bytes);
+            }
+            Modify::Put(_, ref mut key, _) => {
+                let bytes = keys::data_key(key.as_encoded());
+                *key = Key::from_encoded(bytes);
+            }
+            Modify::PessimisticLock(ref mut key, _) => {
+                let bytes = keys::data_key(key.as_encoded());
+                *key = Key::from_encoded(bytes);
+            }
+            Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                let bytes = keys::data_key(key1.as_encoded());
+                *key1 = Key::from_encoded(bytes);
+                let bytes = keys::data_end_key(key2.as_encoded());
+                *key2 = Key::from_encoded(bytes);
+            }
+        }
+    }
+    write_modifies(kv_engine, modifies)
+}
+
+fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
+    let mut ctx = Context::default();
+    ctx.region_id = region.id;
+    ctx.region_epoch = region.region_epoch.clone();
+
+    let peers: Vec<_> = region
+        .peers
+        .iter()
+        .filter(|peer| peer.store_id == store_id)
+        .collect();
+
+    assert!(peers.len() == 1);
+
+    ctx.peer = SingularPtrField::some(peers[0].clone());
+
+    ctx
 }
 
 impl<E, RR> GcRunner<E, RR>
@@ -346,29 +402,30 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    fn flush_txn(txn: MvccTxn, limiter: &Limiter, engine: &E) -> Result<()> {
+    fn flush_txn<EK: KvEngine>(txn: MvccTxn, limiter: &Limiter, kv_engine: EK) -> Result<()> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies)?;
+            modify_on_kv_engine(&kv_engine, modifies)?;
         }
         Ok(())
     }
 
-    fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
-        if !self.need_gc(start_key, end_key, safe_point) {
+    fn gc(&mut self, store_id: u64, region: Region, safe_point: TimeStamp) -> Result<()> {
+        if !self.need_gc(region.get_start_key(), region.get_end_key(), safe_point) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
 
         let mut reader = MvccReader::new(
-            self.engine.snapshot_on_kv_engine(start_key, end_key)?,
+            self.engine
+                .snapshot_on_kv_engine(region.get_start_key(), region.get_end_key())?,
             Some(ScanMode::Forward),
             false,
         );
 
-        let mut next_key = Some(Key::from_encoded_slice(start_key));
+        let mut next_key = Some(Key::from_encoded_slice(region.get_start_key()));
         while next_key.is_some() {
             // Scans at most `GcConfig.batch_keys` keys.
             let (keys, updated_next_key) = reader
@@ -380,14 +437,14 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(keys, safe_point, None)?;
+            self.gc_keys(store_id, Some(region.clone()), keys, safe_point, None)?;
         }
 
         self.stats.add(&reader.statistics);
         debug!(
             "gc has finished";
-            "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
+            "start_key" => log_wrappers::Value::key(region.get_start_key()),
+            "end_key" => log_wrappers::Value::key(region.get_end_key()),
             "safe_point" => safe_point
         );
         Ok(())
@@ -395,9 +452,11 @@ where
 
     fn gc_keys(
         &mut self,
+        store_id: u64,
+        region: Option<Region>,
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+        regions_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone().into_encoded();
@@ -411,12 +470,19 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let snap_ctx = SnapContext::default();
-        let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
         // let snapshot = self
         //     .engine
         //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        let (mut keys, r) = get_keys_in_regions(store_id, keys, regions_provider)?;
+        let region = region.unwrap_or(r.unwrap());
+
+        let ctx = init_snap_ctx(store_id, &region);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
+        let mut kv_engine = snapshot.inner_engine();
 
         let mut txn = Self::new_txn();
         let mut reader = if count <= 1 {
@@ -462,23 +528,31 @@ where
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
             } else {
-                Self::flush_txn(txn, &self.limiter, &self.engine)?;
-                let snapshot = self
-                    .engine
-                    .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
+                Self::flush_txn(txn, &self.limiter, kv_engine)?;
+                // let snapshot = self
+                //     .engine
+                //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
+                let ctx = init_snap_ctx(store_id, &region);
+                let snap_ctx = SnapContext {
+                    pb_ctx: &ctx,
+                    ..Default::default()
+                };
+                let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
+                kv_engine = snapshot.inner_engine();
                 txn = Self::new_txn();
                 reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
         }
-        Self::flush_txn(txn, &self.limiter, &self.engine)?;
+        Self::flush_txn(txn, &self.limiter, kv_engine)?;
         Ok((handled_keys, wasted_keys))
     }
 
     fn raw_gc_keys(
         &mut self,
+        store_id: u64,
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
+        regions_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
         let range_start_key = keys.first().unwrap().clone().into_encoded();
         let range_end_key = {
@@ -491,12 +565,21 @@ where
             Key::from_raw(&k).into_encoded()
         };
 
-        let mut snapshot = self
-            .engine
-            .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
+        // let mut snapshot = self
+        //     .engine
+        //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
 
         let mut raw_modifies = MvccRaw::new();
-        let mut keys = get_keys_in_regions(keys, regions_provider)?;
+        let (mut keys, r) = get_keys_in_regions(store_id, keys, regions_provider)?;
+        let region = r.unwrap();
+
+        let ctx = init_snap_ctx(store_id, &region);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let mut snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
+        let kv_engine = snapshot.inner_engine();
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -535,13 +618,13 @@ where
                 gc_info = GcInfo::default();
             } else {
                 // Flush writeBatch to engine.
-                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+                Self::flush_raw_gc(raw_modifies, &self.limiter, kv_engine.clone())?;
                 // After flush, reset raw_modifies.
                 raw_modifies = MvccRaw::new();
             }
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
+        Self::flush_raw_gc(raw_modifies, &self.limiter, kv_engine)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -607,13 +690,17 @@ where
         gc_info.deleted_versions += 1;
     }
 
-    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
+    fn flush_raw_gc<EK: KvEngine>(
+        raw_modifies: MvccRaw,
+        limiter: &Limiter,
+        kv_engine: EK,
+    ) -> Result<()> {
         let write_size = raw_modifies.write_size();
         let modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies)?;
+            modify_on_kv_engine(&kv_engine, modifies)?;
         }
         Ok(())
     }
@@ -790,21 +877,20 @@ where
 
         match task {
             GcTask::Gc {
-                start_key,
-                end_key,
+                store_id,
+                region,
                 safe_point,
                 callback,
-                ..
             } => {
-                let res = self.gc(&start_key, &end_key, safe_point);
+                let res = self.gc(store_id, region.clone(), safe_point);
                 update_metrics(res.is_err());
                 callback(res);
                 self.update_statistics_metrics();
                 slow_log!(
                     T timer,
                     "GC on range [{}, {}), safe_point {}",
-                    log_wrappers::Value::key(&start_key),
-                    log_wrappers::Value::key(&end_key),
+                    log_wrappers::Value::key(region.get_start_key()),
+                    log_wrappers::Value::key(region.get_end_key()),
                     safe_point
                 );
             }
@@ -815,7 +901,7 @@ where
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
-                match self.gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
+                match self.gc_keys(store_id, None, keys, safe_point, Some(region_info_provider)) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
@@ -837,7 +923,7 @@ where
                 store_id,
                 region_info_provider,
             } => {
-                match self.raw_gc_keys(keys, safe_point, Some((store_id, region_info_provider))) {
+                match self.raw_gc_keys(store_id, keys, safe_point, Some(region_info_provider)) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
@@ -931,17 +1017,15 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    region_id: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    store_id: u64,
+    region: Region,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
         .schedule(GcTask::Gc {
-            region_id,
-            start_key,
-            end_key,
+            store_id,
+            region,
             safe_point,
             callback,
         })
@@ -951,18 +1035,15 @@ fn schedule_gc(
 /// Does GC synchronously.
 pub fn sync_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    region_id: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    store_id: u64,
+    region: Region,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(
-        scheduler, region_id, start_key, end_key, safe_point, callback
-    ))
-    .unwrap_or_else(|| {
-        error!("failed to receive result of gc");
-        Err(box_err!("gc_worker: failed to receive result of gc"))
-    })
+    wait_op!(|callback| schedule_gc(scheduler, store_id, region, safe_point, callback))
+        .unwrap_or_else(|| {
+            error!("failed to receive result of gc");
+            Err(box_err!("gc_worker: failed to receive result of gc"))
+        })
 }
 
 /// Used to schedule GC operations.
@@ -1143,13 +1224,10 @@ where
 
     /// Only for tests.
     pub fn gc(&self, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
-        let start_key = vec![];
-        let end_key = vec![];
         self.worker_scheduler
             .schedule(GcTask::Gc {
-                region_id: 0,
-                start_key,
-                end_key,
+                store_id: 0,
+                region: Region::default(),
                 safe_point,
                 callback,
             })
@@ -2056,9 +2134,7 @@ mod tests {
             gc_worker
                 .scheduler()
                 .schedule(GcTask::Gc {
-                    region_id: 0,
-                    start_key: vec![],
-                    end_key: vec![],
+                    region: Region::default(),
                     safe_point: TimeStamp::from(100),
                     callback: Box::new(|_res| {}),
                 })
