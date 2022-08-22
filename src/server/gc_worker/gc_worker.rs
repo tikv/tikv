@@ -16,8 +16,8 @@ use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -37,6 +37,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
+    Either,
 };
 use txn_types::{Key, TimeStamp};
 
@@ -244,15 +245,15 @@ struct KeysInRegions<R: Iterator<Item = Region>> {
 }
 
 impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-    type Item = Key;
-    fn next(&mut self) -> Option<Key> {
+    type Item = (Key, Region);
+    fn next(&mut self) -> Option<(Key, Region)> {
         loop {
             let region = self.regions.peek()?;
             let key = self.keys.peek()?.as_encoded().as_slice();
             if key < region.get_start_key() {
                 self.keys.next();
             } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                return self.keys.next();
+                return self.keys.next().map(|key| (key, region.clone()));
             } else {
                 self.regions.next();
             }
@@ -260,33 +261,42 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
     }
 }
 
+// Return the iterators with the item to be (Key, Region) where the key belongs
+// to the region and the region of the first key
 fn get_keys_in_regions(
     store_id: u64,
     keys: Vec<Key>,
-    regions_provider: Option<Arc<dyn RegionInfoProvider>>,
-) -> Result<(Box<dyn Iterator<Item = Key>>, Option<Region>)> {
+    region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
+) -> Result<(Box<dyn Iterator<Item = (Key, Region)>>, Region)> {
     assert!(keys.len() >= 1);
 
-    if let Some(region_info_provider) = regions_provider {
-        if keys.len() >= 2 {
-            let start = keys.first().unwrap().as_encoded();
-            let end = keys.last().unwrap().as_encoded();
-            let mut regions = box_try!(region_info_provider.get_regions_in_range(start, end))
-                .into_iter()
-                .filter(move |r| find_peer(r, store_id).is_some())
-                .peekable();
+    match region_or_provider {
+        Either::Left(region) => {
+            let region_clone = region.clone();
+            Ok((
+                Box::new(keys.into_iter().map(move |k| (k, region.clone()))),
+                region_clone,
+            ))
+        }
+        Either::Right(region_provider) => {
+            if keys.len() >= 2 {
+                let start = keys.first().unwrap().as_encoded();
+                let end = keys.last().unwrap().as_encoded();
+                let mut regions = box_try!(region_provider.get_regions_in_range(start, end))
+                    .into_iter()
+                    .filter(move |r| find_peer(r, store_id).is_some())
+                    .peekable();
 
-            // todo(SpadeA): what if no region has been returned
-            let region = regions.peek().unwrap().clone();
-            let keys = keys.into_iter().peekable();
-            return Ok((Box::new(KeysInRegions { keys, regions }), Some(region)));
-        } else {
-            // region_info_provider.seek_region
-            unimplemented!()
+                // todo(SpadeA): what if no region has been returned
+                let region = regions.peek().unwrap().clone();
+                let keys = keys.into_iter().peekable();
+                Ok((Box::new(KeysInRegions { keys, regions }), region))
+            } else {
+                // region_info_provider.seek_region
+                unimplemented!()
+            }
         }
     }
-
-    Ok((Box::new(keys.into_iter()), None))
 }
 
 fn modify_on_kv_engine<EK: KvEngine>(
@@ -437,7 +447,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(store_id, Some(region.clone()), keys, safe_point, None)?;
+            self.gc_keys(store_id, keys, safe_point, Either::Left(region.clone()))?;
         }
 
         self.stats.add(&reader.statistics);
@@ -453,50 +463,37 @@ where
     fn gc_keys(
         &mut self,
         store_id: u64,
-        region: Option<Region>,
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        regions_provider: Option<Arc<dyn RegionInfoProvider>>,
+        region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
         let count = keys.len();
-        let range_start_key = keys.first().unwrap().clone().into_encoded();
-        let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
-            k.push(0);
-            Key::from_raw(&k).into_encoded()
-        };
 
-        // let snapshot = self
-        //     .engine
-        //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
-        let (mut keys, r) = get_keys_in_regions(store_id, keys, regions_provider)?;
-        let region = region.unwrap_or(r.unwrap());
-
-        let ctx = init_snap_ctx(store_id, &region);
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
-        let mut kv_engine = snapshot.inner_engine();
+        let (mut keys, region) = get_keys_in_regions(store_id, keys, region_or_provider)?;
+        let mut current_region_id = region.id;
 
         let mut txn = Self::new_txn();
-        let mut reader = if count <= 1 {
-            MvccReader::new(snapshot, None, false)
-        } else {
-            // keys are closing to each other in one batch of gc keys, so do not use
-            // prefix seek here to avoid too many seeks
-            MvccReader::new(snapshot, Some(ScanMode::Forward), false)
+
+        let (mut reader, mut kv_engine) = {
+            let snapshot = self.get_snapshot(store_id, &region)?;
+            let kv_engine = snapshot.inner_engine();
+
+            if count <= 1 {
+                (MvccReader::new(snapshot, None, false), kv_engine)
+            } else {
+                // keys are closing to each other in one batch of gc keys, so do not use
+                // prefix seek here to avoid too many seeks
+                (
+                    MvccReader::new(snapshot, Some(ScanMode::Forward), false),
+                    kv_engine,
+                )
+            }
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
-        while let Some(ref key) = next_gc_key {
+        while let Some((ref key, ref region)) = next_gc_key {
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 GC_KEY_FAILURES.inc();
                 error!(?e; "GC meets failure"; "key" => %key,);
@@ -520,6 +517,20 @@ where
                     );
                 }
 
+                if current_region_id != region.id {
+                    current_region_id = region.id;
+
+                    (reader, kv_engine) = {
+                        let snapshot = self.get_snapshot(store_id, &region)?;
+                        let kv_engine = snapshot.inner_engine();
+
+                        (
+                            MvccReader::new(snapshot, Some(ScanMode::Forward), false),
+                            kv_engine,
+                        )
+                    };
+                }
+
                 if gc_info.found_versions > 0 {
                     handled_keys += 1;
                 } else {
@@ -529,18 +540,16 @@ where
                 gc_info = GcInfo::default();
             } else {
                 Self::flush_txn(txn, &self.limiter, kv_engine)?;
-                // let snapshot = self
-                //     .engine
-                //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
-                let ctx = init_snap_ctx(store_id, &region);
-                let snap_ctx = SnapContext {
-                    pb_ctx: &ctx,
-                    ..Default::default()
+                (reader, kv_engine) = {
+                    let snapshot = self.get_snapshot(store_id, &region)?;
+                    let kv_engine = snapshot.inner_engine();
+
+                    (
+                        MvccReader::new(snapshot, Some(ScanMode::Forward), false),
+                        kv_engine,
+                    )
                 };
-                let snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
-                kv_engine = snapshot.inner_engine();
                 txn = Self::new_txn();
-                reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false);
             }
         }
         Self::flush_txn(txn, &self.limiter, kv_engine)?;
@@ -552,39 +561,19 @@ where
         store_id: u64,
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        regions_provider: Option<Arc<dyn RegionInfoProvider>>,
+        regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<(usize, usize)> {
-        let range_start_key = keys.first().unwrap().clone().into_encoded();
-        let range_end_key = {
-            let mut k = keys
-                .last()
-                .unwrap()
-                .to_raw()
-                .map_err(|e| EngineError::Codec(e))?;
-            k.push(0);
-            Key::from_raw(&k).into_encoded()
-        };
-
-        // let mut snapshot = self
-        //     .engine
-        //     .snapshot_on_kv_engine(&range_start_key, &range_end_key)?;
-
         let mut raw_modifies = MvccRaw::new();
-        let (mut keys, r) = get_keys_in_regions(store_id, keys, regions_provider)?;
-        let region = r.unwrap();
+        let (mut keys, region) =
+            get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
 
-        let ctx = init_snap_ctx(store_id, &region);
-        let snap_ctx = SnapContext {
-            pb_ctx: &ctx,
-            ..Default::default()
-        };
-        let mut snapshot = block_on(async { tikv_kv::snapshot(&self.engine, snap_ctx).await })?;
+        let mut snapshot = self.get_snapshot(store_id, &region)?;
         let kv_engine = snapshot.inner_engine();
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
-        while let Some(ref key) = next_gc_key {
+        while let Some((ref key, _)) = next_gc_key {
             if let Err(e) = self.raw_gc_key(
                 safe_point,
                 key,
@@ -845,6 +834,18 @@ where
             self.cfg = incoming.clone();
         }
     }
+
+    fn get_snapshot(&self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
+        let ctx = init_snap_ctx(store_id, &region);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+
+        Ok(block_on(async {
+            tikv_kv::snapshot(&self.engine, snap_ctx).await
+        })?)
+    }
 }
 
 impl<E, RR> Runnable for GcRunner<E, RR>
@@ -901,7 +902,12 @@ where
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
-                match self.gc_keys(store_id, None, keys, safe_point, Some(region_info_provider)) {
+                match self.gc_keys(
+                    store_id,
+                    keys,
+                    safe_point,
+                    Either::Right(region_info_provider),
+                ) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
@@ -923,7 +929,7 @@ where
                 store_id,
                 region_info_provider,
             } => {
-                match self.raw_gc_keys(store_id, keys, safe_point, Some(region_info_provider)) {
+                match self.raw_gc_keys(store_id, keys, safe_point, region_info_provider) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc_by(handled as _);
                         GC_COMPACTION_FILTER_MVCC_DELETION_WASTED.inc_by(wasted as _);
