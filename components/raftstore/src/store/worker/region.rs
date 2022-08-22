@@ -658,7 +658,6 @@ where
         let region_state = self.region_state(*region_id)?;
         let apply_state = self.apply_state(*region_id)?;
 
-        let timer = Instant::now();
         check_abort(&abort)?;
 
         let term = apply_state.get_truncated_state().get_term();
