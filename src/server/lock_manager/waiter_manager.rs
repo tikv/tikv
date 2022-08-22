@@ -111,7 +111,7 @@ pub enum Task {
         lock: Lock,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
-        wait_timer: Instant,
+        start_waiting_time: Instant,
     },
     WakeUp {
         // lock info
@@ -183,7 +183,7 @@ pub(crate) struct Waiter {
     pub(crate) lock: Lock,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
-    wait_timer: Instant,
+    start_waiting_time: Instant,
 }
 
 impl Waiter {
@@ -194,7 +194,7 @@ impl Waiter {
         lock: Lock,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
-        wait_timer: Instant,
+        start_waiting_time: Instant,
     ) -> Self {
         Self {
             start_ts,
@@ -203,7 +203,7 @@ impl Waiter {
             lock,
             delay: Delay::new(deadline),
             diag_ctx,
-            wait_timer,
+            start_waiting_time,
         }
     }
 
@@ -227,7 +227,7 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
-        let elapsed = self.wait_timer.saturating_elapsed();
+        let elapsed = self.start_waiting_time.saturating_elapsed();
         GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
             tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
         });
@@ -432,7 +432,7 @@ impl Scheduler {
             lock,
             timeout,
             diag_ctx,
-            wait_timer: Instant::now(),
+            start_waiting_time: Instant::now(),
         });
     }
 
@@ -606,7 +606,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock,
                 timeout,
                 diag_ctx,
-                wait_timer,
+                start_waiting_time,
             } => {
                 let waiter = Waiter::new(
                     start_ts,
@@ -615,7 +615,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     lock,
                     self.normalize_deadline(timeout),
                     diag_ctx,
-                    wait_timer,
+                    start_waiting_time,
                 );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -673,7 +673,7 @@ pub mod tests {
             lock: Lock { ts: lock_ts, hash },
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
-            wait_timer: Instant::now(),
+            start_waiting_time: Instant::now(),
         }
     }
 
