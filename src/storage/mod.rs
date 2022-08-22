@@ -1447,8 +1447,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Ok(())
     }
 
-    // Schedule raw modify commands, which reuse the txn scheduler.
-    // TODO: seperate the txn and raw commands if needed in the future.
+    // Schedule raw modify commands, which reuse the scheduler worker pool.
+    // TODO: separate the txn and raw commands if needed in the future.
     fn sched_raw_command<T>(&self, tag: CommandKind, future: T) -> Result<()>
     where
         T: Future + Send + 'static,
@@ -1870,7 +1870,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Ok(_) => f.await.unwrap(),
             };
             callback(v);
-            KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
                 .get(CMD)
@@ -1956,7 +1956,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Ok(_) => f.await.unwrap(),
             };
             callback(v);
-            KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
                 .get(CMD)
@@ -2005,7 +2005,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Ok(_) => f.await.unwrap(),
             };
             callback(v);
-            KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
                 .get(CMD)
@@ -2058,7 +2058,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Ok(_) => f.await.unwrap(),
             };
             callback(v);
-            KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
                 .get(CMD)
@@ -2102,7 +2102,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Ok(_) => f.await.unwrap(),
             };
             callback(v);
-            KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
             SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
             SCHED_HISTOGRAM_VEC_STATIC
                 .get(CMD)
