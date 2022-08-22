@@ -206,20 +206,30 @@ async fn save_backup_file_worker(
         let files = if msg.files.need_flush_keys() {
             match msg.files.save(&storage).await {
                 Ok(mut split_files) => {
+                    let mut has_err = false;
                     for file in split_files.iter_mut() {
                         // In the case that backup from v1 and restore to v2,
                         // the file range need be encoded as v2 format.
                         // And range in response keep in v1 format.
-                        let (start, end) = codec.convert_key_range_to_dst_version(
+                        let ret = codec.convert_key_range_to_dst_version(
                             msg.start_key.clone(),
                             msg.end_key.clone(),
                         );
+                        if ret.is_err() {
+                            has_err = true;
+                            break;
+                        }
+                        let (start, end) = ret.unwrap();
                         file.set_start_key(start);
                         file.set_end_key(end);
                         file.set_start_version(msg.start_version.into_inner());
                         file.set_end_version(msg.end_version.into_inner());
                     }
-                    Ok(split_files)
+                    if has_err {
+                        Err(box_err!("backup convert key range failed"))
+                    } else {
+                        Ok(split_files)
+                    }
                 }
                 Err(e) => {
                     error_unknown!(?e; "backup save file failed");
@@ -283,6 +293,7 @@ impl BackupRange {
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
         saver: async_channel::Sender<InMemBackupFiles>,
+        storage_name: &str,
     ) -> Result<Statistics> {
         assert!(!self.codec.is_raw_kv);
 
@@ -352,7 +363,7 @@ impl BackupRange {
             .start_key
             .clone()
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut writer = writer_builder.build(next_file_start_key.clone())?;
+        let mut writer = writer_builder.build(next_file_start_key.clone(), storage_name)?;
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!(?e; "backup scan entries failed");
@@ -386,7 +397,7 @@ impl BackupRange {
                 send_to_worker_with_metrics(&saver, msg).await?;
                 next_file_start_key = this_end_key;
                 writer = writer_builder
-                    .build(next_file_start_key.clone())
+                    .build(next_file_start_key.clone(), storage_name)
                     .map_err(|e| {
                         error_unknown!(?e; "backup writer failed");
                         e
@@ -443,6 +454,7 @@ impl BackupRange {
         let mut cursor = CursorBuilder::new(snapshot, self.cf)
             .range(None, self.end_key.clone())
             .scan_mode(ScanMode::Forward)
+            .fill_cache(false)
             .build()?;
         if let Some(begin) = self.start_key.clone() {
             if !cursor.seek(&begin, cfstatistics)? {
@@ -878,7 +890,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                         let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
                         file_system::sha256(&input).ok().map(hex::encode)
                     });
-                    let name = backup_file_name(store_id, &brange.region, key);
+                    let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                     let ct = to_sst_compression_type(request.compression_type);
 
                     let stat = if is_raw_kv {
@@ -914,6 +926,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 backup_ts,
                                 start_ts,
                                 saver_tx.clone(),
+                                _backend.name(),
                             )
                             .await
                     };
@@ -1056,26 +1069,58 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 /// A name consists with five parts: store id, region_id, a epoch version, the hash of range start key and timestamp.
 /// range start key is used to keep the unique file name for file, to handle different tables exists on the same region.
 /// local unix timestamp is used to keep the unique file name for file, to handle receive the same request after connection reset.
-pub fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+pub fn backup_file_name(
+    store_id: u64,
+    region: &Region,
+    key: Option<String>,
+    storage_name: &str,
+) -> String {
     let start = SystemTime::now();
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards");
-    match key {
-        Some(k) => format!(
-            "{}_{}_{}_{}_{}",
-            store_id,
-            region.get_id(),
-            region.get_region_epoch().get_version(),
-            k,
-            since_the_epoch.as_millis()
-        ),
-        None => format!(
-            "{}_{}_{}",
-            store_id,
-            region.get_id(),
-            region.get_region_epoch().get_version()
-        ),
+
+    match (key, storage_name) {
+        // See https://github.com/pingcap/tidb/issues/30087
+        // To avoid 503 Slow Down error, if the backup storage is s3,
+        // organize the backup files by store_id (use slash (/) as delimiter).
+        (Some(k), aws::STORAGE_NAME | external_storage::local::STORAGE_NAME) => {
+            format!(
+                "{}/{}_{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version(),
+                k,
+                since_the_epoch.as_millis()
+            )
+        }
+        (Some(k), _) => {
+            format!(
+                "{}_{}_{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version(),
+                k,
+                since_the_epoch.as_millis()
+            )
+        }
+
+        (None, aws::STORAGE_NAME | external_storage::local::STORAGE_NAME) => {
+            format!(
+                "{}/{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version()
+            )
+        }
+        (None, _) => {
+            format!(
+                "{}_{}_{}",
+                store_id,
+                region.get_id(),
+                region.get_region_epoch().get_version()
+            )
+        }
     }
 }
 
@@ -1524,7 +1569,10 @@ pub mod tests {
             format!("k{:0>10}", idx)
         };
         if api_ver == ApiVersion::V2 {
-            key.insert(0, RAW_KEY_PREFIX as char);
+            // [0, 0, 0] is the default key space id.
+            let mut apiv2_key = [RAW_KEY_PREFIX, 0, 0, 0].to_vec();
+            apiv2_key.extend(key.as_bytes());
+            key = String::from_utf8(apiv2_key).unwrap();
         }
         key
     }
@@ -1561,7 +1609,10 @@ pub mod tests {
     ) -> Key {
         if (cur_ver == ApiVersion::V1 || cur_ver == ApiVersion::V1ttl) && dst_ver == ApiVersion::V2
         {
-            raw_key.insert(0, RAW_KEY_PREFIX as char);
+            // [0, 0, 0] is the default key space id.
+            let mut apiv2_key = [RAW_KEY_PREFIX, 0, 0, 0].to_vec();
+            apiv2_key.extend(raw_key.as_bytes());
+            raw_key = String::from_utf8(apiv2_key).unwrap();
         }
         Key::from_encoded(raw_key.into_bytes())
     }
@@ -1610,22 +1661,22 @@ pub mod tests {
         stats.reset();
         let mut req = BackupRequest::default();
         let backup_start = if cur_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX]
+            vec![RAW_KEY_PREFIX, 0, 0, 0] // key space id takes 3 bytes.
         } else {
             vec![]
         };
         let backup_end = if cur_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX + 1]
+            vec![RAW_KEY_PREFIX, 0, 0, 1] // [0, 0, 1] is the end of the file
         } else {
             vec![]
         };
         let file_start = if dst_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX]
+            vec![RAW_KEY_PREFIX, 0, 0, 0] // key space id takes 3 bytes.
         } else {
             vec![]
         };
         let file_end = if dst_api_ver == ApiVersion::V2 {
-            vec![RAW_KEY_PREFIX + 1]
+            vec![RAW_KEY_PREFIX, 0, 0, 1] // [0, 0, 1] is the end of the file
         } else {
             vec![]
         };
@@ -1905,5 +1956,37 @@ pub mod tests {
         pool.adjust_with(2);
         drop(pool);
         std::thread::sleep(Duration::from_millis(150));
+    }
+
+    #[test]
+    fn test_backup_file_name() {
+        let region = metapb::Region::default();
+        let store_id = 1;
+        let test_cases = vec!["s3", "local", "gcs", "azure", "hdfs"];
+        let test_target = vec![
+            "1/0_0_000",
+            "1/0_0_000",
+            "1_0_0_000",
+            "1_0_0_000",
+            "1_0_0_000",
+        ];
+
+        let delimiter = "_";
+        for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
+            let key = Some(String::from("000"));
+            let filename = backup_file_name(store_id, &region, key, storage_name);
+
+            let mut prefix_arr: Vec<&str> = filename.split(delimiter).collect();
+            prefix_arr.remove(prefix_arr.len() - 1);
+
+            assert_eq!(target.to_string(), prefix_arr.join(delimiter));
+        }
+
+        let test_target = vec!["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
+        for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
+            let key = None;
+            let filename = backup_file_name(store_id, &region, key, storage_name);
+            assert_eq!(target.to_string(), filename);
+        }
     }
 }

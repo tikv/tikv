@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.1.0-alpha"
+version = "6.1.0"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -90,6 +90,7 @@ engine_traits_tests = { path = "components/engine_traits_tests", default-feature
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
@@ -277,9 +278,25 @@ members = [
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
+[profile.dev.package.grpcio-sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.librocksdb_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.libtitan_sys]
+debug = false
+opt-level = 1
+
+[profile.dev.package.tests]
+debug = 1
+opt-level = 1
+
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -305,7 +322,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true
