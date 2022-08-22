@@ -675,13 +675,6 @@ where
             &snap_key,
             Some(&s),
         );
-        debug!(
-            "pre apply snapshot";
-            "region_id" => region_id,
-            "peer_id" => peer_id,
-            "state" => ?apply_state,
-            "time_takes" => ?timer.saturating_elapsed(),
-        );
         Ok(())
     }
 }
