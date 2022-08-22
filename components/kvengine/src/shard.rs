@@ -114,6 +114,8 @@ impl Shard {
             store_bool(&shard.initial_flushed, true);
         } else {
             shard.parent_id = cs.get_parent().shard_id;
+            let mut guard = shard.parent_snap.write().unwrap();
+            *guard = Some(cs.get_parent().get_snapshot().clone());
         }
         shard.base_version = snap.base_version;
         shard.meta_seq.store(cs.sequence, Release);
