@@ -11,6 +11,7 @@ use kvproto::{
     metapb::{self, Region},
     tikvpb::TikvClient,
 };
+use protobuf::RepeatedField;
 use test_raftstore::*;
 use tikv::server::gc_worker::sync_gc;
 use tikv_util::HandyRwLock;
@@ -308,7 +309,12 @@ fn test_gc_bypass_raft() {
     let mut region = Region::default();
     region.set_start_key(b"k1".to_vec());
     region.set_end_key(b"k2".to_vec());
-    sync_gc(&gc_sched, 0, region, 200.into()).unwrap();
+    region.set_peers(RepeatedField::from_vec(vec![metapb::Peer {
+        store_id: 1,
+        id: 1,
+        ..Default::default()
+    }]));
+    sync_gc(&gc_sched, 1, region, 200.into()).unwrap();
 
     for &start_ts in &[10, 20, 30] {
         let commit_ts = start_ts + 5;

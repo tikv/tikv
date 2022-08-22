@@ -1388,6 +1388,7 @@ mod tests {
         kvrpcpb::{ApiVersion, Op},
         metapb::Peer,
     };
+    use protobuf::RepeatedField;
     use raft::StateRole;
     use raftstore::{
         coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
@@ -2185,13 +2186,19 @@ mod tests {
             gate,
         );
 
+        let mut region = Region::default();
+        region.set_peers(RepeatedField::from_vec(vec![Peer {
+            store_id: 1,
+            id: 1,
+            ..Default::default()
+        }]));
         // Before starting gc_worker, fill the scheduler to full.
         for _ in 0..GC_MAX_PENDING_TASKS {
             gc_worker
                 .scheduler()
                 .schedule(GcTask::Gc {
-                    store_id: 0,
-                    region: Region::default(),
+                    store_id: 1,
+                    region: region.clone(),
                     safe_point: TimeStamp::from(100),
                     callback: Box::new(|_res| {}),
                 })
