@@ -46,14 +46,9 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-<<<<<<< HEAD
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
-=======
 use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
->>>>>>> 58fa80e0d... storage: precheck whether the peer is leader when acquiring latches failed (#13254)
 use txn_types::TimeStamp;
 
 use crate::{
@@ -441,18 +436,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .inc();
 
         let mut task_slot = self.inner.get_task_slot(cid);
-<<<<<<< HEAD
         let tctx = task_slot
             .entry(cid)
             .or_insert_with(|| self.inner.new_task_context(Task::new(cid, cmd), callback));
-        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
-=======
-        let tctx = task_slot.entry(cid).or_insert_with(|| {
-            self.inner
-                .new_task_context(Task::new(cid, tracker, cmd), callback)
-        });
-
->>>>>>> 58fa80e0d... storage: precheck whether the peer is leader when acquiring latches failed (#13254)
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -1235,18 +1221,8 @@ mod tests {
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
-<<<<<<< HEAD
-        txn::{commands, commands::TypedCommand, latch::*},
-        TestEngineBuilder, TxnStatus,
-=======
-        txn::{
-            commands,
-            commands::TypedCommand,
-            flow_controller::{EngineFlowController, FlowController},
-            latch::*,
-        },
+        txn::{commands, commands::TypedCommand, flow_controller::FlowController, latch::*},
         RocksEngine, TestEngineBuilder, TxnStatus,
->>>>>>> 58fa80e0d... storage: precheck whether the peer is leader when acquiring latches failed (#13254)
     };
 
     #[derive(Clone)]
@@ -1277,7 +1253,7 @@ mod tests {
                     pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                     in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 },
-                Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                Arc::new(FlowController::empty()),
                 DummyReporter,
                 ResourceTagFactory::new_for_test(),
                 Arc::new(QuotaLimiter::default()),
