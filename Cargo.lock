@@ -5970,6 +5970,7 @@ dependencies = [
  "example_plugin",
  "fail",
  "file_system",
+ "flate2",
  "futures 0.3.15",
  "futures-executor",
  "futures-timer",
