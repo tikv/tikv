@@ -268,7 +268,7 @@ fn get_keys_in_regions(
     keys: Vec<Key>,
     region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
 ) -> Result<(Box<dyn Iterator<Item = (Key, Region)>>, Region)> {
-    assert!(keys.len() >= 1);
+    assert!(!keys.is_empty());
 
     match region_or_provider {
         Either::Left(region) => {
@@ -521,7 +521,7 @@ where
                     current_region_id = region.id;
 
                     (reader, kv_engine) = {
-                        let snapshot = self.get_snapshot(store_id, &region)?;
+                        let snapshot = self.get_snapshot(store_id, region)?;
                         let kv_engine = snapshot.inner_engine();
 
                         (
@@ -541,7 +541,7 @@ where
             } else {
                 Self::flush_txn(txn, &self.limiter, kv_engine)?;
                 (reader, kv_engine) = {
-                    let snapshot = self.get_snapshot(store_id, &region)?;
+                    let snapshot = self.get_snapshot(store_id, region)?;
                     let kv_engine = snapshot.inner_engine();
 
                     (
@@ -836,7 +836,7 @@ where
     }
 
     fn get_snapshot(&self, store_id: u64, region: &Region) -> Result<<E as Engine>::Snap> {
-        let ctx = init_snap_ctx(store_id, &region);
+        let ctx = init_snap_ctx(store_id, region);
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
             ..Default::default()
@@ -1897,7 +1897,12 @@ mod tests {
         assert_eq!(runner.stats.write.seek, 0);
         assert_eq!(runner.stats.write.next, 0);
         runner
-            .gc_keys(keys, TimeStamp::new(200), Some((1, Arc::new(ri_provider))))
+            .gc_keys(
+                1,
+                keys,
+                TimeStamp::new(200),
+                Either::Right(Arc::new(ri_provider)),
+            )
             .unwrap();
         assert_eq!(runner.stats.write.seek, 1);
         assert_eq!(runner.stats.write.next, 100 * 2);
@@ -1989,7 +1994,7 @@ mod tests {
             .collect();
 
         runner
-            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), Some((1, ri_provider)))
+            .raw_gc_keys(1, to_gc_keys, TimeStamp::new(120), ri_provider)
             .unwrap();
 
         assert_eq!(7, runner.stats.data.next);
@@ -2049,9 +2054,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                1,
                 vec![Key::from_raw(b"k2\x00")],
                 TimeStamp::new(200),
-                Some((1, ri_provider.clone())),
+                Either::Right(ri_provider.clone()),
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 20);
@@ -2061,9 +2067,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                1,
                 vec![Key::from_raw(b"k2")],
                 TimeStamp::new(200),
-                Some((1, ri_provider.clone())),
+                Either::Right(ri_provider.clone()),
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2073,9 +2080,10 @@ mod tests {
         assert_eq!(runner.stats.write.seek_tombstone, 0);
         runner
             .gc_keys(
+                1,
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
                 TimeStamp::new(200),
-                Some((1, ri_provider.clone())),
+                Either::Right(ri_provider.clone()),
             )
             .unwrap();
         assert_eq!(runner.stats.write.seek_tombstone, 0);
@@ -2101,9 +2109,10 @@ mod tests {
         runner.stats.write.seek_tombstone = 0;
         runner
             .gc_keys(
+                1,
                 vec![Key::from_raw(b"k2")],
                 safepoint.into(),
-                Some((1, ri_provider)),
+                Either::Right(ri_provider),
             )
             .unwrap();
         // The first batch will leave tombstones that will be seen while processing the
@@ -2140,6 +2149,7 @@ mod tests {
             gc_worker
                 .scheduler()
                 .schedule(GcTask::Gc {
+                    store_id: 0,
                     region: Region::default(),
                     safe_point: TimeStamp::from(100),
                     callback: Box::new(|_res| {}),

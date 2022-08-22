@@ -6,7 +6,11 @@ use collections::HashMap;
 use engine_traits::{Peekable, CF_WRITE};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
-use kvproto::{kvrpcpb::*, metapb, tikvpb::TikvClient};
+use kvproto::{
+    kvrpcpb::*,
+    metapb::{self, Region},
+    tikvpb::TikvClient,
+};
 use test_raftstore::*;
 use tikv::server::gc_worker::sync_gc;
 use tikv_util::HandyRwLock;
@@ -301,7 +305,10 @@ fn test_gc_bypass_raft() {
     }
 
     let gc_sched = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).unwrap();
+    let mut region = Region::default();
+    region.set_start_key(b"k1".to_vec());
+    region.set_end_key(b"k2".to_vec());
+    sync_gc(&gc_sched, 0, region, 200.into()).unwrap();
 
     for &start_ts in &[10, 20, 30] {
         let commit_ts = start_ts + 5;

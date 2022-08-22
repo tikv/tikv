@@ -811,10 +811,8 @@ mod tests {
             .iter()
             .map(|task| match task {
                 GcTask::Gc {
-                    region_id,
-                    safe_point,
-                    ..
-                } => (*region_id, *safe_point),
+                    region, safe_point, ..
+                } => (region.id, *safe_point),
                 _ => unreachable!(),
             })
             .collect();
