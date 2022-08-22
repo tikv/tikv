@@ -56,7 +56,7 @@ impl RegionScheduler {
                     .unwrap();
                 region.get_peers().iter().any(|peer| peer.id == peer_id)
             },
-            5,
+            10,
             "failed to add leaner",
         );
         let mut peer = Peer::new();
@@ -74,7 +74,7 @@ impl RegionScheduler {
                     .iter()
                     .any(|peer| peer.id == peer_id && peer.role == PeerRole::Voter)
             },
-            8,
+            10,
             "failed to promote leaner",
         );
         must_wait(
@@ -83,7 +83,7 @@ impl RegionScheduler {
                     .unwrap()
                     .is_some()
             },
-            5,
+            10,
             "failed to get leader",
         );
         let (region, leader) = block_on(self.pd.get_region_leader_by_id(region_id))
@@ -105,7 +105,7 @@ impl RegionScheduler {
                     .iter()
                     .all(|peer| peer.id != to_remove.id)
             },
-            5,
+            10,
         );
         self.pd.enable_default_operator();
     }

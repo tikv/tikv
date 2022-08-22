@@ -6,7 +6,7 @@ use std::{
         Bound::{Excluded, Unbounded},
         Range,
     },
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread::sleep,
     time::Duration,
 };
@@ -15,14 +15,19 @@ use futures::executor::block_on;
 use grpcio::Channel;
 use kvproto::{
     errorpb::Error,
-    kvrpcpb::{CommitRequest, Context, Mutation, Op, PrewriteRequest, SplitRegionRequest},
+    kvrpcpb::{
+        CommitRequest, Context, GetRequest, Mutation, Op, PrewriteRequest, SplitRegionRequest,
+    },
     metapb::{Peer, Region, RegionEpoch},
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
 use test_raftstore::TestPdClient;
 use tikv::storage::mvcc::TimeStamp;
-use tikv_util::codec::bytes::{decode_bytes, encode_bytes};
+use tikv_util::{
+    codec::bytes::{decode_bytes, encode_bytes},
+    time::Instant,
+};
 
 use crate::must_wait;
 
@@ -33,6 +38,7 @@ pub struct ClusterClient {
     pub(crate) region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub(crate) regions: HashMap<u64, RawRegion>,
+    pub(crate) ref_store: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
 }
 
 #[derive(Clone)]
@@ -98,9 +104,20 @@ impl ClusterClient {
             mutations.push(m)
         }
         let keys = mutations.iter().map(|m| m.get_key().to_vec()).collect();
-        self.kv_prewrite(mutations, start_key, start_ts);
+        let put_time = Instant::now();
+        self.kv_prewrite(mutations.clone(), start_key, start_ts);
         let commit_ts = self.get_ts();
         self.kv_commit(keys, start_ts, commit_ts);
+        let first = mutations.first().unwrap();
+        self.verify_key_value(first.get_key(), first.get_value(), put_time);
+        self.put_kv_in_ref_store(mutations);
+    }
+
+    fn put_kv_in_ref_store(&mut self, mutations: Vec<Mutation>) {
+        let mut ref_store = self.ref_store.lock().unwrap();
+        for mut m in mutations {
+            ref_store.insert(m.take_key(), m.take_value());
+        }
     }
 
     pub fn kv_prewrite(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
@@ -372,5 +389,77 @@ impl ClusterClient {
             return;
         }
         panic!("failed to split key {:?}", key);
+    }
+
+    pub fn must_get_key(&mut self, key: &[u8], put_time: Instant) -> Vec<u8> {
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(10);
+        let mut region_id = 0;
+        let mut last_err = "".to_string();
+        while start_time.saturating_elapsed() < timeout {
+            region_id = self.get_region_id(key);
+            let ctx = self.new_rpc_ctx(region_id);
+            let client = self.get_kv_client(ctx.get_peer().get_store_id());
+            let mut get_req = GetRequest::default();
+            get_req.set_context(ctx);
+            get_req.set_key(key.to_vec());
+            get_req.set_version(u64::MAX);
+            let result = client.kv_get(&get_req);
+            if result.is_err() {
+                last_err = format!("{:?}", result.unwrap_err());
+                sleep(Duration::from_millis(100));
+                continue;
+            }
+            let mut resp = result.unwrap();
+            if resp.has_region_error() {
+                let region_err = resp.get_region_error();
+                last_err = format!("{:?}", region_err);
+                if self.handle_retryable_error(region_id, region_err) {
+                    continue;
+                }
+                if self.handle_region_epoch_not_match(region_err) {
+                    continue;
+                }
+                panic!("unexpected error {:?}", region_err);
+            }
+            if resp.get_not_found() {
+                panic!(
+                    "key {:?} not found on region {}, put elapsed {:?}",
+                    key,
+                    region_id,
+                    put_time.saturating_elapsed()
+                );
+            }
+            return resp.take_value();
+        }
+        panic!(
+            "failed to get key {:?} on region {}, last error {}, put elapsed {:?}",
+            key,
+            region_id,
+            last_err,
+            put_time.saturating_elapsed(),
+        );
+    }
+
+    pub fn verify_data_with_ref_store(&mut self) {
+        let put_time = Instant::now();
+        let ref_store = self.ref_store.lock().unwrap().clone();
+        for (k, v) in ref_store {
+            self.verify_key_value(&k, &v, put_time);
+        }
+    }
+
+    pub fn verify_key_value(&mut self, key: &[u8], expect_val: &[u8], put_time: Instant) {
+        let val = self.must_get_key(key, put_time);
+        if val.as_slice() != expect_val {
+            let region_id = self.get_region_id(key);
+            panic!(
+                "val not equal for key {:?} on region {}, db_len:{}, ref_store_len:{}",
+                key,
+                region_id,
+                val.len(),
+                expect_val.len()
+            );
+        }
     }
 }

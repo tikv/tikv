@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, path::Path, sync::Arc, thread::sleep, time::Duration};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, Mutex},
+    thread::sleep,
+    time::Duration,
+};
 
 use cloud_server::TiKVServer;
 use futures::executor::block_on;
@@ -34,6 +40,7 @@ pub struct ServerCluster {
     security_mgr: Arc<SecurityManager>,
     dfs: Arc<InMemFS>,
     channels: HashMap<u64, Channel>,
+    ref_store: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
 }
 
 impl ServerCluster {
@@ -52,6 +59,7 @@ impl ServerCluster {
             security_mgr: Arc::new(SecurityManager::new(&Default::default()).unwrap()),
             dfs: Arc::new(InMemFS::new()),
             channels: HashMap::new(),
+            ref_store: Arc::new(Mutex::new(HashMap::new())),
         };
         for node_id in nodes {
             cluster.start_node(node_id, &update_conf);
@@ -220,6 +228,7 @@ impl ServerCluster {
             channels: self.channels.clone(),
             region_ranges: Default::default(),
             regions: Default::default(),
+            ref_store: self.ref_store.clone(),
         }
     }
 

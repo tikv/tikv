@@ -5,14 +5,17 @@ use std::{
         atomic::{AtomicU16, AtomicUsize, Ordering},
         Arc,
     },
-    thread::sleep,
+    thread::{sleep, JoinHandle},
     time::Duration,
 };
 
 use futures::executor::block_on;
 use pd_client::PdClient;
 use rand::{Rng, RngCore};
-use test_cloud_server::{try_wait, ServerCluster};
+use test_cloud_server::{
+    client::ClusterClient, scheduler::RegionScheduler, try_wait, ServerCluster,
+};
+use test_raftstore::TestPdClient;
 use tikv::config::TiKvConfig;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -21,6 +24,10 @@ use tikv_util::{
 };
 
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
+static WRITE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static MOVE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+const TIMEOUT: Duration = Duration::from_secs(60);
+const CONCURRENCY: usize = 4;
 
 pub(crate) fn alloc_node_id() -> u16 {
     let node_id = NODE_ALLOCATOR.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -46,46 +53,39 @@ fn test_random_workload() {
     };
     let mut cluster = ServerCluster::new(nodes.clone(), update_conf_fn);
     cluster.wait_region_replicated(&[], 3);
-    let concurrency = 4usize;
-    let timeout = Duration::from_secs(60);
-    let write_counter = Arc::new(AtomicUsize::new(0));
     let mut handles = vec![];
-    for _ in 0..concurrency {
-        let mut client = cluster.new_client();
-        let write_count = write_counter.clone();
-        let handle = std::thread::spawn(move || {
-            let start_time = Instant::now();
-            let mut rng = rand::thread_rng();
-            while start_time.saturating_elapsed() < timeout {
-                let i = rng.gen_range(0..10000usize);
-                client.put_kv(i..(i + 10), i_to_key, i_to_val);
-                write_count.fetch_add(10, Ordering::SeqCst);
-            }
-        });
-        handles.push(handle);
+    for i in 0..CONCURRENCY {
+        handles.push(spawn_write(i, cluster.new_client()));
     }
+    handles.push(spawn_move(cluster.new_region_scheduler()));
     let start_time = Instant::now();
     let pd_client = cluster.get_pd_client();
-    let scheduler = cluster.new_region_scheduler();
-    let mut move_count = 0;
-    while start_time.saturating_elapsed() < timeout {
+    while start_time.saturating_elapsed() < TIMEOUT {
         let ts = block_on(pd_client.get_tso()).unwrap();
-        sleep(Duration::from_millis(1000));
-        pd_client.set_gc_safe_point(ts.into_inner());
-        scheduler.move_random_region();
-        move_count += 1;
-        if move_count % 4 == 0 {
-            let mut rng = rand::thread_rng();
-            let node_idx = rng.gen_range(0..nodes.len());
-            let node_id = nodes[node_idx];
-            info!("stop node {}", node_id);
-            cluster.stop_node(node_id);
-            let sleep_sec = rng.gen_range(1..5);
-            sleep(Duration::from_secs(sleep_sec));
-            info!("start node {}", node_id);
-            cluster.start_node(node_id, update_conf_fn);
+        let mut rng = rand::thread_rng();
+        let node_idx = rng.gen_range(0..nodes.len());
+        let node_id = nodes[node_idx];
+        info!("stop node {}", node_id);
+        cluster.stop_node(node_id);
+        let mut node2_id = 0;
+        if node_idx == 0 {
+            let node2_idx = rng.gen_range(1..nodes.len());
+            node2_id = nodes[node2_idx];
+            info!("stop node {}", node2_id);
+            cluster.stop_node(node2_id);
         }
+        let sleep_sec = rng.gen_range(1..5);
+        sleep(Duration::from_secs(sleep_sec));
+        info!("start node {}", node_id);
+        cluster.start_node(node_id, update_conf_fn);
+        if node2_id > 0 {
+            info!("start node {}", node2_id);
+            cluster.start_node(node2_id, update_conf_fn);
+        }
+        sleep(Duration::from_secs(5));
+        pd_client.set_gc_safe_point(ts.into_inner());
     }
+    info!("stop node thread exit");
     for handle in handles {
         handle.join().unwrap();
     }
@@ -98,13 +98,44 @@ fn test_random_workload() {
     ) {
         cluster.get_data_stats().check_data().unwrap();
     }
+    let mut client = cluster.new_client();
+    client.verify_data_with_ref_store();
     cluster.stop();
-    let total_write_count = write_counter.load(Ordering::SeqCst);
+    let total_write_count = WRITE_COUNTER.load(Ordering::SeqCst);
+    let total_move_count = MOVE_COUNTER.load(Ordering::SeqCst);
     let region_number = pd_client.get_regions_number();
     info!(
         "total_write_count {}, region number {}, move count {}",
-        total_write_count, region_number, move_count
+        total_write_count, region_number, total_move_count
     );
+}
+
+fn spawn_write(idx: usize, mut client: ClusterClient) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        // Make sure each write thread don't conflict with others.
+        let begin = idx * 2000;
+        let end = begin + 2000 - 10;
+        let start_time = Instant::now();
+        let mut rng = rand::thread_rng();
+        while start_time.saturating_elapsed() < TIMEOUT {
+            let i = rng.gen_range(begin..end);
+            client.put_kv(i..(i + 10), i_to_key, i_to_val);
+            WRITE_COUNTER.fetch_add(10, Ordering::SeqCst);
+        }
+        info!("write thread {} exit", idx);
+    })
+}
+
+fn spawn_move(scheduler: RegionScheduler) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let start_time = Instant::now();
+        while start_time.saturating_elapsed() < TIMEOUT {
+            sleep(Duration::from_millis(1000));
+            scheduler.move_random_region();
+            MOVE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+        info!("move thread exit");
+    })
 }
 
 fn i_to_key(i: usize) -> Vec<u8> {
