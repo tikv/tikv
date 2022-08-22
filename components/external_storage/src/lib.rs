@@ -31,7 +31,7 @@ use tokio::time::timeout;
 
 mod hdfs;
 pub use hdfs::{HdfsConfig, HdfsStorage};
-mod local;
+pub mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
