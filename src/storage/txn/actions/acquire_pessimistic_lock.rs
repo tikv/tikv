@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::lock;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
