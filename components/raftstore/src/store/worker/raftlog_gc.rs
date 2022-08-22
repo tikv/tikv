@@ -168,15 +168,14 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             if let Some(seqno) = self.flushed_seqno {
                 let max_compact_to = self
                     .seqno_flushed_index(t.region_id, seqno)
-                    .unwrap_or_default()
-                    + 1;
+                    .unwrap_or_default();
                 if t.end_idx > max_compact_to {
-                    t.end_idx = max_compact_to;
                     let end_idx = t.end_idx;
                     self.residual_log_regions
                         .entry(t.region_id)
                         .and_modify(|v| *v = u64::max(*v, end_idx))
                         .or_insert(t.end_idx);
+                    t.end_idx = max_compact_to;
                 }
                 if t.start_idx >= max_compact_to {
                     continue;
@@ -276,7 +275,8 @@ where
 mod tests {
     use std::{sync::mpsc, time::Duration};
 
-    use engine_traits::{RaftEngine, RaftLogBatch, ALL_CFS};
+    use engine_traits::{MiscExt, RaftEngine, RaftLogBatch, ALL_CFS};
+    use kvproto::raft_serverpb::RegionSequenceNumberRelation;
     use raft::eraftpb::Entry;
     use tempfile::Builder;
 
@@ -347,6 +347,89 @@ mod tests {
     ) {
         for i in start_idx..end_idx {
             assert!(raft_engine.get_entry(region_id, i).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn test_gc_raft_log_with_seqno() {
+        let dir = Builder::new().prefix("gc-raft-log-test").tempdir().unwrap();
+        let path_raft = dir.path().join("raft");
+        let path_kv = dir.path().join("kv");
+        let raft_db = engine_test::raft::new_engine(path_kv.to_str().unwrap(), None).unwrap();
+        let kv_db = engine_test::kv::new_engine(path_raft.to_str().unwrap(), ALL_CFS).unwrap();
+        let engines = Engines::new(kv_db.clone(), raft_db.clone());
+        let init_seqno = kv_db.get_latest_sequence_number();
+
+        let (tx, rx) = mpsc::channel();
+        let mut runner = Runner {
+            gc_entries: Some(tx),
+            engines,
+            tasks: vec![],
+            compact_sync_interval: Duration::from_millis(100),
+            residual_log_regions: HashMap::default(),
+            flushed_seqno: Some(init_seqno),
+        };
+
+        // generate raft logs
+        let region_id = 1;
+        let mut raft_wb = raft_db.log_batch(0);
+        for i in 0..100 {
+            let mut e = Entry::new();
+            e.set_index(i);
+            raft_wb.append(region_id, vec![e]).unwrap();
+        }
+        raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
+
+        let tbls = vec![
+            (Task::gc(region_id, 0, 10), 0, (0, 0), (10, 100), None),
+            (
+                Task::gc(region_id, 0, 50),
+                // Gc [0, 10) would be executed twice.
+                20,
+                (0, 10),
+                (10, 100),
+                Some((init_seqno + 10, 10)),
+            ),
+            (
+                Task::gc(region_id, 50, 50),
+                30,
+                (0, 40),
+                (40, 100),
+                Some((init_seqno + 20, 40)),
+            ),
+            (
+                Task::gc(region_id, 40, 50),
+                // Gc [40, 50) would be executed twice.
+                20,
+                (0, 50),
+                (50, 100),
+                Some((init_seqno + 30, 50)),
+            ),
+            (
+                Task::gc(region_id, 0, 60),
+                10,
+                (0, 60),
+                (60, 100),
+                Some((init_seqno + 40, 60)),
+            ),
+        ];
+
+        for (task, expected_collectd, not_exist_range, exist_range, relation) in tbls {
+            if let Some(r) = relation {
+                let mut relation = RegionSequenceNumberRelation::default();
+                relation.set_sequence_number(r.0);
+                relation.mut_apply_state().set_applied_index(r.1);
+                let mut raft_wb = raft_db.log_batch(0);
+                raft_wb.put_seqno_relation(region_id, &relation).unwrap();
+                raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
+                runner.run(Task::MemtableFlushed(r.0));
+            }
+            runner.run(task);
+            runner.flush();
+            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(res, expected_collectd);
+            raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
+            raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }
     }
 }
