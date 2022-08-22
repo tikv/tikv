@@ -7,8 +7,8 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGCTask};
-use file_system::{IOType, WithIOType};
+use engine_traits::{Engines, KvEngine, RaftEngine, RaftLogGcTask};
+use file_system::{IoType, WithIoType};
 use thiserror::Error;
 use tikv_util::{
     box_try, debug, error,
@@ -118,7 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     /// Does the GC job and returns the count of logs collected.
-    fn gc_raft_log(&mut self, regions: Vec<RaftLogGCTask>) -> Result<usize, Error> {
+    fn gc_raft_log(&mut self, regions: Vec<RaftLogGcTask>) -> Result<usize, Error> {
         fail::fail_point!("worker_gc_raft_log", |s| {
             Ok(s.and_then(|s| s.parse().ok()).unwrap_or(0))
         });
@@ -146,7 +146,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             return;
         }
         fail::fail_point!("worker_gc_raft_log_flush");
-        // Sync wal of kv_db to make sure the data before apply_index has been persisted to disk.
+        // Sync wal of kv_db to make sure the data before apply_index has been persisted
+        // to disk.
         let start = Instant::now();
         self.engines.kv.sync().unwrap_or_else(|e| {
             panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
@@ -191,7 +192,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     "end_index" => t.end_idx,
                 );
             }
-            groups.push(RaftLogGCTask {
+            groups.push(RaftLogGcTask {
                 raft_group_id: t.region_id,
                 from: t.start_idx,
                 to: t.end_idx,
@@ -225,7 +226,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        let _io_type_guard = WithIOType::new(IOType::ForegroundWrite);
+        let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
         let mut flush_now = false;
         match task {
             Task::Gc(task) => {
@@ -287,8 +288,7 @@ mod tests {
         let path_raft = dir.path().join("raft");
         let path_kv = dir.path().join("kv");
         let raft_db = engine_test::raft::new_engine(path_kv.to_str().unwrap(), None).unwrap();
-        let kv_db =
-            engine_test::kv::new_engine(path_raft.to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let kv_db = engine_test::kv::new_engine(path_raft.to_str().unwrap(), ALL_CFS).unwrap();
         let engines = Engines::new(kv_db, raft_db.clone());
 
         let (tx, rx) = mpsc::channel();
@@ -309,7 +309,7 @@ mod tests {
             e.set_index(i);
             raft_wb.append(region_id, vec![e]).unwrap();
         }
-        raft_db.consume(&mut raft_wb, false /*sync*/).unwrap();
+        raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
             (Task::gc(region_id, 0, 10), 10, (0, 10), (10, 100)),

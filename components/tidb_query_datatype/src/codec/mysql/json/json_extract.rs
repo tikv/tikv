@@ -7,9 +7,10 @@ use super::{
 };
 
 impl<'a> JsonRef<'a> {
-    /// `extract` receives several path expressions as arguments, matches them in j, and returns
-    /// the target JSON matched any path expressions, which may be autowrapped as an array.
-    /// If there is no any expression matched, it returns None.
+    /// `extract` receives several path expressions as arguments, matches them
+    /// in j, and returns the target JSON matched any path expressions, which
+    /// may be autowrapped as an array. If there is no any expression matched,
+    /// it returns None.
     ///
     /// See `Extract()` in TiDB `json.binary_function.go`
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {

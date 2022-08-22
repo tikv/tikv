@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use engine_rocks::raw::*;
+use engine_rocks::RocksEngine;
 use fail::fail_point;
 use raftstore::store::fsm::StoreMeta;
 use tikv_util::{self, set_panic_mark, warn, worker::*};
@@ -17,7 +17,7 @@ pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_DAMAGED_FILES_NUM: usize = 2;
 
 pub struct RecoveryRunner {
-    db: Arc<DB>,
+    db: RocksEngine,
     store_meta: Arc<Mutex<StoreMeta>>,
     // Considering that files will not be too much, it is enough to use `Vec`.
     damaged_files: Vec<FileInfo>,
@@ -68,7 +68,7 @@ impl RunnableWithTimer for RecoveryRunner {
 
 impl RecoveryRunner {
     pub fn new(
-        db: Arc<DB>,
+        db: RocksEngine,
         store_meta: Arc<Mutex<StoreMeta>>,
         max_hang_duration: Duration,
         check_duration: Duration,
@@ -87,7 +87,7 @@ impl RecoveryRunner {
             return;
         }
 
-        let live_files = self.db.get_live_files();
+        let live_files = self.db.as_inner().get_live_files();
         for i in 0..live_files.get_files_count() {
             if path == live_files.get_name(i as i32) {
                 let f = FileInfo {
@@ -132,7 +132,8 @@ impl RecoveryRunner {
         self.damaged_files.iter().any(|f| f.name == sst_path)
     }
 
-    // Cleans up obsolete damaged files and panics if some files are not handled in time.
+    // Cleans up obsolete damaged files and panics if some files are not handled in
+    // time.
     fn check_damaged_files(&mut self) {
         if self.damaged_files.is_empty() {
             return;
@@ -153,7 +154,8 @@ impl RecoveryRunner {
     }
 
     // Check whether the StoreMeta contains the region range, if it contains,
-    // recorded fault region ids to report to PD and add file info into `damaged_files`.
+    // recorded fault region ids to report to PD and add file info into
+    // `damaged_files`.
     //
     // Acquire meta lock.
     fn check_overlap_damaged_regions(&self, file: &FileInfo) -> bool {
@@ -163,10 +165,11 @@ impl RecoveryRunner {
             meta.update_overlap_damaged_ranges(&file.name, &file.smallest_key, &file.largest_key);
         if !overlap {
             fail_point!("sst_recovery_before_delete_files");
-            // The sst file can be deleted safely and set `include_end` to `true` otherwise the
-            // file with the same largest key will be skipped.
+            // The sst file can be deleted safely and set `include_end` to `true` otherwise
+            // the file with the same largest key will be skipped.
             // Here store meta lock should be held to prevent peers from being added back.
             self.db
+                .as_inner()
                 .delete_files_in_range(&file.smallest_key, &file.largest_key, true)
                 .unwrap();
             self.must_file_not_exist(&file.name);
@@ -192,7 +195,7 @@ impl RecoveryRunner {
     }
 
     fn must_file_not_exist(&self, fname: &str) {
-        let live_files = self.db.get_live_files();
+        let live_files = self.db.as_inner().get_live_files();
         for i in 0..live_files.get_files_count() {
             if live_files.get_name(i as i32) == fname {
                 // `delete_files_in_range` can't delete L0 files.
@@ -206,7 +209,8 @@ impl RecoveryRunner {
 mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
-    use engine_rocks::raw_util;
+    use engine_rocks::util;
+    use engine_traits::{CompactExt, SyncMutable, CF_DEFAULT};
     use kvproto::metapb::{Peer, Region};
     use tempfile::Builder;
 
@@ -218,16 +222,14 @@ mod tests {
             .prefix("test_sst_recovery_runner")
             .tempdir()
             .unwrap();
-        let db = Arc::new(
-            raw_util::new_engine(path.path().to_str().unwrap(), None, &["cf"], None).unwrap(),
-        );
+        let db = util::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, "cf"]).unwrap();
 
         db.put(b"z2", b"val").unwrap();
         db.put(b"z7", b"val").unwrap();
         // generate SST file.
-        db.compact_range(None, None);
+        db.compact_range(CF_DEFAULT, None, None, false, 1).unwrap();
 
-        let files = db.get_live_files();
+        let files = db.as_inner().get_live_files();
         assert_eq!(files.get_smallestkey(0), b"z2");
         assert_eq!(files.get_largestkey(0), b"z7");
 

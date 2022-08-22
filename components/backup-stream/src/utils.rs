@@ -46,8 +46,9 @@ pub fn wrap_key(v: Vec<u8>) -> Vec<u8> {
 }
 
 /// Transform a str to a [`engine_traits::CfName`]\(`&'static str`).
-/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`, `"write"`, `"LOCK"`, `"lock"`...
-/// returns "ERR_CF". (Which would be ignored then.)
+/// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`,
+/// `"write"`, `"LOCK"`, `"lock"`... returns "ERR_CF". (Which would be ignored
+/// then.)
 pub fn cf_name(s: &str) -> CfName {
     match s {
         "" | "DEFAULT" | "default" => CF_DEFAULT,
@@ -149,7 +150,8 @@ pub type Slot<T> = Mutex<T>;
 /// NOTE: Maybe we can use dashmap for replacing the RwLock.
 pub type SlotMap<K, V, S = RandomState> = RwLock<HashMap<K, Slot<V>, S>>;
 
-/// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference to DSTs.
+/// Like `..=val`(a.k.a. `RangeToInclusive`), but allows `val` being a reference
+/// to DSTs.
 struct RangeToInclusiveRef<'a, T: ?Sized>(&'a T);
 
 impl<'a, T: ?Sized> RangeBounds<T> for RangeToInclusiveRef<'a, T> {
@@ -191,7 +193,8 @@ pub type SegmentSet<T> = SegmentMap<T, ()>;
 
 impl<K: Ord, V: Default> SegmentMap<K, V> {
     /// Try to add a element into the segment tree, with default value.
-    /// (This is useful when using the segment tree as a `Set`, i.e. `SegmentMap<T, ()>`)
+    /// (This is useful when using the segment tree as a `Set`, i.e.
+    /// `SegmentMap<T, ()>`)
     ///
     /// - If no overlapping, insert the range into the tree and returns `true`.
     /// - If overlapping detected, do nothing and return `false`.
@@ -267,8 +270,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
             return Some(overlap_with_start);
         }
         // |--s----+-----+----e----|
-        // Otherwise, the possibility of being overlapping would be there are some sub range
-        // of the queried range...
+        // Otherwise, the possibility of being overlapping would be there are some sub
+        // range of the queried range...
         // |--s----+----e----+-----|
         // ...Or the end key is contained by some Range.
         // For faster query, we merged the two cases together.
@@ -286,7 +289,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
         covered_by_the_range.map(|(k, v)| (k, &v.range_end, &v.item))
     }
 
-    /// Check whether the range is overlapping with any range in the segment tree.
+    /// Check whether the range is overlapping with any range in the segment
+    /// tree.
     pub fn is_overlapping<R>(&self, range: (&R, &R)) -> bool
     where
         K: Borrow<R>,
@@ -301,8 +305,8 @@ impl<K: Ord, V> SegmentMap<K, V> {
 }
 
 /// transform a [`RaftCmdRequest`] to `(key, value, cf)` triple.
-/// once it contains a write request, extract it, and return `Left((key, value, cf))`,
-/// otherwise return the request itself via `Right`.
+/// once it contains a write request, extract it, and return `Left((key, value,
+/// cf))`, otherwise return the request itself via `Right`.
 pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName), Request> {
     let (key, value, cf) = match req.get_cmd_type() {
         CmdType::Put => {
@@ -319,11 +323,11 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 }
 
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
-/// once meet an error, would report it, with the current file and line (so it is made as a macro).    
-/// returns whether it success.
+/// once meet an error, would report it, with the current file and line (so it
+/// is made as a macro). returns whether it success.
 #[macro_export(crate)]
 macro_rules! try_send {
-    ($s: expr, $task: expr) => {
+    ($s:expr, $task:expr) => {
         match $s.schedule($task) {
             Err(err) => {
                 $crate::errors::Error::from(err).report(concat!(
@@ -341,9 +345,10 @@ macro_rules! try_send {
     };
 }
 
-/// a hacky macro which allow us enable all debug log via the feature `backup_stream_debug`.
-/// because once we enable debug log for all crates, it would soon get too verbose to read.
-/// using this macro now we can enable debug log level for the crate only (even compile time...).
+/// a hacky macro which allow us enable all debug log via the feature
+/// `backup_stream_debug`. because once we enable debug log for all crates, it
+/// would soon get too verbose to read. using this macro now we can enable debug
+/// log level for the crate only (even compile time...).
 #[macro_export(crate)]
 macro_rules! debug {
     ($($t: tt)+) => {
@@ -391,7 +396,8 @@ pub fn record_cf_stat(cf_name: &str, stat: &CfStatistics) {
     );
 }
 
-/// a shortcut for handing the result return from `Router::on_events`, when any faliure, send a fatal error to the `doom_messenger`.
+/// a shortcut for handing the result return from `Router::on_events`, when any
+/// failure, send a fatal error to the `doom_messenger`.
 pub fn handle_on_event_result(doom_messenger: &Scheduler<Task>, result: Vec<(String, Result<()>)>) {
     for (task, res) in result.into_iter() {
         if let Err(err) = res {
@@ -422,8 +428,8 @@ pub struct CallbackWaitGroup {
     on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
 }
 
-/// A shortcut for making an opaque future type for return type or argument type,
-/// which is sendable and not borrowing any variables.  
+/// A shortcut for making an opaque future type for return type or argument
+/// type, which is sendable and not borrowing any variables.  
 ///
 /// `fut![T]` == `impl Future<Output = T> + Send + 'static`
 #[macro_export(crate)]
@@ -469,7 +475,8 @@ impl CallbackWaitGroup {
         Box::pin(rx.map(|_| ()))
     }
 
-    /// make a work, as long as the return value held, mark a work in the group is running.
+    /// make a work, as long as the return value held, mark a work in the group
+    /// is running.
     pub fn work(self: Arc<Self>) -> Work {
         self.running.fetch_add(1, Ordering::SeqCst);
         Work(self)
@@ -519,7 +526,20 @@ impl ReadThroughputRecorder {
         let ins = self.ins.as_ref()?;
         let begin = self.begin.as_ref()?;
         let end = ins.io_stat().ok()??;
-        Some(end.read - begin.read)
+        let bytes_read = end.read - begin.read;
+        // FIXME: In our test environment, there may be too many caches hence the
+        // `bytes_read` is always zero.
+        // For now, we eject here and let rocksDB prove that we did read something when
+        // the proc think we don't touch the block device (even in fact we didn't).
+        // NOTE: In the real-world, we would accept the zero `bytes_read` value since
+        // the cache did exists.
+        #[cfg(test)]
+        if bytes_read == 0 {
+            // use println here so we can get this message even log doesn't enabled.
+            println!("ejecting in test since no read recorded in procfs");
+            return None;
+        }
+        Some(bytes_read)
     }
 
     fn end(self) -> u64 {
@@ -579,6 +599,7 @@ mod test {
         time::Duration,
     };
 
+    use engine_traits::WriteOptions;
     use futures::executor::block_on;
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
@@ -677,7 +698,7 @@ mod test {
                         drop(work);
                     });
                 }
-                let _ = block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
+                block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
                 assert_eq!(cnt.load(Ordering::SeqCst), 0, "{:?}@{}", c, i);
             }
         }
@@ -720,20 +741,14 @@ mod test {
         }
     }
 
-    /// skip it currently. Test it at local env successfully but failed at pod.
-    #[cfg(FALSE)]
     #[test]
     fn test_recorder() {
-        use engine_rocks::{raw::DB, RocksEngine};
         use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
         use tempdir::TempDir;
 
         let p = TempDir::new("test_db").unwrap();
-        let mut opt = DBOptions::default();
-        opt.create_if_missing(true);
-        opt.enable_multi_write_batch(true);
-        let db = DB::open(opt.clone(), p.path().as_os_str().to_str().unwrap()).unwrap();
-        let engine = RocksEngine::from_db(Arc::new(db));
+        let engine =
+            engine_rocks::util::new_engine(p.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let mut wb = engine.write_batch();
         for i in 0..100 {
             wb.put_cf(CF_DEFAULT, format!("hello{}", i).as_bytes(), b"world")
@@ -748,7 +763,7 @@ mod test {
         let (items, size) = super::with_record_read_throughput(|| {
             let mut items = vec![];
             let snap = engine.snapshot();
-            snap.scan(b"", b"", false, |k, v| {
+            snap.scan(CF_DEFAULT, b"", b"", false, |k, v| {
                 items.push((k.to_owned(), v.to_owned()));
                 Ok(true)
             })

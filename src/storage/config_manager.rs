@@ -4,8 +4,8 @@
 
 use std::{convert::TryInto, sync::Arc};
 
-use engine_traits::{CFNamesExt, CFOptionsExt, TabletFactory, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOPriority, IOType};
+use engine_traits::{CfNamesExt, CfOptionsExt, TabletFactory, CF_DEFAULT};
+use file_system::{get_io_rate_limiter, IoPriority, IoType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use strum::IntoEnumIterator;
 use tikv_kv::Engine;
@@ -98,10 +98,10 @@ impl<EK: Engine, L: LockManager> ConfigManager for StorageConfigManger<EK, L> {
                 limiter.set_io_rate_limit(limit.0 as usize);
             }
 
-            for t in IOType::iter() {
+            for t in IoType::iter() {
                 if let Some(priority) = io_rate_limit.remove(&(t.as_str().to_owned() + "_priority"))
                 {
-                    let priority: IOPriority = priority.try_into()?;
+                    let priority: IoPriority = priority.try_into()?;
                     limiter.set_io_priority(t, priority);
                 }
             }

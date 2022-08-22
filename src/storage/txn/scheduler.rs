@@ -3,23 +3,25 @@
 // #[PerformanceCriticalPath
 //! Scheduler which schedules the execution of `storage::Command`s.
 //!
-//! There is one scheduler for each store. It receives commands from clients, executes them against
-//! the MVCC layer storage engine.
+//! There is one scheduler for each store. It receives commands from clients,
+//! executes them against the MVCC layer storage engine.
 //!
-//! Logically, the data organization hierarchy from bottom to top is row -> region -> store ->
-//! database. But each region is replicated onto N stores for reliability, the replicas form a Raft
-//! group, one of which acts as the leader. When the client read or write a row, the command is
-//! sent to the scheduler which is on the region leader's store.
+//! Logically, the data organization hierarchy from bottom to top is row ->
+//! region -> store -> database. But each region is replicated onto N stores for
+//! reliability, the replicas form a Raft group, one of which acts as the
+//! leader. When the client read or write a row, the command is sent to the
+//! scheduler which is on the region leader's store.
 //!
-//! Scheduler runs in a single-thread event loop, but command executions are delegated to a pool of
-//! worker thread.
+//! Scheduler runs in a single-thread event loop, but command executions are
+//! delegated to a pool of worker thread.
 //!
-//! Scheduler keeps track of all the running commands and uses latches to ensure serialized access
-//! to the overlapping rows involved in concurrent commands. But note that scheduler only ensures
-//! serialized access to the overlapping rows at command level, but a transaction may consist of
-//! multiple commands, therefore conflicts may happen at transaction level. Transaction semantics
-//! is ensured by the transaction protocol implemented in the client library, which is transparent
-//! to the scheduler.
+//! Scheduler keeps track of all the running commands and uses latches to ensure
+//! serialized access to the overlapping rows involved in concurrent commands.
+//! But note that scheduler only ensures serialized access to the overlapping
+//! rows at command level, but a transaction may consist of multiple commands,
+//! therefore conflicts may happen at transaction level. Transaction semantics
+//! is ensured by the transaction protocol implemented in the client library,
+//! which is transparent to the scheduler.
 
 use std::{
     marker::PhantomData,
@@ -46,7 +48,9 @@ use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData};
-use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
+};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
 use txn_types::TimeStamp;
 
@@ -75,8 +79,8 @@ use crate::{
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
-// The default limit is set to be very large. Then, requests without `max_exectuion_duration`
-// will not be aborted unexpectedly.
+// The default limit is set to be very large. Then, requests without
+// `max_exectuion_duration` will not be aborted unexpectedly.
 pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
@@ -259,6 +263,17 @@ impl<L: LockManager> SchedulerInner<L> {
         tctx
     }
 
+    /// Try to own the corresponding task context and take the callback.
+    ///
+    /// If the task is been processing, it should be owned.
+    /// If it has been finished, then it is not in the slot.
+    /// In both cases, cb should be None. Otherwise, cb should be some.
+    fn try_own_and_take_cb(&self, cid: u64) -> Option<StorageCallback> {
+        self.get_task_slot(cid)
+            .get_mut(&cid)
+            .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None })
+    }
+
     fn take_task_cb_and_pr(&self, cid: u64) -> (Option<StorageCallback>, Option<ProcessResult>) {
         self.get_task_slot(cid)
             .get_mut(&cid)
@@ -279,18 +294,19 @@ impl<L: LockManager> SchedulerInner<L> {
     /// Tries to acquire all the required latches for a command when waken up by
     /// another finished command.
     ///
-    /// Returns a deadline error if the deadline is exceeded. Returns the `Task` if
-    /// all latches are acquired, returns `None` otherwise.
+    /// Returns a deadline error if the deadline is exceeded. Returns the `Task`
+    /// if all latches are acquired, returns `None` otherwise.
     fn acquire_lock_on_wakeup(&self, cid: u64) -> Result<Option<Task>, StorageError> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
-        // Check deadline early during acquiring latches to avoid expired requests blocking
-        // other requests.
+        // Check deadline early during acquiring latches to avoid expired requests
+        // blocking other requests.
         if let Err(e) = tctx.task.as_ref().unwrap().cmd.deadline().check() {
-            // `acquire_lock_on_wakeup` is called when another command releases its locks and wakes up
-            // command `cid`. This command inserted its lock before and now the lock is at the
-            // front of the queue. The actual acquired count is one more than the `owned_count`
-            // recorded in the lock, so we increase one to make `release` work.
+            // `acquire_lock_on_wakeup` is called when another command releases its locks
+            // and wakes up command `cid`. This command inserted its lock before
+            // and now the lock is at the front of the queue. The actual
+            // acquired count is one more than the `owned_count` recorded in the
+            // lock, so we increase one to make `release` work.
             tctx.lock.owned_count += 1;
             return Err(e.into());
         }
@@ -428,7 +444,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.inner
                 .new_task_context(Task::new(cid, tracker, cmd), callback)
         });
-        let deadline = tctx.task.as_ref().unwrap().cmd.deadline();
+
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -437,34 +453,71 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             self.execute(task);
             return;
         }
-        // Check deadline in background.
+        let task = tctx.task.as_ref().unwrap();
+        let deadline = task.cmd.deadline();
+        let cmd_ctx = task.cmd.ctx().clone();
+        self.fail_fast_or_check_deadline(cid, tag, cmd_ctx, deadline);
+        fail_point!("txn_scheduler_acquire_fail");
+    }
+
+    fn fail_fast_or_check_deadline(
+        &self,
+        cid: u64,
+        tag: CommandKind,
+        cmd_ctx: Context,
+        deadline: Deadline,
+    ) {
         let sched = self.clone();
         self.inner
             .high_priority_pool
             .pool
             .spawn(async move {
-                GLOBAL_TIMER_HANDLE
-                    .delay(deadline.to_std_instant())
-                    .compat()
-                    .await
-                    .unwrap();
-                let cb = sched
-                    .inner
-                    .get_task_slot(cid)
-                    .get_mut(&cid)
-                    .and_then(|tctx| if tctx.try_own() { tctx.cb.take() } else { None });
-                if let Some(cb) = cb {
-                    cb.execute(ProcessResult::Failed {
-                        err: StorageErrorInner::DeadlineExceeded.into(),
-                    })
+                match unsafe {
+                    with_tls_engine(|engine: &E| engine.precheck_write_with_ctx(&cmd_ctx))
+                } {
+                    // Precheck failed, try to return err early.
+                    Err(e) => {
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        // The task is not processing or finished currently. It's safe
+                        // to response early here. In the future, the task will be waked up
+                        // and it will finished with DeadlineExceeded error.
+                        // As the cb is taken here, it will not be executed anymore.
+                        if let Some(cb) = cb {
+                            let pr = ProcessResult::Failed {
+                                err: StorageError::from(e),
+                            };
+                            Self::early_response(
+                                cid,
+                                cb,
+                                pr,
+                                tag,
+                                CommandStageKind::precheck_write_err,
+                            );
+                        }
+                    }
+                    Ok(()) => {
+                        SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                        // Check deadline in background.
+                        GLOBAL_TIMER_HANDLE
+                            .delay(deadline.to_std_instant())
+                            .compat()
+                            .await
+                            .unwrap();
+                        let cb = sched.inner.try_own_and_take_cb(cid);
+                        if let Some(cb) = cb {
+                            cb.execute(ProcessResult::Failed {
+                                err: StorageErrorInner::DeadlineExceeded.into(),
+                            })
+                        }
+                    }
                 }
             })
             .unwrap();
-        fail_point!("txn_scheduler_acquire_fail");
     }
 
-    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for further processing.
+    /// Tries to acquire all the necessary latches. If all the necessary latches
+    /// are acquired, the method initiates a get snapshot operation for further
+    /// processing.
     fn try_to_wake_up(&self, cid: u64) {
         match self.inner.acquire_lock_on_wakeup(cid) {
             Ok(Some(task)) => {
@@ -579,8 +632,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
     /// Event handler for the success of read.
     ///
-    /// If a next command is present, continues to execute; otherwise, delivers the result to the
-    /// callback.
+    /// If a next command is present, continues to execute; otherwise, delivers
+    /// the result to the callback.
     fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
@@ -627,9 +680,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         drop(lock_guards);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        // If pipelined pessimistic lock or async apply prewrite takes effect, it's not guaranteed
-        // that the proposed or committed callback is surely invoked, which takes and invokes
-        // `tctx.cb(tctx.pr)`.
+        // If pipelined pessimistic lock or async apply prewrite takes effect, it's not
+        // guaranteed that the proposed or committed callback is surely invoked, which
+        // takes and invokes `tctx.cb(tctx.pr)`.
         if let Some(cb) = tctx.cb {
             let pr = match result {
                 Ok(()) => pr.or(tctx.pr).unwrap(),
@@ -742,8 +795,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         .await;
     }
 
-    /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
-    /// `Scheduler`.
+    /// Processes a read command within a worker thread, then posts
+    /// `ReadFinished` message back to the `Scheduler`.
     fn process_read(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -764,8 +817,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.on_read_finished(task.cid, pr, tag);
     }
 
-    /// Processes a write command within a worker thread, then posts either a `WriteFinished`
-    /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
+    /// Processes a write command within a worker thread, then posts either a
+    /// `WriteFinished` message if successful or a `FinishedWithErr` message
+    /// back to the `Scheduler`.
     async fn process_write(self, snapshot: E::Snap, task: Task, statistics: &mut Statistics) {
         fail_point!("txn_before_process_write");
         let write_bytes = task.cmd.write_bytes();
@@ -775,7 +829,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let ts = task.cmd.ts();
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         let pessimistic_lock_mode = self.pessimistic_lock_mode();
         let pipelined =
             task.cmd.can_be_pipelined() && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
@@ -806,7 +860,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
 
         if write_result.is_ok() {
-            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory pessimistic locks.
+            // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
+            // pessimistic locks.
             sample.add_write_bytes(write_bytes);
         }
         let read_bytes = statistics.cf_statistics(CF_DEFAULT).flow_stats.read_bytes
@@ -833,16 +888,16 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             .map_err(StorageError::from)
             .and(write_result)
         {
-            // Write prepare failure typically means conflicting transactions are detected. Delivers the
-            // error to the callback, and releases the latches.
+            // Write prepare failure typically means conflicting transactions are detected. Delivers
+            // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 debug!("write command failed"; "cid" => cid, "err" => ?err);
                 scheduler.finish_with_err(cid, err);
                 return;
             }
-            // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-            // message when it finishes.
+            // Initiates an async write operation on the storage engine, there'll be a
+            // `WriteFinished` message when it finishes.
             Ok(res) => res,
         };
         let region_id = ctx.get_region_id();
@@ -963,10 +1018,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let _ = self.inner.flow_controller.consume(region_id, write_size);
             } else {
                 let start = Instant::now_coarse();
-                // Control mutex is used to ensure there is only one request consuming the quota.
-                // The delay may exceed 1s, and the speed limit is changed every second.
-                // If the speed of next second is larger than the one of first second,
-                // without the mutex, the write flow can't throttled strictly.
+                // Control mutex is used to ensure there is only one request consuming the
+                // quota. The delay may exceed 1s, and the speed limit is changed every second.
+                // If the speed of next second is larger than the one of first second, without
+                // the mutex, the write flow can't throttled strictly.
                 let control_mutex = self.inner.control_mutex.clone();
                 let _guard = control_mutex.lock().await;
                 let delay = self.inner.flow_controller.consume(region_id, write_size);
@@ -994,8 +1049,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // Mutations on the lock CF should overwrite the memory locks.
-        // We only set a deleted flag here, and the lock will be finally removed when it finishes
-        // applying. See the comments in `PeerPessimisticLocks` for how this flag is used.
+        // We only set a deleted flag here, and the lock will be finally removed when it
+        // finishes applying. See the comments in `PeerPessimisticLocks` for how this
+        // flag is used.
         let txn_ext2 = txn_ext.clone();
         let mut pessimistic_locks_guard = txn_ext2
             .as_ref()
@@ -1021,29 +1077,33 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
             _ => vec![],
         };
-        // Keep the read lock guard of the pessimistic lock table until the request is sent to the raftstore.
+        // Keep the read lock guard of the pessimistic lock table until the request is
+        // sent to the raftstore.
         //
-        // If some in-memory pessimistic locks need to be proposed, we will propose another TransferLeader
-        // command. Then, we can guarentee even if the proposed locks don't include the locks deleted here,
-        // the response message of the transfer leader command must be later than this write command because
-        // this write command has been sent to the raftstore. Then, we don't need to worry this request will
-        // fail due to the voluntary leader transfer.
+        // If some in-memory pessimistic locks need to be proposed, we will propose
+        // another TransferLeader command. Then, we can guarentee even if the proposed
+        // locks don't include the locks deleted here, the response message of the
+        // transfer leader command must be later than this write command because this
+        // write command has been sent to the raftstore. Then, we don't need to worry
+        // this request will fail due to the voluntary leader transfer.
         let _downgraded_guard = pessimistic_locks_guard.and_then(|guard| {
             (!removed_pessimistic_locks.is_empty()).then(|| RwLockWriteGuard::downgrade(guard))
         });
 
-        // The callback to receive async results of write prepare from the storage engine.
+        // The callback to receive async results of write prepare from the storage
+        // engine.
         let engine_cb = Box::new(move |result: EngineResult<()>| {
             let ok = result.is_ok();
             if ok && !removed_pessimistic_locks.is_empty() {
-                // Removing pessimistic locks when it succeeds to apply. This should be done in the apply
-                // thread, to make sure it happens before other admin commands are executed.
+                // Removing pessimistic locks when it succeeds to apply. This should be done in
+                // the apply thread, to make sure it happens before other admin commands are
+                // executed.
                 if let Some(mut pessimistic_locks) = txn_ext
                     .as_ref()
                     .map(|txn_ext| txn_ext.pessimistic_locks.write())
                 {
-                    // If epoch version or term does not match, region or leader change has happened,
-                    // so we needn't remove the key.
+                    // If epoch version or term does not match, region or leader change has
+                    // happened, so we needn't remove the key.
                     if pessimistic_locks.term == term && pessimistic_locks.version == version {
                         for key in removed_pessimistic_locks {
                             pessimistic_locks.remove(&key);
@@ -1070,8 +1130,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         .observe(rows as f64);
 
                     if !ok {
-                        // Only consume the quota when write succeeds, otherwise failed write requests may exhaust
-                        // the quota and other write requests would be in long delay.
+                        // Only consume the quota when write succeeds, otherwise failed write
+                        // requests may exhaust the quota and other write requests would be in long
+                        // delay.
                         if sched.inner.flow_controller.enabled() {
                             sched.inner.flow_controller.unconsume(region_id, write_size);
                         }
@@ -1095,7 +1156,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    /// Returns whether it succeeds to write pessimistic locks to the in-memory lock table.
+    /// Returns whether it succeeds to write pessimistic locks to the in-memory
+    /// lock table.
     fn try_write_in_memory_pessimistic_locks(
         &self,
         txn_ext: Option<&TxnExt>,
@@ -1107,10 +1169,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             None => return false,
         };
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
-        // When not writable, it only means we cannot write locks to the in-memory lock table,
-        // but it is still possible for the region to propose request.
-        // When term or epoch version has changed, the request must fail. To be simple, here we just
-        // let the request fallback to propose and let raftstore generate an appropriate error.
+        // When not writable, it only means we cannot write locks to the in-memory lock
+        // table, but it is still possible for the region to propose request.
+        // When term or epoch version has changed, the request must fail. To be simple,
+        // here we just let the request fallback to propose and let raftstore generate
+        // an appropriate error.
         if !pessimistic_locks.is_writable()
             || pessimistic_locks.term != context.get_term()
             || pessimistic_locks.version != context.get_region_epoch().get_version()
@@ -1187,6 +1250,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
+        kv::{Error as KvError, ErrorInner as KvErrorInner},
         lock_manager::DummyLockManager,
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
@@ -1196,7 +1260,7 @@ mod tests {
             flow_controller::{EngineFlowController, FlowController},
             latch::*,
         },
-        TestEngineBuilder, TxnStatus,
+        RocksEngine, TestEngineBuilder, TxnStatus,
     };
 
     #[derive(Clone)]
@@ -1205,6 +1269,36 @@ mod tests {
     impl FlowStatsReporter for DummyReporter {
         fn report_read_stats(&self, _read_stats: ReadStats) {}
         fn report_write_stats(&self, _write_stats: WriteStats) {}
+    }
+
+    // TODO(cosven): use this in the following test cases to reduce duplicate code.
+    fn new_test_scheduler() -> (Scheduler<RocksEngine, DummyLockManager>, RocksEngine) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let config = Config {
+            scheduler_concurrency: 1024,
+            scheduler_worker_pool_size: 1,
+            scheduler_pending_write_threshold: ReadableSize(100 * 1024 * 1024),
+            enable_async_apply_prewrite: false,
+            ..Default::default()
+        };
+        (
+            Scheduler::new(
+                engine.clone(),
+                DummyLockManager,
+                ConcurrencyManager::new(1.into()),
+                &config,
+                DynamicConfigs {
+                    pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
+                    in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
+                },
+                Arc::new(FlowController::Singleton(EngineFlowController::empty())),
+                DummyReporter,
+                ResourceTagFactory::new_for_test(),
+                Arc::new(QuotaLimiter::default()),
+                latest_feature_gate(),
+            ),
+            engine,
+        )
     }
 
     #[test]
@@ -1378,7 +1472,53 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
+    }
+
+    /// When all latches are acquired, the command should be executed directly.
+    /// When any latch is not acquired, the command should be prechecked.
+    #[test]
+    fn test_schedule_command_with_fail_fast_mode() {
+        let (scheduler, engine) = new_test_scheduler();
+
+        // req can acquire all latches, so it should be executed directly.
+        let mut req = BatchRollbackRequest::default();
+        req.mut_context().max_execution_duration_ms = 10000;
+        req.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()].into());
+        let cmd: TypedCommand<()> = req.into();
+        let (cb, f) = paired_future_callback();
+        scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
+        // It must be executed (and succeed).
+        block_on(f).unwrap().unwrap();
+
+        // Acquire the latch, so that next command(req2) can't require all latches.
+        let mut lock = Lock::new(&[Key::from_raw(b"d")]);
+        let cid = scheduler.inner.gen_id();
+        assert!(scheduler.inner.latches.acquire(&mut lock, cid));
+
+        engine.trigger_not_leader();
+
+        // req2 can't acquire all latches, req2 will be prechecked.
+        let mut req2 = BatchRollbackRequest::default();
+        req2.mut_context().max_execution_duration_ms = 10000;
+        req2.set_keys(vec![b"a".to_vec(), b"b".to_vec(), b"d".to_vec()].into());
+        let cmd2: TypedCommand<()> = req2.into();
+        let (cb2, f2) = paired_future_callback();
+        scheduler.run_cmd(cmd2.cmd, StorageCallback::Boolean(cb2));
+
+        // Precheck should return NotLeader error.
+        assert!(matches!(
+            block_on(f2).unwrap(),
+            Err(StorageError(box StorageErrorInner::Kv(KvError(
+                box KvErrorInner::Request(ref e),
+            )))) if e.has_not_leader(),
+        ));
+        // The task context should be owned, and it's cb should be taken.
+        let cid2 = cid + 1; // Hack: get the cid of req2.
+        let mut task_slot = scheduler.inner.get_task_slot(cid2);
+        let tctx = task_slot.get_mut(&cid2).unwrap();
+        assert!(!tctx.try_own());
+        assert!(tctx.cb.is_none());
     }
 
     #[test]
@@ -1436,7 +1576,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]
@@ -1502,7 +1642,7 @@ mod tests {
         let cmd: TypedCommand<TxnStatus> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::TxnStatus(cb));
-        assert!(block_on(f).unwrap().is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]
@@ -1550,7 +1690,8 @@ mod tests {
         // time limit is 100ms.
         thread::sleep(Duration::from_millis(200));
 
-        // When releasing the lock, the queuing tasks should be all waken up without stack overflow.
+        // When releasing the lock, the queuing tasks should be all waken up without
+        // stack overflow.
         scheduler.release_lock(&lock, cid);
 
         // A new request should not be blocked.
@@ -1559,7 +1700,7 @@ mod tests {
         let cmd: TypedCommand<()> = req.into();
         let (cb, f) = paired_future_callback();
         scheduler.run_cmd(cmd.cmd, StorageCallback::Boolean(cb));
-        assert!(block_on(f).is_ok());
+        block_on(f).unwrap().unwrap();
     }
 
     #[test]

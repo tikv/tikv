@@ -58,8 +58,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchStreamAggregationExecutor<Src> {
     }
 }
 
-// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
+// can omit the type when calling `check_supported`.
 impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -95,13 +95,15 @@ pub struct BatchStreamAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
 
     /// Stores evaluation results of group by expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     group_by_results_unsafe: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
-    /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
-    /// are only valid in the same batch where they are added.
+    /// It is just used to reduce allocations. The lifetime is not really
+    /// 'static. The elements are only valid in the same batch where they
+    /// are added.
     aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
 }
 
@@ -226,8 +228,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
-        // Decode columns with mutable input first, so subsequent access to input can be immutable
-        // (and the borrow checker will be happy)
+        // Decode columns with mutable input first, so subsequent access to input can be
+        // immutable (and the borrow checker will be happy)
         ensure_columns_decoded(
             context,
             &self.group_by_exps,
@@ -391,8 +393,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(group_by_columns)
     }
 
-    /// We cannot ensure the last group is complete, so we can output partial results
-    /// only if group count >= 2.
+    /// We cannot ensure the last group is complete, so we can output partial
+    /// results only if group count >= 2.
     #[inline]
     fn is_partial_results_ready(&self) -> bool {
         AggregationExecutorImpl::<Src>::groups_len(self) >= 2
@@ -469,7 +471,8 @@ mod tests {
         use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
-        // This test creates a stream aggregation executor with the following aggregate functions:
+        // This test creates a stream aggregation executor with the following aggregate
+        // functions:
         // - COUNT(1)
         // - AVG(col_1 + 1.0)
         // And group by:

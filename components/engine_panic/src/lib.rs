@@ -9,6 +9,7 @@
 //! with your engine's own name; then fill in the implementations; remove
 //! the allow(unused) attribute;
 
+#![feature(generic_associated_types)]
 #![allow(unused)]
 
 mod cf_names;

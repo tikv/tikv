@@ -19,12 +19,12 @@ use kvproto::{
 };
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
-use raft::{GetEntriesContext, SnapshotStatus};
+use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, AbstractPeer, RegionSnapshot};
+use super::{local_metrics::TimeTracker, worker::FetchedLogs, AbstractPeer, RegionSnapshot};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
@@ -34,7 +34,7 @@ use crate::store::{
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
-    RaftlogFetchResult, SnapKey,
+    SnapKey,
 };
 
 #[derive(Debug)]
@@ -73,32 +73,36 @@ where
     }
 }
 
-pub type ReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
-pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
+pub type BoxReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
+pub type BoxWriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
+
 #[cfg(any(test, feature = "testexport"))]
 pub type TestCallback = Box<dyn FnOnce(PeerInternalStat) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callback for read only requests including `StatusRequest`,
-///         `GetRequest` and `SnapRequest`
+///    `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
-///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
+///    `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
 pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback<S>),
+    Read(BoxReadCallback<S>),
     /// Write callback.
     Write {
-        cb: WriteCallback,
-        /// `proposed_cb` is called after a request is proposed to the raft group successfully.
-        /// It's used to notify the caller to move on early because it's very likely the request
-        /// will be applied to the raftstore.
+        cb: BoxWriteCallback,
+        /// `proposed_cb` is called after a request is proposed to the raft
+        /// group successfully. It's used to notify the caller to move on early
+        /// because it's very likely the request will be applied to the
+        /// raftstore.
         proposed_cb: Option<ExtCallback>,
-        /// `committed_cb` is called after a request is committed and before it's being applied, and
-        /// it's guaranteed that the request will be successfully applied soon.
+        /// `committed_cb` is called after a request is committed and before
+        /// it's being applied, and it's guaranteed that the request will be
+        /// successfully applied soon.
         committed_cb: Option<ExtCallback>,
+
         trackers: SmallVec<[TimeTracker; 4]>,
     },
     #[cfg(any(test, feature = "testexport"))]
@@ -112,12 +116,12 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
-    pub fn write(cb: WriteCallback) -> Self {
+    pub fn write(cb: BoxWriteCallback) -> Self {
         Self::write_ext(cb, None, None)
     }
 
     pub fn write_ext(
-        cb: WriteCallback,
+        cb: BoxWriteCallback,
         proposed_cb: Option<ExtCallback>,
         committed_cb: Option<ExtCallback>,
     ) -> Self {
@@ -137,13 +141,6 @@ where
             proposed_cb,
             committed_cb,
             trackers: smallvec![tracker],
-        }
-    }
-
-    pub fn get_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        match self {
-            Callback::Write { trackers, .. } => Some(trackers),
-            _ => None,
         }
     }
 
@@ -167,27 +164,22 @@ where
         }
     }
 
-    pub fn has_proposed_cb(&mut self) -> bool {
-        if let Callback::Write { proposed_cb, .. } = self {
-            proposed_cb.is_some()
-        } else {
-            false
-        }
+    pub fn has_proposed_cb(&self) -> bool {
+        let Callback::Write { proposed_cb, .. } = self else { return false };
+        proposed_cb.is_some()
     }
 
     pub fn invoke_proposed(&mut self) {
-        if let Callback::Write { proposed_cb, .. } = self {
-            if let Some(cb) = proposed_cb.take() {
-                cb()
-            }
+        let Callback::Write { proposed_cb, .. } = self else { return };
+        if let Some(cb) = proposed_cb.take() {
+            cb();
         }
     }
 
     pub fn invoke_committed(&mut self) {
-        if let Callback::Write { committed_cb, .. } = self {
-            if let Some(cb) = committed_cb.take() {
-                cb()
-            }
+        let Callback::Write { committed_cb, .. } = self else { return };
+        if let Some(cb) = committed_cb.take() {
+            cb();
         }
     }
 
@@ -198,7 +190,86 @@ where
         }
     }
 
-    pub fn is_none(&self) -> bool {
+    pub fn take_proposed_cb(&mut self) -> Option<ExtCallback> {
+        let Callback::Write { proposed_cb, .. } = self else { return None };
+        proposed_cb.take()
+    }
+
+    pub fn take_committed_cb(&mut self) -> Option<ExtCallback> {
+        let Callback::Write { committed_cb, .. } = self else { return None };
+        committed_cb.take()
+    }
+}
+
+pub trait ReadCallback: ErrorCallback {
+    type Response;
+
+    fn set_result(self, result: Self::Response);
+}
+
+pub trait WriteCallback: ErrorCallback {
+    type Response;
+
+    fn notify_proposed(&mut self);
+    fn notify_committed(&mut self);
+    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
+    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
+    fn set_result(self, result: Self::Response);
+}
+
+pub trait ErrorCallback: Send {
+    fn report_error(self, err: RaftCmdResponse);
+    fn is_none(&self) -> bool;
+}
+
+impl<S: Snapshot> ReadCallback for Callback<S> {
+    type Response = ReadResponse<S>;
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        self.invoke_read(result);
+    }
+}
+
+impl<S: Snapshot> WriteCallback for Callback<S> {
+    type Response = RaftCmdResponse;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        self.invoke_proposed();
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        self.invoke_committed();
+    }
+
+    #[inline]
+    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None };
+        Some(trackers)
+    }
+
+    #[inline]
+    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None };
+        Some(trackers)
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        self.invoke_with_response(result);
+    }
+}
+
+impl<S: Snapshot> ErrorCallback for Callback<S> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        self.invoke_with_response(err);
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
         matches!(self, Callback::None)
     }
 }
@@ -218,7 +289,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 #[repr(u8)]
 pub enum PeerTick {
     Raft = 0,
@@ -231,6 +302,7 @@ pub enum PeerTick {
     CheckLeaderLease = 7,
     ReactivateMemoryLock = 8,
     ReportBuckets = 9,
+    CheckLongUncommitted = 10,
 }
 
 impl PeerTick {
@@ -249,6 +321,7 @@ impl PeerTick {
             PeerTick::CheckLeaderLease => "check_leader_lease",
             PeerTick::ReactivateMemoryLock => "reactivate_memory_lock",
             PeerTick::ReportBuckets => "report_buckets",
+            PeerTick::CheckLongUncommitted => "check_long_uncommitted",
         }
     }
 
@@ -264,6 +337,7 @@ impl PeerTick {
             PeerTick::CheckLeaderLease,
             PeerTick::ReactivateMemoryLock,
             PeerTick::ReportBuckets,
+            PeerTick::CheckLongUncommitted,
         ];
         TICKS
     }
@@ -298,18 +372,20 @@ pub enum MergeResultKind {
     /// Its target peer applys `CommitMerge` log.
     FromTargetLog,
     /// Its target peer receives snapshot.
-    /// In step 1, this peer should mark `pending_move` is true and destroy its apply fsm.
-    /// Then its target peer will remove this peer data and apply snapshot atomically.
+    /// In step 1, this peer should mark `pending_move` is true and destroy its
+    /// apply fsm. Then its target peer will remove this peer data and apply
+    /// snapshot atomically.
     FromTargetSnapshotStep1,
     /// In step 2, this peer should destroy its peer fsm.
     FromTargetSnapshotStep2,
-    /// This peer is no longer needed by its target peer so it can be destroyed by itself.
-    /// It happens if and only if its target peer has been removed by conf change.
+    /// This peer is no longer needed by its target peer so it can be destroyed
+    /// by itself. It happens if and only if its target peer has been removed by
+    /// conf change.
     Stale,
 }
 
-/// Some significant messages sent to raftstore. Raftstore will dispatch these messages to Raft
-/// groups to update some important internal status.
+/// Some significant messages sent to raftstore. Raftstore will dispatch these
+/// messages to Raft groups to update some important internal status.
 #[derive(Debug)]
 pub enum SignificantMsg<SK>
 where
@@ -350,10 +426,7 @@ where
     LeaderCallback(Callback<SK>),
     RaftLogGcFlushed,
     // Reports the result of asynchronous Raft logs fetching.
-    RaftlogFetched {
-        context: GetEntriesContext,
-        res: Box<RaftlogFetchResult>,
-    },
+    RaftlogFetched(FetchedLogs),
     EnterForceLeaderState {
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
@@ -389,7 +462,8 @@ pub enum CasualMessage<EK: KvEngine> {
         hash: Vec<u8>,
     },
 
-    /// Approximate size of target region. This message can only be sent by split-check thread.
+    /// Approximate size of target region. This message can only be sent by
+    /// split-check thread.
     RegionApproximateSize {
         size: u64,
     },
@@ -578,15 +652,16 @@ pub enum PeerMsg<EK: KvEngine> {
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
     RaftCommand(RaftCommand<EK::Snapshot>),
-    /// Tick is periodical task. If target peer doesn't exist there is a potential
-    /// that the raft node will not work anymore.
+    /// Tick is periodical task. If target peer doesn't exist there is a
+    /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes {
         res: ApplyTaskRes<EK::Snapshot>,
     },
-    /// Message that can't be lost but rarely created. If they are lost, real bad
-    /// things happen like some peers will be considered dead in the group.
+    /// Message that can't be lost but rarely created. If they are lost, real
+    /// bad things happen like some peers will be considered dead in the
+    /// group.
     SignificantMsg(SignificantMsg<EK::Snapshot>),
     /// Start the FSM.
     Start,
@@ -636,8 +711,9 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> PeerMsg<EK> {
-    /// For some specific kind of messages, it's actually acceptable if failed to send it by
-    /// `significant_send`. This function determine if the current message is acceptable to fail.
+    /// For some specific kind of messages, it's actually acceptable if failed
+    /// to send it by `significant_send`. This function determine if the
+    /// current message is acceptable to fail.
     pub fn is_send_failure_ignorable(&self) -> bool {
         matches!(
             self,
@@ -656,8 +732,8 @@ where
         invalid_ssts: Vec<SstMeta>,
     },
 
-    // Clear region size and keys for all regions in the range, so we can force them to re-calculate
-    // their size later.
+    // Clear region size and keys for all regions in the range, so we can force them to
+    // re-calculate their size later.
     ClearRegionSizeInRange {
         start_key: Vec<u8>,
         end_key: Vec<u8>,

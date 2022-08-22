@@ -24,9 +24,10 @@ use crate::{
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
-/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and benchmarks.
-/// Note: The `snapshot()` and `async_snapshot()` methods are fake, the returned snapshot is not isolated,
-/// they will be affected by the later modifies.
+/// The BTreeEngine(based on `BTreeMap`) is in memory and only used in tests and
+/// benchmarks. Note: The `snapshot()` and `async_snapshot()` methods are fake,
+/// the returned snapshot is not isolated, they will be affected by the later
+/// modifies.
 #[derive(Clone)]
 pub struct BTreeEngine {
     cf_names: Vec<CfName>,
@@ -102,7 +103,8 @@ impl Engine for BTreeEngine {
         Ok(())
     }
 
-    /// warning: It returns a fake snapshot whose content will be affected by the later modifies!
+    /// warning: It returns a fake snapshot whose content will be affected by
+    /// the later modifies!
     fn async_snapshot(
         &self,
         _ctx: SnapContext<'_>,
@@ -155,9 +157,10 @@ impl BTreeEngineIterator {
         }
     }
 
-    /// In general, there are 2 endpoints in a range, the left one and the right one.
-    /// This method will seek to the left one if left is `true`, else seek to the right one.
-    /// Returns true when the endpoint is valid, which means the endpoint exist and in `self.bounds`.
+    /// In general, there are 2 endpoints in a range, the left one and the right
+    /// one. This method will seek to the left one if left is `true`, else seek
+    /// to the right one. Returns true when the endpoint is valid, which means
+    /// the endpoint exist and in `self.bounds`.
     fn seek_to_range_endpoint(&mut self, range: (Bound<Key>, Bound<Key>), left: bool) -> bool {
         let tree = self.tree.read().unwrap();
         let mut range = tree.range(range);
@@ -246,11 +249,8 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
-    fn iter(&self, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
-        self.iter_cf(CF_DEFAULT, iter_opt)
-    }
     #[inline]
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
@@ -341,13 +341,21 @@ pub mod tests {
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a7", 0);
         iter_op.set_upper_bound(b"a3", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOptions::default();
         iter_op.set_lower_bound(b"a3", 0);
         iter_op.set_upper_bound(b"a7", 0);
-        let mut cursor = Cursor::new(snap.iter(iter_op).unwrap(), ScanMode::Forward, false);
+        let mut cursor = Cursor::new(
+            snap.iter(CF_DEFAULT, iter_op).unwrap(),
+            ScanMode::Forward,
+            false,
+        );
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
         assert!(!cursor.seek(&Key::from_raw(b"a8"), &mut statistics).unwrap());
@@ -420,6 +428,6 @@ pub mod tests {
     #[test]
     fn test_get_not_exist_cf() {
         let engine = BTreeEngine::new(&[]);
-        assert!(::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).is_err());
+        ::panic_hook::recover_safe(|| engine.get_cf("not_exist_cf")).unwrap_err();
     }
 }

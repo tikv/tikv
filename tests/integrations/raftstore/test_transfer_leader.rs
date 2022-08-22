@@ -215,7 +215,7 @@ fn test_transfer_leader_during_snapshot<T: Simulator>(cluster: &mut Cluster<T>) 
     cluster.transfer_leader(r1, new_peer(2, 2));
     let resp = cluster.call_command_on_leader(put, Duration::from_secs(5));
     // if it's transferring leader, resp will timeout.
-    assert!(resp.is_ok(), "{:?}", resp);
+    resp.unwrap();
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
 }
 
@@ -299,11 +299,9 @@ fn test_propose_in_memory_pessimistic_locks() {
     {
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         assert!(pessimistic_locks.is_writable());
-        assert!(
-            pessimistic_locks
-                .insert(vec![(Key::from_raw(b"key"), lock.clone())])
-                .is_ok()
-        );
+        pessimistic_locks
+            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+            .unwrap();
     }
 
     cluster.must_transfer_leader(1, new_peer(2, 2));
@@ -338,13 +336,11 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         min_commit_ts: 30.into(),
     };
     // Write a pessimistic lock to the in-memory pessimistic lock table.
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"key"), lock)])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"key"), lock)])
+        .unwrap();
 
     // Make it fail to transfer leader
     cluster.add_send_filter(CloneFilterFactory(
@@ -361,7 +357,8 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
         LocksStatus::TransferringLeader
     );
 
-    // After several ticks, in-memory pessimistic locks should become available again.
+    // After several ticks, in-memory pessimistic locks should become available
+    // again.
     thread::sleep(Duration::from_secs(1));
     assert_eq!(txn_ext.pessimistic_locks.read().status, LocksStatus::Normal);
     cluster.reset_leader_of_region(1);

@@ -342,10 +342,11 @@ impl Instant {
         }
     }
 
-    /// It is similar to `duration_since`, but it won't panic when `self` is less than `other`,
-    /// and `None` will be returned in this case.
+    /// It is similar to `duration_since`, but it won't panic when `self` is
+    /// less than `other`, and `None` will be returned in this case.
     ///
-    /// Callers need to ensure that `self` and `other` are same type of Instants.
+    /// Callers need to ensure that `self` and `other` are same type of
+    /// Instants.
     pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
         if *self >= other {
             Some(self.duration_since(other))
@@ -505,7 +506,7 @@ pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
 pub type Consume = async_speed_limit::limiter::Consume<CoarseClock, ()>;
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct ThreadReadId {
     sequence: u64,
     pub create_time: Timespec,

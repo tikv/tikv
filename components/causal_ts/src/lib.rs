@@ -1,5 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(map_first_last)] // For `BTreeMap::pop_first`.
+#![feature(div_duration)]
+
 #[macro_use]
 extern crate tikv_util;
 
@@ -22,7 +25,8 @@ pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp>;
 
-    /// Flush (cached) timestamps to keep causality on some events, such as "leader transfer".
+    /// Flush (cached) timestamps to keep causality on some events, such as
+    /// "leader transfer".
     fn flush(&self) -> Result<()> {
         Ok(())
     }

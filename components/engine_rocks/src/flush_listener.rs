@@ -2,7 +2,6 @@
 
 use std::{
     iter::FromIterator,
-    lazy::SyncOnceCell,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -10,6 +9,7 @@ use std::{
 };
 
 use collections::HashMap;
+use once_cell::sync::OnceCell;
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
 use tikv_util::{
@@ -23,7 +23,7 @@ use crate::RocksEngine;
 pub struct FlushListener {
     notifier: Arc<Mutex<dyn Notifier>>,
     engine: Arc<Mutex<Option<RocksEngine>>>,
-    flushed_seqnos: Arc<SyncOnceCell<HashMap<String, AtomicU64>>>,
+    flushed_seqnos: Arc<OnceCell<HashMap<String, AtomicU64>>>,
 }
 
 impl FlushListener {
@@ -31,7 +31,7 @@ impl FlushListener {
         FlushListener {
             notifier: Arc::new(Mutex::new(notifier)),
             engine: Arc::default(),
-            flushed_seqnos: Arc::new(SyncOnceCell::new()),
+            flushed_seqnos: Arc::new(OnceCell::new()),
         }
     }
 
@@ -119,16 +119,11 @@ impl EventListener for FlushListener {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use engine_traits::{
-        ColumnFamilyOptions, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
-    };
-    use rocksdb::DBOptions as RawDBOptions;
+    use engine_traits::{MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT};
+    use rocksdb::{ColumnFamilyOptions, DBOptions as RawDBOptions};
     use tikv_util::sequence_number::{Notifier, SYNCED_MAX_SEQUENCE_NUMBER};
 
-    use crate::{
-        util::{new_engine_opt, RocksCFOptions},
-        FlushListener, RocksColumnFamilyOptions, RocksDBOptions,
-    };
+    use crate::{util::new_engine_opt, FlushListener, RocksCfOptions, RocksDbOptions};
 
     #[derive(Clone)]
     struct TestNotifier;
@@ -148,11 +143,11 @@ mod tests {
         let mut db_opts = RawDBOptions::new();
         let listener = FlushListener::new(TestNotifier);
         db_opts.add_event_listener(listener.clone());
-        let cf_opts = RocksColumnFamilyOptions::new();
+        let cf_opts = ColumnFamilyOptions::new();
         let engine = new_engine_opt(
             path,
-            RocksDBOptions::from_raw(db_opts),
-            vec![RocksCFOptions::new(CF_DEFAULT, cf_opts)],
+            RocksDbOptions::from_raw(db_opts),
+            vec![(CF_DEFAULT, RocksCfOptions::from_raw(cf_opts))],
         )
         .unwrap();
         listener.set_engine(engine.clone());
@@ -165,12 +160,12 @@ mod tests {
         batch.write_opt(&write_opts).unwrap();
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
-        engine.flush(true).unwrap();
+        engine.flush_cfs(true).unwrap();
         let flushed_max_seqno = flushed_seqnos.get(CF_DEFAULT).unwrap();
         assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 3);
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
-        engine.flush(true).unwrap();
+        engine.flush_cfs(true).unwrap();
         assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 4);
     }
 }

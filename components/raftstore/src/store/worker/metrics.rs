@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{cell::RefCell, time::Duration};
+
 use lazy_static::lazy_static;
-use prometheus::*;
+use prometheus::{local::LocalIntCounter, *};
 use prometheus_static_metric::*;
+use tikv_util::time::Instant;
 
 make_auto_flush_static_metric! {
     pub label_enum SnapType {
@@ -44,12 +47,52 @@ make_static_metric! {
         epoch,
         applied_term,
         channel_full,
+        cache_miss,
         safe_ts,
     }
 
-    pub struct ReadRejectCounter : IntCounter {
-       "reason" => RejectReason
+    pub struct LocalReadRejectCounter : LocalIntCounter {
+       "reason" => RejectReason,
     }
+}
+
+pub struct LocalReadMetrics {
+    pub local_executed_requests: LocalIntCounter,
+    pub local_executed_stale_read_requests: LocalIntCounter,
+    pub local_executed_snapshot_cache_hit: LocalIntCounter,
+    pub reject_reason: LocalReadRejectCounter,
+    pub renew_lease_advance: LocalIntCounter,
+    last_flush_time: Instant,
+}
+
+thread_local! {
+    pub static TLS_LOCAL_READ_METRICS: RefCell<LocalReadMetrics> = RefCell::new(
+        LocalReadMetrics {
+            local_executed_requests: LOCAL_READ_EXECUTED_REQUESTS.local(),
+            local_executed_stale_read_requests: LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.local(),
+            local_executed_snapshot_cache_hit: LOCAL_READ_EXECUTED_CACHE_REQUESTS.local(),
+            reject_reason: LocalReadRejectCounter::from(&LOCAL_READ_REJECT_VEC),
+            renew_lease_advance: LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER.local(),
+            last_flush_time: Instant::now_coarse(),
+        }
+    );
+}
+
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
+pub fn maybe_tls_local_read_metrics_flush() {
+    TLS_LOCAL_READ_METRICS.with(|m| {
+        let mut m = m.borrow_mut();
+
+        if m.last_flush_time.saturating_elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+            m.local_executed_requests.flush();
+            m.local_executed_stale_read_requests.flush();
+            m.local_executed_snapshot_cache_hit.flush();
+            m.reject_reason.flush();
+            m.renew_lease_advance.flush();
+            m.last_flush_time = Instant::now_coarse();
+        }
+    });
 }
 
 lazy_static! {
@@ -111,8 +154,6 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
-    pub static ref LOCAL_READ_REJECT: ReadRejectCounter =
-        ReadRejectCounter::from(&LOCAL_READ_REJECT_VEC);
     pub static ref LOCAL_READ_EXECUTED_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_executed_requests",
         "Total number of requests directly executed by local reader."

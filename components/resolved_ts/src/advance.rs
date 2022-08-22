@@ -44,8 +44,8 @@ pub struct AdvanceTsWorker<E: KvEngine> {
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task<E::Snapshot>>,
-    /// The concurrency manager for transactions. It's needed for CDC to check locks when
-    /// calculating resolved_ts.
+    /// The concurrency manager for transactions. It's needed for CDC to check
+    /// locks when calculating resolved_ts.
     concurrency_manager: ConcurrencyManager,
     // store_id -> client
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
@@ -104,10 +104,10 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
             // Ignore get tso errors since we will retry every `advance_ts_interval`.
             let mut min_ts = pd_client.get_tso().await.unwrap_or_default();
 
-            // Sync with concurrency manager so that it can work correctly when optimizations
-            // like async commit is enabled.
-            // Note: This step must be done before scheduling `Task::MinTS` task, and the
-            // resolver must be checked in or after `Task::MinTS`' execution.
+            // Sync with concurrency manager so that it can work correctly when
+            // optimizations like async commit is enabled.
+            // Note: This step must be done before scheduling `Task::MinTs` task, and the
+            // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
@@ -153,8 +153,9 @@ impl<E: KvEngine> AdvanceTsWorker<E> {
 }
 
 // Confirms leadership of region peer before trying to advance resolved ts.
-// This function broadcasts a special message to all stores, gets the leader id of them to confirm whether
-// current peer has a quorum which accepts its leadership.
+// This function broadcasts a special message to all stores, gets the leader id
+// of them to confirm whether current peer has a quorum which accepts its
+// leadership.
 pub async fn region_resolved_ts_store(
     regions: Vec<u64>,
     store_meta: Arc<StdMutex<StoreMeta>>,
@@ -290,7 +291,8 @@ pub async fn region_resolved_ts_store(
             .observe(start.saturating_elapsed_secs());
     });
     for _ in 0..store_count {
-        // Use `select_all` to avoid the process getting blocked when some TiKVs were down.
+        // Use `select_all` to avoid the process getting blocked when some TiKVs were
+        // down.
         let (res, _, remains) = select_all(stores).await;
         stores = remains;
         match res {

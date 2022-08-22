@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! The unified entry for encoding and decoding an evaluable type to / from datum bytes.
-//! Datum bytes consists of 1 byte datum flag and variable bytes datum payload.
+//! The unified entry for encoding and decoding an evaluable type to / from
+//! datum bytes. Datum bytes consists of 1 byte datum flag and variable bytes
+//! datum payload.
 
 use codec::prelude::*;
 use tipb::FieldType;

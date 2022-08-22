@@ -1200,13 +1200,11 @@ mod tests {
 
         let overflow = vec![(f64::MAX, 0.0001)];
         for (lhs, rhs) in overflow {
-            assert!(
-                RpnFnScalarEvaluator::new()
-                    .push_param(lhs)
-                    .push_param(rhs)
-                    .evaluate::<Real>(ScalarFuncSig::DivideReal)
-                    .is_err()
-            )
+            RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::DivideReal)
+                .unwrap_err();
         }
     }
 
@@ -1275,7 +1273,7 @@ mod tests {
                 if is_ok {
                     assert!(result.unwrap().is_none());
                 } else {
-                    assert!(result.is_err());
+                    result.unwrap_err();
                 }
 
                 if has_warning {

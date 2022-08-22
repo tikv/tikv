@@ -37,7 +37,7 @@ impl NicSnapshot {
 
     fn into_pairs(self, prev: &NicSnapshot) -> Vec<ServerInfoPair> {
         macro_rules! pair {
-            ($label: literal, $value: expr, $old_value: expr) => {{
+            ($label:literal, $value:expr, $old_value:expr) => {{
                 let mut pair = ServerInfoPair::default();
                 pair.set_key($label.to_owned());
                 pair.set_value(format!("{:.2}", ($value - $old_value) as f64));
@@ -350,7 +350,7 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     system.refresh_memory();
     let mut pair = ServerInfoPair::default();
     pair.set_key("capacity".to_string());
-    pair.set_value((system.get_total_memory() * KIB).to_string());
+    pair.set_value(SysQuota::memory_limit_in_bytes().to_string());
     let mut item = ServerInfoItem::default();
     item.set_tp("memory".to_string());
     item.set_name("memory".to_string());

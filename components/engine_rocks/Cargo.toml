@@ -36,6 +36,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.4.0"
 log_wrappers = { path = "../log_wrappers" }
 num_cpus = "1"
+once_cell = "1.13"
 online_config = { path = "../online_config" }
 parking_lot_core = "0.9"
 prometheus = { version = "0.13", features = ["nightly"] }

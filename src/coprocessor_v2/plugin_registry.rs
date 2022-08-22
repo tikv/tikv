@@ -100,13 +100,15 @@ impl PluginRegistry {
     /// Hot-reloads plugins from a given directory.
     ///
     /// All plugins that are already present in the directory will be loaded.
-    /// A background thread is spawned to watch file system events. If the library file of a loaded
-    /// plugin is deleted, the corresponding plugin is automatically unloaded; if a new library file
-    /// is placed into the directory, it will be automatically loaded into TiKV's coprocessor plugin
-    /// system.
+    /// A background thread is spawned to watch file system events. If the
+    /// library file of a loaded plugin is deleted, the corresponding plugin
+    /// is automatically unloaded; if a new library file is placed into the
+    /// directory, it will be automatically loaded into TiKV's coprocessor
+    /// plugin system.
     ///
-    /// A file will only be loaded if it has the proper file ending of dynamic link libraries for
-    /// the current platform (`.so` for Linux, `.dylib` for macOS, `.dll` for Windows).
+    /// A file will only be loaded if it has the proper file ending of dynamic
+    /// link libraries for the current platform (`.so` for Linux, `.dylib`
+    /// for macOS, `.dll` for Windows).
     pub fn start_hot_reloading(
         &mut self,
         plugin_directory: impl Into<PathBuf>,
@@ -116,9 +118,9 @@ impl PluginRegistry {
         // Create plugin directory if it doesn't exist.
         std::fs::create_dir_all(&plugin_directory)?;
 
-        // If this is the first call to `start_hot_reloading()`, create a new file system watcher
-        // and background thread for loading plugins. For later invocations, the same watcher and
-        // thread will be used.
+        // If this is the first call to `start_hot_reloading()`, create a new file
+        // system watcher and background thread for loading plugins. For later
+        // invocations, the same watcher and thread will be used.
         if self.fs_watcher.is_none() {
             let (tx, rx) = mpsc::channel();
             let fs_watcher = notify::watcher(tx, Duration::from_secs(3)).unwrap();
@@ -150,7 +152,8 @@ impl PluginRegistry {
                             warn!("a loaded coprocessor plugin is removed. Be aware that original plugin is still running"; "plugin_path" => ?file);
                         }
                         Ok(DebouncedEvent::Rename(old_file, new_file)) => {
-                            // If the file is renamed with a different parent directory, we will receive a `Remove` instead.
+                            // If the file is renamed with a different parent directory, we will
+                            // receive a `Remove` instead.
                             debug_assert!(old_file.parent() == new_file.parent());
                             rename(&old_file, &new_file);
                         }
@@ -180,18 +183,21 @@ impl PluginRegistry {
         Ok(())
     }
 
-    /// Finds a plugin by its name. The plugin must have been loaded before with [`load_plugin()`].
+    /// Finds a plugin by its name. The plugin must have been loaded before with
+    /// [`load_plugin()`].
     ///
-    /// Plugins are indexed by the name that is returned by [`CoprocessorPlugin::name()`].
+    /// Plugins are indexed by the name that is returned by
+    /// [`CoprocessorPlugin::name()`].
     pub fn get_plugin(&self, plugin_name: &str) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin(plugin_name)
     }
 
     /// finds a plugin by its associated file path, similar to [`get_plugin()`].
     ///
-    /// The given path has to be exactly the same as the one the plugin with loaded with, e.g.
-    /// `"./coprocessors/plugin1.so"` would be *different* from `"coprocessors/plugin1.so"`
-    /// (note the leading `./`). The same applies when the associated path was changed with
+    /// The given path has to be exactly the same as the one the plugin with
+    /// loaded with, e.g. `"./coprocessors/plugin1.so"` would be *different*
+    /// from `"coprocessors/plugin1.so"` (note the leading `./`). The same
+    /// applies when the associated path was changed with
     /// [`update_plugin_path()`].
     pub fn get_plugin_by_path<P: AsRef<OsStr>>(&self, plugin_path: P) -> Option<Arc<LoadedPlugin>> {
         self.inner.read().unwrap().get_plugin_by_path(plugin_path)
@@ -200,7 +206,8 @@ impl PluginRegistry {
     /// Returns the names of the currently loaded plugins.
     /// The order of plugin names is arbitrary.
     pub fn loaded_plugin_names(&self) -> Vec<String> {
-        // Collect names into vector so we can release the `RwLockReadGuard` before we return.
+        // Collect names into vector so we can release the `RwLockReadGuard` before we
+        // return.
         self.inner
             .read()
             .unwrap()
@@ -211,9 +218,9 @@ impl PluginRegistry {
 
     /// Loads a [`CoprocessorPlugin`] from a `dylib`.
     ///
-    /// After this function has successfully finished, the plugin is registered with the
-    /// [`PluginRegistry`] and can later be obtained by calling [`get_plugin()`] with the proper
-    /// name.
+    /// After this function has successfully finished, the plugin is registered
+    /// with the [`PluginRegistry`] and can later be obtained by calling
+    /// [`get_plugin()`] with the proper name.
     ///
     /// Returns the name of the loaded plugin.
     pub fn load_plugin<P: AsRef<OsStr>>(&self, file_name: P) -> Result<String, PluginLoadingError> {
@@ -223,10 +230,12 @@ impl PluginRegistry {
     /// Attempts to load all plugins from a given directory.
     ///
     /// Returns a list of the names of all successfully loaded plugins.
-    /// If a file could not be successfully loaded as a plugin, it will be discarded.
+    /// If a file could not be successfully loaded as a plugin, it will be
+    /// discarded.
     ///
-    /// The plugins have to follow the system's naming convention in order to be loaded, e.g. `.so`
-    /// for Linux, `.dylib` for macOS and `.dll` for Windows.
+    /// The plugins have to follow the system's naming convention in order to be
+    /// loaded, e.g. `.so` for Linux, `.dylib` for macOS and `.dll` for
+    /// Windows.
     pub fn load_plugins_from_dir(
         &self,
         dir_name: impl Into<PathBuf>,
@@ -255,8 +264,8 @@ impl PluginRegistry {
 
     /// Updates the associated file path for plugin.
     ///
-    /// This function should be used to maintain consistent state when the underlying file of a
-    /// plugin was renamed or moved.
+    /// This function should be used to maintain consistent state when the
+    /// underlying file of a plugin was renamed or moved.
     pub fn update_plugin_path<P: AsRef<OsStr>>(&self, plugin_name: &str, new_path: P) {
         self.inner
             .write()
@@ -264,7 +273,8 @@ impl PluginRegistry {
             .update_plugin_path(plugin_name, new_path)
     }
 
-    /// Returns the associated file path for the plugin for the given `plugin_name`.
+    /// Returns the associated file path for the plugin for the given
+    /// `plugin_name`.
     pub fn get_path_for_plugin(&self, plugin_name: &str) -> Option<OsString> {
         self.inner
             .read()
@@ -368,24 +378,26 @@ pub struct LoadedPlugin {
 }
 
 impl LoadedPlugin {
-    /// Creates a new `LoadedPlugin` by loading a `dylib` from a file into memory.
+    /// Creates a new `LoadedPlugin` by loading a `dylib` from a file into
+    /// memory.
     ///
     /// The `file_path` argument may be any of:
-    /// * A simple filename of a library if the library is in any of the platform-specific locations
-    ///   from where libraries are usually loaded, e.g. the current directory or in
-    ///   `LD_LIBRARY_PATH` on unix systems.
+    /// * A simple filename of a library if the library is in any of the
+    ///   platform-specific locations from where libraries are usually loaded,
+    ///   e.g. the current directory or in `LD_LIBRARY_PATH` on unix systems.
     /// * Absolute path to the library
     /// * Relative (to the current working directory) path to the library
     ///
-    /// The function instantiates the plugin by calling `_plugin_create()` to obtain a
-    /// [`CoprocessorPlugin`].
+    /// The function instantiates the plugin by calling `_plugin_create()` to
+    /// obtain a [`CoprocessorPlugin`].
     ///
     /// # Safety
     ///
-    /// The library **must** contain a function with name [`PLUGIN_CONSTRUCTOR_SYMBOL`] and the
-    /// signature of [`PluginConstructorSignature`]. Otherwise, behavior is undefined.
-    /// See also [`libloading::Library::get()`] for more information on what restrictions apply to
-    /// [`PLUGIN_CONSTRUCTOR_SYMBOL`].
+    /// The library **must** contain a function with name
+    /// [`PLUGIN_CONSTRUCTOR_SYMBOL`] and the signature of
+    /// [`PluginConstructorSignature`]. Otherwise, behavior is undefined.
+    /// See also [`libloading::Library::get()`] for more information on what
+    /// restrictions apply to [`PLUGIN_CONSTRUCTOR_SYMBOL`].
     pub unsafe fn new<P: AsRef<OsStr>>(file_path: P) -> Result<Self, PluginLoadingError> {
         let lib = Library::new(&file_path)?;
 
@@ -559,7 +571,8 @@ mod tests {
 
         // trigger loading
         std::fs::copy(&original_library_path, &library_path).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so
+        // as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         assert!(registry.get_plugin(plugin_name).is_some());
@@ -570,7 +583,8 @@ mod tests {
 
         // trigger rename
         std::fs::rename(&library_path, &library_path_2).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so
+        // as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         assert!(registry.get_plugin(plugin_name).is_some());
@@ -580,7 +594,8 @@ mod tests {
         );
 
         std::fs::remove_file(&library_path_2).unwrap();
-        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so as to make sure the watcher is triggered.
+        // fs watcher detects changes in every 3 seconds, therefore, wait 4 seconds so
+        // as to make sure the watcher is triggered.
         std::thread::sleep(Duration::from_secs(4));
 
         // plugin will not be unloadad

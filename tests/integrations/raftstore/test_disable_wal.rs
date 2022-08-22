@@ -1,3 +1,6 @@
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
+use engine_traits::MiscExt;
 use test_raftstore::*;
 
 #[test]
@@ -13,6 +16,6 @@ fn test_disable_wal() {
     let _region = cluster.get_region(b"k0");
     // Make sure leader writes the data.
     must_get_equal(&cluster.get_engine(1), b"k0", b"v0");
-    cluster.get_engine(1).flush(true).unwrap();
+    cluster.get_engine(1).flush_cfs(true).unwrap();
     cluster.must_put(b"k2", b"v2");
 }

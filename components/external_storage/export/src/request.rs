@@ -58,7 +58,8 @@ pub async fn restore_inner(
     expected_length: u64,
 ) -> io::Result<()> {
     let storage = create_storage_no_client(&storage_backend)?;
-    // TODO: support encryption. The service must be launched with or sent a DataKeyManager
+    // TODO: support encryption. The service must be launched with or sent a
+    // DataKeyManager
     let output: &mut dyn io::Write = &mut File::create(file_name)?;
     // the minimum speed of reading data, in bytes/second.
     // if reading speed is slower than this rate, we will stop with

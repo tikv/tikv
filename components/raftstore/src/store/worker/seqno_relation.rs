@@ -25,7 +25,7 @@ use crate::store::{
 const RAFT_WB_MAX_KEYS: usize = 256;
 
 pub enum Task<S: Snapshot> {
-    ApplyRes(Vec<Box<ApplyRes<S>>>),
+    ApplyRes(Vec<ApplyRes<S>>),
     MemtableSealed(u64),
 }
 
@@ -81,7 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn on_apply_res(&mut self, apply_res: Vec<Box<ApplyRes<EK::Snapshot>>>) {
+    fn on_apply_res(&mut self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
         let mut sync_relations = HashMap::default();
         for res in &apply_res {
             for seqno in &res.write_seqno {

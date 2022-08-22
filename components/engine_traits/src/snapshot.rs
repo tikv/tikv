@@ -12,5 +12,4 @@ pub trait Snapshot
 where
     Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
 {
-    fn cf_names(&self) -> Vec<&str>;
 }

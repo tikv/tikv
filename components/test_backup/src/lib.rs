@@ -24,7 +24,7 @@ use tidb_query_common::storage::{
 };
 use tikv::{
     config::BackupConfig,
-    coprocessor::{checksum_crc64_xor, dag::TiKvStorage},
+    coprocessor::{checksum_crc64_xor, dag::TikvStorage},
     storage::{
         kv::{Engine, SnapContext},
         SnapshotStore,
@@ -52,7 +52,7 @@ pub struct TestSuite {
 
 // Retry if encounter error
 macro_rules! retry_req {
-    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
+    ($call_req:expr, $check_resp:expr, $resp:ident, $retry:literal, $timeout:literal) => {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
@@ -85,7 +85,7 @@ impl TestSuite {
                 *id,
                 sim.storages[id].clone(),
                 sim.region_info_accessors[id].clone(),
-                engines.kv.as_inner().clone(),
+                engines.kv.clone(),
                 BackupConfig {
                     num_threads: 4,
                     batch_size: 8,
@@ -355,7 +355,7 @@ impl TestSuite {
             false,
         );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
-            storage: TiKvStorage::new(snap_store, false),
+            storage: TikvStorage::new(snap_store, false),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
             is_key_only: false,
@@ -392,7 +392,7 @@ impl TestSuite {
         if !end.is_empty() {
             iter_opt.set_upper_bound(&end, DATA_KEY_PREFIX_LEN);
         }
-        let mut iter = snapshot.iter_cf(cf, iter_opt).unwrap();
+        let mut iter = snapshot.iter(cf, iter_opt).unwrap();
 
         if !iter.seek(&start).unwrap() {
             return (0, 0, 0);

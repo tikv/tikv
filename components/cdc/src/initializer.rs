@@ -16,7 +16,7 @@ use kvproto::{
     metapb::{Region, RegionEpoch},
 };
 use raftstore::{
-    coprocessor::ObserveID,
+    coprocessor::ObserveId,
     router::RaftStoreRouter,
     store::{
         fsm::ChangeObserver,
@@ -47,11 +47,11 @@ use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
-    delegate::{post_init_downstream, Delegate, DownstreamID, DownstreamState},
+    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState},
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, new_old_value_cursor, OldValueCursors},
-    service::ConnID,
+    service::ConnId,
     Error, Result, Task,
 };
 
@@ -81,10 +81,10 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) region_id: u64,
     pub(crate) region_epoch: RegionEpoch,
-    pub(crate) observe_id: ObserveID,
-    pub(crate) downstream_id: DownstreamID,
+    pub(crate) observe_id: ObserveId,
+    pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
-    pub(crate) conn_id: ConnID,
+    pub(crate) conn_id: ConnId,
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
 
@@ -237,10 +237,13 @@ impl<E: KvEngine> Initializer<E> {
             Scanner::TxnKvScanner(txnkv_scanner)
         } else {
             let mut iter_opt = IterOptions::default();
+            iter_opt.set_fill_cache(false);
             let (raw_key_prefix, raw_key_prefix_end) = ApiV2::get_rawkv_range();
             iter_opt.set_lower_bound(&[raw_key_prefix], DATA_KEY_PREFIX_LEN);
             iter_opt.set_upper_bound(&[raw_key_prefix_end], DATA_KEY_PREFIX_LEN);
-            let mut iter = RawMvccSnapshot::from_snapshot(snap).iter(iter_opt).unwrap();
+            let mut iter = RawMvccSnapshot::from_snapshot(snap)
+                .iter(CF_DEFAULT, iter_opt)
+                .unwrap();
 
             iter.seek_to_first()?;
             Scanner::RawKvScanner(iter)
@@ -303,8 +306,9 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    // It's extracted from `Initializer::scan_batch` to avoid becoming an asynchronous block,
-    // so that we can limit scan speed based on the thread disk I/O or RocksDB block read bytes.
+    // It's extracted from `Initializer::scan_batch` to avoid becoming an
+    // asynchronous block, so that we can limit scan speed based on the thread
+    // disk I/O or RocksDB block read bytes.
     fn do_scan<S: Snapshot>(
         &self,
         scanner: &mut Scanner<S>,
@@ -470,10 +474,10 @@ impl<E: KvEngine> Initializer<E> {
     pub(crate) fn deregister_downstream(&self, err: Error) {
         let deregister = if self.build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
-            // * It fails to build a resolver. A delegate requires a resolver
-            //   to advance resolved ts.
-            // * A region error. It usually mean a peer is not leader or
-            //   a leader meets an error and can not serve.
+            // * It fails to build a resolver. A delegate requires a resolver to advance
+            //   resolved ts.
+            // * A region error. It usually mean a peer is not leader or a leader meets an
+            //   error and can not serve.
             Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_id,
@@ -628,10 +632,10 @@ mod tests {
 
             region_id: 1,
             region_epoch: RegionEpoch::default(),
-            observe_id: ObserveID::new(),
-            downstream_id: DownstreamID::new(),
+            observe_id: ObserveId::new(),
+            downstream_id: DownstreamId::new(),
             downstream_state,
-            conn_id: ConnID::new(),
+            conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
             speed_limiter: Limiter::new(speed_limit as _),

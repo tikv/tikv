@@ -1,18 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
-use engine_rocks::{
-    raw::{DBOptions, DB},
-    RocksEngine, RocksWriteBatchVec,
-};
-use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
+use engine_rocks::{RocksCfOptions, RocksDbOptions, RocksEngine, RocksWriteBatchVec};
+use engine_traits::{Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
 use tempfile::Builder;
 use test::Bencher;
 
-fn writebatch(db: &Arc<DB>, round: usize, batch_keys: usize) {
+fn writebatch(engine: &RocksEngine, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
-    let engine = RocksEngine::from_db(db.clone());
     for r in 0..round {
         let mut batch = engine.write_batch();
         for i in 0..batch_keys {
@@ -28,12 +22,17 @@ fn bench_writebatch_impl(b: &mut Bencher, batch_keys: usize) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = DBOptions::new();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
-    let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
+    let db = engine_rocks::util::new_engine_opt(
+        path.path().to_str().unwrap(),
+        opts,
+        vec![(CF_DEFAULT, RocksCfOptions::default())],
+    )
+    .unwrap();
     let key_count = 1 << 13;
     let round = key_count / batch_keys;
     b.iter(|| {
@@ -112,13 +111,17 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = DBOptions::new();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
-    let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
-    let engine = RocksEngine::from_db(db);
+    let engine = engine_rocks::util::new_engine_opt(
+        path.path().to_str().unwrap(),
+        opts,
+        vec![(CF_DEFAULT, RocksCfOptions::default())],
+    )
+    .unwrap();
     b.iter(|| {
         let mut wb = engine.write_batch();
         fill_writebatch(&mut wb, 4096);
@@ -131,13 +134,17 @@ fn bench_writebatch_with_capacity(b: &mut Bencher) {
         .prefix("/tmp/rocksdb_write_batch_bench")
         .tempdir()
         .unwrap();
-    let mut opts = DBOptions::new();
+    let mut opts = RocksDbOptions::default();
     opts.create_if_missing(true);
     opts.enable_unordered_write(false);
     opts.enable_pipelined_write(false);
     opts.enable_multi_batch_write(true);
-    let db = Arc::new(DB::open(opts, path.path().to_str().unwrap()).unwrap());
-    let engine = RocksEngine::from_db(db);
+    let engine = engine_rocks::util::new_engine_opt(
+        path.path().to_str().unwrap(),
+        opts,
+        vec![(CF_DEFAULT, RocksCfOptions::default())],
+    )
+    .unwrap();
     b.iter(|| {
         let mut wb = engine.write_batch_with_cap(4096);
         fill_writebatch(&mut wb, 4096);

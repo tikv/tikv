@@ -21,7 +21,8 @@ use crate::{
 const MAX_TIME_SLICE: Duration = Duration::from_millis(2);
 const MAX_BATCH_SIZE: usize = 1024;
 
-// TODO: refactor to utilize generic type `KvFormat` and eliminate matching `api_version`.
+// TODO: refactor to utilize generic type `KvFormat` and eliminate matching
+// `api_version`.
 pub enum RawStore<S: Snapshot> {
     V1(RawStoreInner<S, ApiV1>),
     V1Ttl(RawStoreInner<RawEncodeSnapshot<S, ApiV1Ttl>, ApiV1Ttl>),
@@ -180,11 +181,11 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         })
     }
 
-    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys. If `end_key` is
-    /// `None`, it means unbounded.
+    /// Scan raw keys in [`start_key`, `end_key`), returns at most `limit` keys.
+    /// If `end_key` is `None`, it means unbounded.
     ///
-    /// If `key_only` is true, the value corresponding to the key will not be read. Only scanned
-    /// keys will be returned.
+    /// If `key_only` is true, the value corresponding to the key will not be
+    /// read. Only scanned keys will be returned.
     pub async fn forward_raw_scan(
         &'a self,
         cf: CfName,
@@ -197,7 +198,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(self.snapshot.iter_cf(cf, option)?, ScanMode::Forward, false);
+        let mut cursor = Cursor::new(self.snapshot.iter(cf, option)?, ScanMode::Forward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -231,11 +232,12 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         Ok(pairs)
     }
 
-    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at most `limit` keys. If
-    /// `start_key` is `None`, it means it's unbounded.
+    /// Scan raw keys in [`end_key`, `start_key`) in reverse order, returns at
+    /// most `limit` keys. If `start_key` is `None`, it means it's unbounded.
     ///
     /// If `key_only` is true, the value
-    /// corresponding to the key will not be read out. Only scanned keys will be returned.
+    /// corresponding to the key will not be read out. Only scanned keys will be
+    /// returned.
     pub async fn reverse_raw_scan(
         &'a self,
         cf: CfName,
@@ -248,11 +250,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
         if limit == 0 {
             return Ok(vec![]);
         }
-        let mut cursor = Cursor::new(
-            self.snapshot.iter_cf(cf, option)?,
-            ScanMode::Backward,
-            false,
-        );
+        let mut cursor = Cursor::new(self.snapshot.iter(cf, option)?, ScanMode::Backward, false);
         let statistics = statistics.mut_cf_statistics(cf);
         if !cursor.reverse_seek(start_key, statistics)? {
             return Ok(vec![]);
@@ -303,8 +301,7 @@ impl<'a, S: Snapshot, F: KvFormat> RawStoreInner<S, F> {
             let cf_stats = stats.mut_cf_statistics(cf);
             let mut opts = IterOptions::new(None, None, false);
             opts.set_upper_bound(r.get_end_key(), DATA_KEY_PREFIX_LEN);
-            let mut cursor =
-                Cursor::new(self.snapshot.iter_cf(cf, opts)?, ScanMode::Forward, false);
+            let mut cursor = Cursor::new(self.snapshot.iter(cf, opts)?, ScanMode::Forward, false);
             cursor.seek(&Key::from_encoded(r.get_start_key().to_vec()), cf_stats)?;
             while cursor.valid()? {
                 row_count += 1;

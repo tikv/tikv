@@ -1,9 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! ## The algorithm to make the TSO cache tolerate failure of TSO service
+//!
+//! 1. The scale of High-Available is specified by config item
+//! `causal-ts.available-interval`.
+//!
+//! 2. Count usage of TSO on every renew interval.
+//!
+//! 3. Calculate `cache_multiplier` by `causal-ts.available-interval /
+//! causal-ts.renew-interval`.
+//!
+//! 4. Then `tso_usage x cache_multiplier` is the expected number of TSO should
+//! be cached.
+//!
+//! 5. And `tso_usage x cache_multiplier - tso_remain` is the expected number of
+//! TSO to be requested from TSO service (if it's not a flush).
+//!
+//! Others:
+//! * `cache_multiplier` is also used as capacity of TSO batch list, as we
+//!   append an item to the list on every renew.
+
 use std::{
+    borrow::Borrow,
+    collections::BTreeMap,
     error, result,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -28,23 +50,28 @@ use crate::{
     CausalTsProvider,
 };
 
-// Renew on every 100ms, to adjust batch size rapidly enough.
-pub(crate) const TSO_BATCH_RENEW_INTERVAL_DEFAULT: u64 = 100;
-// Batch size on every renew interval.
-// One TSO is required for every batch of Raft put messages, so by default 1K tso/s should be enough.
-// Benchmark showed that with a 8.6w raw_put per second, the TSO requirement is 600 per second.
-pub(crate) const TSO_BATCH_MIN_SIZE_DEFAULT: u32 = 100;
-// Max batch size of TSO requests. Space of logical timestamp is 262144,
-// exceed this space will cause PD to sleep, waiting for physical clock advance.
-const TSO_BATCH_MAX_SIZE: u32 = 20_0000;
-
-const TSO_BATCH_RENEW_ON_INITIALIZE: &str = "init";
-const TSO_BATCH_RENEW_BY_BACKGROUND: &str = "background";
-const TSO_BATCH_RENEW_FOR_USED_UP: &str = "used-up";
-const TSO_BATCH_RENEW_FOR_FLUSH: &str = "flush";
+/// Renew on every 100ms, to adjust batch size rapidly enough.
+pub(crate) const DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS: u64 = 100;
+/// Minimal batch size of TSO requests. This is an empirical value.
+pub(crate) const DEFAULT_TSO_BATCH_MIN_SIZE: u32 = 100;
+/// Maximum batch size of TSO requests.
+/// As PD provides 262144 TSO per 50ms, conservatively set to 1/16 of 262144.
+/// Exceed this space will cause PD to sleep for 50ms, waiting for physical
+/// update interval. The 50ms limitation can not be broken through now (see
+/// `tso-update-physical-interval`).
+pub(crate) const DEFAULT_TSO_BATCH_MAX_SIZE: u32 = 8192;
+/// Maximum available interval of TSO cache.
+/// It means the duration that TSO we cache would be available despite failure
+/// of PD. The longer of the value can provide better "High-Availability"
+/// against PD failure, but more overhead of `TsoBatchList` & pressure to TSO
+/// service.
+pub(crate) const DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS: u64 = 3000;
+/// Just a limitation for safety, in case user specify a too big
+/// `available_interval`.
+const MAX_TSO_BATCH_LIST_CAPACITY: u32 = 1024;
 
 /// TSO range: [(physical, logical_start), (physical, logical_end))
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct TsoBatch {
     size: u32,
     physical: u64,
@@ -53,7 +80,7 @@ struct TsoBatch {
 }
 
 impl TsoBatch {
-    pub fn pop(&self) -> Option<TimeStamp> {
+    pub fn pop(&self) -> Option<(TimeStamp, bool /* is_used_up */)> {
         let mut logical = self.logical_start.load(Ordering::Relaxed);
         while logical < self.logical_end {
             match self.logical_start.compare_exchange_weak(
@@ -62,7 +89,12 @@ impl TsoBatch {
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return Some(TimeStamp::compose(self.physical, logical)),
+                Ok(_) => {
+                    return Some((
+                        TimeStamp::compose(self.physical, logical),
+                        logical + 1 == self.logical_end,
+                    ));
+                }
                 Err(x) => logical = x,
             }
         }
@@ -70,51 +102,182 @@ impl TsoBatch {
     }
 
     // `last_ts` is the last timestamp of the new batch.
-    pub fn renew(&mut self, batch_size: u32, last_ts: TimeStamp) -> Result<()> {
-        let (physical, logical) = (last_ts.physical(), last_ts.logical() + 1);
-        let logical_start = logical.checked_sub(batch_size as u64).unwrap();
+    pub fn new(batch_size: u32, last_ts: TimeStamp) -> Self {
+        let (physical, logical_end) = (last_ts.physical(), last_ts.logical() + 1);
+        let logical_start = logical_end.checked_sub(batch_size as u64).unwrap();
 
-        if physical < self.physical
-            || (physical == self.physical && logical_start < self.logical_end)
-        {
-            error!("timestamp fall back"; "last_ts" => ?last_ts, "batch" => ?self,
-                "physical" => physical, "logical" => logical, "logical_start" => logical_start);
-            return Err(box_err!("timestamp fall back"));
+        Self {
+            size: batch_size,
+            physical,
+            logical_end,
+            logical_start: AtomicU64::new(logical_start),
         }
-
-        self.size = batch_size;
-        self.physical = physical;
-        self.logical_end = logical;
-        self.logical_start.store(logical_start, Ordering::Relaxed);
-        Ok(())
     }
 
-    // Note: batch is "used up" in flush, and batch size will be enlarged in next renew.
-    pub fn flush(&self) {
-        self.logical_start
-            .store(self.logical_end, Ordering::Relaxed);
+    /// Number of remaining (available) TSO in the batch.
+    pub fn remain(&self) -> u32 {
+        self.logical_end
+            .saturating_sub(self.logical_start.load(Ordering::Relaxed)) as u32
     }
 
-    // Return None if TsoBatch is empty.
-    // Note that `logical_start` will be larger than `logical_end`. See `pop()`.
-    pub fn used_size(&self) -> Option<u32> {
-        if self.size > 0 {
-            Some(
-                self.size
-                    .checked_sub(
-                        self.logical_end
-                            .saturating_sub(self.logical_start.load(Ordering::Relaxed))
-                            as u32,
-                    )
-                    .unwrap(),
-            )
-        } else {
-            None
-        }
+    /// The original start timestamp in the batch.
+    pub fn original_start(&self) -> TimeStamp {
+        TimeStamp::compose(self.physical, self.logical_end - self.size as u64)
+    }
+
+    /// The excluded end timestamp after the last in batch.
+    pub fn excluded_end(&self) -> TimeStamp {
+        TimeStamp::compose(self.physical, self.logical_end)
     }
 }
 
-/// MAX_RENEW_BATCH_SIZE is the batch size of TSO renew. It is an empirical value.
+/// `TsoBatchList` is a ordered list of `TsoBatch`. It aims to:
+///
+/// 1. Cache more number of TSO to improve high availability. See issue #12794.
+/// `TsoBatch` can only cache at most 262144 TSO as logical clock is 18 bits.
+///
+/// 2. Fully utilize cached TSO when some regions require latest TSO (e.g. in
+/// the scenario of leader transfer). Other regions without the requirement can
+/// still use older TSO cache.
+#[derive(Default, Debug)]
+struct TsoBatchList {
+    inner: RwLock<TsoBatchListInner>,
+
+    /// Number of remaining (available) TSO.
+    /// Using signed integer for avoiding a wrap around huge value as it's not
+    /// precisely counted.
+    tso_remain: AtomicI32,
+
+    /// Statistics of TSO usage.
+    tso_usage: AtomicU32,
+
+    /// Length of batch list. It is used to limit size for efficiency, and keep
+    /// batches fresh.
+    capacity: u32,
+}
+
+/// Inner data structure of batch list.
+/// The reasons why `crossbeam_skiplist::SkipMap` is not chosen:
+///
+/// 1. In `flush()` procedure, a reader of `SkipMap` can still acquire a batch
+/// after the it is removed, which would violate the causality requirement.
+/// The `RwLock<BTreeMap>` avoid this scenario by lock synchronization.
+///
+/// 2. It is a scenario with much more reads than writes. The `RwLock` would not
+/// be less efficient than lock free implementation.
+type TsoBatchListInner = BTreeMap<u64, TsoBatch>;
+
+impl TsoBatchList {
+    pub fn new(capacity: u32) -> Self {
+        Self {
+            capacity: std::cmp::min(capacity, MAX_TSO_BATCH_LIST_CAPACITY),
+            ..Default::default()
+        }
+    }
+
+    pub fn remain(&self) -> u32 {
+        std::cmp::max(self.tso_remain.load(Ordering::Relaxed), 0) as u32
+    }
+
+    pub fn usage(&self) -> u32 {
+        self.tso_usage.load(Ordering::Relaxed)
+    }
+
+    pub fn take_and_report_usage(&self) -> u32 {
+        let usage = self.tso_usage.swap(0, Ordering::Relaxed);
+        TS_PROVIDER_TSO_BATCH_LIST_COUNTING_STATIC
+            .tso_usage
+            .observe(usage as f64);
+        usage
+    }
+
+    // TODO: make it async
+    fn remove_batch(&self, key: u64) {
+        if let Some(batch) = self.inner.write().remove(&key) {
+            self.tso_remain
+                .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
+        }
+    }
+
+    /// Pop timestamp.
+    /// When `after_ts.is_some()`, it will pop timestamp larger that `after_ts`.
+    /// It is used for the scenario that some regions have causality
+    /// requirement (e.g. after transfer, the next timestamp of new leader
+    /// should be larger than the store where it is transferred from).
+    /// `after_ts` is included.
+    pub fn pop(&self, after_ts: Option<TimeStamp>) -> Option<TimeStamp> {
+        let inner = self.inner.read();
+        let range = match after_ts {
+            Some(after_ts) => inner.range(&after_ts.into_inner()..),
+            None => inner.range(..),
+        };
+        for (key, batch) in range {
+            if let Some((ts, is_used_up)) = batch.pop() {
+                let key = *key;
+                drop(inner);
+                self.tso_usage.fetch_add(1, Ordering::Relaxed);
+                self.tso_remain.fetch_sub(1, Ordering::Relaxed);
+                if is_used_up {
+                    // TODO: make it async
+                    self.remove_batch(key);
+                }
+                return Some(ts);
+            }
+        }
+        None
+    }
+
+    pub fn push(&self, batch_size: u32, last_ts: TimeStamp, need_flush: bool) -> Result<u64> {
+        let new_batch = TsoBatch::new(batch_size, last_ts);
+
+        if let Some((_, last_batch)) = self.inner.read().iter().next_back() {
+            if new_batch.original_start() < last_batch.excluded_end() {
+                error!("timestamp fall back"; "batch_size" => batch_size, "last_ts" => ?last_ts,
+                    "last_batch" => ?last_batch, "new_batch" => ?new_batch);
+                return Err(box_err!("timestamp fall back"));
+            }
+        }
+
+        let key = new_batch.original_start().into_inner();
+        {
+            // Hold the write lock until new batch is inserted.
+            // Otherwise a `pop()` would acquire the lock, meet no TSO available, and invoke
+            // renew request.
+            let mut inner = self.inner.write();
+            if need_flush {
+                self.flush_internal(&mut inner);
+            }
+
+            inner.insert(key, new_batch);
+            self.tso_remain
+                .fetch_add(batch_size as i32, Ordering::Relaxed);
+        }
+
+        // remove items out of capacity limitation.
+        // TODO: make it async
+        if self.inner.read().len() > self.capacity as usize {
+            if let Some((_, batch)) = self.inner.write().pop_first() {
+                self.tso_remain
+                    .fetch_sub(batch.remain() as i32, Ordering::Relaxed);
+            }
+        }
+
+        Ok(key)
+    }
+
+    fn flush_internal(&self, inner: &mut TsoBatchListInner) {
+        inner.clear();
+        self.tso_remain.store(0, Ordering::Relaxed);
+    }
+
+    pub fn flush(&self) {
+        let mut inner = self.inner.write();
+        self.flush_internal(&mut inner);
+    }
+}
+
+/// MAX_RENEW_BATCH_SIZE is the batch size of TSO renew. It is an empirical
+/// value.
 const MAX_RENEW_BATCH_SIZE: usize = 64;
 
 type RenewError = Arc<dyn error::Error + Send + Sync>;
@@ -125,53 +288,92 @@ struct RenewRequest {
     sender: oneshot::Sender<RenewResult>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RenewParameter {
+    batch_min_size: u32,
+    batch_max_size: u32,
+    // `cache_multiplier` indicates that times on usage of TSO it should cache.
+    // It is also used as capacity of `TsoBatchList`.
+    cache_multiplier: u32,
+}
+
 pub struct BatchTsoProvider<C: PdClient> {
     pd_client: Arc<C>,
-    batch: Arc<RwLock<TsoBatch>>,
-    batch_min_size: u32,
+    batch_list: Arc<TsoBatchList>,
     causal_ts_worker: Worker,
     renew_interval: Duration,
-    renew_request_tx: mpsc::Sender<RenewRequest>,
+    renew_parameter: RenewParameter,
+    renew_request_tx: Sender<RenewRequest>,
+}
+
+impl<C: PdClient> std::fmt::Debug for BatchTsoProvider<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchTsoProvider")
+            .field("batch_list", &self.batch_list)
+            .field("renew_interval", &self.renew_interval)
+            .field("renew_parameter", &self.renew_parameter)
+            .finish()
+    }
 }
 
 impl<C: PdClient + 'static> BatchTsoProvider<C> {
     pub async fn new(pd_client: Arc<C>) -> Result<Self> {
         Self::new_opt(
             pd_client,
-            Duration::from_millis(TSO_BATCH_RENEW_INTERVAL_DEFAULT),
-            TSO_BATCH_MIN_SIZE_DEFAULT,
+            Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS),
+            Duration::from_millis(DEFAULT_TSO_BATCH_AVAILABLE_INTERVAL_MS),
+            DEFAULT_TSO_BATCH_MIN_SIZE,
+            DEFAULT_TSO_BATCH_MAX_SIZE,
         )
         .await
+    }
+
+    #[allow(unused_mut)]
+    fn calc_cache_multiplier(mut renew_interval: Duration, available_interval: Duration) -> u32 {
+        #[cfg(any(test, feature = "testexport"))]
+        if renew_interval.is_zero() {
+            // Should happen in test only.
+            renew_interval = Duration::from_millis(DEFAULT_TSO_BATCH_RENEW_INTERVAL_MS);
+        }
+        available_interval.div_duration_f64(renew_interval).ceil() as u32
     }
 
     pub async fn new_opt(
         pd_client: Arc<C>,
         renew_interval: Duration,
+        available_interval: Duration,
         batch_min_size: u32,
+        batch_max_size: u32,
     ) -> Result<Self> {
+        let cache_multiplier = Self::calc_cache_multiplier(renew_interval, available_interval);
+        let renew_parameter = RenewParameter {
+            batch_min_size,
+            batch_max_size,
+            cache_multiplier,
+        };
         let (renew_request_tx, renew_request_rx) = mpsc::channel(MAX_RENEW_BATCH_SIZE);
         let s = Self {
             pd_client: pd_client.clone(),
-            batch: Arc::new(RwLock::new(TsoBatch::default())),
-            batch_min_size,
+            batch_list: Arc::new(TsoBatchList::new(cache_multiplier)),
             causal_ts_worker: WorkerBuilder::new("causal_ts_batch_tso_worker").create(),
             renew_interval,
+            renew_parameter,
             renew_request_tx,
         };
         s.init(renew_request_rx).await?;
         Ok(s)
     }
 
-    async fn renew_tso_batch(&self, need_flush: bool, reason: &str) -> Result<()> {
+    async fn renew_tso_batch(&self, need_flush: bool, reason: TsoBatchRenewReason) -> Result<()> {
         Self::renew_tso_batch_internal(self.renew_request_tx.clone(), need_flush, reason).await
     }
 
     async fn renew_tso_batch_internal(
         renew_request_tx: Sender<RenewRequest>,
         need_flush: bool,
-        reason: &str,
+        reason: TsoBatchRenewReason,
     ) -> Result<()> {
-        let start = Instant::now();
+        let start = Instant::now_coarse();
         let (request, response) = oneshot::channel();
         renew_request_tx
             .send(RenewRequest {
@@ -185,60 +387,70 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
             .map_err(|_| box_err!("renew response channel is dropped"))
             .and_then(|r| r.map_err(|err| Error::BatchRenew(err)));
 
-        let label = if res.is_ok() { "ok" } else { "err" };
-        TS_PROVIDER_TSO_BATCH_RENEW_DURATION
-            .with_label_values(&[label, reason])
+        TS_PROVIDER_TSO_BATCH_RENEW_DURATION_STATIC
+            .get(res.borrow().into())
+            .get(reason)
             .observe(start.saturating_elapsed_secs());
         res
     }
 
     async fn renew_tso_batch_impl(
         pd_client: Arc<C>,
-        tso_batch: Arc<RwLock<TsoBatch>>,
-        batch_min_size: u32,
+        tso_batch_list: Arc<TsoBatchList>,
+        renew_parameter: RenewParameter,
         need_flush: bool,
     ) -> Result<()> {
-        let new_batch_size = {
-            let batch = tso_batch.read();
-            match batch.used_size() {
-                None => batch_min_size,
-                Some(used_size) => {
-                    debug!("CachedTsoProvider::renew_tso_batch"; "batch before" => ?batch, "need_flush" => need_flush, "used size" => used_size);
-                    Self::calc_new_batch_size(batch.size, used_size, batch_min_size)
-                }
-            }
-        };
+        let tso_remain = tso_batch_list.remain();
+        let new_batch_size =
+            Self::calc_new_batch_size(tso_batch_list.clone(), renew_parameter, need_flush);
 
-        match pd_client.batch_get_tso(new_batch_size).await {
+        TS_PROVIDER_TSO_BATCH_LIST_COUNTING_STATIC
+            .tso_remain
+            .observe(tso_remain as f64);
+        TS_PROVIDER_TSO_BATCH_LIST_COUNTING_STATIC
+            .new_batch_size
+            .observe(new_batch_size as f64);
+
+        let res = match pd_client.batch_get_tso(new_batch_size).await {
             Err(err) => {
-                warn!("BatchTsoProvider::renew_tso_batch, pd_client.batch_get_tso error"; "error" => ?err, "need_flash" => need_flush);
+                warn!("BatchTsoProvider::renew_tso_batch, pd_client.batch_get_tso error";
+                    "new_batch_size" => new_batch_size, "error" => ?err, "need_flash" => need_flush);
                 if need_flush {
-                    let batch = tso_batch.write();
-                    batch.flush();
+                    tso_batch_list.flush();
                 }
                 Err(err.into())
             }
             Ok(ts) => {
-                {
-                    let mut batch = tso_batch.write();
-                    batch.renew(new_batch_size, ts).map_err(|e| {
+                tso_batch_list
+                    .push(new_batch_size, ts, need_flush)
+                    .map_err(|e| {
                         if need_flush {
-                            batch.flush();
+                            tso_batch_list.flush();
                         }
                         e
                     })?;
-                    debug!("BatchTsoProvider::renew_tso_batch"; "batch renew" => ?batch, "ts" => ?ts);
-                }
-                TS_PROVIDER_TSO_BATCH_SIZE.set(new_batch_size as i64);
+                debug!("BatchTsoProvider::renew_tso_batch";
+                    "tso_batch_list.remain" => tso_batch_list.remain(), "ts" => ?ts);
+
+                // Should only be invoked after successful renew. Otherwise the TSO usage will
+                // be lost, and batch size requirement will be less than expected. Note that
+                // invoked here is not precise. There would be `get_ts()` before here after
+                // above `tso_batch_list.push()`, and make `tso_usage` a little bigger. This
+                // error is acceptable.
+                tso_batch_list.take_and_report_usage();
+
                 Ok(())
             }
-        }
+        };
+        let total_batch_size = tso_batch_list.remain() + tso_batch_list.usage();
+        TS_PROVIDER_TSO_BATCH_SIZE.set(total_batch_size as i64);
+        res
     }
 
     async fn renew_thread(
         pd_client: Arc<C>,
-        tso_batch: Arc<RwLock<TsoBatch>>,
-        batch_min_size: u32,
+        tso_batch_list: Arc<TsoBatchList>,
+        renew_parameter: RenewParameter,
         mut rx: Receiver<RenewRequest>,
     ) {
         loop {
@@ -267,8 +479,8 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
 
             let res = Self::renew_tso_batch_impl(
                 pd_client.clone(),
-                tso_batch.clone(),
-                batch_min_size,
+                tso_batch_list.clone(),
+                renew_parameter,
                 need_flush,
             )
             .await
@@ -283,28 +495,36 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         }
     }
 
-    fn calc_new_batch_size(batch_size: u32, used_size: u32, batch_min_size: u32) -> u32 {
-        if used_size > batch_size * 3 / 4 {
-            // Enlarge to double if used more than 3/4.
-            std::cmp::min(batch_size << 1, TSO_BATCH_MAX_SIZE)
-        } else if used_size < batch_size / 4 {
-            // Shrink to half if used less than 1/4.
-            std::cmp::max(batch_size >> 1, batch_min_size)
-        } else {
-            batch_size
+    fn calc_new_batch_size(
+        tso_batch_list: Arc<TsoBatchList>,
+        renew_parameter: RenewParameter,
+        need_flush: bool,
+    ) -> u32 {
+        // The expected number of TSO is `cache_multiplier` times on latest usage.
+        // Note: There is a `batch_max_size` limitation, so the request batch size will
+        // be less than expected, and will be fulfill in next renew.
+        // TODO: consider schedule TSO requests exceed `batch_max_size` limitation to
+        // fulfill requirement in time.
+        let mut new_batch_size = tso_batch_list.usage() * renew_parameter.cache_multiplier;
+        if !need_flush {
+            new_batch_size = new_batch_size.saturating_sub(tso_batch_list.remain())
         }
+        std::cmp::min(
+            std::cmp::max(new_batch_size, renew_parameter.batch_min_size),
+            renew_parameter.batch_max_size,
+        )
     }
 
     async fn init(&self, renew_request_rx: Receiver<RenewRequest>) -> Result<()> {
         // Spawn renew thread.
         let pd_client = self.pd_client.clone();
-        let tso_batch = self.batch.clone();
-        let batch_min_size = self.batch_min_size;
+        let tso_batch_list = self.batch_list.clone();
+        let renew_parameter = self.renew_parameter;
         self.causal_ts_worker.remote().spawn(async move {
-            Self::renew_thread(pd_client, tso_batch, batch_min_size, renew_request_rx).await;
+            Self::renew_thread(pd_client, tso_batch_list, renew_parameter, renew_request_rx).await;
         });
 
-        self.renew_tso_batch(true, TSO_BATCH_RENEW_ON_INITIALIZE)
+        self.renew_tso_batch(true, TsoBatchRenewReason::init)
             .await?;
 
         let request_tx = self.renew_request_tx.clone();
@@ -314,7 +534,7 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
                 let _ = Self::renew_tso_batch_internal(
                     request_tx,
                     false,
-                    TSO_BATCH_RENEW_BY_BACKGROUND,
+                    TsoBatchRenewReason::background,
                 )
                 .await;
             }
@@ -328,33 +548,38 @@ impl<C: PdClient + 'static> BatchTsoProvider<C> {
         Ok(())
     }
 
-    // Get current batch_size, for test purpose.
-    pub fn batch_size(&self) -> u32 {
-        self.batch.read().size
+    #[cfg(test)]
+    pub fn tso_remain(&self) -> u32 {
+        self.batch_list.remain()
+    }
+
+    #[cfg(test)]
+    pub fn tso_usage(&self) -> u32 {
+        self.batch_list.usage()
     }
 }
 
 const GET_TS_MAX_RETRY: u32 = 3;
 
 impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
+    // TODO: support `after_ts` argument.
     fn get_ts(&self) -> Result<TimeStamp> {
         let start = Instant::now();
         let mut retries = 0;
         let mut last_batch_size: u32;
         loop {
             {
-                let batch = self.batch.read();
-                last_batch_size = batch.size;
-                match batch.pop() {
+                last_batch_size = self.batch_list.remain() + self.batch_list.usage();
+                match self.batch_list.pop(None) {
                     Some(ts) => {
                         trace!("BatchTsoProvider::get_ts: {:?}", ts);
-                        TS_PROVIDER_GET_TS_DURATION
-                            .with_label_values(&["ok"])
+                        TS_PROVIDER_GET_TS_DURATION_STATIC
+                            .ok
                             .observe(start.saturating_elapsed_secs());
                         return Ok(ts);
                     }
                     None => {
-                        warn!("BatchTsoProvider::get_ts, batch used up"; "batch.size" => batch.size, "retries" => retries);
+                        warn!("BatchTsoProvider::get_ts, batch used up"; "last_batch_size" => last_batch_size, "retries" => retries);
                     }
                 }
             }
@@ -362,23 +587,24 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
             if retries >= GET_TS_MAX_RETRY {
                 break;
             }
-            if let Err(err) = block_on(self.renew_tso_batch(false, TSO_BATCH_RENEW_FOR_USED_UP)) {
-                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would mean that PD is quite busy.
-                // So do not retry any more.
+            if let Err(err) = block_on(self.renew_tso_batch(false, TsoBatchRenewReason::used_up)) {
+                // `renew_tso_batch` failure is likely to be caused by TSO timeout, which would
+                // mean that PD is quite busy. So do not retry any more.
                 error!("BatchTsoProvider::get_ts, renew_tso_batch fail on batch used-up"; "err" => ?err);
                 break;
             }
             retries += 1;
         }
-        error!("BatchTsoProvider::get_ts, batch used up"; "batch.size" => last_batch_size, "retries" => retries);
-        TS_PROVIDER_GET_TS_DURATION
-            .with_label_values(&["err"])
+        error!("BatchTsoProvider::get_ts, batch used up"; "last_batch_size" => last_batch_size, "retries" => retries);
+        TS_PROVIDER_GET_TS_DURATION_STATIC
+            .err
             .observe(start.saturating_elapsed_secs());
         Err(Error::TsoBatchUsedUp(last_batch_size))
     }
 
+    // TODO: provide asynchronous method
     fn flush(&self) -> Result<()> {
-        block_on(self.renew_tso_batch(true, TSO_BATCH_RENEW_FOR_FLUSH))
+        block_on(self.renew_tso_batch(true, TsoBatchRenewReason::flush))
     }
 }
 
@@ -410,55 +636,207 @@ pub mod tests {
 
     #[test]
     fn test_tso_batch() {
-        let mut batch = TsoBatch::default();
+        let batch = TsoBatch::new(10, TimeStamp::compose(1, 100));
 
-        assert_eq!(batch.used_size(), None);
-        assert_eq!(batch.pop(), None);
-        batch.flush();
+        assert_eq!(batch.original_start(), TimeStamp::compose(1, 91));
+        assert_eq!(batch.excluded_end(), TimeStamp::compose(1, 101));
+        assert_eq!(batch.remain(), 10);
 
-        batch.renew(10, TimeStamp::compose(1, 100)).unwrap();
-        for logical in 91..=95 {
-            assert_eq!(batch.pop(), Some(TimeStamp::compose(1, logical)));
+        for logical in 91..=93 {
+            assert_eq!(batch.pop(), Some((TimeStamp::compose(1, logical), false)));
         }
-        assert_eq!(batch.used_size(), Some(5));
+        assert_eq!(batch.remain(), 7);
 
-        for logical in 96..=100 {
-            assert_eq!(batch.pop(), Some(TimeStamp::compose(1, logical)));
+        for logical in 94..=99 {
+            assert_eq!(batch.pop(), Some((TimeStamp::compose(1, logical), false)));
         }
-        assert_eq!(batch.used_size(), Some(10));
-        assert_eq!(batch.pop(), None);
+        assert_eq!(batch.remain(), 1);
 
-        batch.renew(10, TimeStamp::compose(1, 110)).unwrap();
-        // timestamp fall back
-        assert!(batch.renew(10, TimeStamp::compose(1, 119)).is_err());
-
-        batch.renew(10, TimeStamp::compose(1, 200)).unwrap();
-        for logical in 191..=195 {
-            assert_eq!(batch.pop(), Some(TimeStamp::compose(1, logical)));
-        }
-        batch.flush();
-        assert_eq!(batch.used_size(), Some(10));
+        assert_eq!(batch.pop(), Some((TimeStamp::compose(1, 100), true)));
         assert_eq!(batch.pop(), None);
+        assert_eq!(batch.remain(), 0);
     }
 
     #[test]
     fn test_cals_new_batch_size() {
+        let cache_multiplier = 30;
         let cases = vec![
-            (100, 0, 100),
-            (100, 76, 200),
-            (200, 49, 100),
-            (200, 50, 200),
-            (200, 150, 200),
-            (200, 151, 400),
-            (200, 200, 400),
-            (TSO_BATCH_MAX_SIZE, TSO_BATCH_MAX_SIZE, TSO_BATCH_MAX_SIZE),
+            (0, 0, true, 100),
+            (50, 0, true, 100),
+            (1000, 100, true, 3000),
+            (
+                1000,
+                DEFAULT_TSO_BATCH_MAX_SIZE,
+                true,
+                DEFAULT_TSO_BATCH_MAX_SIZE,
+            ),
+            (0, 0, false, 100),
+            (1000, 0, false, 100),
+            (1000, 100, false, 2000),
+            (5000, 100, false, 100),
+            (
+                1000,
+                DEFAULT_TSO_BATCH_MAX_SIZE,
+                false,
+                DEFAULT_TSO_BATCH_MAX_SIZE,
+            ),
         ];
 
-        for (i, (batch_size, used_size, expected)) in cases.into_iter().enumerate() {
-            let new_size =
-                BatchTsoProvider::<TestPdClient>::calc_new_batch_size(batch_size, used_size, 100);
+        for (i, (remain, usage, need_flush, expected)) in cases.into_iter().enumerate() {
+            let batch_list = Arc::new(TsoBatchList {
+                inner: Default::default(),
+                tso_remain: AtomicI32::new(remain as i32),
+                tso_usage: AtomicU32::new(usage),
+                capacity: cache_multiplier,
+            });
+            let renew_parameter = RenewParameter {
+                batch_min_size: DEFAULT_TSO_BATCH_MIN_SIZE,
+                batch_max_size: DEFAULT_TSO_BATCH_MAX_SIZE,
+                cache_multiplier,
+            };
+            let new_size = BatchTsoProvider::<TestPdClient>::calc_new_batch_size(
+                batch_list,
+                renew_parameter,
+                need_flush,
+            );
             assert_eq!(new_size, expected, "case {}", i);
         }
+    }
+
+    #[test]
+    fn test_tso_batch_list_basic() {
+        let batch_list = TsoBatchList::new(10);
+
+        assert_eq!(batch_list.remain(), 0);
+        assert_eq!(batch_list.usage(), 0);
+        assert_eq!(batch_list.pop(None), None);
+
+        batch_list
+            .push(10, TimeStamp::compose(1, 100), false)
+            .unwrap();
+        assert_eq!(batch_list.remain(), 10);
+        assert_eq!(batch_list.usage(), 0);
+
+        for logical in 91..=94 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        assert_eq!(batch_list.remain(), 6);
+        assert_eq!(batch_list.usage(), 4);
+
+        for logical in 95..=100 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        assert_eq!(batch_list.remain(), 0);
+        assert_eq!(batch_list.usage(), 10);
+        assert_eq!(batch_list.pop(None), None);
+        assert_eq!(batch_list.remain(), 0);
+        assert_eq!(batch_list.usage(), 10);
+
+        batch_list
+            .push(10, TimeStamp::compose(1, 110), false)
+            .unwrap();
+        assert_eq!(batch_list.remain(), 10);
+        assert_eq!(batch_list.usage(), 10);
+        // timestamp fall back
+        batch_list
+            .push(10, TimeStamp::compose(1, 119), false)
+            .unwrap_err();
+        batch_list
+            .push(10, TimeStamp::compose(1, 200), false)
+            .unwrap();
+        assert_eq!(batch_list.remain(), 20);
+        assert_eq!(batch_list.usage(), 10);
+
+        for logical in 101..=110 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        for logical in 191..=195 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        assert_eq!(batch_list.remain(), 5);
+        assert_eq!(batch_list.usage(), 25);
+
+        batch_list.flush();
+        assert_eq!(batch_list.pop(None), None);
+        assert_eq!(batch_list.remain(), 0);
+        assert_eq!(batch_list.take_and_report_usage(), 25);
+        assert_eq!(batch_list.usage(), 0);
+
+        // need_flush
+        batch_list
+            .push(10, TimeStamp::compose(1, 300), false)
+            .unwrap();
+        let key391 = batch_list
+            .push(10, TimeStamp::compose(1, 400), true)
+            .unwrap();
+        assert_eq!(key391, TimeStamp::compose(1, 391).into_inner());
+        assert_eq!(batch_list.remain(), 10);
+        assert_eq!(batch_list.usage(), 0);
+
+        for logical in 391..=400 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        assert_eq!(batch_list.remain(), 0);
+        assert_eq!(batch_list.usage(), 10);
+    }
+
+    #[test]
+    fn test_tso_batch_list_max_batch_count() {
+        let batch_list = TsoBatchList::new(3);
+
+        batch_list
+            .push(10, TimeStamp::compose(1, 100), false)
+            .unwrap(); // will be remove after the 4th push.
+        batch_list
+            .push(10, TimeStamp::compose(1, 200), false)
+            .unwrap();
+        batch_list
+            .push(10, TimeStamp::compose(1, 300), false)
+            .unwrap();
+        batch_list
+            .push(10, TimeStamp::compose(1, 400), false)
+            .unwrap();
+
+        for logical in 191..=195 {
+            assert_eq!(batch_list.pop(None), Some(TimeStamp::compose(1, logical)));
+        }
+        assert_eq!(batch_list.remain(), 25);
+        assert_eq!(batch_list.usage(), 5);
+    }
+
+    #[test]
+    fn test_tso_batch_list_pop_after_ts() {
+        let batch_list = TsoBatchList::new(10);
+
+        batch_list
+            .push(10, TimeStamp::compose(1, 100), false)
+            .unwrap();
+        batch_list
+            .push(10, TimeStamp::compose(1, 200), false)
+            .unwrap();
+        batch_list
+            .push(10, TimeStamp::compose(1, 300), false)
+            .unwrap();
+        batch_list
+            .push(10, TimeStamp::compose(1, 400), false)
+            .unwrap();
+
+        let after_ts = TimeStamp::compose(1, 291);
+        for logical in 291..=300 {
+            assert_eq!(
+                batch_list.pop(Some(after_ts)),
+                Some(TimeStamp::compose(1, logical))
+            );
+        }
+        for logical in 391..=400 {
+            assert_eq!(
+                batch_list.pop(Some(after_ts)),
+                Some(TimeStamp::compose(1, logical))
+            );
+        }
+        assert_eq!(batch_list.pop(Some(after_ts)), None);
+        assert_eq!(batch_list.remain(), 20);
+        assert_eq!(batch_list.usage(), 20);
     }
 
     #[test]
@@ -477,49 +855,67 @@ pub mod tests {
         let pd_cli = Arc::new(TestPdClient::new(1, false));
         pd_cli.set_tso(1000.into());
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
+        // renew manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
+            Duration::from_secs(1), // cache_multiplier = 10
             100,
+            80000,
         ))
         .unwrap();
-        assert_eq!(provider.batch_size(), 100);
+        assert_eq!(provider.tso_remain(), 100);
+        assert_eq!(provider.tso_usage(), 0);
+
         for ts in 1001..=1010u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
+        assert_eq!(provider.tso_remain(), 90);
+        assert_eq!(provider.tso_usage(), 10);
 
         provider.flush().unwrap(); // allocated: [1101, 1200]
-        assert_eq!(provider.batch_size(), 100);
+        assert_eq!(provider.tso_remain(), 100);
+        assert_eq!(provider.tso_usage(), 0);
         // used up
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
         for ts in 1101..=1200u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        assert_eq!(provider.tso_remain(), 0);
+        assert_eq!(provider.tso_usage(), 100);
+        provider.get_ts().unwrap_err();
+        assert_eq!(provider.tso_remain(), 0);
+        assert_eq!(provider.tso_usage(), 100);
 
-        provider.flush().unwrap(); // allocated: [1201, 1400]
-        assert_eq!(provider.batch_size(), 200);
-
-        // used < 20%
-        for ts in 1201..=1249u64 {
+        provider.flush().unwrap(); // allocated: [1201, 2200]
+        for ts in 1201..=1260u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
+        assert_eq!(provider.tso_remain(), 940);
+        assert_eq!(provider.tso_usage(), 60);
 
-        provider.flush().unwrap(); // allocated: [1401, 1500]
-        assert_eq!(provider.batch_size(), 100);
+        // allocated: [2201, 2300]
+        block_on(provider.renew_tso_batch(false, TsoBatchRenewReason::background)).unwrap();
+        assert_eq!(provider.tso_remain(), 1040); // 940 + 100
+        assert_eq!(provider.tso_usage(), 0);
 
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1401..=1500u64 {
+        for ts in 1261..=2300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
+        assert_eq!(provider.tso_remain(), 0);
+        assert_eq!(provider.tso_usage(), 1040);
 
         // renew on used-up
-        for ts in 1501..=2500u64 {
+        for ts in 2301..=100_000u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
+        // batch size: 10400, 80000, 80000
+        // batch boundary: 2301, 12700, 92700, 100_000
+        assert_eq!(provider.tso_remain(), 72700);
+        assert_eq!(provider.tso_usage(), 7300);
     }
 
     #[test]
@@ -529,25 +925,27 @@ pub mod tests {
 
         {
             pd_cli.trigger_tso_failure();
-            assert!(
-                block_on(BatchTsoProvider::new_opt(
-                    pd_cli.clone(),
-                    Duration::ZERO,
-                    100
-                ))
-                .is_err()
-            );
+            block_on(BatchTsoProvider::new_opt(
+                pd_cli.clone(),
+                Duration::ZERO,
+                Duration::from_secs(3),
+                100,
+                8192,
+            ))
+            .unwrap_err();
         }
 
-        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to renew manually.
-        // allocated: [1001, 1100]
+        // Set `renew_interval` to 0 to disable background renew. Invoke `flush()` to
+        // renew manually. allocated: [1001, 1100]
         let provider = block_on(BatchTsoProvider::new_opt(
             pd_cli.clone(),
             Duration::ZERO,
+            Duration::from_secs(1), // cache_multiplier=10
             100,
+            8192,
         ))
         .unwrap();
-        assert_eq!(provider.batch_size(), 100);
+        assert_eq!(provider.tso_remain(), 100);
         for ts in 1001..=1010u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
@@ -557,23 +955,23 @@ pub mod tests {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
         for ts in 1101..=1300u64 {
             // renew on used-up, allocated: [1101, 1300]
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.get_ts().is_err()); // renew fail on used-up
+        provider.get_ts().unwrap_err(); // renew fail on used-up
 
         pd_cli.trigger_tso_failure();
-        assert!(provider.flush().is_err());
+        provider.flush().unwrap_err();
 
-        provider.flush().unwrap(); // allocated: [1301, 1700]
+        provider.flush().unwrap(); // allocated: [1301, 3300]
         pd_cli.trigger_tso_failure(); // make renew fail to verify used-up
-        for ts in 1301..=1700u64 {
+        for ts in 1301..=3300u64 {
             assert_eq!(TimeStamp::from(ts), provider.get_ts().unwrap())
         }
-        assert!(provider.get_ts().is_err());
+        provider.get_ts().unwrap_err();
     }
 }

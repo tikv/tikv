@@ -99,9 +99,9 @@ impl TestHook for FailpointHook {
     }
 }
 
-/// During panic, due to drop order, failpoints will not be cleared before tests exit.
-/// If tests wait for a sleep failpoint, the whole tests will hang. So we need a method
-/// to clear failpoints explicitly besides teardown.
+/// During panic, due to drop order, failpoints will not be cleared before tests
+/// exit. If tests wait for a sleep failpoint, the whole tests will hang. So we
+/// need a method to clear failpoints explicitly besides teardown.
 pub fn clear_failpoints() {
     FS.with(|s| s.borrow_mut().take());
 }

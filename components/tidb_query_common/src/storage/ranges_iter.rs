@@ -2,17 +2,17 @@
 
 use super::range::Range;
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum IterStatus {
     /// All ranges are consumed.
     Drained,
 
-    /// Last range is drained or this iteration is a fresh start so that caller should scan
-    /// on a new range.
+    /// Last range is drained or this iteration is a fresh start so that caller
+    /// should scan on a new range.
     NewRange(Range),
 
-    /// Last interval range is not drained and the caller should continue scanning without changing
-    /// the scan range.
+    /// Last interval range is not drained and the caller should continue
+    /// scanning without changing the scan range.
     Continue,
 }
 
@@ -23,13 +23,14 @@ pub enum IterStatus {
 /// - a flag indicating continuing last interval range
 /// - a flag indicating that all ranges are consumed
 ///
-/// If a new range is returned, caller can then scan unknown amount of key(s) within this new range.
-/// The caller must inform the structure so that it will emit a new range next time by calling
-/// `notify_drained()` after current range is drained. Multiple `notify_drained()` without `next()`
-/// will have no effect.
+/// If a new range is returned, caller can then scan unknown amount of key(s)
+/// within this new range. The caller must inform the structure so that it will
+/// emit a new range next time by calling `notify_drained()` after current range
+/// is drained. Multiple `notify_drained()` without `next()` will have no
+/// effect.
 pub struct RangesIterator {
-    /// Whether or not we are processing a valid range. If we are not processing a range, or there
-    /// is no range any more, this field is `false`.
+    /// Whether or not we are processing a valid range. If we are not processing
+    /// a range, or there is no range any more, this field is `false`.
     in_range: bool,
 
     iter: std::vec::IntoIter<Range>,

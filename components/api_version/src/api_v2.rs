@@ -50,7 +50,7 @@ impl KvFormat for ApiV2 {
         match key[0] {
             RAW_KEY_PREFIX => KeyMode::Raw,
             TXN_KEY_PREFIX => KeyMode::Txn,
-            TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::TiDB,
+            TIDB_META_KEY_PREFIX | TIDB_TABLE_KEY_PREFIX => KeyMode::Tidb,
             _ => KeyMode::Unknown,
         }
     }
@@ -143,8 +143,8 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // scope of raw keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key(user_key: &[u8], ts: Option<TimeStamp>) -> Key {
         let encoded_key = Key::from_raw(user_key);
         if let Some(ts) = ts {
@@ -156,13 +156,14 @@ impl KvFormat for ApiV2 {
     }
 
     // Note: `user_key` may not be `KeyMode::Raw`.
-    // E.g., `raw_xxx_range` interfaces accept an exclusive end key just beyond the scope of raw keys.
-    // The validity is ensured by client & Storage interfaces.
+    // E.g. `raw_xxx_range` interfaces accept an exclusive end key just beyond the
+    // scope of raw keys. The validity is ensured by client & Storage interfaces.
     fn encode_raw_key_owned(mut user_key: Vec<u8>, ts: Option<TimeStamp>) -> Key {
         let src_len = user_key.len();
         let encoded_len = MemComparableByteCodec::encoded_len(src_len);
 
-        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later, especially in raw write procedures.
+        // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later,
+        // especially in raw write procedures.
         user_key.reserve(encoded_len - src_len + number::U64_SIZE);
         user_key.resize(encoded_len, 0u8);
         MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);
@@ -248,8 +249,8 @@ impl ApiV2 {
 }
 
 // Note: `encoded_bytes` may not be `KeyMode::Raw`.
-// E.g., backup service accept an exclusive end key just beyond the scope of raw keys.
-// The validity is ensured by client & Storage interfaces.
+// E.g., backup service accept an exclusive end key just beyond the scope of raw
+// keys. The validity is ensured by client & Storage interfaces.
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
     bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
@@ -261,8 +262,8 @@ fn is_valid_encoded_key(encoded_key: &Key, with_ts: bool) -> bool {
     is_valid_encoded_bytes(encoded_key.as_encoded(), with_ts)
 }
 
-/// TimeStamp::zero is not acceptable, as such entries can not be retrieved by RawKV MVCC.
-/// See `RawMvccSnapshot::seek_first_key_value_cf`.
+/// TimeStamp::zero is not acceptable, as such entries can not be retrieved by
+/// RawKV MVCC. See `RawMvccSnapshot::seek_first_key_value_cf`.
 #[inline]
 fn is_valid_ts(ts: TimeStamp) -> bool {
     !ts.is_zero()

@@ -6,7 +6,7 @@ publish = false
 description = "Vector aggr functions of query engine to run TiDB pushed down executors"
 
 [dependencies]
-match_template = { path = "../match_template" }
+match-template = "0.0.1"
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }

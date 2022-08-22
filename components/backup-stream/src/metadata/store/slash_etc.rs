@@ -49,7 +49,7 @@ impl std::fmt::Debug for Key {
 }
 
 /// A value (maybe tombstone.)
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 enum Value {
     Val(Vec<u8>),
     Del,
@@ -83,7 +83,8 @@ impl Snapshot for WithRevision<SlashEtcStore> {
         }
 
         // use iterator operations (instead of collect all kv pairs in the range)
-        // if the test case get too slow. (How can we figure out whether there are more?)
+        // if the test case get too slow. (How can we figure out whether there are
+        // more?)
         let more = if extra.limit > 0 {
             let more = kvs.len() > extra.limit;
             kvs.truncate(extra.limit);

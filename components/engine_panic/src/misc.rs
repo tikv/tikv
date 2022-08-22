@@ -5,11 +5,11 @@ use engine_traits::{DeleteStrategy, MiscExt, Range, Result};
 use crate::engine::PanicEngine;
 
 impl MiscExt for PanicEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
+    fn flush_cfs(&self, wait: bool) -> Result<()> {
         panic!()
     }
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
+    fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         panic!()
     }
 

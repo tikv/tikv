@@ -19,7 +19,7 @@ use resource_metering::{Config, ResourceTagFactory};
 use tempfile::TempDir;
 use test_util::alloc_port;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, TikvConfig},
     storage::{
         lock_manager::DummyLockManager, RocksEngine, StorageApiV1, TestEngineBuilder,
         TestStorageBuilderApiV1,
@@ -50,7 +50,7 @@ pub struct TestSuite {
 
 impl TestSuite {
     pub fn new(cfg: resource_metering::Config) -> Self {
-        let (mut tikv_cfg, dir) = TiKvConfig::with_tmp().unwrap();
+        let (mut tikv_cfg, dir) = TikvConfig::with_tmp().unwrap();
         tikv_cfg.resource_metering = cfg.clone();
         let cfg_controller = ConfigController::new(tikv_cfg);
 

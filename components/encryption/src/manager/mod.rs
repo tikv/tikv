@@ -13,7 +13,7 @@ use std::{
 
 use crossbeam::channel::{self, select, tick};
 use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as DBEncryptionMethod, FileEncryptionInfo,
+    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
 };
 use fail::fail_point;
 use file_system::File;
@@ -23,7 +23,7 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, compat, Iv},
+    crypter::{self, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -194,11 +194,15 @@ impl Dicts {
 
     fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
-        let iv = Iv::new_ctr();
+        let iv = if method != EncryptionMethod::Plaintext {
+            Iv::new_ctr()
+        } else {
+            Iv::Empty
+        };
         let file = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
-            method: compat(method),
+            method,
             ..Default::default()
         };
         let file_num = {
@@ -243,7 +247,7 @@ impl Dicts {
 
         file_dict_file.remove(fname)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-        if file.method != compat(EncryptionMethod::Plaintext) {
+        if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
         } else {
             debug!("delete plaintext file"; "fname" => fname);
@@ -263,9 +267,9 @@ impl Dicts {
                     return Ok(None);
                 }
             };
-            // When an encrypted file exists in the file system, the file_dict must have info about
-            // this file. But the opposite is not true, this is because the actual file operation
-            // and file_dict operation are not atomic.
+            // When an encrypted file exists in the file system, the file_dict must have
+            // info about this file. But the opposite is not true, this is because the
+            // actual file operation and file_dict operation are not atomic.
             check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
             let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
@@ -275,7 +279,7 @@ impl Dicts {
         file_dict_file.insert(dst_fname, &file)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
-        if method != compat(EncryptionMethod::Plaintext) {
+        if method != EncryptionMethod::Plaintext {
             info!("link encrypted file"; "src" => src_fname, "dst" => dst_fname);
         } else {
             info!("link plaintext file"; "src" => src_fname, "dst" => dst_fname);
@@ -312,7 +316,7 @@ impl Dicts {
             // Generate a new data key if
             //   1. encryption method is not the same, or
             //   2. the current data key was exposed and the new master key is secure.
-            if compat(method) == key.method && !(key.was_exposed && master_key.is_secure()) {
+            if method == key.method && !(key.was_exposed && master_key.is_secure()) {
                 let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
                 match now.duration_since(creation_time) {
                     Ok(duration) => {
@@ -336,7 +340,7 @@ impl Dicts {
         let (key_id, key) = generate_data_key(method);
         let data_key = DataKey {
             key,
-            method: compat(method),
+            method,
             creation_time,
             was_exposed: false,
             ..Default::default()
@@ -466,7 +470,8 @@ impl DataKeyManager {
         Ok(Some(Self::from_dicts(dicts, args.method, master_key)?))
     }
 
-    /// Will block file operation for a considerable amount of time. Only used for debugging purpose.
+    /// Will block file operation for a considerable amount of time. Only used
+    /// for debugging purpose.
     pub fn retain_encrypted_files(&self, f: impl Fn(&str) -> bool) {
         let mut dict = self.dicts.file_dict.lock().unwrap();
         let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
@@ -493,7 +498,7 @@ impl DataKeyManager {
             Dicts::open(
                 &args.dict_path,
                 args.rotation_period,
-                &*master_key,
+                master_key,
                 args.enable_file_dictionary_log,
                 args.file_dictionary_rewrite_threshold,
             ),
@@ -559,7 +564,7 @@ impl DataKeyManager {
             ))
         })?;
         // Rewrite key_dict after replace master key.
-        dicts.save_key_dict(&*master_key)?;
+        dicts.save_key_dict(master_key)?;
 
         info!("encryption: persisted result after replace master key.");
         Ok(dicts)
@@ -592,7 +597,7 @@ impl DataKeyManager {
 
     pub fn create_file_for_write<P: AsRef<Path>>(&self, path: P) -> Result<EncrypterWriter<File>> {
         let file_writer = File::create(&path)?;
-        self.open_file_with_writer(path, file_writer, true /*create*/)
+        self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
     pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
@@ -614,9 +619,9 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
-            crypter::encryption_method_from_db_encryption_method(file.method),
+            crypter::from_engine_encryption_method(file.method),
             &file.key,
-            if file.method == DBEncryptionMethod::Plaintext {
+            if file.method == EtEncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -644,9 +649,9 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
-            crypter::encryption_method_from_db_encryption_method(file.method),
+            crypter::from_engine_encryption_method(file.method),
             &file.key,
-            if file.method == DBEncryptionMethod::Plaintext {
+            if file.method == EtEncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -683,9 +688,9 @@ impl DataKeyManager {
         let (_, file_dict) = FileDictionaryFile::open(
             dict_path,
             FILE_DICT_NAME,
-            true, /*enable_file_dictionary_log*/
+            true, // enable_file_dictionary_log
             1,
-            true, /*skip_rewrite*/
+            true, // skip_rewrite
         )?;
         if let Some(file_path) = file_path {
             if let Some(info) = file_dict.files.get(file_path) {
@@ -722,7 +727,7 @@ impl DataKeyManager {
         };
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::encryption_method_to_db_encryption_method(method),
+            method: crypter::to_engine_encryption_method(method),
             iv,
         };
         Ok(Some(encrypted_file))
@@ -749,10 +754,10 @@ impl EncryptionKeyManager for DataKeyManager {
                 // Return Plaintext if file is not found
                 // RocksDB requires this
                 let file = FileInfo::default();
-                let method = compat(EncryptionMethod::Plaintext);
+                let method = EncryptionMethod::Plaintext;
                 Ok(FileEncryptionInfo {
                     key: vec![],
-                    method: crypter::encryption_method_to_db_encryption_method(method),
+                    method: crypter::to_engine_encryption_method(method),
                     iv: file.iv,
                 })
             }
@@ -766,7 +771,7 @@ impl EncryptionKeyManager for DataKeyManager {
         let file = self.dicts.new_file(fname, self.method)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::encryption_method_to_db_encryption_method(file.method),
+            method: crypter::to_engine_encryption_method(file.method),
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
@@ -788,7 +793,7 @@ impl EncryptionKeyManager for DataKeyManager {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as DBEncryptionMethod;
+    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
     use matches::assert_matches;
     use tempfile::TempDir;
@@ -911,7 +916,7 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
-        assert_eq!(bar.method, DBEncryptionMethod::Plaintext);
+        assert_eq!(bar.method, EtEncryptionMethod::Plaintext);
     }
 
     // When enabling encryption, using insecure master key is not allowed.
@@ -1294,11 +1299,11 @@ mod tests {
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
 
         let result = new_key_manager(&tmp_dir, None, wrong_key, previous);
-        // When the master key is invalid, the key manager left a empty file dict and return errors.
+        // When the master key is invalid, the key manager left a empty file dict and
+        // return errors.
         assert!(result.is_err());
         let previous = Box::new(PlaintextBackend::default()) as Box<dyn Backend>;
-        let result = new_key_manager(&tmp_dir, None, right_key, previous);
-        assert!(result.is_ok());
+        new_key_manager(&tmp_dir, None, right_key, previous).unwrap();
     }
 
     #[test]
@@ -1317,7 +1322,7 @@ mod tests {
         {
             let raw = File::create(&path).unwrap();
             let mut f = manager
-                .open_file_with_writer(&path, raw, false /*create*/)
+                .open_file_with_writer(&path, raw, false /* create */)
                 .unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
@@ -1333,6 +1338,114 @@ mod tests {
             let mut f = manager.open_file_for_read(&path).unwrap();
             assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
             assert_eq!(buffer, content);
+        }
+    }
+
+    fn generate_mock_file<P: AsRef<Path>>(dkm: Option<&DataKeyManager>, path: P, content: &String) {
+        use std::io::Write;
+        match dkm {
+            Some(manager) => {
+                // Encryption enabled. Use DataKeyManager to manage file.
+                let mut f = manager.create_file_for_write(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+            None => {
+                // Encryption disabled. Write content in plaintext.
+                let mut f = File::create(&path).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+        }
+    }
+
+    fn check_mock_file_content<P: AsRef<Path>>(
+        dkm: Option<&DataKeyManager>,
+        path: P,
+        expected: &String,
+    ) {
+        use std::io::Read;
+
+        match dkm {
+            Some(manager) => {
+                let mut buffer = String::new();
+                let mut f = manager.open_file_for_read(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+            None => {
+                let mut buffer = String::new();
+                let mut f = File::open(&path).unwrap();
+                assert_eq!(f.read_to_string(&mut buffer).unwrap(), expected.len());
+                assert_eq!(buffer, expected.to_string());
+            }
+        }
+    }
+
+    fn test_change_method(from: EncryptionMethod, to: EncryptionMethod) {
+        if from == to {
+            return;
+        }
+
+        let generate_file_name = |method| format!("{:?}", method);
+        let generate_file_content = |method| format!("Encrypted with {:?}", method);
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (key_path, _tmp_key_dir) = create_key_file("key");
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let path_to_file1 = tmp_dir.path().join(generate_file_name(from));
+        let content1 = generate_file_content(from);
+
+        if from == EncryptionMethod::Plaintext {
+            // encryption not enabled.
+            let mut args = def_data_key_args(&tmp_dir);
+            args.method = EncryptionMethod::Plaintext;
+            let manager =
+                DataKeyManager::new(master_key_backend, Box::new(move || Ok(previous)), args)
+                    .unwrap();
+            assert!(manager.is_none());
+            generate_mock_file(None, &path_to_file1, &content1);
+            check_mock_file_content(None, &path_to_file1, &content1);
+        } else {
+            let manager =
+                new_key_manager(&tmp_dir, Some(from), master_key_backend, previous).unwrap();
+
+            generate_mock_file(Some(&manager), &path_to_file1, &content1);
+            check_mock_file_content(Some(&manager), &path_to_file1, &content1);
+            // Close old manager
+            drop(manager);
+        }
+
+        // re-open with new encryption/plaintext algorithm.
+        let master_key_backend =
+            Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
+        let previous = new_mock_backend() as Box<dyn Backend>;
+        let manager = new_key_manager(&tmp_dir, Some(to), master_key_backend, previous).unwrap();
+        let path_to_file2 = tmp_dir.path().join(generate_file_name(to));
+
+        let content2 = generate_file_content(to);
+        generate_mock_file(Some(&manager), &path_to_file2, &content2);
+        check_mock_file_content(Some(&manager), &path_to_file2, &content2);
+        // check old file content
+        check_mock_file_content(Some(&manager), &path_to_file1, &content1);
+    }
+
+    #[test]
+    fn test_encryption_algorithm_switch() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+
+        let method_list = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            EncryptionMethod::Sm4Ctr,
+        ];
+        for from in method_list {
+            for to in method_list {
+                test_change_method(from, to)
+            }
         }
     }
 }

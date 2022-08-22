@@ -7,7 +7,8 @@ use tidb_query_datatype::{builder::FieldTypeBuilder, EvalType, FieldTypeAccessor
 use tidb_query_expr::{impl_cast::get_cast_fn_rpn_node, RpnExpression, RpnExpressionBuilder};
 use tipb::{Expr, FieldType};
 
-/// Checks whether or not there is only one child and the child expression is supported.
+/// Checks whether or not there is only one child and the child expression is
+/// supported.
 pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     if aggr_def.get_children().len() != 1 {
         return Err(other_err!(
@@ -23,7 +24,8 @@ pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     Ok(())
 }
 
-/// Rewrites the expression to insert necessary cast functions for SUM and AVG aggregate functions.
+/// Rewrites the expression to insert necessary cast functions for SUM and AVG
+/// aggregate functions.
 ///
 /// See `typeInfer4Sum` and `typeInfer4Avg` in TiDB.
 ///
@@ -63,7 +65,8 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
     Ok(())
 }
 
-/// Rewrites the expression to insert necessary cast functions for Bit operation family functions.
+/// Rewrites the expression to insert necessary cast functions for Bit operation
+/// family functions.
 pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
     let ret_field_type = exp.ret_field_type(schema);
     let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.as_accessor().tp()));

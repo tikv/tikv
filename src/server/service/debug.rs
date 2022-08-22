@@ -61,7 +61,8 @@ pub struct Service<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> {
 }
 
 impl<ER: RaftEngine, EK: KvEngine, T: RaftStoreRouter<EK>> Service<ER, EK, T> {
-    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a
+    /// `GcWorker`.
     pub fn new(
         engines: Engines<RocksEngine, ER>,
         pool: Handle,
