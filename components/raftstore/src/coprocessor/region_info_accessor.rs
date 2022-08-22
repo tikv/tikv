@@ -170,7 +170,7 @@ impl RegionChangeObserver for RegionEventListener {
         let region = context.region().clone();
         let event = match event {
             RegionChangeEvent::Create => RaftStoreEvent::CreateRegion { region, role },
-            RegionChangeEvent::Update => RaftStoreEvent::UpdateRegion { region, role },
+            RegionChangeEvent::Update(_) => RaftStoreEvent::UpdateRegion { region, role },
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
             RegionChangeEvent::UpdateBuckets(buckets) => {
                 RaftStoreEvent::UpdateRegionBuckets { region, buckets }
