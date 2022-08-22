@@ -1,5 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, io::Write};
+
+use kvproto::pdpb;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -31,21 +34,22 @@ pub use self::metrics_reader::HistogramReader;
 
 mod metrics_reader;
 
-use std::collections::HashMap;
-
-use kvproto::pdpb;
 pub type RecordPairVec = Vec<pdpb::RecordPair>;
 
 pub fn dump() -> String {
     let mut buffer = vec![];
+    dump_to(&mut buffer);
+    String::from_utf8(buffer).unwrap()
+}
+
+pub fn dump_to(w: &mut impl Write) {
     let encoder = TextEncoder::new();
     let metric_families = prometheus::gather();
     for mf in metric_families {
-        if let Err(e) = encoder.encode(&[mf], &mut buffer) {
+        if let Err(e) = encoder.encode(&[mf], w) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
     }
-    String::from_utf8(buffer).unwrap()
 }
 
 make_auto_flush_static_metric! {
