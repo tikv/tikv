@@ -42,6 +42,8 @@ pub struct Config {
     #[online_config(skip)]
     pub prevote: bool,
     #[online_config(skip)]
+    pub follower_repl: bool,
+    #[online_config(skip)]
     pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
@@ -298,6 +300,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             prevote: true,
+            follower_repl: false,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),
             raft_base_tick_interval: ReadableDuration::secs(1),
@@ -716,6 +719,9 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["prevote"])
             .set((self.prevote as i32).into());
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["follower_repl"])
+            .set((self.follower_repl as i32).into());
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["capacity"])

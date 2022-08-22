@@ -354,6 +354,10 @@
 ## election.
 # prevote = true
 
+## Whether to enable follower replication.
+## Follower replication reduces the cross-AZ traffic for write-flow on cloud.
+# follower-repl = false
+
 ## The path to RaftDB directory.
 ## If not set, it will be `{data-dir}/raft`.
 ## If there are multiple disks on the machine, storing the data of Raft RocksDB on a different disk

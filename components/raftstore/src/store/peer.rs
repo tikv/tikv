@@ -933,7 +933,7 @@ where
             check_quorum: true,
             skip_bcast_commit: true,
             pre_vote: cfg.prevote,
-            follower_repl: true,
+            follower_repl: cfg.follower_repl,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             ..Default::default()
         };
