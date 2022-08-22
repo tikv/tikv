@@ -675,7 +675,7 @@ where
             &snap_key,
             Some(&s),
         );
-        info!(
+        debug!(
             "pre apply snapshot";
             "region_id" => region_id,
             "peer_id" => peer_id,
