@@ -162,13 +162,12 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.take_context(),
             )
         } else {
-            // the inconsistent naming is for compatibility with the old version :-(
             let pessimistic_actions = req.take_pessimistic_actions();
             let mutations = req
                 .take_mutations()
                 .into_iter()
                 .map(Into::into)
-                .zip(pessimistic_actions.into_iter())
+                .zip(pessimistic_actions)
                 .collect();
             PrewritePessimistic::new(
                 mutations,

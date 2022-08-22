@@ -793,8 +793,9 @@ impl PrewriteKind for Pessimistic {
 /// The type of mutation and, optionally, its extra information, differing for
 /// the optimistic and pessimistic transaction.
 /// For optimistic txns, this is `Mutation`.
-/// For pessimistic txns, this is `(Mutation, bool)`, where the bool indicates
-/// whether the mutation takes a pessimistic lock or not.
+/// For pessimistic txns, this is `(Mutation, PessimisticAction)`, where the
+/// action indicates what kind of operations(checks) need to be performed.
+/// The action also implies the type of the lock status.
 trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn into_mutation(self) -> Mutation;
