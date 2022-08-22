@@ -6,7 +6,7 @@ use std::{
     mem,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
-        mpsc::Sender,
+        mpsc::{self, Sender},
         Arc, Mutex,
     },
     vec::IntoIter,
@@ -16,8 +16,8 @@ use api_version::{ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::FlowInfo;
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, KvEngine, MiscExt, Range, WriteBatch, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
+    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -261,8 +261,11 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
     }
 }
 
-// Return the iterators with the item to be (Key, Region) where the key belongs
-// to the region and the region of the first key
+// If `region_or_provider` is Region, it means all keys are located in the same
+// region. If `region_or_provider` is RegionInfoProvider, then we should find
+// all regions of thoes keys.
+// We return an iterator which yeild item of `Key` and the region taht the key
+// is located. We also return the reion of the first key.
 fn get_keys_in_regions(
     store_id: u64,
     keys: Vec<Key>,
@@ -292,8 +295,33 @@ fn get_keys_in_regions(
                 let keys = keys.into_iter().peekable();
                 Ok((Box::new(KeysInRegions { keys, regions }), region))
             } else {
-                // region_info_provider.seek_region
-                unimplemented!()
+                // We only have on key.
+                let key = keys.first().unwrap().as_encoded();
+
+                let (tx, rx) = mpsc::channel();
+                box_try!(region_provider.seek_region(
+                    key,
+                    Box::new(move |iter| {
+                        for info in iter {
+                            if find_peer(&info.region, store_id).is_some() {
+                                let _ = tx.send(Some(info.region.clone()));
+                                return;
+                            }
+                        }
+                        let _ = tx.send(None);
+                    }),
+                ));
+
+                let region = match rx.recv() {
+                    Ok(Some(region)) => region,
+                    _ => unimplemented!(), // todo(SpadeA): when it can receive error or None?
+                };
+
+                let region_clone = region.clone();
+                Ok((
+                    Box::new(keys.into_iter().map(move |k| (k, region.clone()))),
+                    region_clone,
+                ))
             }
         }
     }
@@ -468,6 +496,16 @@ where
         region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
         let count = keys.len();
+        let range_start_key = keys.first().unwrap().clone();
+        let range_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(0);
+            Key::from_raw(&k)
+        };
 
         let (mut keys, region) = get_keys_in_regions(store_id, keys, region_or_provider)?;
         let mut current_region_id = region.id;
@@ -489,6 +527,7 @@ where
                 )
             }
         };
+        reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -529,6 +568,7 @@ where
                             kv_engine,
                         )
                     };
+                    reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
                 }
 
                 if gc_info.found_versions > 0 {
@@ -549,6 +589,7 @@ where
                         kv_engine,
                     )
                 };
+                reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
                 txn = Self::new_txn();
             }
         }

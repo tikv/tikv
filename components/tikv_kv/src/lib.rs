@@ -372,6 +372,7 @@ pub trait Snapshot: Sync + Send + Clone {
     fn lower_bound(&self) -> Option<&[u8]> {
         None
     }
+
     // The maximum key can be fetched from the snapshot should less than the upper
     // bound.
     #[inline]
