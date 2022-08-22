@@ -11,6 +11,7 @@
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
+    Mutex,
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -22,12 +23,15 @@ use engine_test::{
 use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
 use kvproto::{metapb::Store, raft_serverpb::RaftMessage};
 use pd_client::RpcClient;
-use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{fsm::store::StoreMeta, Config, PdTask, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{create_store_batch_system, Bootstrap, StoreRouter, StoreSystem};
 use slog::{o, Logger};
 use tempfile::TempDir;
 use test_pd::mocker::Service;
-use tikv_util::config::VersionTrack;
+use tikv_util::{
+    config::VersionTrack,
+    worker::{LazyWorker, Scheduler, Worker},
+};
 
 mod test_election;
 
@@ -107,6 +111,10 @@ impl TestNode {
             self.store.clone(),
             self.logger.clone(),
         );
+        
+        let pd_worker = LazyWorker::new("test-pd-worker");
+        let raft_log_worker = Worker::new("raftlog-fetch-worker");
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(10)));
         system
             .start(
                 self.store.clone(),
@@ -115,6 +123,9 @@ impl TestNode {
                 self.factory.clone().unwrap(),
                 trans,
                 &router,
+                pd_worker, 
+                raft_log_worker,
+                store_meta,
             )
             .unwrap();
         self.system = Some(system);

@@ -377,7 +377,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: &StoreRouter<EK, ER>,
-        raft_router: RaftRouter<EK, ER>,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         raft_log_worker: Worker,
         store_meta: Arc<Mutex<StoreMeta>>,
