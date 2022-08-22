@@ -134,6 +134,8 @@ pub struct MvccReader<S: EngineSnapshot> {
 
     fill_cache: bool,
 
+    pub hint_min_ts: Option<TimeStamp>,
+
     // The term and the epoch version when the snapshot is created. They will be zero
     // if the two properties are not available.
     term: u64,
@@ -152,6 +154,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache,
+            hint_min_ts: None,
             term: 0,
             version: 0,
         }
@@ -167,6 +170,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
+            hint_min_ts: None,
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
         }
@@ -434,6 +438,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
+                .hint_min_ts(self.hint_min_ts)
                 .build()?;
             self.write_cursor = Some(cursor);
         }

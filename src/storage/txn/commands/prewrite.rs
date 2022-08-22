@@ -445,6 +445,9 @@ impl<K: PrewriteKind> Prewriter<K> {
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
             context.statistics,
         );
+        if !self.mutations.iter().any(|m| m.need_constraint_check()) {
+            reader.reader.reader.hint_min_ts = Some(self.start_ts);
+        }
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.
 
@@ -796,6 +799,7 @@ impl PrewriteKind for Pessimistic {
 trait MutationLock {
     fn is_pessimistic_lock(&self) -> bool;
     fn into_mutation(self) -> Mutation;
+    fn need_constraint_check(&self) -> bool;
 }
 
 impl MutationLock for Mutation {
@@ -806,6 +810,13 @@ impl MutationLock for Mutation {
     fn into_mutation(self) -> Mutation {
         self
     }
+
+    fn need_constraint_check(&self) -> bool {
+        match &self {
+            Mutation::Insert(..) | Mutation::CheckNotExists(..) => true,
+            _ => false,
+        }
+    }
 }
 
 impl MutationLock for (Mutation, bool) {
@@ -815,6 +826,14 @@ impl MutationLock for (Mutation, bool) {
 
     fn into_mutation(self) -> Mutation {
         self.0
+    }
+
+    fn need_constraint_check(&self) -> bool {
+        if self.1 {
+            false
+        } else {
+            self.0.need_constraint_check()
+        }
     }
 }
 
