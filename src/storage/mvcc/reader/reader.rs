@@ -626,42 +626,51 @@ impl<S: EngineSnapshot> MvccReader<S> {
     }
 }
 
-// MvccScaner is used to scan all the MVCC versions of keys within the given key
-// range.
-pub struct MvccScaner<S: EngineSnapshot> {
+// MvccScanner is used to scan all the MVCC versions of keys within the given
+// key range that are written later than the given `min_version`.
+pub struct MvccScanner<S: EngineSnapshot> {
+    pub statistics: Statistics,
     snapshot: S,
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
+
+    batch_size: usize,
     min_version: TimeStamp,
     start_key: Key,
     end_key: Key,
 }
 
-impl<S: EngineSnapshot> MvccScaner<S> {
+impl<S: EngineSnapshot> MvccScanner<S> {
     pub fn new(
         snapshot: S,
+        batch_size: usize,
         min_version: TimeStamp,
         start_key: Key,
         end_key: Key,
-    ) -> Result<MvccScaner<S>> {
-        Ok(MvccScaner {
+    ) -> MvccScanner<S> {
+        MvccScanner {
+            statistics: Statistics::default(),
             snapshot,
             lock_cursor: None,
             write_cursor: None,
+            batch_size,
             min_version,
             start_key,
             end_key,
-        })
+        }
     }
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+            let mut cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
                 .fill_cache(false)
                 .scan_mode(ScanMode::Forward)
                 // Scan the MVCC versions after the `self.min_version` as possible.
                 .hint_min_ts(Some(self.min_version))
+                .range(Some(self.start_key.clone()), Some(self.end_key.clone()))
                 .build()?;
+            let _ok = cursor.seek_to_first(&mut self.statistics.write);
+            // TODO: handle the result of `seek_to_first` properly.
             self.write_cursor = Some(cursor);
         }
         Ok(())
@@ -669,14 +678,62 @@ impl<S: EngineSnapshot> MvccScaner<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
+            let mut cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(false)
                 .scan_mode(ScanMode::Forward)
                 .hint_min_ts(Some(self.min_version))
+                .range(Some(self.start_key.clone()), Some(self.end_key.clone()))
                 .build()?;
+            let _ok = cursor.seek_to_first(&mut self.statistics.lock);
+            // TODO: handle the result of `seek_to_first` properly.
             self.lock_cursor = Some(cursor);
         }
         Ok(())
+    }
+
+    /// Scan all the MVCC versions of keys within the given key range in
+    /// `CF_WRITE` that are committed after the `min_version`.
+    pub fn scan_next_batch_write(&mut self) -> Result<Vec<(Key, Write)>> {
+        self.create_write_cursor()?;
+        let cursor = self.write_cursor.as_mut().unwrap();
+        let mut ok = cursor.valid()?;
+        if !ok {
+            return Ok(vec![]);
+        }
+        let mut writes = Vec::with_capacity(self.batch_size);
+        while ok && writes.len() < self.batch_size {
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+            let commit_ts = key.decode_ts()?;
+            if commit_ts > self.min_version {
+                writes.push((
+                    key,
+                    WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned(),
+                ));
+            }
+            ok = cursor.next(&mut self.statistics.write);
+        }
+        Ok(writes)
+    }
+
+    /// Scan all the MVCC versions of keys within the given key range in
+    /// `CF_LOCK` that are written after the `min_version`.
+    pub fn scan_next_batch_lock(&mut self) -> Result<Vec<(Key, Lock)>> {
+        self.create_lock_cursor()?;
+        let cursor = self.lock_cursor.as_mut().unwrap();
+        let mut ok = cursor.valid()?;
+        if !ok {
+            return Ok(vec![]);
+        }
+        let mut locks = Vec::with_capacity(self.batch_size);
+        while ok && locks.len() < self.batch_size {
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
+            let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?.to_owned();
+            if lock.ts > self.min_version {
+                locks.push((key, lock));
+            }
+            ok = cursor.next(&mut self.statistics.lock);
+        }
+        Ok(locks)
     }
 }
 
@@ -2062,6 +2119,174 @@ pub mod tests {
             let (k, ts) = (Key::from_raw(k), 199.into());
             reader.seek_write(&k, ts).unwrap();
             assert_eq!(reader.statistics.write.seek_tombstone, *tombstones);
+        }
+    }
+
+    #[test]
+    fn test_mvcc_scanner() {
+        let writes = vec![
+            (
+                Key::from_raw(b"a"),
+                Write::new(WriteType::Put, TimeStamp::new(1), None),
+                TimeStamp::new(2), // CommitTS
+            ),
+            (
+                Key::from_raw(b"b"),
+                Write::new(WriteType::Put, TimeStamp::new(4), None),
+                TimeStamp::new(5),
+            ),
+            (
+                Key::from_raw(b"c"),
+                Write::new(WriteType::Put, TimeStamp::new(7), None),
+                TimeStamp::new(8),
+            ),
+        ];
+        let locks = vec![
+            (
+                Key::from_raw(b"d"),
+                Lock::new(
+                    LockType::Put,
+                    b"d".to_vec(),
+                    TimeStamp::new(3),
+                    0,
+                    None,
+                    TimeStamp::zero(),
+                    0,
+                    TimeStamp::zero(),
+                ),
+            ),
+            (
+                Key::from_raw(b"e"),
+                Lock::new(
+                    LockType::Put,
+                    b"e".to_vec(),
+                    TimeStamp::new(6),
+                    0,
+                    None,
+                    TimeStamp::zero(),
+                    0,
+                    TimeStamp::zero(),
+                ),
+            ),
+            (
+                Key::from_raw(b"f"),
+                Lock::new(
+                    LockType::Put,
+                    b"f".to_vec(),
+                    TimeStamp::new(9),
+                    0,
+                    None,
+                    TimeStamp::zero(),
+                    0,
+                    TimeStamp::zero(),
+                ),
+            ),
+        ];
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+        let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
+        for (key, write_record, commit_ts) in writes.iter() {
+            txn.put_write(key.clone(), *commit_ts, write_record.as_ref().to_bytes());
+        }
+        for (key, lock) in locks.iter() {
+            txn.put_lock(key.clone(), lock);
+        }
+        write(&engine, &Context::default(), txn.into_modifies());
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        struct Case {
+            min_version: TimeStamp,
+            start_key: Key,
+            end_key: Key,
+            expected_writes: Vec<(Key, Write, TimeStamp)>,
+            expected_locks: Vec<(Key, Lock)>,
+        }
+        let cases = vec![
+            // Scan all keys in `CF_WRITE` and `CF_LOCK`.
+            Case {
+                min_version: 1.into(),
+                start_key: Key::from_raw(b"a"),
+                end_key: Key::from_raw(b"z"),
+                expected_writes: writes.clone(),
+                expected_locks: locks.clone(),
+            },
+            // Scan the keys within the given range in `CF_WRITE` and `CF_LOCK`.
+            Case {
+                min_version: 1.into(),
+                start_key: Key::from_raw(b"b"),
+                end_key: Key::from_raw(b"f"),
+                expected_writes: writes[1..=2].to_vec(),
+                expected_locks: locks[0..=1].to_vec(),
+            },
+            // Scan the keys written later than the given version in `CF_WRITE` and `CF_LOCK`.
+            Case {
+                min_version: 2.into(),
+                start_key: Key::from_raw(b"a"),
+                end_key: Key::from_raw(b"z"),
+                expected_writes: writes[1..=2].to_vec(),
+                expected_locks: locks.clone(),
+            },
+            // Scan the keys within the given range and written later than the given version in
+            // `CF_WRITE` and `CF_LOCK`.
+            Case {
+                min_version: 7.into(),
+                start_key: Key::from_raw(b"b"),
+                end_key: Key::from_raw(b"f"),
+                expected_writes: writes[2..].to_vec(),
+                expected_locks: vec![],
+            },
+        ];
+        let batch_size = writes.len();
+        for (case_idx, case) in cases.iter().enumerate() {
+            let mut reader = MvccScanner::new(
+                snapshot.clone(),
+                batch_size,
+                case.min_version,
+                case.start_key.clone(),
+                case.end_key.clone(),
+            );
+            let scanned_writes = reader.scan_next_batch_write().unwrap();
+            assert_eq!(
+                scanned_writes.len(),
+                case.expected_writes.len(),
+                "case #{}",
+                case_idx
+            );
+            for (idx, (scanned_key, scanned_write_record)) in scanned_writes.iter().enumerate() {
+                assert_eq!(
+                    *scanned_key,
+                    case.expected_writes[idx]
+                        .0
+                        .clone()
+                        .append_ts(case.expected_writes[idx].2),
+                    "case #{}",
+                    case_idx
+                );
+                assert_eq!(
+                    *scanned_write_record, case.expected_writes[idx].1,
+                    "case #{}",
+                    case_idx
+                );
+            }
+            let scanned_locks = reader.scan_next_batch_lock().unwrap();
+            assert_eq!(
+                scanned_locks.len(),
+                case.expected_locks.len(),
+                "case #{}",
+                case_idx
+            );
+            for (idx, (scanned_key, scanned_lock_record)) in scanned_locks.iter().enumerate() {
+                assert_eq!(
+                    *scanned_key, case.expected_locks[idx].0,
+                    "case #{}",
+                    case_idx
+                );
+                assert_eq!(
+                    *scanned_lock_record, case.expected_locks[idx].1,
+                    "case #{}",
+                    case_idx
+                );
+            }
         }
     }
 }

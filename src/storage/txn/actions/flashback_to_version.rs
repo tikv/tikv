@@ -6,6 +6,8 @@ use crate::storage::{
     Snapshot,
 };
 
+const BATCH_SIZE: usize = 1024;
+
 pub fn flashback_to_version<S: Snapshot>(
     txn: &mut MvccTxn,
     reader: &mut MvccReader<S>,
