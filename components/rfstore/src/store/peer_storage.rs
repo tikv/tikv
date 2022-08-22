@@ -478,7 +478,7 @@ impl PeerStorage {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(&mut ctx.raft_wb, false);
         }
-        write_peer_state(&mut ctx.raft_wb, &region);
+        write_peer_state(&mut ctx.raft_wb, self.store_id, &region);
         let last_index = snap.get_metadata().get_index();
         let last_term = snap.get_metadata().get_term();
         self.raft_state.last_index = last_index;
@@ -487,14 +487,11 @@ impl PeerStorage {
         self.last_term = last_term;
         self.apply_state.applied_index = last_index;
         self.apply_state.applied_index_term = last_term;
-        ctx.raft_wb.set_state(
-            region.get_id(),
-            KV_ENGINE_META_KEY,
-            &change_set.write_to_bytes().unwrap(),
-        );
+        let shard_meta = ShardMeta::new(self.store_id, &change_set);
+        write_engine_meta(&mut ctx.raft_wb, &shard_meta);
         ctx.raft_wb
             .truncate_raft_log(region.get_id(), last_index, last_term);
-        self.shard_meta = Some(kvengine::ShardMeta::new(self.store_id, &change_set));
+        self.shard_meta = Some(shard_meta);
         self.region = region;
         self.snap_state = SnapState::Applying;
         Ok(change_set)
@@ -608,7 +605,13 @@ pub fn write_initial_raft_state(
     );
 }
 
-pub fn write_peer_state(raft_wb: &mut rfengine::WriteBatch, region: &metapb::Region) {
+pub fn write_peer_state(
+    raft_wb: &mut rfengine::WriteBatch,
+    store_id: u64,
+    region: &metapb::Region,
+) {
+    let tag = PeerTag::new(store_id, RegionIDVer::from_region(region));
+    info!("{} write peer state", tag);
     let mut region_state = raft_serverpb::RegionLocalState::default();
     region_state.set_state(PeerState::Normal);
     region_state.set_region(region.clone());
@@ -616,6 +619,11 @@ pub fn write_peer_state(raft_wb: &mut rfengine::WriteBatch, region: &metapb::Reg
     let epoch = region.get_region_epoch();
     let key = region_state_key(epoch.get_version(), epoch.get_conf_ver());
     raft_wb.set_state(region.get_id(), &key, &state_bin);
+}
+
+pub fn write_engine_meta(raft_wb: &mut rfengine::WriteBatch, meta: &ShardMeta) {
+    info!("{} write engine meta, sequence: {}", meta.tag(), meta.seq);
+    raft_wb.set_state(meta.id, KV_ENGINE_META_KEY, &meta.marshal());
 }
 
 pub fn encode_snap_data(region: &metapb::Region, change_set: &kvenginepb::ChangeSet) -> Bytes {

@@ -15,7 +15,9 @@ use engine_traits::{CFNamesExt, MiscExt};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    metapb::Region,
+    pdpb,
     raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest,
         SplitRequest,
@@ -38,7 +40,7 @@ use tikv_util::{
 use yatp::Remote;
 
 use crate::{
-    store::{Callback, CasualMessage, PeerMsg, StoreInfo},
+    store::{Callback, CasualMessage, PeerMsg, PeerTag, RegionIDVer, StoreInfo},
     RaftRouter, RaftStoreRouter,
 };
 
@@ -339,9 +341,15 @@ impl PdRunner {
         }
     }
 
+    fn peer_tag(&self, region: &Region) -> PeerTag {
+        let id_ver = RegionIDVer::from_region(region);
+        PeerTag::new(self.store_id, id_ver)
+    }
+
     // Note: The parameter doesn't contain `self` because this function may
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
+        tag: PeerTag,
         router: RaftRouter,
         _scheduler: Scheduler<PdTask>,
         pd_client: Arc<dyn PdClient>,
@@ -355,7 +363,7 @@ impl PdRunner {
     ) {
         if split_keys.is_empty() {
             info!("empty split key, skip ask batch split";
-                "region_id" => region.get_id());
+                "region" => tag);
             return;
         }
         let resp = pd_client.ask_batch_split(region.clone(), split_keys.len());
@@ -364,7 +372,7 @@ impl PdRunner {
                 Ok(mut resp) => {
                     info!(
                         "try to batch split region";
-                        "region_id" => region.get_id(),
+                        "region" => tag,
                         "new_region_ids" => ?resp.get_ids(),
                         "region" => ?region,
                         "task" => task,
@@ -382,7 +390,7 @@ impl PdRunner {
                 Err(e) => {
                     warn!(
                         "ask batch split failed";
-                        "region_id" => region.get_id(),
+                        "region" => tag,
                         "err" => ?e,
                     );
                 }
@@ -598,6 +606,7 @@ impl PdRunner {
     fn handle_validate_peer(&self, local_region: metapb::Region, peer: metapb::Peer) {
         let router = self.router.clone();
         let resp = self.pd_client.get_region_by_id(local_region.get_id());
+        let tag = self.peer_tag(&local_region);
         let f = async move {
             match resp.await {
                 Ok(Some(pd_region)) => {
@@ -612,7 +621,7 @@ impl PdRunner {
                         info!(
                             "local region epoch is greater the \
                              region epoch in PD ignore validate peer";
-                            "region_id" => local_region.get_id(),
+                            "region" => tag,
                             "peer_id" => peer.get_id(),
                             "local_region_epoch" => ?local_region.get_region_epoch(),
                             "pd_region_epoch" => ?pd_region.get_region_epoch()
@@ -633,7 +642,7 @@ impl PdRunner {
                         info!(
                             "peer is not a valid member of region, to be \
                              destroyed soon";
-                            "region_id" => local_region.get_id(),
+                            "region" => tag,
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
                         );
@@ -644,7 +653,7 @@ impl PdRunner {
                     } else {
                         info!(
                             "peer is still a valid member of region";
-                            "region_id" => local_region.get_id(),
+                            "region" => tag,
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region
                         );
@@ -658,7 +667,7 @@ impl PdRunner {
                     // TODO: handle merge
                 }
                 Err(e) => {
-                    error!("get region failed"; "err" => ?e);
+                    error!("{} get region failed", tag; "err" => ?e);
                 }
             }
         };
@@ -670,10 +679,11 @@ impl PdRunner {
         let store_id = self.store_id;
 
         let fut = self.pd_client
-            .handle_region_heartbeat_response(self.store_id, Box::new(move |mut resp: pdpb::RegionHeartbeatResponse| {
+            .handle_region_heartbeat_response(store_id, Box::new(move |mut resp: pdpb::RegionHeartbeatResponse| {
                 let region_id = resp.get_region_id();
                 let epoch = resp.take_region_epoch();
                 let peer = resp.take_target_peer();
+                let tag = PeerTag::new(store_id, RegionIDVer::new(region_id, epoch.version));
 
                 if resp.has_change_peer() {
                     PD_HEARTBEAT_COUNTER_VEC
@@ -683,7 +693,7 @@ impl PdRunner {
                     let mut change_peer = resp.take_change_peer();
                     info!(
                         "try to change peer";
-                        "region_id" => region_id,
+                        "region" => tag,
                         "change_type" => ?change_peer.get_change_type(),
                         "peer" => ?change_peer.get_peer()
                     );
@@ -700,7 +710,7 @@ impl PdRunner {
                     let mut change_peer_v2 = resp.take_change_peer_v2();
                     info!(
                         "try to change peer";
-                        "region_id" => region_id,
+                        "region" => tag,
                         "changes" => ?change_peer_v2.get_changes(),
                         "kind" => ?ConfChangeKind::confchange_kind(change_peer_v2.get_changes().len()),
                     );
@@ -714,7 +724,7 @@ impl PdRunner {
                     let mut transfer_leader = resp.take_transfer_leader();
                     info!(
                         "try to transfer leader";
-                        "region_id" => region_id,
+                        "region" => tag,
                         "from_peer" => ?peer,
                         "to_peer" => ?transfer_leader.get_peer()
                     );
@@ -726,7 +736,7 @@ impl PdRunner {
                         .inc();
 
                     let mut split_region = resp.take_split_region();
-                    info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
+                    info!("try to split"; "region" => tag, "region_epoch" => ?epoch);
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
                         CasualMessage::SplitRegion {
                             region_epoch: epoch,
@@ -808,7 +818,10 @@ impl PdRunner {
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
             None => {}
-            Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
+            Some(_) => {
+                let tag = PeerTag::new(self.store_id, RegionIDVer::new(region_id, 0));
+                info!("remove peer statistic record in pd"; "region" => tag)
+            }
         }
     }
 
@@ -832,6 +845,7 @@ impl PdRunner {
     ) {
         let pd_client = self.pd_client.clone();
         let concurrency_manager = self.concurrency_manager.clone();
+        let tag = PeerTag::new(self.store_id, RegionIDVer::new(region_id, 0));
         let f = async move {
             let mut success = false;
             while txn_ext.max_ts_sync_status.load(Ordering::SeqCst) == initial_status {
@@ -851,19 +865,16 @@ impl PdRunner {
                         break;
                     }
                     Err(e) => {
-                        warn!(
-                            "failed to update max timestamp for region {}: {:?}",
-                            region_id, e
-                        );
+                        warn!("failed to update max timestamp for region {}: {:?}", tag, e);
                     }
                 }
             }
             if success {
-                info!("succeed to update max timestamp"; "region_id" => region_id);
+                info!("succeed to update max timestamp"; "region" => tag);
             } else {
                 info!(
                     "updating max timestamp is stale";
-                    "region_id" => region_id,
+                    "region" => tag,
                     "initial_status" => initial_status,
                 );
             }
@@ -878,7 +889,7 @@ impl PdRunner {
         let delay = false;
 
         if delay {
-            info!("[failpoint] delay update max ts for 1s"; "region_id" => region_id);
+            info!("[failpoint] delay update max ts for 1s"; "region" => tag);
             let deadline = Instant::now() + Duration::from_secs(1);
             self.remote
                 .spawn(GLOBAL_TIMER_HANDLE.delay(deadline).compat().then(|_| f));
@@ -924,6 +935,7 @@ impl Runnable for PdRunner {
                 right_derive,
                 callback,
             } => Self::handle_ask_batch_split(
+                self.peer_tag(&region),
                 self.router.clone(),
                 self.scheduler.clone(),
                 self.pd_client.clone(),

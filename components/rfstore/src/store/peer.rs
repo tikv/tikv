@@ -473,12 +473,20 @@ impl Peer {
         let truncated = ps.truncated_index();
         let truncated_term = ps.truncated_term();
         let last = ps.last_index();
+        let last_term = ps.last_term();
         let commit = ps.commit_index();
 
         let applied_index = ps.applied_index();
         info!(
-            "new peer storage first:{:?} truncated:{:?} t_term:{:?} last:{:?}, applied: {:?}, commit: {:?}",
-            first, truncated, truncated_term, last, applied_index, commit,
+            "{} new peer storage first:{} truncated:{} trunc_term:{} last:{}, last_term:{}, applied: {}, commit: {}",
+            ps.tag(),
+            first,
+            truncated,
+            truncated_term,
+            last,
+            last_term,
+            applied_index,
+            commit,
         );
 
         let raft_cfg = raft::Config {
@@ -1421,10 +1429,9 @@ impl Peer {
         ctx.apply_msgs.msgs.push(ApplyMsg::PendingSplit(cs));
         for (i, new_meta) in new_metas.iter().enumerate() {
             let new_region = &regions[i];
-            write_peer_state(&mut ctx.raft_wb, new_region);
+            write_peer_state(&mut ctx.raft_wb, self.peer.store_id, new_region);
             if new_meta.id == self.region_id {
-                ctx.raft_wb
-                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
+                write_engine_meta(&mut ctx.raft_wb, new_meta);
                 // The raft state key changed when region version change, we need to set it here.
                 // We handle committed entries before update peer storage's raft state, so the peer
                 // storage's raft state may not be update to date, we set the hard state of raft.
@@ -1453,8 +1460,7 @@ impl Peer {
                     // initial state and add dependent.
                     continue;
                 }
-                ctx.raft_wb
-                    .set_state(new_meta.id, KV_ENGINE_META_KEY, &new_meta.marshal());
+                write_engine_meta(&mut ctx.raft_wb, new_meta);
                 let region_version = new_region.get_region_epoch().get_version();
                 write_initial_raft_state(&mut ctx.raft_wb, new_region.get_id(), region_version);
             }
@@ -1489,7 +1495,7 @@ impl Peer {
             self.tag(),
         ) {
             if region_has_peer(&region, self.peer_id()) {
-                write_peer_state(&mut ctx.raft_wb, &region);
+                write_peer_state(&mut ctx.raft_wb, self.peer.store_id, &region);
             } else {
                 // It's a remove self conf change, it will be updated in destroy method with
                 // tombstone state.

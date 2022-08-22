@@ -21,7 +21,7 @@ pub(crate) fn convert_sst(
     req: &RaftCmdRequest,
     shard_meta: ShardMeta,
 ) -> crate::Result<kvenginepb::ChangeSet> {
-    info!("convert sst {:?}", req);
+    info!("{} convert sst {:?}", shard_meta.tag(), req);
     let region_id = req.get_header().get_region_id();
     let region_ver = req.get_header().get_region_epoch().get_version();
     let mut sst_iters = vec![];

@@ -77,6 +77,7 @@ impl GcRunner {
     }
 
     fn remove_kv_garbage_files(&self, kv_file_ids: &HashSet<u64>) -> kvengine::Result<()> {
+        let store_id = self.kv.get_engine_id();
         let entries = fs::read_dir(&self.kv.opts.local_dir)?;
         for e in entries {
             let entry = e?;
@@ -87,11 +88,11 @@ impl GcRunner {
             let path = entry.path();
             let path_str = path.to_str().unwrap();
             if path_str.ends_with(".tmp") {
-                Self::remove_file(&path)?;
+                Self::remove_file(store_id, &path)?;
             } else if path_str.ends_with(".sst") {
                 let id = sstable::parse_file_id(&path)?;
                 if !kv_file_ids.contains(&id) {
-                    Self::remove_file(&path)?;
+                    Self::remove_file(store_id, &path)?;
                 }
             } else if !path_str.ends_with("LOCK") {
                 warn!("unexpected file {:?}", path);
@@ -100,8 +101,8 @@ impl GcRunner {
         Ok(())
     }
 
-    fn remove_file(file: &Path) -> std::io::Result<()> {
-        info!("local file GC remove file {:?}", file);
+    fn remove_file(store_id: u64, file: &Path) -> std::io::Result<()> {
+        info!("{} local file GC remove file {:?}", store_id, file);
         fs::remove_file(file)
     }
 
@@ -109,6 +110,7 @@ impl GcRunner {
         if self.importer.get_mode() == SwitchMode::Import {
             return Ok(());
         }
+        let store_id = self.kv.get_engine_id();
         let ssts = self.importer.list_ssts()?;
         for sst_meta in &ssts {
             let path = self.importer.get_path(sst_meta);
@@ -120,8 +122,8 @@ impl GcRunner {
                     write!(uuid, "{:X}", b).expect("Unable to write");
                 }
                 info!(
-                    "gc runner delete sst uuid {} file {:?} timeout {:?}",
-                    uuid, path, self.timeout
+                    "{} gc runner delete sst uuid {} file {:?} timeout {:?}",
+                    store_id, uuid, path, self.timeout
                 );
             }
         }

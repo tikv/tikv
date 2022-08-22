@@ -466,10 +466,14 @@ impl RaftContext {
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         let msg_type = msg.get_message().get_msg_type();
+        let tag = PeerTag::new(
+            self.store_id(),
+            RegionIDVer::new(region_id, cur_epoch.get_version()),
+        );
 
         info!(
             "raft message is stale, tell to gc";
-            "region_id" => region_id,
+            "region" => tag,
             "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );

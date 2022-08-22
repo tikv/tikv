@@ -34,10 +34,10 @@ use crate::{
         msg::Callback,
         notify_req_region_removed,
         peer::{Peer, StaleState},
-        util as _util, ApplyMetrics, ApplyMsg, CasualMessage, Config, CustomBuilder, Engines,
-        MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftApplyState, RaftContext, SignificantMsg,
-        SnapState, StoreMsg, Ticker, PEER_TICK_CHECK_STALE_STATE, PEER_TICK_PD_HEARTBEAT,
-        PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
+        util as _util, write_engine_meta, ApplyMetrics, ApplyMsg, CasualMessage, Config,
+        CustomBuilder, Engines, MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftApplyState,
+        RaftContext, SignificantMsg, SnapState, StoreMsg, Ticker, PEER_TICK_CHECK_STALE_STATE,
+        PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
         PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
     DiscardReason, Error, RaftStoreRouter, Result,
@@ -79,14 +79,14 @@ impl PeerFsm {
             }
             Some(peer) => peer.clone(),
         };
-
+        let peer = Peer::new(store_id, cfg, engines, region, meta_peer)?;
         info!(
             "create peer";
-            "region_id" => region.get_id(),
-            "peer_id" => meta_peer.get_id(),
+            "region" => peer.tag(),
+            "peer_id" => peer.peer_id(),
         );
         Ok(PeerFsm {
-            peer: Peer::new(store_id, cfg, engines, region, meta_peer)?,
+            peer,
             stopped: false,
             apply_worker_idx: thread_rng().gen_range(0..cfg.apply_pool_size),
             applying_cnt: Arc::new(AtomicU64::new(0)),
@@ -105,16 +105,17 @@ impl PeerFsm {
         peer: metapb::Peer,
     ) -> Result<PeerFsm> {
         // We will remove tombstone key when apply snapshot
-        info!(
-            "replicate peer";
-            "region_id" => region_id,
-            "peer_id" => peer.get_id(),
-        );
 
         let mut region = metapb::Region::default();
         region.set_id(region_id);
+        let peer = Peer::new(store_id, cfg, engines, &region, peer)?;
+        info!(
+            "replicate peer";
+            "region" => peer.tag(),
+            "peer_id" => peer.peer_id(),
+        );
         Ok(PeerFsm {
-            peer: Peer::new(store_id, cfg, engines, &region, peer)?,
+            peer,
             stopped: false,
             ticker: Ticker::new(cfg),
             apply_worker_idx: thread_rng().gen_range(0..cfg.apply_pool_size),
@@ -401,14 +402,12 @@ impl<'a> PeerMsgHandler<'a> {
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let msg_debug = MsgDebug(&msg);
-        if msg_debug.need_log() {
-            debug!(
-                "handle raft message";
-                "tag" => self.peer.tag(),
-                "peer_id" => self.fsm.peer_id(),
-                "message" => %msg_debug,
-            );
-        }
+        debug!(
+            "handle raft message";
+            "tag" => self.peer.tag(),
+            "peer_id" => self.fsm.peer_id(),
+            "message" => %msg_debug,
+        );
 
         if !self.validate_raft_msg(&msg) {
             return Ok(());
@@ -1156,14 +1155,12 @@ impl<'a> PeerMsgHandler<'a> {
                     let shard_meta = self.peer.mut_store().mut_engine_meta();
                     shard_meta.data_sequence = applied_idx;
                     shard_meta.set_property(TERM_KEY, &applied_term.to_le_bytes());
-                    let meta_data = shard_meta.marshal();
+                    let shard_meta = shard_meta.clone();
                     info!(
                         "advance data sequence from {} to {}", persisted_log_idx, applied_idx;
                         "region" => self.peer.tag(),
                     );
-                    self.ctx
-                        .raft_wb
-                        .set_state(region_id, _util::KV_ENGINE_META_KEY, &meta_data);
+                    write_engine_meta(&mut self.ctx.raft_wb, &shard_meta);
                     persisted_log_idx = applied_idx;
                 }
             }
@@ -1328,15 +1325,6 @@ impl PeerMsgHandler<'_> {
 }
 
 pub struct MsgDebug<'a>(pub &'a RaftMessage);
-
-impl MsgDebug<'_> {
-    fn need_log(&self) -> bool {
-        match self.0.get_message().msg_type {
-            MessageType::MsgHeartbeat | MessageType::MsgHeartbeatResponse => false,
-            _ => true,
-        }
-    }
-}
 
 impl std::fmt::Display for MsgDebug<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
