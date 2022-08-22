@@ -182,12 +182,16 @@ where
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
-        if region_keys >= host.cfg.region_max_keys() {
+        // if bucket checker using scan is added, to utilize the scan,
+        // add keys checker as well for free
+        // It has the assumption that the size's checker is before the keys's check in the host
+        let need_split_region = region_keys >= host.cfg.region_max_keys();
+        if need_split_region {
             info!(
                 "approximate keys over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "keys" => region_keys,
-                "threshold" => host.cfg.region_max_keys,
+                "threshold" => host.cfg.region_max_keys(),
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
