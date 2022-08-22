@@ -24,8 +24,7 @@ use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
     metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
-    pdpb,
-    pdpb::CheckPolicy,
+    pdpb::{self, CheckPolicy, StoreReport},
     raft_cmdpb::*,
     raft_serverpb::{
         PeerState, RaftApplyState, RaftLocalState, RaftMessage, RaftTruncatedState,
@@ -1392,7 +1391,7 @@ impl<T: Simulator> Cluster<T> {
         region_id: u64,
         store_id: u64,
         failed_stores: Vec<u64>,
-    ) {
+    ) -> StoreReport {
         self.enter_force_leader(region_id, store_id, failed_stores);
         let mut store_report = None;
         for _ in 0..20 {
@@ -1403,6 +1402,7 @@ impl<T: Simulator> Cluster<T> {
             sleep_ms(100);
         }
         assert_ne!(store_report, None);
+        store_report.unwrap()
     }
 
     pub fn exit_force_leader(&mut self, region_id: u64, store_id: u64) {

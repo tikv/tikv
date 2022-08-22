@@ -187,7 +187,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
     }
 
     /// query the named task from the meta store.
-    pub async fn get_task(&self, name: &str) -> Result<StreamTask> {
+    pub async fn get_task(&self, name: &str) -> Result<Option<StreamTask>> {
         let now = Instant::now();
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_get"]).observe(now.saturating_elapsed().as_secs_f64())
@@ -199,14 +199,12 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .get(Keys::Key(MetaKey::task_of(name)))
             .await?;
         if items.is_empty() {
-            return Err(Error::NoSuchTask {
-                task_name: name.to_owned(),
-            });
+            return Ok(None);
         }
         let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(items[0].value())?;
         let is_paused = self.check_task_paused(name).await?;
 
-        Ok(StreamTask { info, is_paused })
+        Ok(Some(StreamTask { info, is_paused }))
     }
 
     /// fetch all tasks from the meta store.
@@ -217,19 +215,26 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let snap = self.meta_store.snapshot().await?;
         let kvs = snap.get(Keys::Prefix(MetaKey::tasks())).await?;
-        let pause_hash = self.get_tasks_pause_status().await?;
 
         let mut tasks = Vec::with_capacity(kvs.len());
         for kv in kvs {
+            let t = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(kv.value())?;
+            let paused = self.check_task_paused(t.get_name()).await?;
             tasks.push(StreamTask {
-                info: protobuf::parse_from_bytes(kv.value())?,
-                is_paused: pause_hash.contains_key(kv.key()),
+                info: t,
+                is_paused: paused,
             });
         }
         Ok(WithRevision {
             inner: tasks,
             revision: snap.revision(),
         })
+    }
+
+    // get the reveresion from meta store.
+    pub async fn get_reversion(&self) -> Result<i64> {
+        let snap = self.meta_store.snapshot().await?;
+        Ok(snap.revision())
     }
 
     /// watch event stream from the revision(exclusive).
@@ -369,6 +374,12 @@ impl<Store: MetaStore> MetadataClient<Store> {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get"]).observe(now.saturating_elapsed().as_secs_f64())
         }
         let task = self.get_task(task_name).await?;
+        if task.is_none() {
+            return Err(Error::NoSuchTask {
+                task_name: task_name.to_owned(),
+            });
+        }
+
         let timestamp = self.meta_store.snapshot().await?;
         let items = timestamp
             .get(Keys::Key(MetaKey::next_backup_ts_of(
@@ -377,7 +388,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
             )))
             .await?;
         if items.is_empty() {
-            Ok(task.info.start_ts)
+            Ok(task.unwrap().info.start_ts)
         } else {
             assert_eq!(items.len(), 1);
             Self::parse_ts_from_bytes(items[0].1.as_slice())
@@ -391,6 +402,12 @@ impl<Store: MetaStore> MetadataClient<Store> {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_progress_get_global"]).observe(now.saturating_elapsed().as_secs_f64())
         }
         let task = self.get_task(task_name).await?;
+        if task.is_none() {
+            return Err(Error::NoSuchTask {
+                task_name: task_name.to_owned(),
+            });
+        }
+
         let snap = self.meta_store.snapshot().await?;
         let global_ts = snap.get(Keys::Prefix(MetaKey::next_backup_ts(task_name)))
             .await?
@@ -401,7 +418,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
                     .ok()
             })
             .min()
-            .unwrap_or(task.info.start_ts);
+            .unwrap_or(task.unwrap().info.start_ts);
         Ok(global_ts)
     }
 

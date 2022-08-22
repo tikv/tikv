@@ -82,7 +82,7 @@ use super::{
     DestroyPeerJob,
 };
 use crate::{
-    coprocessor::{CoprocessorHost, RegionChangeEvent, RoleChange},
+    coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
@@ -223,6 +223,7 @@ bitflags! {
         const SYNC_LOG       = 0b0000_0001;
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
+        const COMMIT_MERGE   = 0b0000_1000;
     }
 }
 
@@ -780,6 +781,8 @@ where
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
     last_committed_split_idx: u64,
+    /// The index of last sent snapshot
+    last_sent_snapshot_idx: u64,
     /// Approximate size of logs that is applied but not compacted yet.
     pub raft_log_size_hint: u64,
 
@@ -949,6 +952,7 @@ where
             last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
+            last_sent_snapshot_idx: 0,
             consistency_state: ConsistencyState {
                 last_check_time: Instant::now(),
                 index: INVALID_INDEX,
@@ -1461,6 +1465,7 @@ where
         host: &CoprocessorHost<impl KvEngine>,
         reader: &mut ReadDelegate,
         region: metapb::Region,
+        reason: RegionChangeReason,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
         {
@@ -1484,7 +1489,11 @@ where
         }
 
         if !self.pending_remove {
-            host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
+            host.on_region_changed(
+                self.region(),
+                RegionChangeEvent::Update(reason),
+                self.get_role(),
+            );
         }
     }
 
@@ -1566,6 +1575,12 @@ where
     ) {
         for msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgSnapshot {
+                let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
+                if snap_index > self.last_sent_snapshot_idx {
+                    self.last_sent_snapshot_idx = snap_index;
+                }
+            }
             if msg_type == MessageType::MsgTimeoutNow && self.is_leader() {
                 // After a leader transfer procedure is triggered, the lease for
                 // the old leader may be expired earlier than usual, since a new leader
@@ -2020,6 +2035,7 @@ where
                     // prewrites or commits will be just a waste.
                     self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
                     self.raft_group.skip_bcast_commit(false);
+                    self.last_sent_snapshot_idx = self.raft_group.raft.raft_log.last_index();
 
                     // A more recent read may happen on the old leader. So max ts should
                     // be updated after a peer becomes leader.
@@ -2742,7 +2758,7 @@ where
                 .trace_cached_entries(apply.entries[0].clone());
             if needs_evict_entry_cache(ctx.cfg.evict_cache_on_memory_ratio) {
                 // Compact all cached entries instead of half evict.
-                self.mut_store().evict_cache(false);
+                self.mut_store().evict_entry_cache(false);
             }
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::apply(apply));
@@ -3120,7 +3136,7 @@ where
 
         if !self.is_leader() {
             self.mut_store()
-                .compact_cache_to(apply_state.applied_index + 1);
+                .compact_entry_cache(apply_state.applied_index + 1);
         }
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
@@ -3165,8 +3181,14 @@ where
         // Reset delete_keys_hint and size_diff_hint.
         self.delete_keys_hint = 0;
         self.size_diff_hint = 0;
-        self.region_buckets = None;
-        self.last_region_buckets = None;
+        self.reset_region_buckets();
+    }
+
+    pub fn reset_region_buckets(&mut self) {
+        if self.region_buckets.is_some() {
+            self.last_region_buckets = self.region_buckets.take();
+            self.region_buckets = None;
+        }
     }
 
     /// Try to renew leader lease.
@@ -3956,12 +3978,14 @@ where
             || min_committed == 0
             || last_index - min_matched > ctx.cfg.merge_max_log_gap
             || last_index - min_committed > ctx.cfg.merge_max_log_gap * 2
+            || min_matched < self.last_sent_snapshot_idx
         {
             return Err(box_err!(
-                "log gap from matched: {} or committed: {} to last index: {} is too large, skip merge",
+                "log gap too large, skip merge: matched: {}, committed: {}, last index: {}, last_snapshot: {}",
                 min_matched,
                 min_committed,
-                last_index
+                last_index,
+                self.last_sent_snapshot_idx
             ));
         }
         let mut entry_size = 0;
@@ -4127,6 +4151,7 @@ where
                 self.pre_propose_prepare_merge(poll_ctx, req)?;
                 ctx.insert(ProposalContext::PREPARE_MERGE);
             }
+            AdminCmdType::CommitMerge => ctx.insert(ProposalContext::COMMIT_MERGE),
             _ => {}
         }
 
@@ -5515,8 +5540,10 @@ mod tests {
             &[ProposalContext::SPLIT],
             &[ProposalContext::SYNC_LOG],
             &[ProposalContext::PREPARE_MERGE],
+            &[ProposalContext::COMMIT_MERGE],
             &[ProposalContext::SPLIT, ProposalContext::SYNC_LOG],
             &[ProposalContext::PREPARE_MERGE, ProposalContext::SYNC_LOG],
+            &[ProposalContext::COMMIT_MERGE, ProposalContext::SYNC_LOG],
         ];
 
         for flags in tbl {

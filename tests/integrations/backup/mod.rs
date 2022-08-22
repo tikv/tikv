@@ -174,7 +174,9 @@ fn test_backup_huge_range_and_import() {
         backup_ts,
         &storage_path,
     );
-    let resps1 = block_on(rx.collect::<Vec<_>>());
+    let mut resps1 = block_on(rx.collect::<Vec<_>>());
+    resps1.sort_by(|r1, r2| r1.start_key.cmp(&r2.start_key));
+
     // Only leader can handle backup.
     // ... But the response may be split into two parts (when meeting huge region).
     assert_eq!(resps1.len(), 2, "{:?}", resps1);
@@ -187,9 +189,8 @@ fn test_backup_huge_range_and_import() {
     assert!(!resps1[0].get_files().is_empty());
 
     // Sort the files for avoiding race conditions. (would this happen?)
-    if files1[0].start_key > files1[1].start_key {
-        files1.swap(0, 1);
-    }
+    files1.sort_by(|f1, f2| f1.start_key.cmp(&f2.start_key));
+
     assert_eq!(resps1[0].start_key, b"".to_vec());
     assert_eq!(resps1[0].end_key, resps1[1].start_key);
     assert_eq!(resps1[1].end_key, b"".to_vec());
@@ -353,7 +354,9 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
         let key = {
             let mut key = k.into_bytes();
             if cur_api_ver != ApiVersion::V2 && dst_api_ver == ApiVersion::V2 {
-                key.insert(0, b'r')
+                let mut apiv2_key = [b'r', 0, 0, 0].to_vec();
+                apiv2_key.extend(key);
+                key = apiv2_key;
             }
             key
         };
@@ -363,9 +366,17 @@ fn test_backup_rawkv_cross_version_impl(cur_api_ver: ApiVersion, dst_api_ver: Ap
 
     // Backup file should have same contents.
     // Set non-empty range to check if it's incorrectly encoded.
+    let (backup_start, backup_end) = if cur_api_ver != dst_api_ver {
+        (
+            vec![b'r', 0, 0, 0, b'r', b'a'],
+            vec![b'r', 0, 0, 0, b'r', b'z'],
+        )
+    } else {
+        (vec![b'r', b'a'], vec![b'r', b'z'])
+    };
     let rx = target_suite.backup_raw(
-        vec![b'r', b'a'], // start
-        vec![b'r', b'z'], // end
+        backup_start, // start
+        backup_end,   // end
         cf,
         &make_unique_dir(tmp.path()),
         dst_api_ver,

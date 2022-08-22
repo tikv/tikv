@@ -31,7 +31,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, errors::Result, metrics::*, util};
+use crate::{endpoint::Task, metrics::*, util};
 
 const DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS: u64 = 5_000; // 5s
 
@@ -234,7 +234,9 @@ pub async fn region_resolved_ts_store(
                 let client =
                     get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
                         .await
-                        .map_err(|e| (to_store, true, format!("[get tikv client] {}", e)))?;
+                        .map_err(|e| {
+                            (to_store, e.retryable(), format!("[get tikv client] {}", e))
+                        })?;
 
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
@@ -363,7 +365,7 @@ async fn get_tikv_client(
     security_mgr: Arc<SecurityManager>,
     env: Arc<Environment>,
     tikv_clients: Arc<Mutex<HashMap<u64, TikvClient>>>,
-) -> Result<TikvClient> {
+) -> pd_client::Result<TikvClient> {
     {
         let clients = tikv_clients.lock().await;
         if let Some(client) = clients.get(&store_id).cloned() {
@@ -371,9 +373,10 @@ async fn get_tikv_client(
         }
     }
     let timeout = Duration::from_millis(DEFAULT_CHECK_LEADER_TIMEOUT_MILLISECONDS);
-    let store = box_try!(box_try!(
-        tokio::time::timeout(timeout, pd_client.get_store_async(store_id)).await
-    ));
+    let store = tokio::time::timeout(timeout, pd_client.get_store_async(store_id))
+        .await
+        .map_err(|e| pd_client::Error::Other(Box::new(e)))
+        .flatten()?;
     let mut clients = tikv_clients.lock().await;
     let start = Instant::now_coarse();
     // hack: so it's different args, grpc will always create a new connection.
