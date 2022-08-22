@@ -381,7 +381,7 @@ mod tests {
         let mut cfg = Config::default();
         assert!(cfg.validate().is_ok());
 
-        let max_pool_size = std::cmp::max(1, SysQuota::cpu_cores_quota() as usize);
+        let max_pool_size = std::cmp::max(4, SysQuota::cpu_cores_quota() as usize);
         cfg.scheduler_worker_pool_size = max_pool_size;
         assert!(cfg.validate().is_ok());
 
