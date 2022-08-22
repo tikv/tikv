@@ -4025,7 +4025,11 @@ where
             &mut poll_ctx.pd_scheduler,
             &mut err_resp,
         ) {
-            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader.inc();
+            poll_ctx
+                .raft_metrics
+                .invalid_proposal
+                .read_index_no_leader
+                .inc();
             cb.report_error(err_resp);
             return false;
         }
