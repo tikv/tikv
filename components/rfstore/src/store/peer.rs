@@ -1429,8 +1429,8 @@ impl Peer {
         ctx.apply_msgs.msgs.push(ApplyMsg::PendingSplit(cs));
         for (i, new_meta) in new_metas.iter().enumerate() {
             let new_region = &regions[i];
-            write_peer_state(&mut ctx.raft_wb, self.peer.store_id, new_region);
             if new_meta.id == self.region_id {
+                write_peer_state(&mut ctx.raft_wb, self.peer.store_id, new_region);
                 write_engine_meta(&mut ctx.raft_wb, new_meta);
                 // The raft state key changed when region version change, we need to set it here.
                 // We handle committed entries before update peer storage's raft state, so the peer
@@ -1448,18 +1448,33 @@ impl Peer {
                 self.preprocessed_region = Some(new_region.clone());
             } else {
                 let raft = &ctx.global.engines.raft;
-                if raft.get_state(new_meta.id, KV_ENGINE_META_KEY).is_some()
-                    // The new region may apply snapshot in the same batch, so we should check
-                    // raft_wb too.
-                    || ctx
-                        .raft_wb
-                        .get_state(new_meta.id, KV_ENGINE_META_KEY)
-                        .is_some()
+                if let Some(state) = load_last_peer_state(raft, new_region.get_id()) {
+                    // The peer has been created or destroyed.
+                    info!(
+                        "{} avoid write region meta for region {:?}, peer state {:?}",
+                        self.tag(),
+                        new_region,
+                        state,
+                    );
+                    continue;
+                }
+                // The new region may apply snapshot in the same batch, so we should check
+                // raft_wb too.
+                if ctx
+                    .raft_wb
+                    .get_state(new_meta.id, KV_ENGINE_META_KEY)
+                    .is_some()
                 {
                     // The region has already been created and initialized, so skip to write
                     // initial state and add dependent.
+                    info!(
+                        "{} avoid write region meta for region {:?}",
+                        self.tag(),
+                        new_region
+                    );
                     continue;
                 }
+                write_peer_state(&mut ctx.raft_wb, self.peer.store_id, new_region);
                 write_engine_meta(&mut ctx.raft_wb, new_meta);
                 let region_version = new_region.get_region_epoch().get_version();
                 write_initial_raft_state(&mut ctx.raft_wb, new_region.get_id(), region_version);

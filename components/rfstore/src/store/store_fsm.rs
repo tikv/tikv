@@ -700,16 +700,10 @@ impl<'a> StoreMsgHandler<'a> {
         let to_peer_id = msg.get_to_peer().get_id();
 
         // Check if the target peer is tombstone.
-        let rf_engine = &self.ctx.global.engines.raft;
-        let local_state =
-            match rf_engine.get_last_state_with_prefix(region_id, REGION_META_KEY_PREFIX) {
-                Some(state_bin) => {
-                    let mut state = RegionLocalState::default();
-                    state.merge_from_bytes(&state_bin)?;
-                    state
-                }
-                None => return Ok(CheckMsgStatus::NewPeerFirst),
-            };
+        let local_state = match load_last_peer_state(&self.ctx.global.engines.raft, region_id) {
+            Some(state) => state,
+            None => return Ok(CheckMsgStatus::NewPeerFirst),
+        };
         let tag = PeerTag::new(
             self.store.id,
             RegionIDVer::new(
@@ -988,12 +982,13 @@ impl<'a> StoreMsgHandler<'a> {
             .engines
             .kv
             .set_shard_active(region_id, is_leader);
+        let tag = peer_fsm.peer.tag();
         if is_leader {
             peer_fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
                 "notify pd with split";
-                "tag" => peer_fsm.peer.tag(),
+                "tag" => tag,
                 "peer_id" => peer_fsm.peer_id(),
                 "split_count" => regions.len(),
             );
@@ -1005,7 +1000,7 @@ impl<'a> StoreMsgHandler<'a> {
             if let Err(e) = self.ctx.global.pd_scheduler.schedule(task) {
                 error!(
                     "failed to notify pd";
-                    "tag" => peer_fsm.peer.tag(),
+                    "tag" => tag,
                     "peer_id" => peer_fsm.peer_id(),
                     "err" => %e,
                 );
@@ -1020,7 +1015,7 @@ impl<'a> StoreMsgHandler<'a> {
             .remove(&last_key)
             .is_none()
         {
-            panic!("{} original region should exist", peer_fsm.peer.tag());
+            panic!("{} original region should exist", tag);
         }
         let mut new_peers = vec![];
         for new_region in regions {
@@ -1038,7 +1033,6 @@ impl<'a> StoreMsgHandler<'a> {
             }
             if let Some(existing) = self.ctx.peers.get(&new_region_id) {
                 let peer_fsm = existing.peer_fsm.lock().unwrap();
-                let tag = peer_fsm.peer.tag();
                 let pending_snap = peer_fsm.peer.has_pending_snapshot();
                 let initialized = peer_fsm.peer.is_initialized();
                 if pending_snap || initialized {
@@ -1055,12 +1049,23 @@ impl<'a> StoreMsgHandler<'a> {
                         .remove_dependent(region_id, new_region_id);
                     continue;
                 }
+            } else if let Some(state) =
+                load_last_peer_state(&self.ctx.global.engines.raft, new_region_id)
+            {
+                if state.get_state() == PeerState::Tombstone {
+                    // The peer has been destroyed.
+                    info!(
+                        "{} peer avoid created by split, peer state: {:?}",
+                        tag, state
+                    );
+                    continue;
+                }
             }
             // Now all checking passed.
             // Insert new regions and validation
             info!(
                 "split insert new region";
-                "tag" => peer_fsm.peer.tag(),
+                "tag" => tag,
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );

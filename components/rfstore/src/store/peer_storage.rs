@@ -14,6 +14,7 @@ use raft_proto::{
     eraftpb,
     eraftpb::{ConfState, HardState},
 };
+use raft_serverpb::RegionLocalState;
 use raftstore::store::{util, util::conf_state_from_region};
 use rfengine;
 use tikv_util::{box_err, debug, info};
@@ -23,7 +24,8 @@ use crate::{
     errors::*,
     store::{
         get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState,
-        RaftContext, RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY, TERM_KEY,
+        RaftContext, RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY,
+        REGION_META_KEY_PREFIX, TERM_KEY,
     },
 };
 
@@ -612,7 +614,7 @@ pub fn write_peer_state(
 ) {
     let tag = PeerTag::new(store_id, RegionIDVer::from_region(region));
     info!("{} write peer state", tag);
-    let mut region_state = raft_serverpb::RegionLocalState::default();
+    let mut region_state = RegionLocalState::default();
     region_state.set_state(PeerState::Normal);
     region_state.set_region(region.clone());
     let state_bin = region_state.write_to_bytes().unwrap();
@@ -649,4 +651,13 @@ pub fn decode_snap_data(data: &[u8]) -> Result<(metapb::Region, kvenginepb::Chan
     let mut change_set = kvenginepb::ChangeSet::default();
     change_set.merge_from_bytes(&data[offset..(offset + size2)])?;
     Ok((region, change_set))
+}
+
+pub fn load_last_peer_state(raft: &rfengine::RfEngine, region_id: u64) -> Option<RegionLocalState> {
+    raft.get_last_state_with_prefix(region_id, REGION_META_KEY_PREFIX)
+        .map(|v| {
+            let mut state = RegionLocalState::default();
+            state.merge_from_bytes(&v).unwrap();
+            state
+        })
 }
