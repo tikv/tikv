@@ -627,7 +627,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
 }
 
 // MvccScanner is used to scan all the MVCC versions of keys within the given
-// key range that are written later than the given `min_version`.
+// key range that are written later than the given `min_write_version` and
+// `min_lock_version`.
 pub struct MvccScanner<S: EngineSnapshot> {
     pub statistics: Statistics,
     snapshot: S,
@@ -635,18 +636,20 @@ pub struct MvccScanner<S: EngineSnapshot> {
     write_cursor: Option<Cursor<S::Iter>>,
 
     batch_size: usize,
-    min_version: TimeStamp,
-    start_key: Key,
-    end_key: Key,
+    min_write_version: TimeStamp,
+    min_lock_version: TimeStamp,
+    start_key: Option<Key>,
+    end_key: Option<Key>,
 }
 
 impl<S: EngineSnapshot> MvccScanner<S> {
     pub fn new(
         snapshot: S,
         batch_size: usize,
-        min_version: TimeStamp,
-        start_key: Key,
-        end_key: Key,
+        min_write_version: TimeStamp,
+        min_lock_version: TimeStamp,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
     ) -> MvccScanner<S> {
         MvccScanner {
             statistics: Statistics::default(),
@@ -654,7 +657,8 @@ impl<S: EngineSnapshot> MvccScanner<S> {
             lock_cursor: None,
             write_cursor: None,
             batch_size,
-            min_version,
+            min_write_version,
+            min_lock_version,
             start_key,
             end_key,
         }
@@ -666,8 +670,8 @@ impl<S: EngineSnapshot> MvccScanner<S> {
                 .fill_cache(false)
                 .scan_mode(ScanMode::Forward)
                 // Scan the MVCC versions after the `self.min_version` as possible.
-                .hint_min_ts(Some(self.min_version))
-                .range(Some(self.start_key.clone()), Some(self.end_key.clone()))
+                .hint_min_ts(Some(self.min_write_version))
+                .range(self.start_key.clone(), self.end_key.clone())
                 .build()?;
             let _ok = cursor.seek_to_first(&mut self.statistics.write);
             // TODO: handle the result of `seek_to_first` properly.
@@ -681,8 +685,8 @@ impl<S: EngineSnapshot> MvccScanner<S> {
             let mut cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(false)
                 .scan_mode(ScanMode::Forward)
-                .hint_min_ts(Some(self.min_version))
-                .range(Some(self.start_key.clone()), Some(self.end_key.clone()))
+                .hint_min_ts(Some(self.min_lock_version))
+                .range(self.start_key.clone(), self.end_key.clone())
                 .build()?;
             let _ok = cursor.seek_to_first(&mut self.statistics.lock);
             // TODO: handle the result of `seek_to_first` properly.
@@ -692,7 +696,7 @@ impl<S: EngineSnapshot> MvccScanner<S> {
     }
 
     /// Scan all the MVCC versions of keys within the given key range in
-    /// `CF_WRITE` that are committed after the `min_version`.
+    /// `CF_WRITE` that are committed after the `min_write_version`.
     pub fn scan_next_batch_write(&mut self) -> Result<Vec<(Key, Write)>> {
         self.create_write_cursor()?;
         let cursor = self.write_cursor.as_mut().unwrap();
@@ -704,7 +708,7 @@ impl<S: EngineSnapshot> MvccScanner<S> {
         while ok && writes.len() < self.batch_size {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
             let commit_ts = key.decode_ts()?;
-            if commit_ts > self.min_version {
+            if commit_ts > self.min_write_version {
                 writes.push((
                     key,
                     WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned(),
@@ -716,7 +720,7 @@ impl<S: EngineSnapshot> MvccScanner<S> {
     }
 
     /// Scan all the MVCC versions of keys within the given key range in
-    /// `CF_LOCK` that are written after the `min_version`.
+    /// `CF_LOCK` that are written after the `min_lock_version`.
     pub fn scan_next_batch_lock(&mut self) -> Result<Vec<(Key, Lock)>> {
         self.create_lock_cursor()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
@@ -728,7 +732,7 @@ impl<S: EngineSnapshot> MvccScanner<S> {
         while ok && locks.len() < self.batch_size {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?.to_owned();
-            if lock.ts > self.min_version {
+            if lock.ts > self.min_lock_version {
                 locks.push((key, lock));
             }
             ok = cursor.next(&mut self.statistics.lock);
@@ -2242,8 +2246,9 @@ pub mod tests {
                 snapshot.clone(),
                 batch_size,
                 case.min_version,
-                case.start_key.clone(),
-                case.end_key.clone(),
+                case.min_version,
+                Some(case.start_key.clone()),
+                Some(case.end_key.clone()),
             );
             let scanned_writes = reader.scan_next_batch_write().unwrap();
             assert_eq!(

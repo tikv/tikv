@@ -5,9 +5,8 @@ use tikv_kv::WriteData;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    kv::ScanMode,
     lock_manager::LockManager,
-    mvcc::{MvccReader, MvccTxn},
+    mvcc::{MvccScanner, MvccTxn},
     txn::{
         commands::{
             Command, CommandExt, ResponsePolicy, TypedCommand, WriteCommand, WriteContext,
@@ -18,7 +17,6 @@ use crate::storage::{
     ProcessResult, Snapshot,
 };
 
-// TODO: consider add `KvFormat` generic parameter.
 command! {
     FlashbackToVersion:
         cmd_ty => (TimeStamp /* Version to reset */, Key /* start_key */, Key /* end_key */),
@@ -44,20 +42,20 @@ impl CommandExt for FlashbackToVersion {
     }
 }
 
+const BATCH_SIZE: usize = 1024;
+
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let mut txn = MvccTxn::new(self.version, context.concurrency_manager);
-        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
-        // Flashback all keys within [start_key, end_key) to the specified version by
-        // deleting all keys in `CF_WRITE`, `CF_DEFAULT` and `CF_LOCK` that are written
-        // later than this version.
-        flashback_to_version(
-            &mut txn,
-            &mut reader,
+        let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
+        let mut reader = MvccScanner::new(
+            snapshot,
+            BATCH_SIZE,
             self.version,
-            self.start_key,
-            self.end_key,
-        )?;
+            TimeStamp::zero(),
+            Some(self.start_key),
+            Some(self.end_key),
+        );
+        flashback_to_version(&mut txn, &mut reader)?;
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
