@@ -367,7 +367,12 @@ impl<'a> PrewriteMutation<'a> {
                     // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
                     // if it is a retrying prewrite request.
                     TransactionKind::Pessimistic(for_update_ts) => {
-                        if commit_ts > for_update_ts {
+                        if let DoConstraintCheck = self.pessimistic_action {
+                            if commit_ts > self.txn_props.start_ts {
+                                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                                self.write_conflict_error(&write, commit_ts)?;
+                            }
+                        } else if commit_ts > for_update_ts {
                             warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
                                 "key" => %self.key, 
                                 "start_ts" => self.txn_props.start_ts, 
@@ -2055,5 +2060,40 @@ pub mod tests {
         test_all_levels(&prepare_lock_record);
         test_all_levels(&prepare_delete);
         test_all_levels(&prepare_gc_fence);
+    }
+
+    #[test]
+    fn test_deferred_constraint_check() {
+        let engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let key = b"key";
+        let key2 = b"key2";
+        let value = b"value";
+
+        // 1. write conflict
+        must_prewrite_put(&engine, key, value, key, 1);
+        must_commit(&engine, key, 1, 5);
+        must_pessimistic_prewrite_insert(&engine, key2, value, key, 3, 3, SkipPessimisticCheck);
+        let err =
+            must_pessimistic_prewrite_insert_err(&engine, key, value, key, 3, 3, DoConstraintCheck);
+        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+
+        // 2. unique constraint fail
+        must_prewrite_put(&engine, key, value, key, 11);
+        must_commit(&engine, key, 11, 12);
+        let err = must_pessimistic_prewrite_insert_err(
+            &engine,
+            key,
+            value,
+            key,
+            13,
+            13,
+            DoConstraintCheck,
+        );
+        assert!(matches!(err, Error(box ErrorInner::AlreadyExist { .. })));
+
+        // 3. success
+        must_prewrite_delete(&engine, key, key, 21);
+        must_commit(&engine, key, 21, 22);
+        must_pessimistic_prewrite_insert(&engine, key, value, key, 23, 23, DoConstraintCheck);
     }
 }

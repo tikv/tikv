@@ -33,13 +33,92 @@ pub fn must_prewrite_put_impl<E: Engine>(
     assertion: Assertion,
     assertion_level: AssertionLevel,
 ) {
+    must_prewrite_put_impl_with_should_not_exist(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts,
+        pessimistic_action,
+        lock_ttl,
+        for_update_ts,
+        txn_size,
+        min_commit_ts,
+        max_commit_ts,
+        is_retry_request,
+        assertion,
+        assertion_level,
+        false,
+    );
+}
+
+pub fn must_prewrite_insert_impl<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: TimeStamp,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+    lock_ttl: u64,
+    for_update_ts: TimeStamp,
+    txn_size: u64,
+    min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+    is_retry_request: bool,
+    assertion: Assertion,
+    assertion_level: AssertionLevel,
+) {
+    must_prewrite_put_impl_with_should_not_exist(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts,
+        pessimistic_action,
+        lock_ttl,
+        for_update_ts,
+        txn_size,
+        min_commit_ts,
+        max_commit_ts,
+        is_retry_request,
+        assertion,
+        assertion_level,
+        true,
+    );
+}
+
+pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: TimeStamp,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+    lock_ttl: u64,
+    for_update_ts: TimeStamp,
+    txn_size: u64,
+    min_commit_ts: TimeStamp,
+    max_commit_ts: TimeStamp,
+    is_retry_request: bool,
+    assertion: Assertion,
+    assertion_level: AssertionLevel,
+    should_not_exist: bool,
+) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let cm = ConcurrencyManager::new(ts);
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()), assertion);
+    let mutation = if should_not_exist {
+        Mutation::Insert((Key::from_raw(key), value.to_vec()), assertion)
+    } else {
+        Mutation::Put((Key::from_raw(key), value.to_vec()), assertion)
+    };
     let txn_kind = if for_update_ts.is_zero() {
         TransactionKind::Optimistic(false)
     } else {
@@ -109,6 +188,34 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
     pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_put_impl(
+        engine,
+        key,
+        value,
+        pk,
+        &None,
+        ts.into(),
+        pessimistic_action,
+        0,
+        for_update_ts.into(),
+        0,
+        TimeStamp::default(),
+        TimeStamp::default(),
+        false,
+        Assertion::None,
+        AssertionLevel::Off,
+    );
+}
+
+pub fn must_pessimistic_prewrite_insert<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+) {
+    must_prewrite_insert_impl(
         engine,
         key,
         value,
@@ -277,6 +384,7 @@ fn default_txn_props(
         assertion_level: AssertionLevel::Off,
     }
 }
+
 pub fn must_prewrite_put_err_impl<E: Engine>(
     engine: &E,
     key: &[u8],
@@ -291,13 +399,80 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
     assertion: Assertion,
     assertion_level: AssertionLevel,
 ) -> Error {
+    must_prewrite_put_err_impl_with_should_not_exist(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts.into(),
+        for_update_ts.into(),
+        pessimistic_action,
+        max_commit_ts.into(),
+        is_retry_request,
+        assertion,
+        assertion_level,
+        false,
+    )
+}
+
+pub fn must_prewrite_insert_err_impl<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+    max_commit_ts: impl Into<TimeStamp>,
+    is_retry_request: bool,
+    assertion: Assertion,
+    assertion_level: AssertionLevel,
+) -> Error {
+    must_prewrite_put_err_impl_with_should_not_exist(
+        engine,
+        key,
+        value,
+        pk,
+        secondary_keys,
+        ts.into(),
+        for_update_ts.into(),
+        pessimistic_action,
+        max_commit_ts.into(),
+        is_retry_request,
+        assertion,
+        assertion_level,
+        true,
+    )
+}
+
+pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    secondary_keys: &Option<Vec<Vec<u8>>>,
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+    max_commit_ts: impl Into<TimeStamp>,
+    is_retry_request: bool,
+    assertion: Assertion,
+    assertion_level: AssertionLevel,
+    should_not_exist: bool,
+) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
     let cm = ConcurrencyManager::new(for_update_ts);
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
-    let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()), assertion);
+    let mutation = if should_not_exist {
+        Mutation::Insert((Key::from_raw(key), value.to_vec()), assertion)
+    } else {
+        Mutation::Put((Key::from_raw(key), value.to_vec()), assertion)
+    };
     let commit_kind = if secondary_keys.is_some() {
         CommitKind::Async(max_commit_ts.into())
     } else {
@@ -352,6 +527,31 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
     pessimistic_action: PrewriteRequestPessimisticAction,
 ) -> Error {
     must_prewrite_put_err_impl(
+        engine,
+        key,
+        value,
+        pk,
+        &None,
+        ts,
+        for_update_ts,
+        pessimistic_action,
+        0,
+        false,
+        Assertion::None,
+        AssertionLevel::Off,
+    )
+}
+
+pub fn must_pessimistic_prewrite_insert_err<E: Engine>(
+    engine: &E,
+    key: &[u8],
+    value: &[u8],
+    pk: &[u8],
+    ts: impl Into<TimeStamp>,
+    for_update_ts: impl Into<TimeStamp>,
+    pessimistic_action: PrewriteRequestPessimisticAction,
+) -> Error {
+    must_prewrite_insert_err_impl(
         engine,
         key,
         value,
