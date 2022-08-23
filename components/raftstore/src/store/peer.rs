@@ -8,7 +8,7 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, mpsc,
     },
     time::{Duration, Instant},
     u64, usize,
@@ -39,7 +39,7 @@ use kvproto::{
     },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
-    },
+    }, 
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{BucketStat, INVALID_ID};
@@ -704,6 +704,50 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
+#[derive(Clone, Debug)]
+pub struct FlashbackWaitApplySyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+    _ch: mpsc::SyncSender<bool>,
+}
+
+impl FlashbackWaitApplySyncer {
+    pub fn new(ch: mpsc::SyncSender<bool>) -> Self {
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let ch_clone = ch.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("Unsafe recovery, wait apply finished");
+            if *abort_clone.lock().unwrap() {
+                warn!("Unsafe recovery, wait apply aborted");
+                return;
+            }
+            ch_clone.send(true).unwrap();
+        }));
+        FlashbackWaitApplySyncer {
+            _closure: Arc::new(closure),
+            abort,
+            _ch: ch,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
+    }
+}
+
+pub enum FlashbackState {
+    // Stores the state is for the wait apply stage of flashback process.
+    // This state is set by the peer fsm when invoke msg PrepareFlashback. Once set, 
+    // it is checked every time this peer applies a new entry or a snapshot, 
+    // if the target index is met, this state will be dropped. 
+    // The syncer holds a channer inner object that is callback for the next step of flashback process.
+    WaitApply {
+        syncer: FlashbackWaitApplySyncer,
+    },
+}
+
+
 #[derive(Getters)]
 pub struct Peer<EK, ER>
 where
@@ -885,6 +929,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    pub flashback_state: Option<FlashbackState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1016,6 +1061,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
+            flashback_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -3404,6 +3450,35 @@ where
         } else {
             Some(req.get_admin_request().get_cmd_type())
         };
+
+        // when enable flashback, we should not allow request to be proposed
+        if self.flashback_state.is_some() {
+            // TODO allow flashback to propose
+            info!(
+                "cannot propose request when flashback is enabled";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            // schedule
+            match req.get_admin_request().get_cmd_type() {
+                 // schedule
+                 AdminCmdType::TransferLeader | AdminCmdType::ChangePeer | AdminCmdType::Split => {
+                     return false
+                 }
+                 _ => (),
+            };
+            // rw
+            for req in req.get_requests() {
+                match req.get_cmd_type() {
+                    CmdType::Get | CmdType::Snap | CmdType::ReadIndex => return false,
+                    CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
+                        return false
+                    }
+                    CmdType::Invalid | CmdType::Prewrite => (),
+                }
+            }
+        }
+
         let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);
@@ -4920,6 +4995,35 @@ where
                     );
                 }
                 self.unsafe_recovery_state = None;
+            }
+        }
+    }
+
+    pub fn maybe_finish_wait_apply(&mut self, force: bool) {
+        let target_index = if self.force_leader.is_some() {
+            // For regions that lose quorum (or regions have force leader), whatever has
+            // been proposed will be committed. Based on that fact, we simply use "last
+            // index" here to avoid implementing another "wait commit" process.
+            self.raft_group.raft.raft_log.last_index()
+        } else {
+            self.raft_group.raft.raft_log.committed
+        };
+        
+        if let Some(FlashbackState::WaitApply { .. }) =
+        &self.flashback_state
+        {
+            if self.raft_group.raft.raft_log.applied >= target_index || force {
+                if self.is_force_leader() {
+                    info!(
+                        "Unsafe recovery, finish wait apply";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_index" => target_index,
+                        "applied" =>  self.raft_group.raft.raft_log.applied,
+                        "force" => force,
+                    );
+                }
+                self.flashback_state = None;
             }
         }
     }

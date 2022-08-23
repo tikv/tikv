@@ -66,7 +66,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{self, AtomicBool},
-        Arc,
+        Arc, mpsc,
     },
 };
 
@@ -1511,7 +1511,30 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let region_id = ctx.get_region_id();
         // TODO: reject any scheduling, read or write request.
         // TODO: wait for the applied index to reach the latest committed index.
-        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback(tx));
+        match rx.recv() {
+            Ok(check) => {
+                if !check {
+                    info!(
+                        "another process of flashback to version is executing in progress";
+                        "region_id" => region_id,
+                    );
+                } else {
+                    info!(
+                        "flashback to version is prepared";
+                        "region_id" => region_id,
+                    );
+                }
+            }
+            Err(e) => {
+                error!("failed to receive prepare flashback result: {:?}", e);
+                return Err(Error::from(ErrorInner::Other(box_err!(
+                    "failed to receive prepare flashback result: {:?}",
+                    e
+                ))));
+            }
+        }
 
         // TODO: flashback to the specified version.
         self.sched_txn_command(

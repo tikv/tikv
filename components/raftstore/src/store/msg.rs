@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, sync::mpsc};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
@@ -439,7 +439,7 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    PrepareFlashback,
+    PrepareFlashback(mpsc::SyncSender<bool>),
     FinishFlashback,
 }
 

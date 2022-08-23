@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc as other_mpsc},
     time::{Duration, Instant},
     u64,
 };
@@ -81,6 +81,7 @@ use crate::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            FlashbackState, FlashbackWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
@@ -915,12 +916,32 @@ where
         syncer.report_for_self(self_report);
     }
 
-    fn on_prepare_flashback(&mut self) {
-        todo!()
+    // set a flag to stop schedule and rw
+    fn on_prepare_flashback(&mut self, ch: other_mpsc::SyncSender<bool>) {
+        if self.fsm.peer.flashback_state.is_some() {
+            warn!(
+                "Flashback can't wait apply, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            ch.send(false).unwrap();
+            return;
+        }
+
+        let wait_apply = FlashbackWaitApplySyncer::new(ch.clone());
+        self.fsm.peer.flashback_state = Some(FlashbackState::WaitApply {
+            syncer: wait_apply.clone(),
+        });
+
+        self.fsm
+            .peer
+            .maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
     fn on_finish_flashback(&mut self) {
-        todo!();
+        self.fsm
+            .peer
+            .maybe_finish_wait_apply(true);
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1319,7 +1340,7 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
-            SignificantMsg::PrepareFlashback => self.on_prepare_flashback(),
+            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
             SignificantMsg::FinishFlashback => self.on_finish_flashback(),
         }
     }
@@ -2091,6 +2112,17 @@ where
         }
     }
 
+    fn check_flashback_state(&mut self) {
+        match &self.fsm.peer.flashback_state {
+            Some(FlashbackState::WaitApply { .. }) => self
+                .fsm
+                .peer
+                .maybe_finish_wait_apply(/* force= */ false),
+            // 
+            None => {}
+        }
+    }
+
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -2157,6 +2189,9 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
+        }
+        if self.fsm.peer.flashback_state.is_some() {
+            self.check_flashback_state();
         }
     }
 
