@@ -99,7 +99,7 @@ impl<'a> Iterator for PathExpressionTokenizer<'a> {
     // next will try to parse the next path leg and return
     // if it returns None, it means the input is over.
     // if it returns Some(Err(..)), it means the format is error.
-    // if it returns Some(Ok(..)), it means the
+    // if it returns Some(Ok(..)), it represents the next token.
     fn next(&mut self) -> Option<Result<PathExpressionToken>> {
         self.trim_white_spaces();
         // trim all spaces at first
@@ -191,10 +191,20 @@ impl<'a> PathExpressionTokenizer<'a> {
                 let key_end = self.current_index();
                 self.char_iterator.next().unwrap();
 
+                let key = unquote_string(unsafe { self.input.get_unchecked(key_start..key_end) })?;
+                for ch in key.chars() {
+                    // According to JSON standard, a string cannot
+                    // contain any ASCII control characters
+                    if ch.is_control() {
+                        // TODO: add the concrete error location
+                        // after unquote, we lost the map between
+                        // the character and input position.
+                        return Err(box_json_path_err!(key_start));
+                    }
+                }
+
                 Ok(PathExpressionToken::Leg((
-                    PathLeg::Key(unquote_string(&unsafe {
-                        self.input.get_unchecked(key_start..key_end)
-                    })?),
+                    PathLeg::Key(key),
                     Position {
                         start,
                         end: self.current_index(),
@@ -224,7 +234,7 @@ impl<'a> PathExpressionTokenizer<'a> {
                 // it's not quoted, we'll have to validate whether it's an available ECMEScript
                 // identifier
                 for (i, c) in key.char_indices() {
-                    if i == 0 && c >= '0' && c <= '9' {
+                    if i == 0 && c.is_ascii_digit() {
                         return Err(box_json_path_err!(key_start + i));
                     }
                     if !c.is_ascii_alphanumeric() && c != '_' && c != '$' && c.is_ascii() {
@@ -321,12 +331,8 @@ impl<'a> PathExpressionTokenizer<'a> {
                     Position { start, end },
                 )))
             }
-            Some((pos, _)) => {
-                Err(box_json_path_err!(pos))
-            }
-            None => {
-                Err(box_json_path_err!(self.current_index()))
-            }
+            Some((pos, _)) => Err(box_json_path_err!(pos)),
+            None => Err(box_json_path_err!(self.current_index())),
         }
     }
 }
@@ -525,6 +531,11 @@ mod tests {
                 Some("Invalid JSON path expression. The error is around character position 3."),
                 None,
             ),
+            (
+                "$.\"a\\t\"",
+                Some("Invalid JSON path expression. The error is around character position 4."),
+                None,
+            ),
         ];
         for (i, (path_expr, error_message, expected)) in test_cases.drain(..).enumerate() {
             let r = parse_json_path_expr(path_expr);
@@ -559,10 +570,10 @@ mod tests {
     #[test]
     fn test_parse_json_path_expr_contains_any_asterisk() {
         let mut test_cases = vec![
-            ("$.a[b]", false),
+            ("$.a[0]", false),
             ("$.a[*]", true),
-            ("$.*[b]", true),
-            ("$**.a[b]", true),
+            ("$.*[0]", true),
+            ("$**.a[0]", true),
         ];
         for (i, (path_expr, expected)) in test_cases.drain(..).enumerate() {
             let r = parse_json_path_expr(path_expr);
