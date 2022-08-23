@@ -96,7 +96,7 @@ impl PeerFsm {
 
     // The peer can be created from another node with raft membership changes, and we only
     // know the region_id and peer_id when creating this replicated peer, the region info
-    // will be retrieved later after applying snapshot.
+    // will be retrieved later after restored snapshot.
     pub fn replicate(
         store_id: u64,
         cfg: &Config,

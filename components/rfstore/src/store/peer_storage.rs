@@ -64,7 +64,7 @@ pub enum SnapState {
     ApplyAborted,
 }
 
-pub struct ApplySnapResult {
+pub struct RestoreSnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
@@ -193,7 +193,12 @@ impl raft::Storage for PeerStorage {
         let conf_state = conf_state_from_region(self.region());
         snap_meta.set_conf_state(conf_state);
         snap.set_metadata(snap_meta);
-        debug!("peer storage generate snapshot {}", self.tag());
+        info!(
+            "{} peer storage generate snapshot index:{}, term:{}",
+            self.tag(),
+            snap_index,
+            snap_term
+        );
         Ok(snap)
     }
 }
@@ -380,7 +385,7 @@ impl PeerStorage {
         ctx: &mut RaftContext,
         ready: &mut raft::Ready,
         store_meta: &mut Option<&mut StoreMeta>,
-    ) -> Option<ApplySnapResult> {
+    ) -> Option<RestoreSnapResult> {
         let mut res = None;
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
@@ -395,9 +400,9 @@ impl PeerStorage {
             *store_meta = Some(meta);
             if !pending_split && !replaced_by_split {
                 let prev_region = self.region().clone();
-                let change_set = self.apply_snapshot(ready.snapshot(), ctx).unwrap();
+                let change_set = self.restore_snapshot(ready.snapshot(), ctx).unwrap();
                 let region = self.region.clone();
-                res = Some(ApplySnapResult {
+                res = Some(RestoreSnapResult {
                     prev_region,
                     region,
                     destroyed_regions: vec![],
@@ -462,12 +467,12 @@ impl PeerStorage {
             .set_state(meta.id, &key, &self.raft_state.marshal());
     }
 
-    fn apply_snapshot(
+    fn restore_snapshot(
         &mut self,
         snap: &eraftpb::Snapshot,
         ctx: &mut RaftContext,
     ) -> Result<kvenginepb::ChangeSet> {
-        info!("peer storage begin to apply snapshot"; "region" => self.tag());
+        info!("peer storage restore snapshot"; "region" => self.tag());
         let (region, change_set) = decode_snap_data(snap.get_data())?;
         if region.get_id() != self.get_region_id() {
             return Err(box_err!(

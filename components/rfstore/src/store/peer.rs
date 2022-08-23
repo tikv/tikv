@@ -1213,7 +1213,7 @@ impl Peer {
                 .clone();
             if peer != self.peer {
                 info!(
-                    "meta changed in applying snapshot";
+                    "meta changed after restored snapshot";
                     "tag" => self.tag(),
                     "peer_id" => self.peer.get_id(),
                     "before" => ?self.peer,
@@ -1458,7 +1458,7 @@ impl Peer {
                     );
                     continue;
                 }
-                // The new region may apply snapshot in the same batch, so we should check
+                // The new region may restore snapshot in the same batch, so we should check
                 // raft_wb too.
                 if ctx
                     .raft_wb
@@ -1803,13 +1803,13 @@ impl Peer {
     pub(crate) fn update_store_meta_for_snap(
         &mut self,
         ctx: &mut RaftContext,
-        apply_result: ApplySnapResult,
+        restore_snap_result: RestoreSnapResult,
         meta: &mut StoreMeta,
     ) -> bool {
-        let prev_region = apply_result.prev_region;
-        let region = apply_result.region;
+        let prev_region = restore_snap_result.prev_region;
+        let region = restore_snap_result.region;
         info!(
-            "snapshot is applied";
+            "snapshot is restored";
             "tag" => self.tag(),
             "peer_id" => self.peer_id(),
             "region" => ?region,
@@ -1833,7 +1833,7 @@ impl Peer {
 
         if is_region_initialized(&prev_region) {
             info!(
-                "region changed after applying snapshot";
+                "region changed after restored snapshot";
                 "tag" => self.tag(),
                 "peer_id" => self.peer_id(),
                 "prev_region" => ?prev_region,
@@ -1863,7 +1863,7 @@ impl Peer {
             .push(ApplyMsg::Registration(MsgRegistration::new(self)));
         ctx.apply_msgs
             .msgs
-            .push(ApplyMsg::PrepareChangeSet(apply_result.change_set));
+            .push(ApplyMsg::PrepareChangeSet(restore_snap_result.change_set));
         true
     }
 
