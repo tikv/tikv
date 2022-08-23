@@ -5156,7 +5156,7 @@ where
     }
     #[inline]
     fn has_pending_merge_state(&self) -> bool {
-        !self.pending_merge_state.is_none()
+        self.pending_merge_state.is_some()
     }
     /// Whether the snapshot is handling.
     /// See the comments of `check_snap_status` for more details.
