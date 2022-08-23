@@ -8,7 +8,7 @@ use kvproto::metapb::Store;
 use raftstore::store::{Config, ReadDelegate};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
-use crate::{batch::StoreContext, tablet::CachedTablet, StoreMsg};
+use crate::{batch::StoreContext, router::StoreMsg, tablet::CachedTablet};
 
 pub struct StoreMeta<E>
 where
@@ -53,15 +53,15 @@ impl StoreFsm {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&self, store_msg_buf: &mut Vec<StoreMsg>) -> usize {
+    pub fn recv(&self, store_msg_buf: &mut Vec<StoreMsg>, batch_size: usize) -> usize {
         let l = store_msg_buf.len();
-        for i in l..store_msg_buf.capacity() {
+        for i in l..batch_size {
             match self.receiver.try_recv() {
                 Ok(msg) => store_msg_buf.push(msg),
                 Err(_) => return i - l,
             }
         }
-        store_msg_buf.capacity() - l
+        batch_size - l
     }
 }
 
