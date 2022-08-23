@@ -453,23 +453,18 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut time_slice_start = Instant::now();
         loop {
             // Check whether we should yield from the execution
-            if need_reschedule(time_slice_start) {
-                reschedule().await;
-                time_slice_start = Instant::now();
-            }
+            // if need_reschedule(time_slice_start) {
+            //     reschedule().await;
+            //     time_slice_start = Instant::now();
+            // }
 
             let mut chunk = Chunk::default();
 
             let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
-                //let _guard = sample.observe_cpu();
-                self.internal_handle_request(
-                    false,
-                    batch_size,
-                    &mut chunk,
-                    &mut warnings,
-                    &mut ctx,
-                ).await?
+                // let _guard = sample.observe_cpu();
+                self.internal_handle_request(false, batch_size, &mut chunk, &mut warnings, &mut ctx)
+                    .await?
             };
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
@@ -548,13 +543,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         while record_len < self.stream_row_limit && !is_drained {
             let mut current_chunk = Chunk::default();
             // TODO: Streaming coprocessor on TiKV is just not enabled in TiDB now.
-            let (drained, len) = self.internal_handle_request(
-                true,
-                batch_size.min(self.stream_row_limit - record_len),
-                &mut current_chunk,
-                &mut warnings,
-                &mut ctx,
-            ).await?;
+            let (drained, len) = self
+                .internal_handle_request(
+                    true,
+                    batch_size.min(self.stream_row_limit - record_len),
+                    &mut current_chunk,
+                    &mut warnings,
+                    &mut ctx,
+                )
+                .await?;
             chunk
                 .mut_rows_data()
                 .extend_from_slice(current_chunk.get_rows_data());

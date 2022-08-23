@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use async_trait::async_trait;
+use std::time::Duration;
+
+use tikv_util::time::Instant;
+use yatp::task::future::reschedule;
+
 use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
 
@@ -24,13 +28,36 @@ pub struct RangesScanner<T> {
     current_range: IntervalRange,
     working_range_begin_key: Vec<u8>,
     working_range_end_key: Vec<u8>,
+    rescheduler: RescheduleChecker,
 }
 
-#[async_trait]
-pub trait ReScheduleChecker {
-    async fn check_pull(&mut self);
+struct RescheduleChecker {
+    prev_start: Instant,
+    prev_key_count: usize,
 }
 
+const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+const CHECK_KEYS: usize = 32;
+
+impl RescheduleChecker {
+    fn new() -> Self {
+        Self {
+            prev_start: Instant::now(),
+            prev_key_count: 0,
+        }
+    }
+
+    async fn check_reschedule(&mut self, force_check: bool) {
+        self.prev_key_count += 1;
+        if (force_check || self.prev_key_count % CHECK_KEYS == 0)
+            && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
+        {
+            reschedule().await;
+            self.prev_start = Instant::now();
+            self.prev_key_count = 0;
+        }
+    }
+}
 
 pub struct RangesScannerOptions<T> {
     pub storage: T,
@@ -65,6 +92,7 @@ impl<T: Storage> RangesScanner<T> {
             },
             working_range_begin_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             working_range_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
+            rescheduler: RescheduleChecker::new(),
         }
     }
 
@@ -83,6 +111,7 @@ impl<T: Storage> RangesScanner<T> {
         update_scanned_range: bool,
     ) -> Result<Option<OwnedKvPair>, StorageError> {
         loop {
+            let mut force_check = true;
             let range = self.ranges_iter.next();
             let some_row = match range {
                 IterStatus::NewRange(Range::Point(r)) => {
@@ -102,7 +131,10 @@ impl<T: Storage> RangesScanner<T> {
                         .begin_scan(self.scan_backward_in_range, self.is_key_only, r)?;
                     self.storage.scan_next()?
                 }
-                IterStatus::Continue => self.storage.scan_next()?,
+                IterStatus::Continue => {
+                    force_check = false;
+                    self.storage.scan_next()?
+                }
                 IterStatus::Drained => {
                     if self.is_scanned_range_aware {
                         self.update_working_range_end_key();
@@ -118,6 +150,7 @@ impl<T: Storage> RangesScanner<T> {
                 if let Some(r) = self.scanned_rows_per_range.last_mut() {
                     *r += 1;
                 }
+                self.rescheduler.check_reschedule(force_check).await;
 
                 return Ok(some_row);
             } else {
@@ -251,6 +284,7 @@ impl<T: Storage> RangesScanner<T> {
 #[cfg(test)]
 mod tests {
     use futures::executor::block_on;
+
     use super::*;
     use crate::storage::{test_fixture::FixtureStorage, IntervalRange, PointRange, Range};
 
@@ -350,12 +384,18 @@ mod tests {
             is_key_only: true,
             is_scanned_range_aware: false,
         });
-        assert_eq!(block_on(scanner.next()).unwrap(), Some((b"bar".to_vec(), Vec::new())));
+        assert_eq!(
+            block_on(scanner.next()).unwrap(),
+            Some((b"bar".to_vec(), Vec::new()))
+        );
         assert_eq!(
             block_on(scanner.next()).unwrap(),
             Some((b"bar_2".to_vec(), Vec::new()))
         );
-        assert_eq!(block_on(scanner.next()).unwrap(), Some((b"foo".to_vec(), Vec::new())));
+        assert_eq!(
+            block_on(scanner.next()).unwrap(),
+            Some((b"foo".to_vec(), Vec::new()))
+        );
         assert_eq!(
             block_on(scanner.next()).unwrap(),
             Some((b"foo_2".to_vec(), Vec::new()))
@@ -703,17 +743,26 @@ mod tests {
         });
 
         // Only lower_inclusive is updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"");
 
         // Upper_exclusive is updated.
-        assert_eq!(&block_on(scanner.next_opt(true)).unwrap().unwrap().0, b"foo_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(true)).unwrap().unwrap().0,
+            b"foo_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
         // Upper_exclusive is not updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo_3");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo_3"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
@@ -746,22 +795,34 @@ mod tests {
         });
 
         // Only lower_inclusive is updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"");
 
         // Upper_exclusive is updated. Updated by scanned row.
-        assert_eq!(&block_on(scanner.next_opt(true)).unwrap().unwrap().0, b"foo_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(true)).unwrap().unwrap().0,
+            b"foo_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
         // Upper_exclusive is not updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"bar");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"bar"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
         // Upper_exclusive is not updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"bar_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"bar_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo");
         assert_eq!(&scanner.working_range_end_key, b"foo_2\0");
 
@@ -789,17 +850,26 @@ mod tests {
         });
 
         // Only lower_inclusive is updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo_3");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo_3"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo_8");
         assert_eq!(&scanner.working_range_end_key, b"");
 
         // Upper_exclusive is updated.
-        assert_eq!(&block_on(scanner.next_opt(true)).unwrap().unwrap().0, b"foo_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(true)).unwrap().unwrap().0,
+            b"foo_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo_8");
         assert_eq!(&scanner.working_range_end_key, b"foo_2");
 
         // Upper_exclusive is not updated.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"foo_8");
         assert_eq!(&scanner.working_range_end_key, b"foo_2");
 
@@ -830,22 +900,34 @@ mod tests {
         });
 
         // Lower_inclusive is updated. Upper_exclusive is not update.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"bar_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"bar_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"box");
         assert_eq!(&scanner.working_range_end_key, b"");
 
         // Upper_exclusive is updated. Updated by scanned row.
-        assert_eq!(&block_on(scanner.next_opt(true)).unwrap().unwrap().0, b"bar");
+        assert_eq!(
+            &block_on(scanner.next_opt(true)).unwrap().unwrap().0,
+            b"bar"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"box");
         assert_eq!(&scanner.working_range_end_key, b"bar");
 
         // Upper_exclusive is not update.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo_2");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo_2"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"box");
         assert_eq!(&scanner.working_range_end_key, b"bar");
 
         // Upper_exclusive is not update.
-        assert_eq!(&block_on(scanner.next_opt(false)).unwrap().unwrap().0, b"foo");
+        assert_eq!(
+            &block_on(scanner.next_opt(false)).unwrap().unwrap().0,
+            b"foo"
+        );
         assert_eq!(&scanner.working_range_begin_key, b"box");
         assert_eq!(&scanner.working_range_end_key, b"bar");
 

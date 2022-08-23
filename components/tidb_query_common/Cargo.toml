@@ -20,6 +20,7 @@ serde_json = "1.0"
 thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
 byteorder = "1.2"

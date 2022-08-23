@@ -206,7 +206,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     async fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
-        let src_result = self.entities.src.next_batch(crate::runner::BATCH_MAX_SIZE).await;
+        let src_result = self
+            .entities
+            .src
+            .next_batch(crate::runner::BATCH_MAX_SIZE)
+            .await;
 
         self.entities.context.warnings = src_result.warnings;
 

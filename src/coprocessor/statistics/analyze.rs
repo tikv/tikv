@@ -393,7 +393,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             {
-                //let _guard = sample.observe_cpu();
+                // let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE).await;
                 is_drained = result.is_drained?;
 

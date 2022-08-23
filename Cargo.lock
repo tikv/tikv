@@ -5920,6 +5920,7 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "time",
+ "yatp",
 ]
 
 [[package]]
