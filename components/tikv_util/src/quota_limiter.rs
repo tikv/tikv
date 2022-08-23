@@ -153,6 +153,19 @@ impl QuotaLimiter {
         Duration::from_nanos(self.max_delay_duration.load(Ordering::Relaxed))
     }
 
+<<<<<<< HEAD
+=======
+    pub fn auto_tune_enabled(&self) -> bool {
+        self.enable_auto_tune.load(Ordering::Relaxed)
+    }
+
+    pub fn total_read_bytes_consumed(&self, is_foreground: bool) -> usize {
+        self.get_limiters(is_foreground)
+            .read_bandwidth_limiter
+            .total_bytes_consumed()
+    }
+
+>>>>>>> 252b44288... make read quota limiter work for coprocessor as well (#13257)
     // To generate a sampler.
     pub fn new_sample(&self) -> Sample {
         Sample {
