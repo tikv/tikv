@@ -849,8 +849,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
         self.pool.borrow_mut().spawn(async move {
             loop {
-                // when get the guard, release it until we finish scanning a batch, 
-                // because if we were suspended during scanning, 
+                // when get the guard, release it until we finish scanning a batch,
+                // because if we were suspended during scanning,
                 // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
                 let guard = limit.guard().await;
                 if let Err(e) = guard {
@@ -1174,11 +1174,12 @@ pub mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        sync::Mutex,
+        sync::{Mutex, RwLock},
         time::Duration,
     };
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
+    use collections::HashSet;
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
@@ -1213,7 +1214,9 @@ pub mod tests {
     impl MockRegionInfoProvider {
         pub fn new(encode_key: bool) -> Self {
             MockRegionInfoProvider {
-                regions: Arc::new(Mutex::new(RegionCollector::new())),
+                regions: Arc::new(Mutex::new(RegionCollector::new(Arc::new(RwLock::new(
+                    HashSet::default(),
+                ))))),
                 cancel: None,
                 need_encode_key: encode_key,
             }

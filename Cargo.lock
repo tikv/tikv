@@ -4214,7 +4214,7 @@ dependencies = [
  "engine_traits",
  "error_code",
  "fail",
- "futures-util",
+ "futures 0.3.15",
  "keys",
  "kvproto",
  "log_wrappers",
