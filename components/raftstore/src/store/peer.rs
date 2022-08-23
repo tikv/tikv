@@ -1696,7 +1696,6 @@ where
         for idx in group {
             let peer_id = msgs[*idx].get_to();
             let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
-            let is_replicate_state = self.raft_group.raft.is_replicate_state(peer_id);
             if self.raft_group.is_recent_active(peer_id)
                 && self.raft_group.get_next_idx(peer_id).unwrap() > next_idx
                 && is_voter
@@ -1762,7 +1761,10 @@ where
         // Filter MsgAppend.
         for (pos, msg) in msgs.iter().enumerate() {
             // Follower replication is enabled and msg is append.
-            if self.follower_repl() && msg.get_msg_type() == MessageType::MsgAppend {
+            if self.follower_repl()
+                && msg.get_msg_type() == MessageType::MsgAppend
+                && self.raft_group.raft.is_replicate_state(msg.get_to())
+            {
                 if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                     let to_peer_store_id = to_peer.get_store_id();
                     // Leader and to_peer is not in the same zone.
