@@ -10,6 +10,8 @@ portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
 failpoints = ["fail/failpoints"]
 compat_new_proxy = []
+compat_old_proxy = []
+testexport = []
 
 # Disables runtime checks of invariants required by RocksDB that are redundant
 # with assertions inside RocksDB itself. This makes it possible to test those

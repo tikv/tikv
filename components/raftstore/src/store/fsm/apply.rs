@@ -71,7 +71,10 @@ use self::memtrace::*;
 use super::metrics::*;
 use crate::{
     bytes_capacity,
-    coprocessor::{Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel},
+    coprocessor::{
+        ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+        RegionState,
+    },
     engine_store_ffi::{
         ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader, WriteCmdType, WriteCmds,
     },
@@ -294,6 +297,7 @@ pub enum ExecResult<S> {
 }
 
 /// The possible returned value when applying logs.
+#[derive(Debug)]
 pub enum ApplyResult<S> {
     None,
     Yield,
@@ -405,6 +409,11 @@ where
     /// this entry will never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
+    /// A self-defined engine may be slow to ingest ssts.
+    /// It may move some elements of `delete_ssts` into `pending_delete_ssts` to
+    /// delay deletion. Otherwise we may lost data.
+    pending_delete_ssts: Vec<SstMetaInfo>,
+
     /// The priority of this Handler.
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
@@ -465,6 +474,7 @@ where
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
+            pending_delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -491,8 +501,14 @@ where
     /// write the changes into rocksdb.
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
-    pub fn commit(&mut self, _delegate: &mut ApplyDelegate<EK>) {
-        unreachable!()
+    pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
+        // TODO(tiflash): pengding PR https://github.com/tikv/tikv/pull/12957.
+        // We always persist advanced apply state here.
+        // However, it should not be called from `handle_raft_entry_normal`.
+        if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
+            delegate.write_apply_state(self.kv_wb_mut());
+        }
+        self.commit_opt(delegate, true);
     }
 
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
@@ -509,6 +525,26 @@ where
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.sync_log_hint;
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            if cfg!(feature = "compat_old_proxy") {
+                // There may be put and delete requests after ingest request in the same fsm.
+                // To guarantee the correct order, we must ingest the pending_sst first, and
+                // then persist the kv write batch to engine.
+                if !self.pending_ssts.is_empty() {
+                    let tag = self.tag.clone();
+                    self.importer
+                        .ingest(&self.pending_ssts, &self.engine)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "{} failed to ingest ssts {:?}: {:?}",
+                                tag, self.pending_ssts, e
+                            );
+                        });
+                    self.pending_ssts = vec![];
+                }
+            }
+        }
         if !self.kv_wb_mut().is_empty() {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -567,6 +603,14 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            if cfg!(feature = "compat_old_proxy") {
+                if !delegate.pending_remove {
+                    delegate.write_apply_state(self.kv_wb_mut());
+                }
+            }
+        }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
@@ -1190,7 +1234,8 @@ where
         apply_ctx.sync_log_hint |= should_sync_log(&cmd);
 
         apply_ctx.host.pre_apply(&self.region, &cmd);
-        let (mut resp, exec_result) = self.apply_raft_cmd(apply_ctx, index, term, &cmd);
+        let (mut resp, exec_result, should_write) =
+            self.apply_raft_cmd(apply_ctx, index, term, &cmd);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
             return exec_result;
         }
@@ -1206,10 +1251,13 @@ where
         // store will call it after handing exec result.
         cmd_resp::bind_term(&mut resp, self.term);
         let cmd_cb = self.find_pending(index, term, is_conf_change_cmd(&cmd));
-        let cmd = Cmd::new(index, cmd, resp);
+        let cmd = Cmd::new(index, term, cmd, resp);
         apply_ctx
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
+        if should_write {
+            apply_ctx.commit(self);
+        }
         exec_result
     }
 
@@ -1227,7 +1275,7 @@ where
         index: u64,
         term: u64,
         req: &RaftCmdRequest,
-    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>) {
+    ) -> (RaftCmdResponse, ApplyResult<EK::Snapshot>, bool) {
         // if pending remove, apply should be aborted already.
         assert!(!self.pending_remove);
 
@@ -1235,28 +1283,20 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result, flash_res) = if ctx.host.pre_exec(&self.region, req, index, term) {
+        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, req, index, term) {
             // One of the observers want to filter execution of the command.
             let mut resp = RaftCmdResponse::default();
             if !req.get_header().get_uuid().is_empty() {
                 let uuid = req.get_header().get_uuid().to_vec();
                 resp.mut_header().set_uuid(uuid);
             }
-            {
-                // TODO(tiflash) This can be removed when we merged `post_exec`
-                // hacked by CalvinNeo.
-                let cmds = WriteCmds::new();
-                ctx.engine_store_server_helper.handle_write_raft_cmd(
-                    &cmds,
-                    RaftCmdHeader::new(self.region.get_id(), index, term),
-                );
-            }
-            (resp, ApplyResult::None, EngineStoreApplyRes::None)
+            // We do not need to hack here. A filtered command can also be handled by post_exec.
+            (resp, ApplyResult::None)
         } else {
             ctx.exec_log_index = index;
             ctx.exec_log_term = term;
             ctx.kv_wb_mut().set_save_point();
-            let (resp, exec_result, flash_res) = match self.exec_raft_cmd(ctx, req) {
+            let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
                 Ok(a) => {
                     ctx.kv_wb_mut().pop_save_point().unwrap();
                     if req.has_admin_request() {
@@ -1280,52 +1320,60 @@ where
                             "peer_id" => self.id(),
                         ),
                     }
-                    {
-                        // hacked by solotzg.
-                        let cmds = WriteCmds::new();
-                        ctx.engine_store_server_helper.handle_write_raft_cmd(
-                            &cmds,
-                            RaftCmdHeader::new(self.region.get_id(), index, term),
-                        );
-                    }
-                    (
-                        cmd_resp::new_error(e),
-                        ApplyResult::None,
-                        EngineStoreApplyRes::None,
-                    )
+                    (cmd_resp::new_error(e), ApplyResult::None)
                 }
             };
-            (resp, exec_result, flash_res)
+            (resp, exec_result)
         };
         if let ApplyResult::WaitMergeSource(_) = exec_result {
-            return (resp, exec_result);
+            return (resp, exec_result, false);
         }
 
         self.apply_state.set_applied_index(index);
         self.applied_index_term = term;
 
-        let need_write_apply_state = match flash_res {
-            EngineStoreApplyRes::Persist => true,
-            EngineStoreApplyRes::NotFound => {
-                if req.has_admin_request() {
-                    error!(
-                        "region not found in engine-store, maybe have exec `RemoveNode` first";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "term" => term,
-                        "index" => index,
-                    );
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
+        let cmd = Cmd::new(index, term, req.clone(), resp.clone());
+        let (modified_region, mut pending_handle_ssts) = match exec_result {
+            ApplyResult::Res(ref e) => match e {
+                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
+                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
+                _ => (None, None),
+            },
+            _ => (None, None),
         };
-
-        if need_write_apply_state && !self.pending_remove {
-            info!("persist apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
-            self.write_apply_state(ctx.kv_wb_mut());
+        let mut apply_ctx_info = ApplyCtxInfo {
+            pending_handle_ssts: &mut pending_handle_ssts,
+            delete_ssts: &mut ctx.delete_ssts,
+            pending_delete_ssts: &mut ctx.pending_delete_ssts,
+        };
+        let should_write = ctx.host.post_exec(
+            &self.region,
+            &cmd,
+            &self.apply_state,
+            &RegionState {
+                peer_id: self.id(),
+                pending_remove: self.pending_remove,
+                modified_region,
+            },
+            &mut apply_ctx_info,
+        );
+        match pending_handle_ssts {
+            None => (),
+            Some(mut v) => {
+                if !v.is_empty() {
+                    // All elements in `pending_handle_ssts` should be moved into either
+                    // `delete_ssts` or `pending_delete_ssts`, once handled by by any of the
+                    // `post_exec` observers. So a non-empty
+                    // `pending_handle_ssts` here indicates no `post_exec` handled.
+                    ctx.delete_ssts.append(&mut v);
+                }
+                RAFT_APPLYING_SST_GAUGE
+                    .with_label_values(&["pending_delete"])
+                    .set(ctx.pending_delete_ssts.len() as i64);
+            }
         }
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
@@ -1378,7 +1426,7 @@ where
             }
         }
 
-        (resp, exec_result)
+        (resp, exec_result, should_write)
     }
 
     fn destroy(&mut self, apply_ctx: &mut ApplyContext<EK>) {
@@ -1428,11 +1476,7 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(
-        RaftCmdResponse,
-        ApplyResult<EK::Snapshot>,
-        EngineStoreApplyRes,
-    )> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
@@ -1448,35 +1492,18 @@ where
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(
-        RaftCmdResponse,
-        ApplyResult<EK::Snapshot>,
-        EngineStoreApplyRes,
-    )> {
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
-
-        match cmd_type {
-            AdminCmdType::CompactLog | AdminCmdType::CommitMerge => {}
-            AdminCmdType::ComputeHash | AdminCmdType::VerifyHash => {
-                info!(
-                    "useless admin command";
-                    "region_id" => self.region_id(),
-                    "term" => ctx.exec_log_term,
-                    "index" => ctx.exec_log_index,
-                    "type" => ?cmd_type,
-                );
-            }
-            _ => {
-                info!(
-                    "execute admin command";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.id(),
-                    "term" => ctx.exec_log_term,
-                    "index" => ctx.exec_log_index,
-                    "command" => ?request
-                );
-            }
+        if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
+            info!(
+                "execute admin command";
+                "region_id" => self.region_id(),
+                "peer_id" => self.id(),
+                "term" => ctx.exec_log_term,
+                "index" => ctx.exec_log_index,
+                "command" => ?request,
+            );
         }
 
         let (mut response, mut exec_result) = match cmd_type {
@@ -1502,78 +1529,65 @@ where
             resp.mut_header().set_uuid(uuid);
         }
 
-        let flash_res = if let ApplyResult::WaitMergeSource(_) = &exec_result {
-            EngineStoreApplyRes::None
-        } else {
-            ctx.engine_store_server_helper.handle_admin_raft_cmd(
-                &request,
-                &response,
-                RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
-            )
-        };
-
         resp.set_admin_response(response);
-        Ok((resp, exec_result, flash_res))
+        Ok((resp, exec_result))
     }
 
     fn exec_write_cmd(
         &mut self,
         ctx: &mut ApplyContext<EK>,
         req: &RaftCmdRequest,
-    ) -> Result<(
-        RaftCmdResponse,
-        ApplyResult<EK::Snapshot>,
-        EngineStoreApplyRes,
-    )> {
-        const NONE_STR: &str = "";
+    ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
+        fail_point!(
+            "on_apply_write_cmd",
+            cfg!(release) || self.id() == 3,
+            |_| {
+                unimplemented!();
+            }
+        );
+
         let requests = req.get_requests();
+
+        let mut ranges = vec![];
         let mut ssts = vec![];
-        let mut cmds = WriteCmds::with_capacity(requests.len());
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
-                CmdType::Put => {
-                    let put = req.get_put();
-                    let cf = crate::engine_store_ffi::name_to_cf(put.get_cf());
-                    let (key, value) = (put.get_key(), put.get_value());
-                    if cf != ColumnFamilyType::Lock {
-                        self.metrics.size_diff_hint += key.len() as i64 + value.len() as i64;
-                        self.metrics.written_bytes += key.len() as u64 + value.len() as u64;
-                        self.metrics.written_keys += 1;
-                    }
-                    cmds.push(key, value, WriteCmdType::Put, cf);
+                CmdType::Put => self.handle_put(ctx, req),
+                CmdType::Delete => self.handle_delete(ctx, req),
+                CmdType::DeleteRange => {
+                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
                 }
-                CmdType::Delete => {
-                    let del = req.get_delete();
-                    let cf = crate::engine_store_ffi::name_to_cf(del.get_cf());
-                    let key = del.get_key();
-                    if cf != ColumnFamilyType::Lock {
-                        self.metrics.size_diff_hint -= key.len() as i64;
-                        self.metrics.delete_keys_hint += 1;
-                        self.metrics.written_bytes += key.len() as u64;
-                        self.metrics.written_keys += 1;
-                    }
-                    cmds.push(key, NONE_STR.as_ref(), WriteCmdType::Del, cf);
-                }
-                CmdType::IngestSst => {
-                    ssts.push(SstMetaInfo {
-                        total_bytes: 0,
-                        total_kvs: 0,
-                        meta: req.get_ingest_sst().get_sst().clone(),
-                    });
-                }
-                CmdType::Snap | CmdType::Get | CmdType::DeleteRange => {
-                    // engine-store will drop table, no need DeleteRange
+                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
+                // Readonly commands are handled in raftstore directly.
+                // Don't panic here in case there are old entries need to be applied.
+                // It's also safe to skip them here, because a restart must have happened,
+                // hence there is no callback to be called.
+                CmdType::Snap | CmdType::Get => {
+                    warn!(
+                        "skip readonly command";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
+                        "command" => ?req,
+                    );
                     continue;
                 }
                 CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
-                    panic!("invalid cmd type, message maybe currupted");
+                    Err(box_err!("invalid cmd type, message maybe corrupted"))
                 }
-            }
+            }?;
         }
 
-        return if !ssts.is_empty() {
-            assert_eq!(cmds.len(), 0);
+        let mut resp = RaftCmdResponse::default();
+        if !req.get_header().get_uuid().is_empty() {
+            let uuid = req.get_header().get_uuid().to_vec();
+            resp.mut_header().set_uuid(uuid);
+        }
+
+        assert!(ranges.is_empty() || ssts.is_empty());
+        let exec_res = if !ranges.is_empty() {
+            ApplyResult::Res(ExecResult::DeleteRange { ranges })
+        } else if !ssts.is_empty() {
             #[cfg(feature = "failpoints")]
             {
                 let mut dont_delete_ingested_sst_fp = || {
@@ -1583,51 +1597,12 @@ where
                 };
                 dont_delete_ingested_sst_fp();
             }
-            match self.handle_ingest_sst_for_engine_store(&ctx, &ssts) {
-                EngineStoreApplyRes::None => {
-                    self.pending_clean_ssts.append(&mut ssts);
-                    info!(
-                        "skip persist for ingest sst";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "term" => ctx.exec_log_term,
-                        "index" => ctx.exec_log_index,
-                        "pending_ssts" => ?self.pending_clean_ssts
-                    );
-
-                    Ok((
-                        RaftCmdResponse::new(),
-                        ApplyResult::None,
-                        EngineStoreApplyRes::None,
-                    ))
-                }
-                EngineStoreApplyRes::NotFound | EngineStoreApplyRes::Persist => {
-                    ssts.append(&mut self.pending_clean_ssts);
-                    info!(
-                        "ingest sst success";
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.id(),
-                        "term" => ctx.exec_log_term,
-                        "index" => ctx.exec_log_index,
-                        "ssts_to_clean" => ?ssts
-                    );
-                    ctx.delete_ssts.append(&mut ssts.clone());
-                    Ok((
-                        RaftCmdResponse::new(),
-                        ApplyResult::Res(ExecResult::IngestSst { ssts }),
-                        EngineStoreApplyRes::Persist,
-                    ))
-                }
-            }
+            ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
-            let flash_res = {
-                ctx.engine_store_server_helper.handle_write_raft_cmd(
-                    &cmds,
-                    RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
-                )
-            };
-            Ok((RaftCmdResponse::new(), ApplyResult::None, flash_res))
+            ApplyResult::None
         };
+
+        Ok((resp, exec_res))
     }
 }
 
@@ -1658,6 +1633,7 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
@@ -1669,6 +1645,7 @@ where
                 )
             });
         } else {
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
@@ -1699,6 +1676,7 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1715,6 +1693,7 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1778,6 +1757,8 @@ where
                     e
                 )
             };
+
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
@@ -1787,6 +1768,8 @@ where
             } else {
                 DeleteStrategy::DeleteByKey
             };
+
+            // TODO(tiflash): open this comment if we finish engine_tiflash.
             // Delete all remaining keys.
             engine
                 .delete_ranges_cf(cf, strategy.clone(), &range)
@@ -2982,7 +2965,10 @@ pub fn is_conf_change_cmd(msg: &RaftCmdRequest) -> bool {
     req.has_change_peer() || req.has_change_peer_v2()
 }
 
-fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
+/// This function is used to check whether an sst is valid for ingestion.
+///
+/// The `sst` must have epoch and range matched with `region`.
+pub fn check_sst_for_ingestion(sst: &SstMeta, region: &Region) -> Result<()> {
     let uuid = sst.get_uuid();
     if let Err(e) = UuidBuilder::from_slice(uuid) {
         return Err(box_err!("invalid uuid {:?}: {:?}", uuid, e));
@@ -5017,6 +5003,14 @@ mod tests {
             self
         }
 
+        fn prepare_merge(mut self, target: metapb::Region) -> EntryBuilder {
+            let mut request = AdminRequest::default();
+            request.set_cmd_type(AdminCmdType::PrepareMerge);
+            request.mut_prepare_merge().set_target(target);
+            self.req.set_admin_request(request);
+            self
+        }
+
         fn compact_log(mut self, index: u64, term: u64) -> EntryBuilder {
             let mut req = AdminRequest::default();
             req.set_cmd_type(AdminCmdType::CompactLog);
@@ -5048,6 +5042,10 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        delay_remove_ssts: Arc<AtomicBool>,
+        last_delete_sst_count: Arc<AtomicU64>,
+        last_pending_delete_sst_count: Arc<AtomicU64>,
+        last_pending_handle_sst_count: Arc<AtomicU64>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -5060,9 +5058,68 @@ mod tests {
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
+
+        fn post_exec_query(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: &Cmd,
+            _: &RaftApplyState,
+            _: &RegionState,
+            apply_info: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            match apply_info.pending_handle_ssts {
+                Some(v) => {
+                    // If it is a ingest sst
+                    let mut ssts = std::mem::take(v);
+                    assert_ne!(ssts.len(), 0);
+                    if self.delay_remove_ssts.load(Ordering::SeqCst) {
+                        apply_info.pending_delete_ssts.append(&mut ssts);
+                    } else {
+                        apply_info.delete_ssts.append(&mut ssts);
+                    }
+                }
+                None => (),
+            }
+            self.last_delete_sst_count
+                .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
+            self.last_pending_delete_sst_count.store(
+                apply_info.pending_delete_ssts.len() as u64,
+                Ordering::SeqCst,
+            );
+            self.last_pending_handle_sst_count.store(
+                match apply_info.pending_handle_ssts {
+                    Some(ref v) => v.len() as u64,
+                    None => 0,
+                },
+                Ordering::SeqCst,
+            );
+            false
+        }
     }
 
     impl AdminObserver for ApplyObserver {
+        fn post_exec_admin(
+            &self,
+            _: &mut ObserverContext<'_>,
+            cmd: &Cmd,
+            _: &RaftApplyState,
+            region_state: &RegionState,
+            _: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            let request = cmd.request.get_admin_request();
+            match request.get_cmd_type() {
+                AdminCmdType::CompactLog => true,
+                AdminCmdType::CommitMerge
+                | AdminCmdType::PrepareMerge
+                | AdminCmdType::RollbackMerge => {
+                    assert!(region_state.modified_region.is_some());
+                    true
+                }
+                AdminCmdType::BatchSplit => true,
+                _ => false,
+            }
+        }
+
         fn pre_exec_admin(
             &self,
             _: &mut ObserverContext<'_>,
@@ -5722,11 +5779,13 @@ mod tests {
     #[test]
     fn test_exec_observer() {
         let (_path, engine) = create_tmp_engine("test-exec-observer");
-        let (_import_dir, importer) = create_tmp_importer("test-exec-observer");
+        let (import_dir, importer) = create_tmp_importer("test-exec-observer");
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -5740,8 +5799,8 @@ mod tests {
             sender,
             region_scheduler,
             coprocessor_host: host,
-            importer,
-            engine,
+            importer: importer.clone(),
+            engine: engine.clone(),
             router: router.clone(),
             store_id: 1,
             pending_create_peers,
@@ -5761,13 +5820,16 @@ mod tests {
         router.schedule_task(1, Msg::Registration(reg));
 
         let mut index_id = 1;
-        let put_entry = EntryBuilder::new(1, 1)
+        let put_entry = EntryBuilder::new(index_id, 1)
             .put(b"k1", b"v1")
+            .put(b"k2", b"v2")
+            .put(b"k3", b"v3")
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
         fetch_apply_res(&rx);
 
+        // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
         let compact_entry = EntryBuilder::new(index_id, 1)
             .compact_log(index_id - 1, 2)
@@ -5823,6 +5885,93 @@ mod tests {
         // We can't get exec result of ComputeHash.
         assert_eq!(apply_res.exec_res.len(), 0);
         obs.filter_consistency_check.store(false, Ordering::SeqCst);
+
+        // Phase 2: we test if post_exec will persist when need.
+        // We choose BatchSplit in order to make sure `modified_region` is filled.
+        index_id += 1;
+        let mut splits = BatchSplitRequest::default();
+        splits.set_right_derive(true);
+        splits.mut_requests().push(new_split_req(b"k2", 8, vec![7]));
+        let split = EntryBuilder::new(index_id, 1)
+            .split(splits)
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![split], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_term, 1);
+        let (r1, r8) = if let ExecResult::SplitRegion {
+            regions,
+            derived: _,
+            new_split_regions: _,
+        } = apply_res.exec_res.front().unwrap()
+        {
+            let r8 = regions.get(0).unwrap();
+            let r1 = regions.get(1).unwrap();
+            assert_eq!(r8.get_id(), 8);
+            assert_eq!(r1.get_id(), 1);
+            (r1, r8)
+        } else {
+            panic!("error split exec_res");
+        };
+
+        index_id += 1;
+        let merge = EntryBuilder::new(index_id, 1)
+            .prepare_merge(r8.clone())
+            .epoch(1, 3)
+            .build();
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![merge], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
+        assert_eq!(apply_res.applied_index_term, 1);
+        // PrepareMerge will trigger commit.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(apply_res.apply_state, state);
+
+        // Phase 3: we test if we can delay deletion of some sst files.
+        let r1_epoch = r1.get_region_epoch();
+        index_id += 1;
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"2")];
+        let sst_path = import_dir.path().join("test.sst");
+        let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+        meta.set_region_id(1);
+        meta.set_region_epoch(r1_epoch.clone());
+        let mut file = importer.create(&meta).unwrap();
+        file.append(&data).unwrap();
+        file.finish().unwrap();
+        let src = sst_path.clone();
+        let dst = file.get_import_path().save.to_str().unwrap();
+        std::fs::copy(src, dst).unwrap();
+        assert!(sst_path.as_path().exists());
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+
+        obs.delay_remove_ssts.store(true, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
+
+        index_id += 1;
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+        obs.delay_remove_ssts.store(false, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
 
         system.shutdown();
     }

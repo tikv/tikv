@@ -53,9 +53,55 @@ impl RocksWriteBatch {
     }
 }
 
+impl RocksWriteBatch {
+    fn cf_to_name(&self, cf: u32) -> &'static str {
+        // d 0 w 2 l 1
+        let handle_default = get_cf_handle(self.db.as_ref(), engine_traits::CF_DEFAULT).unwrap();
+        let d = handle_default.id();
+        let handle_write = get_cf_handle(self.db.as_ref(), engine_traits::CF_WRITE).unwrap();
+        let w = handle_write.id();
+        let handle_lock = get_cf_handle(self.db.as_ref(), engine_traits::CF_LOCK).unwrap();
+        let l = handle_lock.id();
+        if cf == l {
+            return engine_traits::CF_LOCK;
+        } else if cf == w {
+            return engine_traits::CF_WRITE;
+        } else if cf == d {
+            return engine_traits::CF_DEFAULT;
+        } else {
+            return engine_traits::CF_RAFT;
+        }
+    }
+    #[cfg(any(test, feature = "testexport"))]
+    fn check_double_write(&self) {
+        // It will fire if we write by both observer(compat_old_proxy is not enabled)
+        // and TiKV's WriteBatch.
+        tikv_util::debug!("check if double write happens");
+        if cfg!(feature = "compat_old_proxy") {
+            // We need write to RocksEngine by WriteBatch other than observer.
+        } else {
+            for (_, cf, k, _) in self.wb.iter() {
+                let handle = self.db.cf_handle_by_id(cf as usize).unwrap();
+                let cf_name = self.cf_to_name(handle.id());
+                match cf_name {
+                    engine_traits::CF_DEFAULT
+                    | engine_traits::CF_LOCK
+                    | engine_traits::CF_WRITE => {
+                        assert_eq!(crate::do_write(cf_name, k), true);
+                    }
+                    _ => (),
+                };
+            }
+        }
+    }
+    #[cfg(not(any(test, feature = "testexport")))]
+    fn check_double_write(&self) {}
+}
+
 impl engine_traits::WriteBatch for RocksWriteBatch {
     fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
         let opt: RocksWriteOptions = opts.into();
+        self.check_double_write();
         self.get_db()
             .write_opt(&self.wb, &opt.into_raw())
             .map_err(Error::Engine)
@@ -101,7 +147,7 @@ impl engine_traits::WriteBatch for RocksWriteBatch {
 }
 
 pub fn do_write(cf: &str, key: &[u8]) -> bool {
-    #[cfg(feature = "compat_new_proxy")]
+    #[cfg(not(feature = "compat_old_proxy"))]
     {
         return match cf {
             engine_traits::CF_RAFT => true,
@@ -111,7 +157,10 @@ pub fn do_write(cf: &str, key: &[u8]) -> bool {
             _ => false,
         };
     }
-    return true;
+    #[cfg(feature = "compat_old_proxy")]
+    {
+        return true;
+    }
 }
 
 impl RocksWriteBatch {

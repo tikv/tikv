@@ -11,6 +11,7 @@ pub struct Config {
     pub tikv: TiKvConfig,
     pub prefer_mem: bool,
     pub proxy_cfg: ProxyConfig,
+    /// Whether our mock server should compat new proxy.
     pub proxy_compat: bool,
 }
 

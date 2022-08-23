@@ -49,6 +49,7 @@ impl ChangeLog {
             .map(|cmd| {
                 let Cmd {
                     index,
+                    term: _,
                     mut request,
                     mut response,
                 } = cmd;

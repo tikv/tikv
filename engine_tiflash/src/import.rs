@@ -13,7 +13,7 @@ impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
-        #[cfg(feature = "compat_new_proxy")]
+        #[cfg(not(feature = "compat_old_proxy"))]
         {
             // do nothing
             return Ok(());

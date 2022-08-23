@@ -27,6 +27,8 @@ test-engines-panic = [
 cloud-aws = ["sst_importer/cloud-aws"]
 cloud-gcp = ["sst_importer/cloud-gcp"]
 cloud-azure = ["sst_importer/cloud-azure"]
+compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
+compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 batch-system = { path = "../batch-system", default-features = false }

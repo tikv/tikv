@@ -66,7 +66,6 @@ fn test_download_sst_blocking_sst_writer() {
     ingest.set_sst(meta);
     let resp = import.ingest(&ingest).unwrap();
     assert!(!resp.has_error());
-
     check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 

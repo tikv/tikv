@@ -183,10 +183,15 @@ unsafe fn load_from_db(store: &mut EngineStoreServer, region: &mut Box<Region>) 
     }
 }
 
-unsafe fn write_to_db_data(store: &mut EngineStoreServer, region: &mut Box<Region>) {
+unsafe fn write_to_db_data(
+    store: &mut EngineStoreServer,
+    region: &mut Box<Region>,
+    reason: String,
+) {
     info!("mock flush to engine";
         "region" => ?region.region,
         "store_id" => store.id,
+        "reason" => reason
     );
     let kv = &mut store.engines.as_mut().unwrap().kv;
     for cf in 0..3 {
@@ -232,11 +237,23 @@ impl EngineStoreServerWrap {
         let region_id = header.region_id;
         let node_id = (*self.engine_store_server).id;
         info!("handle_admin_raft_cmd";
-            "request"=>?req, "response"=>?resp, "index"=>header.index, "region-id"=>header.region_id);
+            "node_id"=>node_id,
+            "request"=>?req,
+            "response"=>?resp,
+            "header"=>?header,
+            "region_id"=>header.region_id,
+        );
         let do_handle_admin_raft_cmd =
             move |region: &mut Box<Region>, engine_store_server: &mut EngineStoreServer| {
                 if region.apply_state.get_applied_index() >= header.index {
-                    return ffi_interfaces::EngineStoreApplyRes::Persist;
+                    // If it is a old entry.
+                    error!("obsolete admin index";
+                    "apply_state"=>?region.apply_state,
+                    "header"=>?header,
+                    "node_id"=>node_id,
+                    );
+                    panic!("observe obsolete admin index");
+                    return ffi_interfaces::EngineStoreApplyRes::None;
                 }
                 match req.get_cmd_type() {
                     AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2 => {
@@ -414,6 +431,7 @@ impl EngineStoreServerWrap {
                 let res = match req.get_cmd_type() {
                     AdminCmdType::CompactLog => {
                         fail::fail_point!("no_persist_compact_log", |_| {
+                            // Persist data, but don't persist meta.
                             ffi_interfaces::EngineStoreApplyRes::None
                         });
                         ffi_interfaces::EngineStoreApplyRes::Persist
@@ -450,11 +468,17 @@ impl EngineStoreServerWrap {
         };
         match res {
             ffi_interfaces::EngineStoreApplyRes::Persist => {
+                // Persist tells ApplyDelegate to do a commit.
+                // So we also need a persist of actual data on engine-store' side.
                 if let Some(region) = region {
                     if req.get_cmd_type() == AdminCmdType::CompactLog {
                         // We already persist when fn_try_flush_data.
                     } else {
-                        write_to_db_data(&mut (*self.engine_store_server), region);
+                        write_to_db_data(
+                            &mut (*self.engine_store_server),
+                            region,
+                            format!("admin {:?}", req),
+                        );
                     }
                 }
             }
@@ -470,11 +494,17 @@ impl EngineStoreServerWrap {
     ) -> ffi_interfaces::EngineStoreApplyRes {
         let region_id = header.region_id;
         let server = &mut (*self.engine_store_server);
+        let node_id = (*self.engine_store_server).id;
         let kv = &mut (*self.engine_store_server).engines.as_mut().unwrap().kv;
         let proxy_compat = server.proxy_compat;
-
         let mut do_handle_write_raft_cmd = move |region: &mut Box<Region>| {
             if region.apply_state.get_applied_index() >= header.index {
+                debug!("obsolete write index";
+                "apply_state"=>?region.apply_state,
+                "header"=>?header,
+                "node_id"=>node_id,
+                );
+                panic!("observe obsolete write index");
                 return ffi_interfaces::EngineStoreApplyRes::None;
             }
             for i in 0..cmds.len {
@@ -486,13 +516,12 @@ impl EngineStoreServerWrap {
                 let cf = &*cmds.cmd_cf.add(i as _);
                 let cf_index = (*cf) as u8;
                 debug!(
-                    "handle_write_raft_cmd";
+                    "handle_write_raft_cmd with kv";
                     "k" => ?&k[..std::cmp::min(4usize, k.len())],
                     "v" => ?&v[..std::cmp::min(4usize, v.len())],
                     "region_id" => region_id,
                     "node_id" => server.id,
                     "header" => ?header,
-                    "proxy_compat" => proxy_compat,
                 );
                 let data = &mut region.data[cf_index as usize];
                 match tp {
@@ -507,7 +536,8 @@ impl EngineStoreServerWrap {
             // Advance apply index, but do not persist
             region.set_applied(header.index, header.term);
             if !proxy_compat {
-                write_to_db_data(server, region);
+                // If we don't support new proxy
+                write_to_db_data(server, region, format!("write"));
             }
             ffi_interfaces::EngineStoreApplyRes::None
         };
@@ -653,11 +683,19 @@ unsafe extern "C" fn ffi_try_flush_data(
     fail::fail_point!("try_flush_data", |e| {
         let b = e.unwrap().parse::<u8>().unwrap();
         if b == 1 {
-            write_to_db_data(&mut (*store.engine_store_server), region);
+            write_to_db_data(
+                &mut (*store.engine_store_server),
+                region,
+                format!("fn_try_flush_data"),
+            );
         }
         b
     });
-    write_to_db_data(&mut (*store.engine_store_server), region);
+    write_to_db_data(
+        &mut (*store.engine_store_server),
+        region,
+        format!("fn_try_flush_data"),
+    );
     true as u8
 }
 
@@ -883,7 +921,7 @@ unsafe extern "C" fn ffi_pre_handle_snapshot(
         "snap len" => snaps.len,
     );
     for i in 0..snaps.len {
-        let mut snapshot = snaps.views.add(i as usize);
+        let snapshot = snaps.views.add(i as usize);
         let view = &*(snapshot as *mut ffi_interfaces::SSTView);
         let mut sst_reader = SSTReader::new(proxy_helper, view);
 
@@ -949,7 +987,11 @@ unsafe extern "C" fn ffi_apply_pre_handled_snapshot(
         "store_id" => node_id,
         "region" => ?region.region,
     );
-    write_to_db_data(&mut (*store.engine_store_server), region);
+    write_to_db_data(
+        &mut (*store.engine_store_server),
+        region,
+        String::from("prehandle-snap"),
+    );
 }
 
 unsafe extern "C" fn ffi_handle_ingest_sst(
@@ -966,7 +1008,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     let _kv = &mut (*store.engine_store_server).engines.as_mut().unwrap().kv;
 
     match kvstore.entry(region_id) {
-        std::collections::hash_map::Entry::Occupied(o) => {}
+        std::collections::hash_map::Entry::Occupied(_o) => {}
         std::collections::hash_map::Entry::Vacant(v) => {
             // When we remove hacked code in handle_raft_entry_normal during migration,
             // some tests in handle_raft_entry_normal may fail, since it can observe a empty cmd,
@@ -989,7 +1031,7 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
     );
 
     for i in 0..snaps.len {
-        let mut snapshot = snaps.views.add(i as usize);
+        let snapshot = snaps.views.add(i as usize);
         // let _path = std::str::from_utf8_unchecked((*snapshot).path.to_slice());
         let mut sst_reader =
             SSTReader::new(proxy_helper, &*(snapshot as *mut ffi_interfaces::SSTView));
@@ -1010,7 +1052,14 @@ unsafe extern "C" fn ffi_handle_ingest_sst(
         region.apply_state.mut_truncated_state().set_term(term);
     }
 
-    write_to_db_data(&mut (*store.engine_store_server), region);
+    fail::fail_point!("on_handle_ingest_sst_return", |e| {
+        ffi_interfaces::EngineStoreApplyRes::None
+    });
+    write_to_db_data(
+        &mut (*store.engine_store_server),
+        region,
+        String::from("ingest-sst"),
+    );
     ffi_interfaces::EngineStoreApplyRes::Persist
 }
 

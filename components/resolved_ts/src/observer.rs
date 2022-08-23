@@ -185,7 +185,7 @@ mod test {
             put_cf(CF_WRITE, b"k7", b"v"),
             put_cf(CF_WRITE, b"k8", b"v"),
         ];
-        let mut cmd = Cmd::new(0, RaftCmdRequest::default(), RaftCmdResponse::default());
+        let mut cmd = Cmd::new(0, 0, RaftCmdRequest::default(), RaftCmdResponse::default());
         cmd.request.mut_requests().clear();
         for put in &data {
             cmd.request.mut_requests().push(put.clone());

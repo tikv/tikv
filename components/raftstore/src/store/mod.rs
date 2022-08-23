@@ -33,7 +33,7 @@ pub use self::{
     },
     compaction_guard::CompactionGuardGeneratorFactory,
     config::Config,
-    fsm::{DestroyPeerJob, RaftRouter, StoreInfo},
+    fsm::{check_sst_for_ingestion, DestroyPeerJob, RaftRouter, StoreInfo},
     hibernate_state::{GroupState, HibernateState},
     memory::*,
     metrics::RAFT_ENTRY_FETCHES_VEC,

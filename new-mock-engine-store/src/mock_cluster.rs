@@ -308,7 +308,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         &mut self,
         router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
-        let (mut engines, key_manager, dir) =
+        let (engines, key_manager, dir) =
             create_tiflash_test_engine(router.clone(), self.io_rate_limiter.clone(), &self.cfg);
 
         self.create_ffi_helper_set(engines, &key_manager, &router);
@@ -328,7 +328,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
             debug!("recover node"; "node_id" => node_id);
-            let mut engines = self.engines.get_mut(&node_id).unwrap().clone();
+            let engines = self.engines.get_mut(&node_id).unwrap().clone();
             let key_mgr = self.key_managers_map[&node_id].clone();
             // Always at the front of the vector.
             self.associate_ffi_helper_set(Some(0), node_id);
@@ -886,6 +886,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         reqs: Vec<Request>,
         read_quorum: bool,
         timeout: Duration,
+        panic_when_timeout: bool,
     ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
@@ -931,7 +932,10 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             }
             return resp;
         }
-        panic!("request timeout");
+        if panic_when_timeout {
+            panic!("request timeout");
+        }
+        RaftCmdResponse::default()
     }
 
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
@@ -954,7 +958,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         region_key: &[u8],
         reqs: Vec<Request>,
     ) -> result::Result<RaftCmdResponse, PbError> {
-        let resp = self.request(region_key, reqs, false, Duration::from_secs(5));
+        let resp = self.request(region_key, reqs, false, Duration::from_secs(5), true);
         if resp.get_header().has_error() {
             Err(resp.get_header().get_error().clone())
         } else {
@@ -972,6 +976,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             vec![new_delete_cmd(cf, key)],
             false,
             Duration::from_secs(5),
+            true,
         );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);

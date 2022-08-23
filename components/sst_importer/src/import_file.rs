@@ -83,7 +83,8 @@ impl fmt::Debug for ImportPath {
 /// ImportFile is used to handle the writing and verification of SST files.
 pub struct ImportFile {
     meta: SstMeta,
-    path: ImportPath,
+    // TODO(tiflash) remove pub when support get_import_path
+    pub path: ImportPath,
     file: Option<Box<dyn SyncableWrite>>,
     digest: crc32fast::Hasher,
     key_manager: Option<Arc<DataKeyManager>>,
@@ -166,6 +167,10 @@ impl ImportFile {
             return Err(Error::FileCorrupted(self.path.temp.clone(), reason));
         }
         Ok(())
+    }
+
+    pub fn get_import_path(&self) -> &ImportPath {
+        &self.path
     }
 }
 

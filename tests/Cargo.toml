@@ -49,6 +49,7 @@ mem-profiling = ["tikv/mem-profiling"]
 sse = ["tikv/sse"]
 portable = ["tikv/portable"]
 compat_new_proxy = ["engine_tiflash/compat_new_proxy"]
+compat_old_proxy = ["engine_tiflash/compat_old_proxy"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }

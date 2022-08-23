@@ -8,6 +8,7 @@
 #![feature(hash_drain_filter)]
 #![feature(vec_retain_mut)]
 #![recursion_limit = "256"]
+#![feature(drain_filter)]
 
 #[cfg(test)]
 extern crate test;

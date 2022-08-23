@@ -9,11 +9,12 @@ use std::{
     vec::IntoIter,
 };
 
-use engine_traits::CfName;
+use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::RaftApplyState,
 };
 use raft::{eraftpb, StateRole};
 
@@ -74,6 +75,21 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+/// Context of a region provided for observers.
+#[derive(Default, Clone)]
+pub struct RegionState {
+    pub peer_id: u64,
+    pub pending_remove: bool,
+    pub modified_region: Option<Region>,
+}
+
+/// Context for exec observers of mutation to be applied to ApplyContext.
+pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_delete_ssts: &'a mut Vec<SstMetaInfo>,
+}
+
 pub trait AdminObserver: Coprocessor {
     /// Hook to call before proposing admin request.
     fn pre_propose_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminRequest) -> Result<()> {
@@ -86,6 +102,19 @@ pub trait AdminObserver: Coprocessor {
     /// Hook to call after applying admin request.
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
+
+    /// Hook to call immediately after exec command
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        _: &RaftApplyState,
+        _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
+    ) -> bool {
+        false
+    }
 
     /// Hook before exec admin request, returns whether we should skip this
     /// admin.
@@ -117,6 +146,19 @@ pub trait QueryObserver: Coprocessor {
     /// Hook to call after applying write request.
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
+
+    /// Hook to call immediately after exec command.
+    /// Will be a special persistence after this exec if a observer returns true.
+    fn post_exec_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &Cmd,
+        _: &RaftApplyState,
+        _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
+    ) -> bool {
+        false
+    }
 
     /// Hook before exec write request, returns whether we should skip this
     /// write.
@@ -241,14 +283,16 @@ pub trait RegionChangeObserver: Coprocessor {
 #[derive(Clone, Debug, Default)]
 pub struct Cmd {
     pub index: u64,
+    pub term: u64,
     pub request: RaftCmdRequest,
     pub response: RaftCmdResponse,
 }
 
 impl Cmd {
-    pub fn new(index: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
+    pub fn new(index: u64, term: u64, request: RaftCmdRequest, response: RaftCmdResponse) -> Cmd {
         Cmd {
             index,
+            term,
             request,
             response,
         }

@@ -143,7 +143,9 @@ pub fn collect_all_states(cluster: &Cluster<NodeCluster>, region_id: u64) -> Has
 pub fn new_mock_cluster(id: u64, count: usize) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let cluster = Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
+    let mut cluster = Cluster::new(id, count, sim, pd_client.clone(), ProxyConfig::default());
+    // Compat new proxy
+    cluster.cfg.proxy_compat = true;
 
     (cluster, pd_client)
 }
@@ -171,10 +173,12 @@ pub fn must_get_mem(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    let s = std::str::from_utf8(key).unwrap_or("");
     panic!(
-        "can't get mem value {:?} for key {} in {}, actual {:?}",
+        "can't get mem value {:?} for key {}({}) in {}, actual {:?}",
         value.map(tikv_util::escape),
         log_wrappers::hex_encode_upper(key),
+        s,
         engine_store_server.id,
         last_res,
     )
@@ -210,7 +214,7 @@ pub fn check_key(
         };
         match in_mem {
             Some(b) => {
-                let mut lock = cluster.ffi_helper_set.lock().unwrap();
+                let lock = cluster.ffi_helper_set.lock().unwrap();
                 let server = &lock.get(&id).unwrap().engine_store_server;
                 if b {
                     must_get_mem(server, region_id, k, Some(v));
@@ -220,6 +224,60 @@ pub fn check_key(
             }
             None => (),
         };
+    }
+}
+
+pub fn check_apply_state(
+    cluster: &Cluster<NodeCluster>,
+    region_id: u64,
+    prev_states: &HashMap<u64, States>,
+    in_mem_eq: Option<bool>,
+    in_disk_eq: Option<bool>,
+) {
+    let old = prev_states.get(&region_id).unwrap();
+    for _ in 1..10 {
+        let new_states = collect_all_states(&cluster, region_id);
+        let new = new_states.get(&region_id).unwrap();
+        if let Some(b) = in_mem_eq {
+            if b && new.in_memory_applied_term == old.in_memory_applied_term
+                && new.in_memory_apply_state == old.in_memory_apply_state
+            {
+                break;
+            }
+            if !b
+                && (new.in_memory_applied_term != old.in_memory_applied_term
+                    || new.in_memory_apply_state != old.in_memory_apply_state)
+            {
+                break;
+            }
+        }
+        if let Some(b) = in_disk_eq {
+            if b && new.in_disk_apply_state == old.in_disk_apply_state {
+                break;
+            }
+            if !b && new.in_disk_apply_state != old.in_disk_apply_state {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let new_states = collect_all_states(&cluster, region_id);
+    let new = new_states.get(&region_id).unwrap();
+    if let Some(b) = in_mem_eq {
+        if b {
+            assert_eq!(new.in_memory_applied_term, old.in_memory_applied_term);
+            assert_eq!(new.in_memory_apply_state, old.in_memory_apply_state);
+        } else {
+            assert_ne!(new.in_memory_apply_state, old.in_memory_apply_state);
+        }
+    }
+    if let Some(b) = in_disk_eq {
+        if b && new.in_disk_apply_state == old.in_disk_apply_state {
+            assert_eq!(new.in_disk_apply_state, old.in_disk_apply_state);
+        }
+        if !b && new.in_disk_apply_state != old.in_disk_apply_state {
+            assert_ne!(new.in_disk_apply_state, old.in_disk_apply_state);
+        }
     }
 }
 
@@ -239,14 +297,14 @@ pub fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
 #[test]
 fn test_kv_write() {
     let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-    cluster.cfg.proxy_compat = true;
 
+    cluster.cfg.proxy_compat = false;
     // No persist will be triggered by CompactLog
     fail::cfg("no_persist_compact_log", "return").unwrap();
     let _ = cluster.run();
 
     cluster.must_put(b"k0", b"v0");
-    check_key(&cluster, b"k0", b"v0", Some(false), Some(false), None);
+    // check_key(&cluster, b"k0", b"v0", Some(false), Some(false), None);
 
     // We can read initial raft state, since we don't persist meta either.
     let r1 = cluster.get_region(b"k0").get_id();
