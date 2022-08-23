@@ -130,7 +130,7 @@ pub trait DebugExecutor {
     }
 
     fn dump_region_size_and_key(&self, region: u64, cfs: Vec<&str>) -> (usize, usize) {
-        let (sizes) = self.get_region_size_and_key(region, cfs);
+        let sizes = self.get_region_size_and_key(region, cfs);
         let mut total_size = 0;
         let mut total_key = 0;
         println!("region id: {}", region);
