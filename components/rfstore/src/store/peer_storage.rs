@@ -476,6 +476,23 @@ impl PeerStorage {
                 self.get_region_id()
             ));
         }
+        // If the region is created by raft message, parent_id is always None, but it's possible
+        // a split request is applied lately and added it to the dependent, so we avoid adding dependent
+        // when splitting regions by checking peer existence to handle such a case.
+        if let Some(parent_id) = self.parent_id() {
+            if ctx
+                .global
+                .engines
+                .raft
+                .remove_dependent(parent_id, self.get_region_id())
+                == 0
+                && parent_id != self.get_region_id()
+            {
+                ctx.global
+                    .router
+                    .send_store(StoreMsg::DependentsEmpty(parent_id));
+            }
+        }
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
             self.clear_meta(&mut ctx.raft_wb, false);
