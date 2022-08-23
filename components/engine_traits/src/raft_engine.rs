@@ -17,6 +17,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_prepare_bootstrap_region(&self) -> Result<Option<Region>>;
 
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
+    fn get_snapshot_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
@@ -153,6 +154,9 @@ pub trait RaftLogBatch: Send {
     fn remove_prepare_bootstrap_region(&mut self) -> Result<()>;
 
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
+    fn put_snapshot_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState)
+    -> Result<()>;
+    fn delete_snapshot_raft_state(&mut self, raft_group_id: u64) -> Result<()>;
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
 

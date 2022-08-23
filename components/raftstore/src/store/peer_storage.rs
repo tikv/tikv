@@ -132,13 +132,12 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     raft_wb: &mut ER::LogBatch,
     region_id: u64,
 ) -> Result<()> {
-    let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
     let snapshot_raft_state: RaftLocalState =
-        match box_try!(engines.kv.get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
+        match box_try!(engines.raft.get_snapshot_raft_state(region_id)) {
             Some(state) => state,
             None => {
                 return Err(box_err!(
-                    "[region {}] failed to get raftstate from kv engine, \
+                    "[region {}] failed to get raftstate, \
                      when recover from applying state",
                     region_id
                 ));
@@ -366,7 +365,7 @@ where
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
-        kv_wb: &mut impl Mutable,
+        wb: &mut impl RaftLogBatch,
     ) -> Result<()> {
         let mut snapshot_raft_state = self.raft_state().clone();
         snapshot_raft_state
@@ -374,11 +373,7 @@ where
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        kv_wb.put_msg_cf(
-            CF_RAFT,
-            &keys::snapshot_raft_state_key(self.region.get_id()),
-            &snapshot_raft_state,
-        )?;
+        wb.put_snapshot_raft_state(self.region.get_id(), &snapshot_raft_state)?;
         Ok(())
     }
 
@@ -894,9 +889,12 @@ where
             // but not write raft_local_state to raft db in time.
             // We write raft state to kv db, with last index set to snap index,
             // in case of recv raft log after snapshot.
+            if write_task.raft_wb.is_none() {
+                write_task.raft_wb = Some(self.engines.raft.log_batch(64));
+            }
             self.save_snapshot_raft_state_to(
                 ready.snapshot().get_metadata().get_index(),
-                write_task.extra_write.v1_mut().unwrap(),
+                write_task.raft_wb.as_mut().unwrap(),
             )?;
             self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
         }
@@ -1573,7 +1571,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             0,
             true,
@@ -1721,7 +1719,7 @@ pub mod tests {
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             0,
             true,
@@ -1787,7 +1785,7 @@ pub mod tests {
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s1.engines.kv.clone(),
+            s1.engines.clone(),
             mgr,
             0,
             true,

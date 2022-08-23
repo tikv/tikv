@@ -52,6 +52,10 @@ impl RaftEngineReadOnly for PanicEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         panic!()
     }
+
+    fn get_snapshot_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>> {
+        panic!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
@@ -189,6 +193,18 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
+        panic!()
+    }
+
+    fn put_snapshot_raft_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &RaftLocalState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_snapshot_raft_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
 }
