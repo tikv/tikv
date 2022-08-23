@@ -66,6 +66,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{self, AtomicBool},
+        mpsc::sync_channel,
         Arc,
     },
 };
@@ -1537,15 +1538,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         // TODO: wait for the applied index to reach the latest committed index.
         let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback);
 
-        // TODO: flashback to the specified version.
+        let (tx, rx) = sync_channel(1);
         self.sched_txn_command(
             req.into(),
-            Box::new(|x| {
-                todo!("should block here until the flashback is finished");
+            Box::new(move |x| {
+                tx.send(x).unwrap();
             }),
         )?;
+        match rx.recv() {
+            Ok(txn_res) => txn_res?,
+            Err(recv_err) => {
+                return Err(box_err!(
+                    "failed to wait the flashback txn command result: {:?}",
+                    recv_err
+                ));
+            }
+        }
 
-        // Resume the scheduling, reading and writing.
+        // TODO: resume the scheduling, reading and writing.
         let _ = raft_router.significant_send(region_id, SignificantMsg::FinishFlashback);
 
         KV_COMMAND_COUNTER_VEC_STATIC.flashback_to_version.inc();

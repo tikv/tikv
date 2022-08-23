@@ -144,6 +144,8 @@ impl TaskContext {
         // Write command should acquire write lock.
         if !task.cmd.readonly()
             && !lock.is_write_lock()
+            // See the comments for `gen_lock!` of `Command::FlashbackToVersion`
+            // to get why we bypass the lock generation check here.
             && !matches!(task.cmd, Command::FlashbackToVersion(..))
         {
             panic!("write lock is expected for command {}", task.cmd);
