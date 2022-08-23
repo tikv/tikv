@@ -165,7 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ),
             pending_remove: false,
             cmd_epoch_checker: Default::default(),
-            proposals: ProposalQueue::new(tag.clone()),
+            proposals: ProposalQueue::new(tag),
         }))
     }
 

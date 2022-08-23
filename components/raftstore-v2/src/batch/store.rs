@@ -401,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
             store.get_id(),
-            raft_engine.clone(),
+            raft_engine,
             tablet_factory,
             trans,
             router.clone(),
