@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
+use std::{convert::TryInto, ops::Deref};
+
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
     RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
@@ -395,6 +397,22 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    }
+
+    fn recover_from_raft_db(&self) -> Result<bool> {
+        let recover_from_raftdb = matches!(self
+            .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
+            .map(|v| u8::from_be_bytes(v.deref().try_into().unwrap())),
+            Some(val) if val == 1);
+        Ok(recover_from_raftdb)
+    }
+
+    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()> {
+        let recover_from_raft_db = if recover_from_raft_db { 1 } else { 0 };
+        self.put(
+            keys::RECOVER_FROM_RAFT_DB_KEY,
+            &u8::to_be_bytes(recover_from_raft_db),
+        )
     }
 }
 

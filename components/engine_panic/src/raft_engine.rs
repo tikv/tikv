@@ -163,6 +163,14 @@ impl RaftEngine for PanicEngine {
     {
         panic!()
     }
+
+    fn recover_from_raft_db(&self) -> Result<bool> {
+        panic!()
+    }
+
+    fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
