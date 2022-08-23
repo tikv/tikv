@@ -177,8 +177,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     fn on_receive_command(&self, send_time: Instant) {
         self.store_ctx
             .raft_metrics
-            .propose
-            .request_wait_time
+            .propose_wait_time
             .observe(duration_to_sec(send_time.saturating_elapsed()) as f64);
     }
 
