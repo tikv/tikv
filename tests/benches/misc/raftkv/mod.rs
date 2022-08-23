@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
@@ -179,7 +180,11 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(RwLock::new(HashSet::default())),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
@@ -208,7 +213,11 @@ fn bench_async_write(b: &mut test::Bencher) {
     region.mut_region_epoch().set_version(2);
     region.mut_region_epoch().set_conf_ver(5);
     let (_tmp, db) = new_engine();
-    let kv = RaftKv::new(SyncBenchRouter::new(region.clone(), db.clone()), db);
+    let kv = RaftKv::new(
+        SyncBenchRouter::new(region.clone(), db.clone()),
+        db,
+        Arc::new(RwLock::new(HashSet::default())),
+    );
 
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
