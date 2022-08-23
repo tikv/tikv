@@ -4436,6 +4436,61 @@ mod tests {
         );
     }
 
+    // TODO: add more flashback test cases.
+    #[test]
+    fn test_flashback_to_version() {
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@100".to_vec())],
+                    b"k".to_vec(),
+                    100.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k")],
+                    100.into(),
+                    101.into(),
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(101.into())),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@100".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 102.into()))
+                .unwrap()
+                .0,
+        );
+        storage
+            .sched_txn_command(
+                commands::FlashbackToVersion::new(
+                    100.into(),
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"z"),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 102.into()))
+                .unwrap()
+                .0,
+        );
+    }
+
     #[test]
     fn test_high_priority_get_put() {
         let storage = TestStorageBuilderApiV1::new(DummyLockManager)

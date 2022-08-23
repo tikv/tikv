@@ -19,7 +19,7 @@ use crate::storage::{
 
 command! {
     FlashbackToVersion:
-        cmd_ty => (TimeStamp /* Version to reset */, Key /* start_key */, Key /* end_key */),
+        cmd_ty => (),
         display => "kv::command::flashback_to_version [{}, {}) @ {} | {:?}", (start_key, end_key, version ,ctx),
         content => {
             version: TimeStamp,
@@ -50,7 +50,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         let mut reader = MvccScanner::new(
             snapshot,
             BATCH_SIZE,
+            // Flashback the `CF_WRITE` and `CF_DEFAULT` to `self.version`.
             self.version,
+            // Clear the whole `CF_LOCK`, so we use `TimeStamp::zero()`.
             TimeStamp::zero(),
             Some(self.start_key),
             Some(self.end_key),

@@ -142,7 +142,10 @@ impl TaskContext {
         let tag = task.cmd.tag();
         let lock = task.cmd.gen_lock();
         // Write command should acquire write lock.
-        if !task.cmd.readonly() && !lock.is_write_lock() {
+        if !task.cmd.readonly()
+            && !lock.is_write_lock()
+            && !matches!(task.cmd, Command::FlashbackToVersion(..))
+        {
             panic!("write lock is expected for command {}", task.cmd);
         }
         let write_bytes = if lock.is_write_lock() {

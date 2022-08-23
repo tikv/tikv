@@ -9,14 +9,16 @@ use crate::storage::{
 };
 
 // Flashback all keys within [start_key, end_key) to the specified version by
-// deleting all keys in `CF_WRITE` and `CF_DEFAULT` that are committed later
-// than this version and clearing all locks in `CF_LOCK`.
+// deleting all keys in `CF_WRITE`, `CF_DEFAULT` and `CF_LOCK` that are written
+// later than this version.
 pub fn flashback_to_version<S: Snapshot>(
     txn: &mut MvccTxn,
     scanner: &mut MvccScanner<S>,
 ) -> MvccResult<()> {
     // To flashback the `CF_WRITE`, we need to delete all write records whose
-    // `commit_ts` is greater than the specified version.
+    // `commit_ts` is greater than the specified version, and if it's not a
+    // short-value `WriteType::Put`, we need to delete the actual data from
+    // `CF_DEFAULT` as well.
     loop {
         let writes = scanner.scan_next_batch_write()?;
         if writes.is_empty() {
@@ -33,7 +35,10 @@ pub fn flashback_to_version<S: Snapshot>(
             }
         }
     }
-    // To flashback the `CF_LOCK`, we need to delete all locks inside.
+    // To flashback the `CF_LOCK`, we need to delete all locks records whose
+    // `start_ts` is greater than the specified version, and if it's not a
+    // short-value `LockType::Put`, we need to delete the actual data from
+    // `CF_DEFAULT` as well.
     // TODO: `resolved_ts` better be taken into account here.
     loop {
         let locks = scanner.scan_next_batch_lock()?;

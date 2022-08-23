@@ -79,11 +79,6 @@ pub enum ProcessResult {
         previous_value: Option<Value>,
         succeed: bool,
     },
-    FlashbackToVersionRes {
-        version: TimeStamp,
-        start_key: Key,
-        end_key: Key,
-    },
 }
 
 impl ProcessResult {

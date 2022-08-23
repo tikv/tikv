@@ -347,7 +347,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
-impl From<FlashbackToVersionRequest> for TypedCommand<(TimeStamp, Key, Key)> {
+impl From<FlashbackToVersionRequest> for TypedCommand<()> {
     fn from(mut req: FlashbackToVersionRequest) -> Self {
         FlashbackToVersion::new(
             req.get_version().into(),
