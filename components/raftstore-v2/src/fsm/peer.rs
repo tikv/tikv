@@ -17,12 +17,12 @@ use tikv_util::{
 
 use crate::{batch::StoreContext, raft::Peer, PeerMsg, PeerTick, Result};
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);
 
 pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     peer: Peer<EK, ER>,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    receiver: Receiver<PeerMsg<EK>>,
+    receiver: Receiver<PeerMsg>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
     tick_registry: u16,
@@ -62,7 +62,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg<EK>>) -> usize {
+    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>) -> usize {
         let l = peer_msg_buf.len();
         for i in l..peer_msg_buf.capacity() {
             match self.receiver.try_recv() {
@@ -80,7 +80,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
-    type Message = PeerMsg<EK>;
+    type Message = PeerMsg;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -183,13 +183,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
     }
 
-    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
+    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
+                PeerMsg::RaftQuery(_) => unimplemented!(),
                 PeerMsg::RaftCommand(_) => unimplemented!(),
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes { res } => unimplemented!(),
+                PeerMsg::ApplyRes(res) => unimplemented!(),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {

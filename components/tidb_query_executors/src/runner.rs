@@ -471,6 +471,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     &mut ctx,
                 )?
             };
+            if chunk.has_rows_data() {
+                sample.add_read_bytes(chunk.get_rows_data().len());
+            }
 
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
