@@ -1012,7 +1012,7 @@ where
             self.last_hash.1 as usize
         };
 
-        let mut transport_on_send_store_fp = || {
+        let transport_on_send_store_fp = || {
             fail_point!(
                 "transport_on_send_snapshot",
                 msg.get_message().get_msg_type() == raft::eraftpb::MessageType::MsgSnapshot,

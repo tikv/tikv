@@ -170,13 +170,14 @@ pub async fn region_resolved_ts_store(
     defer!(PENDING_RTS_COUNT.dec());
     fail_point!("before_sync_replica_read_state", |_| regions.clone());
 
-    let store_id = match store_meta.lock().unwrap().store_id {
+    let current_store_id = match store_meta.lock().unwrap().store_id {
         Some(id) => id,
         None => return vec![],
     };
 
-    // store_id -> leaders info, record the request to each stores
-    let mut store_map: HashMap<u64, Vec<LeaderInfo>> = HashMap::default();
+    // store_id -> (non-learner count, leaders info), record the request to each
+    // stores
+    let mut store_map: HashMap<u64, (usize, Vec<LeaderInfo>)> = HashMap::default();
     // region_id -> region, cache the information of regions
     let mut region_map: HashMap<u64, Vec<Peer>> = HashMap::default();
     // region_id -> peers id, record the responses
@@ -188,21 +189,20 @@ pub async fn region_resolved_ts_store(
     for (region_id, (peer_list, leader_info)) in info_map {
         let leader_id = leader_info.get_peer_id();
         // Check if the leader in this store
-        if util::find_store_id(&peer_list, leader_id) != Some(store_id) {
+        if util::find_store_id(&peer_list, leader_id) != Some(current_store_id) {
             continue;
         }
         let mut unvotes = 0;
         for peer in &peer_list {
-            if peer.store_id == store_id && peer.id == leader_id {
-                resp_map.entry(region_id).or_default().push(store_id);
+            if peer.store_id == current_store_id && peer.id == leader_id {
+                resp_map.entry(region_id).or_default().push(peer.store_id);
             } else {
                 // It's still necessary to check leader on learners even if they don't vote
                 // because performing stale read on learners require it.
-                store_map
-                    .entry(peer.store_id)
-                    .or_default()
-                    .push(leader_info.clone());
+                let store_info = store_map.entry(peer.store_id).or_default();
+                store_info.1.push(leader_info.clone());
                 if peer.get_role() != PeerRole::Learner {
+                    store_info.0 += 1;
                     unvotes += 1;
                 }
             }
@@ -219,11 +219,11 @@ pub async fn region_resolved_ts_store(
     let leader_info_size = store_map
         .values()
         .next()
-        .map_or(0, |regions| regions[0].compute_size());
-    let store_count = store_map.len();
+        .map_or(0, |(_, regions)| regions[0].compute_size());
     let mut stores: Vec<_> = store_map
         .into_iter()
-        .map(|(to_store, regions)| {
+        .filter(|(_, (non_learner_count, _))| *non_learner_count > 0)
+        .map(|(to_store, (_, regions))| {
             let tikv_clients = tikv_clients.clone();
             let env = env.clone();
             let pd_client = pd_client.clone();
@@ -236,12 +236,9 @@ pub async fn region_resolved_ts_store(
             async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                let client =
-                    get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients.clone())
-                        .await
-                        .map_err(|e| {
-                            (to_store, e.retryable(), format!("[get tikv client] {}", e))
-                        })?;
+                let client = get_tikv_client(to_store, pd_client, security_mgr, env, tikv_clients)
+                    .await
+                    .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
 
                 let mut req = CheckLeaderRequest::default();
                 req.set_regions(regions.into());
@@ -290,7 +287,7 @@ pub async fn region_resolved_ts_store(
             .with_label_values(&["all"])
             .observe(start.saturating_elapsed_secs());
     });
-    for _ in 0..store_count {
+    while !stores.is_empty() {
         // Use `select_all` to avoid the process getting blocked when some TiKVs were
         // down.
         let (res, _, remains) = select_all(stores).await;
