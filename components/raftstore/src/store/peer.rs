@@ -761,24 +761,6 @@ where
     fn has_pending_merge_state(&self) -> bool;
     fn is_handling_snapshot(&self) -> bool;
 
-    #[inline]
-    fn ready_to_handle_read(&self) -> bool {
-        // TODO: It may cause read index to wait a long time.
-
-        // There may be some values that are not applied by this leader yet but the old
-        // leader, if applied_term isn't equal to current term.
-        self.store_applied_term() == self.term()
-            // There may be stale read if the old leader splits really slow,
-            // the new region may already elected a new leader while
-            // the old leader still think it owns the split range.
-            && !self.is_splitting()
-            // There may be stale read if a target leader is in another store and
-            // applied commit merge, written new values, but the sibling peer in
-            // this store does not apply commit merge, so the leader is not ready
-            // to read, until the merge is rollbacked.
-            && !self.is_merging()
-    }
-
     fn pre_read_index(&self) -> Result<()> {
         fail_point!(
             "before_propose_readindex",
@@ -2562,6 +2544,24 @@ where
             // TODO: Instead of sharing the counter, we should apply snapshots
             //       in apply workers.
             && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
+    }
+
+    #[inline]
+    pub fn ready_to_handle_read(&self) -> bool {
+        // TODO: It may cause read index to wait a long time.
+
+        // There may be some values that are not applied by this leader yet but the old
+        // leader, if applied_term isn't equal to current term.
+        self.store_applied_term() == self.term()
+            // There may be stale read if the old leader splits really slow,
+            // the new region may already elected a new leader while
+            // the old leader still think it owns the split range.
+            && !self.is_splitting()
+            // There may be stale read if a target leader is in another store and
+            // applied commit merge, written new values, but the sibling peer in
+            // this store does not apply commit merge, so the leader is not ready
+            // to read, until the merge is rollbacked.
+            && !self.is_merging()
     }
 
     /// Checks if leader needs to keep sending logs for follower.

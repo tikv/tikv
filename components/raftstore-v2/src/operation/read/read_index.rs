@@ -181,6 +181,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         read_ch.report_error(resp);
     }
 
+    /// response the read index request
+    ///
+    /// awake the read tasks waiting in frontend (such as unified thread pool)
     pub(crate) fn response_read<T>(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
@@ -249,10 +252,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
                 }
             }
-            if self.ready_to_handle_read() {
-                while let Some(mut read) = self.pending_reads.pop_front() {
-                    self.response_read(&mut read, ctx);
-                }
+            while let Some(mut read) = self.pending_reads.pop_front() {
+                self.response_read(&mut read, ctx);
             }
         }
 

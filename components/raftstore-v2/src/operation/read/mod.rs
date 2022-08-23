@@ -6,7 +6,7 @@
 //! - Otherwise, redirect the request to the raftstore and proposed as a
 //!   RaftCommand in the raft layer.
 
+mod follower_read_index;
 mod local;
 mod read_index;
-mod follower_read_index;
 mod replica_read;
