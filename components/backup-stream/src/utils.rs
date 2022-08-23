@@ -639,6 +639,7 @@ mod test {
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
+    use tokio::io::AsyncWriteExt;
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
 
@@ -825,5 +826,38 @@ mod test {
             size,
             items_size
         );
+    }
+
+    #[tokio::test]
+    async fn test_files_reader() {
+        use tokio::{fs::File, io::AsyncReadExt};
+        use tempdir::TempDir;
+        use super::FilesReader;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let files_num = 5;
+        let mut files_path = Vec::new();
+        let mut expect_content = String::new();
+        for i in 0..files_num {
+            let path = dir.path().join(format!("f{}", i));
+            let mut file = File::create(&path).await.unwrap();
+            let content = format!("{i}_{i}_{i}_{i}_{i}\n{i}{i}{i}{i}\n").repeat(10);
+            file.write_all(content.as_bytes()).await.unwrap();
+            file.sync_all().await.unwrap();
+
+            files_path.push(path);
+            expect_content.push_str(&content);
+        }
+
+        let mut files = Vec::new();
+        for i in 0..files_num {
+            let file = File::open(&files_path[i]).await.unwrap();
+            files.push(file);
+        }
+
+        let mut files_reader = FilesReader::new(files);
+        let mut read_content = String::new();
+        files_reader.read_to_string(&mut read_content).await.unwrap();
+        assert_eq!(expect_content, read_content);
     }
 }
