@@ -356,6 +356,31 @@ where
         write_modifies(&self.engine, modifies)
     }
 
+    fn amend_modify(&self, modifies: &mut Vec<Modify>) {
+        for modify in modifies {
+            match modify {
+                Modify::Delete(_, ref mut key) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    let bytes = keys::data_key(key.as_encoded());
+                    *key = Key::from_encoded(bytes);
+                }
+                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                    let bytes = keys::data_key(key1.as_encoded());
+                    *key1 = Key::from_encoded(bytes);
+                    let bytes = keys::data_end_key(key2.as_encoded());
+                    *key2 = Key::from_encoded(bytes);
+                }
+            }
+        }
+    }
+
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
         let region_id = ctx.get_region_id();
         match self.region_leaders.read().unwrap().get(&region_id) {

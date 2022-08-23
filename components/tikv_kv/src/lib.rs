@@ -270,6 +270,8 @@ pub trait Engine: Send + Clone + 'static {
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
+    fn amend_modify(&self, _modifies: &mut Vec<Modify>) {}
+
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
     /// Precheck request which has write with it's context.

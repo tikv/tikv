@@ -2713,6 +2713,10 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.modify_on_kv_engine(modifies)
     }
 
+    fn amend_modify(&self, modifies: &mut Vec<Modify>) {
+        self.engine.amend_modify(modifies)
+    }
+
     fn async_snapshot(
         &self,
         ctx: SnapContext<'_>,

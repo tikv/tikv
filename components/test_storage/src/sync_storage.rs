@@ -8,7 +8,10 @@ use std::{
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use futures::executor::block_on;
-use kvproto::kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
+use kvproto::{
+    kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
+    metapb,
+};
 use raftstore::{coprocessor::RegionInfoProvider, router::RaftStoreBlackHole};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
@@ -334,8 +337,14 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         .unwrap()
     }
 
-    pub fn gc(&self, _: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.gc(safe_point.into(), cb)).unwrap()
+    pub fn gc(
+        &self,
+        store_id: u64,
+        region: metapb::Region,
+        _: Context,
+        safe_point: impl Into<TimeStamp>,
+    ) -> Result<()> {
+        wait_op!(|cb| self.gc_worker.gc(store_id, region, safe_point.into(), cb)).unwrap()
     }
 
     pub fn delete_range(

@@ -13,7 +13,11 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use engine_traits::{CF_DEFAULT, CF_LOCK};
-use kvproto::kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo};
+use kvproto::{
+    kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo},
+    metapb,
+};
+use protobuf::RepeatedField;
 use rand::random;
 use test_storage::*;
 use tikv::{
@@ -680,9 +684,13 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (_cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
-    store.test_txn_store_gc(key);
-    raft_store.test_txn_store_gc(key);
+    let (mut cluster, raft_store) =
+        AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
+
+    let region = cluster.get_region(key.as_bytes());
+    let store_leader = cluster.leader_of_region(region.id).unwrap().store_id;
+    store.test_txn_store_gc(store_leader, key, region.clone());
+    raft_store.test_txn_store_gc(store_leader, key, region);
 }
 
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
@@ -698,7 +706,14 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
         store.put_ok(k.as_bytes(), b"v1", 5, 10);
         store.put_ok(k.as_bytes(), b"v2", 15, 20);
     }
-    store.gc_ok(30);
+
+    let store_id = 1;
+    let mut region = metapb::Region::default();
+    region.set_peers(RepeatedField::from_vec(vec![metapb::Peer {
+        store_id,
+        ..Default::default()
+    }]));
+    store.gc_ok(store_id, region, 30);
     for k in &keys {
         store.get_none(k.as_bytes(), 15);
     }
@@ -714,12 +729,13 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
     }
 
     let mut last_region = cluster.get_region(b"");
-    store.gc_ok_for_cluster(&mut cluster, b"", 30);
+    store.gc_ok_for_cluster(&mut cluster, b"", last_region.clone(), 30);
     for k in &keys {
         // clear data whose commit_ts < 30
         let region = cluster.get_region(k.as_bytes());
         if last_region != region {
-            store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), 30);
+            store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), region.clone(), 30);
+            println!("Last region {:?} region {:?}", last_region, region);
             last_region = region;
         }
     }

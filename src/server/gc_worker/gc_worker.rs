@@ -327,35 +327,6 @@ fn get_keys_in_regions(
     }
 }
 
-fn modify_on_kv_engine<EK: KvEngine>(
-    kv_engine: &EK,
-    mut modifies: Vec<Modify>,
-) -> tikv_kv::Result<()> {
-    for modify in &mut modifies {
-        match modify {
-            Modify::Delete(_, ref mut key) => {
-                let bytes = keys::data_key(key.as_encoded());
-                *key = Key::from_encoded(bytes);
-            }
-            Modify::Put(_, ref mut key, _) => {
-                let bytes = keys::data_key(key.as_encoded());
-                *key = Key::from_encoded(bytes);
-            }
-            Modify::PessimisticLock(ref mut key, _) => {
-                let bytes = keys::data_key(key.as_encoded());
-                *key = Key::from_encoded(bytes);
-            }
-            Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                let bytes = keys::data_key(key1.as_encoded());
-                *key1 = Key::from_encoded(bytes);
-                let bytes = keys::data_end_key(key2.as_encoded());
-                *key2 = Key::from_encoded(bytes);
-            }
-        }
-    }
-    write_modifies(kv_engine, modifies)
-}
-
 fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     let mut ctx = Context::default();
     ctx.region_id = region.id;
@@ -368,9 +339,9 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
         .filter(|peer| peer.store_id == store_id)
         .collect();
 
-    assert!(peers.len() == 1);
-
-    ctx.peer = SingularPtrField::some(peers[0].clone());
+    if peers.len() == 1 {
+        ctx.peer = SingularPtrField::some(peers[0].clone());
+    }
 
     ctx
 }
@@ -441,12 +412,18 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    fn flush_txn<EK: KvEngine>(txn: MvccTxn, limiter: &Limiter, kv_engine: EK) -> Result<()> {
+    fn flush_txn<EK: KvEngine>(
+        txn: MvccTxn,
+        limiter: &Limiter,
+        engine: &E,
+        kv_engine: EK,
+    ) -> Result<()> {
         let write_size = txn.write_size();
-        let modifies = txn.into_modifies();
+        let mut modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            modify_on_kv_engine(&kv_engine, modifies)?;
+            engine.amend_modify(&mut modifies);
+            write_modifies(&kv_engine, modifies)?;
         }
         Ok(())
     }
@@ -580,7 +557,7 @@ where
                 next_gc_key = keys.next();
                 gc_info = GcInfo::default();
             } else {
-                Self::flush_txn(txn, &self.limiter, kv_engine)?;
+                Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
                 (reader, kv_engine) = {
                     let snapshot = self.get_snapshot(store_id, region)?;
                     let kv_engine = snapshot.inner_engine();
@@ -594,7 +571,7 @@ where
                 txn = Self::new_txn();
             }
         }
-        Self::flush_txn(txn, &self.limiter, kv_engine)?;
+        Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -649,13 +626,13 @@ where
                 gc_info = GcInfo::default();
             } else {
                 // Flush writeBatch to engine.
-                Self::flush_raw_gc(raw_modifies, &self.limiter, kv_engine.clone())?;
+                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, kv_engine.clone())?;
                 // After flush, reset raw_modifies.
                 raw_modifies = MvccRaw::new();
             }
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, kv_engine)?;
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, kv_engine)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -724,14 +701,16 @@ where
     fn flush_raw_gc<EK: KvEngine>(
         raw_modifies: MvccRaw,
         limiter: &Limiter,
+        engine: &E,
         kv_engine: EK,
     ) -> Result<()> {
         let write_size = raw_modifies.write_size();
-        let modifies = raw_modifies.into_modifies();
+        let mut modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            modify_on_kv_engine(&kv_engine, modifies)?;
+            engine.amend_modify(&mut modifies);
+            write_modifies(&kv_engine, modifies)?;
         }
         Ok(())
     }
@@ -1271,11 +1250,17 @@ where
     }
 
     /// Only for tests.
-    pub fn gc(&self, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
+    pub fn gc(
+        &self,
+        store_id: u64,
+        region: Region,
+        safe_point: TimeStamp,
+        callback: Callback<()>,
+    ) -> Result<()> {
         self.worker_scheduler
             .schedule(GcTask::Gc {
-                store_id: 0,
-                region: Region::default(),
+                store_id,
+                region,
                 safe_point,
                 callback,
             })
@@ -1478,6 +1463,31 @@ mod tests {
                 }
             }
             write_modifies(&self.kv_engine(), modifies)
+        }
+
+        fn amend_modify(&self, modifies: &mut Vec<Modify>) {
+            for modify in modifies {
+                match modify {
+                    Modify::Delete(_, ref mut key) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::Put(_, ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                        let bytes = keys::data_key(key1.as_encoded());
+                        *key1 = Key::from_encoded(bytes);
+                        let bytes = keys::data_end_key(key2.as_encoded());
+                        *key2 = Key::from_encoded(bytes);
+                    }
+                }
+            }
         }
 
         fn async_write(
@@ -2209,6 +2219,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         gc_worker
             .gc(
+                0,
+                Region::default(),
                 TimeStamp::from(1),
                 Box::new(move |res| {
                     tx.send(res).unwrap();

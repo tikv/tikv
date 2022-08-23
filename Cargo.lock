@@ -5725,6 +5725,7 @@ dependencies = [
  "futures 0.3.15",
  "kvproto",
  "pd_client",
+ "protobuf",
  "raftstore",
  "test_raftstore",
  "tikv",
