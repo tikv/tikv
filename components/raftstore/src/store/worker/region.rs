@@ -665,6 +665,12 @@ where
         let snap_key = SnapKey::new(*region_id, term, idx);
         let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
+            self.coprocessor_host.pre_apply_snapshot(
+                region_state.get_region(),
+                *peer_id,
+                &snap_key,
+                None,
+            );
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
         check_abort(&abort)?;
@@ -818,12 +824,7 @@ where
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
                 if self.ctx.coprocessor_host.should_pre_apply_snapshot() {
-                    if let Err(e) = self.ctx.pre_apply_snapshot(&task) {
-                        info!(
-                            "pre apply snapshot failed";
-                            "e" => ?e,
-                        );
-                    }
+                    let _ = self.ctx.pre_apply_snapshot(&task);
                 }
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
