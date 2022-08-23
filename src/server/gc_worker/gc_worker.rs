@@ -360,6 +360,7 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     let mut ctx = Context::default();
     ctx.region_id = region.id;
     ctx.region_epoch = region.region_epoch.clone();
+    ctx.stale_read = true;
 
     let peers: Vec<_> = region
         .peers

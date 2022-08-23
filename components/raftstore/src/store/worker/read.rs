@@ -782,7 +782,6 @@ where
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                        assert!(read_ts > 0);
                         if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;

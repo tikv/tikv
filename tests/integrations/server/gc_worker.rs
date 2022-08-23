@@ -6,12 +6,7 @@ use collections::HashMap;
 use engine_traits::{Peekable, CF_WRITE};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
-use kvproto::{
-    kvrpcpb::*,
-    metapb::{self, Region},
-    tikvpb::TikvClient,
-};
-use protobuf::RepeatedField;
+use kvproto::{kvrpcpb::*, metapb, tikvpb::TikvClient};
 use test_raftstore::*;
 use tikv::server::gc_worker::sync_gc;
 use tikv_util::HandyRwLock;
@@ -276,7 +271,7 @@ fn test_applied_lock_collector() {
 // `keys::DATA_PREFIX`. This case ensures it's performed correctly.
 #[test]
 fn test_gc_bypass_raft() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(1);
+    let (cluster, leader, ctx) = must_new_cluster_mul(2);
     cluster.pd_client.disable_default_operator();
 
     let env = Arc::new(Environment::new(1));
@@ -305,25 +300,25 @@ fn test_gc_bypass_raft() {
         assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_some());
     }
 
-    let gc_sched = cluster.sim.rl().get_gc_worker(1).scheduler();
-    let mut region = Region::default();
-    region.set_start_key(b"k1".to_vec());
-    region.set_end_key(b"k2".to_vec());
-    region.set_peers(RepeatedField::from_vec(vec![metapb::Peer {
-        store_id: 1,
-        id: 1,
-        ..Default::default()
-    }]));
-    sync_gc(&gc_sched, 1, region, 200.into()).unwrap();
+    let node_ids = cluster.get_node_ids();
+    for store_id in node_ids {
+        let gc_sched = cluster.sim.rl().get_gc_worker(store_id).scheduler();
 
-    for &start_ts in &[10, 20, 30] {
-        let commit_ts = start_ts + 5;
-        let key = Key::from_raw(b"k1").append_ts(start_ts.into());
-        let key = data_key(key.as_encoded());
-        assert!(engine.kv.get_value(&key).unwrap().is_none());
+        let mut region = cluster.get_region(b"a");
+        region.set_start_key(b"k1".to_vec());
+        region.set_end_key(b"k2".to_vec());
+        sync_gc(&gc_sched, store_id, region, 200.into()).unwrap();
 
-        let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
-        let key = data_key(key.as_encoded());
-        assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_none());
+        let engine = cluster.engines.get(&store_id).unwrap();
+        for &start_ts in &[10, 20, 30] {
+            let commit_ts = start_ts + 5;
+            let key = Key::from_raw(b"k1").append_ts(start_ts.into());
+            let key = data_key(key.as_encoded());
+            assert!(engine.kv.get_value(&key).unwrap().is_none());
+
+            let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
+            let key = data_key(key.as_encoded());
+            assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_none());
+        }
     }
 }
