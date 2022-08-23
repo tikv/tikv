@@ -535,10 +535,8 @@ impl PeerStorage {
     pub(crate) fn parent_id(&self) -> Option<u64> {
         self.shard_meta
             .as_ref()
-            .unwrap()
-            .parent
-            .as_ref()
-            .map(|parent| parent.id)
+            .and_then(|m| m.parent.as_ref())
+            .map(|p| p.id)
     }
 
     /// The last index of raft logs that have been applied and persisted to the state machine.
