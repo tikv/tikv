@@ -61,11 +61,11 @@ fn append_if_ref_unique<'a>(elem_list: &mut Vec<JsonRef<'a>>, other: &Vec<JsonRe
 
     let mut unique_verifier = HashSet::<RefEqualJsonWrapper<'a>>::with_hasher(Default::default());
     for elem in elem_list.iter() {
-        unique_verifier.insert(RefEqualJsonWrapper(elem.clone()));
+        unique_verifier.insert(RefEqualJsonWrapper(*elem));
     }
 
     for elem in other {
-        let elem = RefEqualJsonWrapper(elem.clone());
+        let elem = RefEqualJsonWrapper(*elem);
         if !unique_verifier.contains(&elem) {
             elem_list.push(elem.0);
         }
