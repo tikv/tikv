@@ -21,7 +21,7 @@ mod hibernate_state;
 mod peer_storage;
 mod region_snapshot;
 mod replication_mode;
-mod snap;
+pub mod snap;
 mod txn_ext;
 pub mod worker;
 

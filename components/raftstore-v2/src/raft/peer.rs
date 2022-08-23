@@ -140,7 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, s, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
-        Ok(Some(Peer {
+        let peer = Peer {
             raft_group,
             tablet: CachedTablet::new(tablet),
             has_ready: false,
@@ -166,7 +166,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             pending_remove: false,
             cmd_epoch_checker: Default::default(),
             proposals: ProposalQueue::new(tag),
-        }))
+        };
+
+        // If this region has only one peer and I am the one, campaign directly.
+        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
+            peer.raft_group.campaign()?;
+        }
+
+        Ok(Some(peer))
     }
 
     #[inline]
@@ -361,7 +368,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+    pub fn peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
         for p in self.raft_group.store().region().get_peers() {
             if p.get_id() == peer_id {
                 return Some(p.clone());
@@ -411,6 +418,19 @@ where
     #[inline]
     fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
+    }
+
+    /// Get the leader peer meta.
+    ///
+    /// `None` is returned if there is no leader or the meta can't be found.
+    #[inline]
+    fn leader(&self) -> Option<metapb::Peer> {
+        let leader_id = self.leader_id();
+        if leader_id != 0 {
+            self.peer_from_cache(leader_id)
+        } else {
+            None
+        }
     }
 
     #[inline]
