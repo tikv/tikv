@@ -13,16 +13,22 @@ use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    time::{duration_to_sec, Instant},
 };
 
-use crate::{batch::StoreContext, raft::Peer, PeerMsg, PeerTick, Result};
+use crate::{
+    batch::StoreContext,
+    raft::Peer,
+    router::{PeerMsg, PeerTick},
+    Result,
+};
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);
 
 pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     peer: Peer<EK, ER>,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    receiver: Receiver<PeerMsg<EK>>,
+    receiver: Receiver<PeerMsg>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
     tick_registry: u16,
@@ -62,9 +68,9 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg<EK>>) -> usize {
+    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>, batch_size: usize) -> usize {
         let l = peer_msg_buf.len();
-        for i in l..peer_msg_buf.capacity() {
+        for i in l..batch_size {
             match self.receiver.try_recv() {
                 Ok(msg) => peer_msg_buf.push(msg),
                 Err(e) => {
@@ -75,12 +81,12 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
                 }
             }
         }
-        peer_msg_buf.capacity() - l
+        batch_size - l
     }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
-    type Message = PeerMsg<EK>;
+    type Message = PeerMsg;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -167,6 +173,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.schedule_tick(PeerTick::Raft);
     }
 
+    #[inline]
+    fn on_receive_command(&self, send_time: Instant) {
+        self.store_ctx
+            .raft_metrics
+            .propose_wait_time
+            .observe(duration_to_sec(send_time.saturating_elapsed()) as f64);
+    }
+
     fn on_tick(&mut self, tick: PeerTick) {
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
@@ -183,13 +197,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
     }
 
-    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
+    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
-                PeerMsg::RaftCommand(_) => unimplemented!(),
+                PeerMsg::RaftQuery(cmd) => {
+                    self.on_receive_command(cmd.send_time);
+                    self.on_query(cmd.request, cmd.ch)
+                }
+                PeerMsg::RaftCommand(cmd) => {
+                    self.on_receive_command(cmd.send_time);
+                    // self.on_command(cmd.cmd.request, cmd.ch)
+                    unimplemented!()
+                }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes { res } => unimplemented!(),
+                PeerMsg::ApplyRes(res) => unimplemented!(),
                 PeerMsg::Start => self.on_start(),
                 PeerMsg::Noop => unimplemented!(),
                 PeerMsg::Persisted {
