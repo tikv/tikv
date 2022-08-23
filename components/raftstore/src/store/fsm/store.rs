@@ -2754,7 +2754,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         for (store_id, zone) in zone_info {
             ctx_zone.insert(store_id, zone);
         }
-        info!("Update Zone Information: {:?}", ctx_zone);
+        debug!("Update Zone Information: {:?}", ctx_zone);
     }
 
     fn on_unsafe_recovery_create_peer(&self, region: Region) {

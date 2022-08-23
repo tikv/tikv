@@ -1735,7 +1735,7 @@ where
                 if msg.get_to() == agent_id {
                     msg.set_forwards(forwards.into());
                     msg.set_msg_type(MessageType::MsgGroupBroadcast);
-                    info!(
+                    debug!(
                         "Follower replication: Peer {} via agent {}. Forwards:{:?}",
                         self.peer.id,
                         agent_id,
@@ -1745,7 +1745,7 @@ where
                 }
             }
         } else {
-            info!("Fail to select agent.");
+            debug!("Fail to select agent.");
         }
     }
 
@@ -1786,7 +1786,7 @@ where
 
         // Build MsgGroupBroadcast.
         for (zone, group) in msg_append_group.iter() {
-            info!("Zone name: {}, group info: {:?}", zone, group);
+            debug!("Zone name: {}, group info: {:?}", zone, group);
             if group.len() > 1 {
                 self.merge_msg_append(group, &mut msgs, &mut discard);
             }

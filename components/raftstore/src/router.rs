@@ -91,16 +91,6 @@ where
             PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
         })
     }
-
-    // /// Update Zone Information to all peers.
-    // fn report_zone_info_update(&self, zone_info: HashMap<u64, String>) {
-    //     self.broadcast_normal(|| {
-    //         PeerMsg::SignificantMsg(SignificantMsg::UpdateZoneInfo {
-    //             zone_info: zone_info.clone(),
-    //         })
-    //     });
-    //     info!("Report Zone Info Update");
-    // }
 }
 
 fn send_command_impl<EK, PR>(
