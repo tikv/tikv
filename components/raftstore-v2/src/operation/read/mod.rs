@@ -7,3 +7,6 @@
 //!   RaftCommand in the raft layer.
 
 mod local;
+mod read_index;
+mod follower_read_index;
+mod replica_read;

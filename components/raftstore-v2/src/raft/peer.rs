@@ -1,36 +1,37 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
+use std::{mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{
-    kvrpcpb::{ExtraOp as TxnExtraOp, LockInfo},
+    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
-    raft_cmdpb::{self, CmdType, RaftCmdRequest, RaftCmdResponse},
-    raft_serverpb::RegionLocalState,
+    raft_cmdpb::{self, RaftCmdRequest},
 };
 use pd_client::BucketMeta;
-use raft::{RawNode, Ready, StateRole, INVALID_ID};
+use protobuf::Message;
+use raft::{RawNode, StateRole};
 use raftstore::{
     store::{
-        cmd_resp,
-        fsm::{apply::notify_stale_req, Proposal},
-        metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ReadCallback,
-        peer::{propose_read_index, ForceLeaderState, ProposalQueue, RaftPeer, RequestInspector},
-        read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
-        util::{check_region_epoch, find_peer, Lease, LeaseState, RegionReadProgress},
+        fsm::Proposal,
+        metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
+        peer::{
+            get_sync_log_from_request, CmdEpochChecker, ProposalContext, ProposalQueue, RaftPeer,
+            RequestInspector,
+        },
+        read_queue::{ReadIndexQueue, ReadIndexRequest},
+        util::{Lease, LeaseState, RegionReadProgress},
         worker::{LocalReadContext, ReadExecutor},
-        Callback, Config, EntryStorage, PdTask, RaftlogFetchTask, Transport, TxnExt, WriteRouter,
+        Config, EntryStorage, RaftlogFetchTask, Transport, TxnExt,
     },
     Error,
 };
-use slog::{debug, error, info, o, Logger};
+use slog::{debug, error, info, o, warn, Logger};
 use tikv_util::{
     box_err,
     config::ReadableSize,
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt, ThreadReadId},
+    time::{monotonic_raw_now, Instant as TiInstant},
     worker::Scheduler,
     Either,
 };
@@ -39,17 +40,16 @@ use super::storage::Storage;
 use crate::{
     batch::StoreContext,
     operation::AsyncWriter,
-    router::{QueryResChannel, QueryResult, RaftCommand, RaftQuery, ReadResponse},
+    router::{CmdResChannel, QueryResChannel},
     tablet::{self, CachedTablet},
     Result,
 };
 
 const REGION_READ_PROGRESS_CAP: usize = 128;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    raft_group: RawNode<Storage<ER>>,
+    pub(crate) raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
@@ -58,21 +58,24 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) async_writer: AsyncWriter<EK, ER>,
     has_ready: bool,
     pub(crate) logger: Logger,
-    pending_reads: ReadIndexQueue<QueryResChannel>,
+    pub(crate) pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
-    tag: String,
+    pub(crate) tag: String,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
 
     /// Indicates whether the peer should be woken up.
-    should_wake_up: bool,
+    pub(crate) should_wake_up: bool,
 
     /// Time of the last attempt to wake up inactive leader.
-    bcast_wake_up_time: Option<TiInstant>,
-    leader_lease: Lease,
+    pub(crate) bcast_wake_up_time: Option<TiInstant>,
+    pub(crate) leader_lease: Lease,
     pending_remove: bool,
-    force_leader: Option<ForceLeaderState>,
+
+    /// Check whether this proposal can be proposed based on its epoch.
+    cmd_epoch_checker: CmdEpochChecker<QueryResChannel>,
+    proposals: ProposalQueue<CmdResChannel>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -161,7 +164,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.renew_leader_lease_advance_duration(),
             ),
             pending_remove: false,
-            force_leader: None,
+            cmd_epoch_checker: Default::default(),
+            proposals: ProposalQueue::new(tag.clone()),
         }))
     }
 
@@ -184,14 +188,109 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.pending_reads.push_back(read, is_leader);
     }
 
-    // TODO
-    fn propose_normal<T: Transport>(
+    fn pre_propose<T: Transport>(
         &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
+        poll_ctx: &mut StoreContext<EK, ER, T>,
+        req: &mut RaftCmdRequest,
+    ) -> Result<ProposalContext> {
+        // TODO: coprocessor_host.pre_propose;
+        // poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
+        let mut ctx = ProposalContext::empty();
+
+        if get_sync_log_from_request(req) {
+            ctx.insert(ProposalContext::SYNC_LOG);
+        }
+
+        // TODO: to handle AdminCmdType such as split, merge.
+        Ok(ctx)
+    }
+
+    fn next_proposal_index(&self) -> u64 {
+        self.raft_group.raft.raft_log.last_index() + 1
+    }
+
+    // TODO: DiskFull
+    pub(crate) fn propose_normal<T: Transport>(
+        &mut self,
+        poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
     ) -> Result<Either<u64, u64>> {
-        // TODO
-        Ok(Either::Left(0))
+        // TODO: add force leader check
+        // TODO: to handle AdminCmdType::RollbackMerge, AdminCmdType::PrepareMerge
+
+        poll_ctx.raft_metrics.propose.normal.inc();
+
+        if self.has_applied_to_current_term() {
+            // Only when applied index's term is equal to current leader's term, the
+            // information in epoch checker is up to date and can be used to check epoch.
+            if let Some(index) = self
+                .cmd_epoch_checker
+                .propose_check_epoch(&req, self.term())
+            {
+                return Ok(Either::Right(index));
+            }
+        } else if req.has_admin_request() {
+            // The admin request is rejected because it may need to update epoch checker
+            // which introduces an uncertainty and may breaks the correctness of epoch
+            // checker.
+            return Err(box_err!(
+                "{} peer has not applied to current term, applied_term {}, current_term {}",
+                self.tag(),
+                self.store_applied_term(),
+                self.term()
+            ));
+        }
+
+        // TODO: validate request for unexpected changes.
+        let ctx = match self.pre_propose(poll_ctx, &mut req) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                // TODO: add PrepareMerge logging code
+                return Err(e);
+            }
+        };
+
+        let data = req.write_to_bytes()?;
+
+        // TODO: use local histogram metrics
+        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
+
+        if data.len() as u64 > poll_ctx.cfg.raft_entry_max_size.0 {
+            error!(
+                self.logger,
+                "entry is too large";
+                "size" => data.len(),
+            );
+            return Err(Error::RaftEntryTooLarge {
+                region_id: self.region_id(),
+                entry_size: data.len() as u64,
+            });
+        }
+
+        self.maybe_inject_propose_error(&req)?;
+        let propose_index = self.next_proposal_index();
+        self.raft_group.propose(ctx.to_vec(), data)?;
+        if self.next_proposal_index() == propose_index {
+            // The message is dropped silently, this usually due to leader absence
+            // or transferring leader. Both cases can be considered as NotLeader error.
+            return Err(Error::NotLeader(self.region_id(), None));
+        }
+
+        Ok(Either::Left(propose_index))
+    }
+
+    pub(crate) fn post_propose<T>(
+        &mut self,
+        poll_ctx: &mut StoreContext<EK, ER, T>,
+        mut p: Proposal<CmdResChannel>,
+    ) {
+        // Try to renew leader lease on every consistent read/write request.
+        if poll_ctx.current_time.is_none() {
+            poll_ctx.current_time = Some(monotonic_raw_now());
+        }
+        p.propose_time = poll_ctx.current_time;
+
+        self.proposals.push(p);
     }
 
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {
@@ -387,7 +486,7 @@ where
 
     #[inline]
     fn has_force_leader(&self) -> bool {
-        self.force_leader.is_some()
+        false
     }
 
     #[inline]
@@ -415,23 +514,6 @@ where
     fn is_handling_snapshot(&self) -> bool {
         // TODOTODO
         false
-    }
-}
-
-impl<EK> ReadExecutor<EK> for CachedTablet<EK>
-where
-    EK: KvEngine,
-{
-    fn get_tablet(&mut self) -> &EK {
-        self.latest().unwrap()
-    }
-
-    fn get_snapshot(
-        &mut self,
-        _: Option<ThreadReadId>,
-        _: &mut Option<LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
-        Arc::new(self.get_tablet().snapshot())
     }
 }
 

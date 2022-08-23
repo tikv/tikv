@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
+    Engines, KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions, CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -127,7 +127,7 @@ pub struct ProposalQueue<C> {
 }
 
 impl<C: WriteCallback> ProposalQueue<C> {
-    fn new(tag: String) -> ProposalQueue<C> {
+    pub fn new(tag: String) -> ProposalQueue<C> {
         ProposalQueue {
             tag,
             queue: VecDeque::new(),
@@ -156,7 +156,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
     }
 
     // Find proposal in front or at the given term and index
-    fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<C>> {
+    pub fn pop(&mut self, term: u64, index: u64) -> Option<Proposal<C>> {
         self.queue.pop_front().and_then(|p| {
             // Comparing the term first then the index, because the term is
             // increasing among all log entries and the index is increasing
@@ -194,7 +194,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
         self.queue.front()
     }
 
-    fn push(&mut self, p: Proposal<C>) {
+    pub fn push(&mut self, p: Proposal<C>) {
         if let Some(f) = self.queue.back() {
             // The term must be increasing among all log entries and the index
             // must be increasing inside a given term
@@ -275,19 +275,19 @@ pub struct CheckTickResult {
     reason: &'static str,
 }
 
-pub struct ProposedAdminCmd<S: Snapshot> {
+pub struct ProposedAdminCmd<C: ErrorCallback> {
     cmd_type: AdminCmdType,
     epoch_state: AdminCmdEpochState,
     index: u64,
-    cbs: Vec<Callback<S>>,
+    cbs: Vec<C>,
 }
 
-impl<S: Snapshot> ProposedAdminCmd<S> {
+impl<C: ErrorCallback> ProposedAdminCmd<C> {
     fn new(
         cmd_type: AdminCmdType,
         epoch_state: AdminCmdEpochState,
         index: u64,
-    ) -> ProposedAdminCmd<S> {
+    ) -> ProposedAdminCmd<C> {
         ProposedAdminCmd {
             cmd_type,
             epoch_state,
@@ -297,16 +297,16 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
     }
 }
 
-struct CmdEpochChecker<S: Snapshot> {
+pub struct CmdEpochChecker<C: ErrorCallback> {
     // Although it's a deque, because of the characteristics of the settings from
     // `admin_cmd_epoch_lookup`, the max size of admin cmd is 2, i.e. split/merge and change
     // peer.
-    proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
+    proposed_admin_cmd: VecDeque<ProposedAdminCmd<C>>,
     term: u64,
 }
 
-impl<S: Snapshot> Default for CmdEpochChecker<S> {
-    fn default() -> CmdEpochChecker<S> {
+impl<C: ErrorCallback> Default for CmdEpochChecker<C> {
+    fn default() -> CmdEpochChecker<C> {
         CmdEpochChecker {
             proposed_admin_cmd: VecDeque::new(),
             term: 0,
@@ -314,7 +314,7 @@ impl<S: Snapshot> Default for CmdEpochChecker<S> {
     }
 }
 
-impl<S: Snapshot> CmdEpochChecker<S> {
+impl<C: ErrorCallback + std::fmt::Debug> CmdEpochChecker<C> {
     fn maybe_update_term(&mut self, term: u64) {
         assert!(term >= self.term);
         if term > self.term {
@@ -332,7 +332,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     ///
     /// Returns None if passing the epoch check, otherwise returns a index which
     /// is the last admin cmd index conflicted with this proposal.
-    fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
+    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
         self.maybe_update_term(term);
         let (check_ver, check_conf_ver) = if !req.has_admin_request() {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
@@ -399,7 +399,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
                         vec![region.to_owned()],
                     ));
                     cmd_resp::bind_term(&mut resp, term);
-                    cb.invoke_with_response(resp);
+                    cb.report_error(resp);
                 }
             } else {
                 break;
@@ -408,7 +408,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
+    fn attach_to_conflict_cmd(&mut self, index: u64, cb: C) {
         if let Some(cmd) = self
             .proposed_admin_cmd
             .iter_mut()
@@ -425,7 +425,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     }
 }
 
-impl<S: Snapshot> Drop for CmdEpochChecker<S> {
+impl<C: ErrorCallback> Drop for CmdEpochChecker<C> {
     fn drop(&mut self) {
         if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
             for mut state in self.proposed_admin_cmd.drain(..) {
@@ -1027,6 +1027,41 @@ where
             // during between the two operations a replica read could read empty data.
             && !self.is_handling_snapshot()
     }
+
+    #[inline]
+    fn maybe_inject_propose_error(
+        &self,
+        #[allow(unused_variables)] req: &RaftCmdRequest,
+    ) -> Result<()> {
+        // The return value format is {req_type}:{store_id}
+        // Request matching the format will fail to be proposed.
+        // Empty `req_type` means matching all kinds of requests.
+        // ":{store_id}" can be omitted, meaning matching all stores.
+        fail_point!("raft_propose", |r| {
+            r.map_or(Ok(()), |s| {
+                let mut parts = s.splitn(2, ':');
+                let cmd_type = parts.next().unwrap();
+                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
+                if let Some(store_id) = store_id {
+                    if store_id != self.peer().get_store_id() {
+                        return Ok(());
+                    }
+                }
+                let admin_type = req.get_admin_request().get_cmd_type();
+                let match_type = cmd_type.is_empty()
+                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
+                    || (cmd_type == "transfer_leader"
+                        && admin_type == AdminCmdType::TransferLeader);
+                // More matching rules can be added here.
+                if match_type {
+                    Err(box_err!("injected error"))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        Ok(())
+    }
 }
 
 #[derive(Getters)]
@@ -1176,7 +1211,7 @@ where
     pub txn_ext: Arc<TxnExt>,
 
     /// Check whether this proposal can be proposed based on its epoch.
-    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
+    cmd_epoch_checker: CmdEpochChecker<Callback<EK::Snapshot>>,
 
     // disk full peer set.
     pub disk_full_peers: DiskFullPeers,
@@ -5521,41 +5556,6 @@ where
         self.raft_group.raft.r.max_msg_size = ctx.cfg.raft_max_size_per_msg.0;
     }
 
-    #[inline]
-    fn maybe_inject_propose_error(
-        &self,
-        #[allow(unused_variables)] req: &RaftCmdRequest,
-    ) -> Result<()> {
-        // The return value format is {req_type}:{store_id}
-        // Request matching the format will fail to be proposed.
-        // Empty `req_type` means matching all kinds of requests.
-        // ":{store_id}" can be omitted, meaning matching all stores.
-        fail_point!("raft_propose", |r| {
-            r.map_or(Ok(()), |s| {
-                let mut parts = s.splitn(2, ':');
-                let cmd_type = parts.next().unwrap();
-                let store_id = parts.next().map(|s| s.parse::<u64>().unwrap());
-                if let Some(store_id) = store_id {
-                    if store_id != self.peer.get_store_id() {
-                        return Ok(());
-                    }
-                }
-                let admin_type = req.get_admin_request().get_cmd_type();
-                let match_type = cmd_type.is_empty()
-                    || (cmd_type == "prepare_merge" && admin_type == AdminCmdType::PrepareMerge)
-                    || (cmd_type == "transfer_leader"
-                        && admin_type == AdminCmdType::TransferLeader);
-                // More matching rules can be added here.
-                if match_type {
-                    Err(box_err!("injected error"))
-                } else {
-                    Ok(())
-                }
-            })
-        });
-        Ok(())
-    }
-
     /// Update states of the peer which can be changed in the previous raft
     /// tick.
     pub fn post_raft_group_tick(&mut self) {
@@ -5710,7 +5710,7 @@ fn get_transfer_leader_cmd(msg: &RaftCmdRequest) -> Option<&TransferLeaderReques
     Some(req.get_transfer_leader())
 }
 
-fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
+pub fn get_sync_log_from_request(msg: &RaftCmdRequest) -> bool {
     if msg.has_admin_request() {
         let req = msg.get_admin_request();
         return matches!(
@@ -6133,7 +6133,7 @@ mod tests {
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
 
-        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
+        let mut epoch_checker = CmdEpochChecker::<Callback<KvTestSnapshot>>::default();
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
         assert_eq!(epoch_checker.term, 10);

@@ -422,6 +422,13 @@ impl Drop for QueryResChannel {
     }
 }
 
+impl fmt::Debug for QueryResChannel
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "QueryResChannel")
+    }
+}
+
 unsafe impl Send for QueryResChannel {}
 unsafe impl Sync for QueryResChannel {}
 
