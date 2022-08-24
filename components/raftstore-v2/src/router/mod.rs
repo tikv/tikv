@@ -8,6 +8,6 @@ mod response_channel;
 pub(crate) use self::internal_message::ApplyTask;
 pub use self::{
     internal_message::ApplyRes,
-    message::{PeerMsg, PeerTick, RaftCommand, RaftQuery, RaftRequest, StoreMsg, StoreTick},
+    message::{PeerMsg, PeerTick, RaftRequest, StoreMsg, StoreTick},
     response_channel::{CmdResChannel, QueryResChannel, QueryResult},
 };

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use fail::fail_point;
 pub use future_pool::{Full, FuturePool};
-use prometheus::Histogram;
+use prometheus::{local::LocalHistogram, Histogram};
 use yatp::{
     pool::{CloneRunnerBuilder, Local, Runner},
     queue::{multilevel, QueueType, TaskCell as _},
@@ -45,13 +45,15 @@ impl<T: PoolTicker> TickerWrapper<T> {
         }
     }
 
-    pub fn try_tick(&mut self) {
+    // Returns whether tick has been triggered.
+    pub fn try_tick(&mut self) -> bool {
         let now = Instant::now_coarse();
         if now.saturating_duration_since(self.last_tick_time) < tick_interval() {
-            return;
+            return false;
         }
         self.last_tick_time = now;
         self.ticker.on_tick();
+        true
     }
 
     pub fn on_tick(&mut self) {
@@ -93,7 +95,7 @@ pub struct YatpPoolRunner<T: PoolTicker> {
     before_pause: Option<Arc<dyn Fn() + Send + Sync>>,
 
     // Statistics about the schedule wait duration.
-    schedule_wait_duration: Histogram,
+    schedule_wait_duration: LocalHistogram,
 }
 
 impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
@@ -118,7 +120,9 @@ impl<T: PoolTicker> Runner for YatpPoolRunner<T> {
                 .observe(schedule_time.elapsed().as_secs_f64());
         }
         let finished = self.inner.handle(local, task_cell);
-        self.ticker.try_tick();
+        if self.ticker.try_tick() {
+            self.schedule_wait_duration.flush();
+        }
         finished
     }
 
@@ -160,7 +164,7 @@ impl<T: PoolTicker> YatpPoolRunner<T> {
             after_start,
             before_stop,
             before_pause,
-            schedule_wait_duration,
+            schedule_wait_duration: schedule_wait_duration.local(),
         }
     }
 }
@@ -334,6 +338,8 @@ mod tests {
         for _ in 0..3 {
             rx.recv().unwrap();
         }
+        // Drop the pool so the local metrics are flushed.
+        drop(pool);
         let histogram = metrics::YATP_POOL_SCHEDULE_WAIT_DURATION_VEC.with_label_values(&[name]);
         assert_eq!(histogram.get_sample_count() as u32, 6, "{:?}", histogram);
     }
