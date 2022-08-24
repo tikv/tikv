@@ -730,6 +730,7 @@ where
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self, is_timeout: bool) {
         fail_point!("apply_pending_snapshot", |_| {});
+        let mut is_first = true;
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be
             // ingested. check level 0 every time because we can not make sure
@@ -739,11 +740,12 @@ where
             }
             if let Some(Task::Apply { region_id, ,, }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if self.ctx.engine.can_apply_snapshot(is_timeout, *region_id) {
+                if self.ctx.engine.can_apply_snapshot(is_timeout, is_first, *region_id) {
                     // KvEngine can't apply snapshot for other reasons.
                     break;
                 }
                 if let Some(Task::Apply { region_id, status, peed_id }) = self.pending_applies.pop_front() {
+                    is_first = false;
                     self.ctx.handle_apply(region_id, peer_id, status);
                 }
             }
