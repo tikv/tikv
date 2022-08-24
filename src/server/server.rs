@@ -421,7 +421,10 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::{transport::Transport, *};
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{transport::Transport, *},
+    };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;
@@ -507,6 +510,7 @@ mod tests {
             tx,
             Default::default(),
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
         gc_worker.start().unwrap();
 

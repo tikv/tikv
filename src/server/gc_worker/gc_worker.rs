@@ -28,7 +28,7 @@ use kvproto::{
 use pd_client::{FeatureGate, PdClient};
 use protobuf::SingularPtrField;
 use raftstore::{
-    coprocessor::{CoprocessorHost, RangeKey, RegionInfoProvider},
+    coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
@@ -110,16 +110,20 @@ where
     },
     UnsafeDestroyRange {
         ctx: Context,
+        store_id: u64,
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     },
     PhysicalScanLock {
         ctx: Context,
+        store_id: u64,
         max_ts: TimeStamp,
         start_key: Key,
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     },
     /// If GC in compaction filter is enabled, versions on default CF will be
     /// handled with `DB::delete` in write CF's compaction filter. However if
@@ -296,26 +300,11 @@ fn get_keys_in_regions(
                 Ok((Box::new(KeysInRegions { keys, regions }), region))
             } else {
                 // We only have on key.
-                let key = keys.first().unwrap().as_encoded();
-
-                let (tx, rx) = mpsc::channel();
-                box_try!(region_provider.seek_region(
-                    key,
-                    Box::new(move |iter| {
-                        for info in iter {
-                            if find_peer(&info.region, store_id).is_some() {
-                                let _ = tx.send(Some(info.region.clone()));
-                                return;
-                            }
-                        }
-                        let _ = tx.send(None);
-                    }),
-                ));
-
-                let region = match rx.recv() {
-                    Ok(Some(region)) => region,
-                    _ => unimplemented!(), // todo(SpadeA): when it can receive error or None?
-                };
+                let region = seek_region(
+                    store_id,
+                    keys.first().unwrap().as_encoded(),
+                    region_provider,
+                )?;
 
                 let region_clone = region.clone();
                 Ok((
@@ -324,6 +313,31 @@ fn get_keys_in_regions(
                 ))
             }
         }
+    }
+}
+
+fn seek_region(
+    store_id: u64,
+    key: &[u8],
+    region_provider: Arc<dyn RegionInfoProvider>,
+) -> Result<Region> {
+    let (tx, rx) = mpsc::channel();
+    box_try!(region_provider.seek_region(
+        key,
+        Box::new(move |iter| {
+            for info in iter {
+                if find_peer(&info.region, store_id).is_some() {
+                    let _ = tx.send(Some(info.region.clone()));
+                    return;
+                }
+            }
+            let _ = tx.send(None);
+        }),
+    ));
+
+    match rx.recv() {
+        Ok(Some(region)) => Ok(region),
+        _ => unimplemented!(), // todo(SpadeA): when it can receive error or None?
     }
 }
 
@@ -344,26 +358,6 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     }
 
     ctx
-}
-
-fn amend_range_start(range_start_key: &Key, region: &Region) -> Key {
-    let range_start_key = RangeKey::from_start_key(range_start_key.as_encoded().to_vec());
-    let region_start_key = RangeKey::from_start_key(region.get_start_key().to_vec());
-    if range_start_key > region_start_key {
-        Key::from_encoded(range_start_key.into_key())
-    } else {
-        Key::from_encoded(region_start_key.into_key())
-    }
-}
-
-fn amend_range_end(range_end_key: &Key, region: &Region) -> Key {
-    let range_end_key = RangeKey::from_end_key(range_end_key.as_encoded().to_vec());
-    let region_end_key = RangeKey::from_end_key(region.get_end_key().to_vec());
-    if range_end_key < region_end_key {
-        Key::from_encoded(range_end_key.into_key())
-    } else {
-        Key::from_encoded(region_end_key.into_key())
-    }
 }
 
 impl<E, RR> GcRunner<E, RR>
@@ -525,11 +519,7 @@ where
                 )
             }
         };
-
-        reader.set_range(
-            Some(amend_range_start(&range_start_key, &region)),
-            Some(amend_range_end(&range_end_key, &region)),
-        );
+        reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -570,10 +560,7 @@ where
                             kv_engine,
                         )
                     };
-                    reader.set_range(
-                        Some(amend_range_start(&range_start_key, region)),
-                        Some(amend_range_end(&range_end_key, region)),
-                    );
+                    reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
                 }
 
                 if gc_info.found_versions > 0 {
@@ -594,10 +581,7 @@ where
                         kv_engine,
                     )
                 };
-                reader.set_range(
-                    Some(amend_range_start(&range_start_key, region)),
-                    Some(amend_range_end(&range_end_key, region)),
-                );
+                reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
                 txn = Self::new_txn();
             }
         }
@@ -626,9 +610,6 @@ where
         let mut raw_modifies = MvccRaw::new();
         let (mut keys, region) =
             get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
-        let current_region_id = region.id;
-        let mut amend_start_key = amend_range_start(&range_start_key, &region);
-        let mut amend_end_key = amend_range_end(&range_end_key, &region);
 
         let mut snapshot = self.get_snapshot(store_id, &region)?;
         let kv_engine = snapshot.inner_engine();
@@ -636,17 +617,12 @@ where
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
-        while let Some((ref key, ref region)) = next_gc_key {
-            if current_region_id != region.id {
-                amend_start_key = amend_range_start(&range_start_key, region);
-                amend_end_key = amend_range_end(&range_end_key, region);
-            }
-
+        while let Some((ref key, _)) = next_gc_key {
             if let Err(e) = self.raw_gc_key(
                 safe_point,
                 key,
-                &amend_start_key,
-                &amend_end_key,
+                &range_start_key,
+                &range_end_key,
                 &mut raw_modifies,
                 &mut snapshot,
                 &mut gc_info,
@@ -770,7 +746,14 @@ where
         Ok(())
     }
 
-    fn unsafe_destroy_range(&self, ctx: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
+    fn unsafe_destroy_range(
+        &self,
+        ctx: &Context,
+        store_id: u64,
+        start_key: &Key,
+        end_key: &Key,
+        regions_provider: Arc<dyn RegionInfoProvider>,
+    ) -> Result<()> {
         info!(
             "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
@@ -781,7 +764,11 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.kv_engine();
+
+        let region = seek_region(store_id, start_key.as_encoded(), regions_provider)?;
+        // We only need to get a snapshot of any region as we just want the inner engine
+        // of it which is the same for all regions.
+        let kv_engine = self.get_snapshot(store_id, &region)?.inner_engine();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is
@@ -794,7 +781,7 @@ where
         // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
         let delete_files_start_time = Instant::now();
         for cf in cfs {
-            local_storage
+            kv_engine
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteFiles,
@@ -817,7 +804,7 @@ where
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            local_storage
+            kv_engine
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteByKey,
@@ -828,7 +815,7 @@ where
                     warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
                     e
                 })?;
-            local_storage
+            kv_engine
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteBlobs,
@@ -865,18 +852,35 @@ where
     fn handle_physical_scan_lock(
         &self,
         _: &Context,
+        store_id: u64,
         max_ts: TimeStamp,
         start_key: &Key,
         limit: usize,
+        regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<Vec<LockInfo>> {
-        let snap = self
-            .engine
-            .snapshot_on_kv_engine(start_key.as_encoded(), &[])
-            .unwrap();
-        let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
-        let (locks, _) = reader
-            .scan_locks(Some(start_key), None, |l| l.ts <= max_ts, limit)
-            .map_err(TxnError::from_mvcc)?;
+        let regions = box_try!(regions_provider.get_regions_in_range(start_key.as_encoded(), &[]))
+            .into_iter()
+            .filter(move |r| find_peer(r, store_id).is_some());
+
+        let mut first_round = true;
+        let mut locks = Vec::new();
+        for region in regions {
+            let start_key = {
+                if first_round {
+                    first_round = false;
+                    start_key.clone()
+                } else {
+                    Key::from_raw(region.get_start_key())
+                }
+            };
+            let snap = self.get_snapshot(store_id, &region)?;
+            let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
+            let (locks_this_region, _) = reader
+                .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
+                .map_err(TxnError::from_mvcc)?;
+
+            locks.extend(locks_this_region);
+        }
 
         let mut lock_infos = Vec::with_capacity(locks.len());
         for (key, lock) in locks {
@@ -1020,11 +1024,19 @@ where
             }
             GcTask::UnsafeDestroyRange {
                 ctx,
+                store_id,
                 start_key,
                 end_key,
                 callback,
+                region_info_provider,
             } => {
-                let res = self.unsafe_destroy_range(&ctx, &start_key, &end_key);
+                let res = self.unsafe_destroy_range(
+                    &ctx,
+                    store_id,
+                    &start_key,
+                    &end_key,
+                    region_info_provider,
+                );
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
@@ -1036,12 +1048,21 @@ where
             }
             GcTask::PhysicalScanLock {
                 ctx,
+                store_id,
                 max_ts,
                 start_key,
                 limit,
                 callback,
+                region_info_provider,
             } => {
-                let res = self.handle_physical_scan_lock(&ctx, max_ts, &start_key, limit);
+                let res = self.handle_physical_scan_lock(
+                    &ctx,
+                    store_id,
+                    max_ts,
+                    &start_key,
+                    limit,
+                    region_info_provider,
+                );
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
@@ -1141,6 +1162,7 @@ where
     raft_store_router: RR,
     /// Used to signal unsafe destroy range is executed.
     flow_info_sender: Option<Sender<FlowInfo>>,
+    region_info_provider: Arc<dyn RegionInfoProvider>,
 
     config_manager: GcWorkerConfigManager,
 
@@ -1176,6 +1198,7 @@ where
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
+            region_info_provider: self.region_info_provider.clone(),
         }
     }
 }
@@ -1211,6 +1234,7 @@ where
         flow_info_sender: Sender<FlowInfo>,
         cfg: GcConfig,
         feature_gate: FeatureGate,
+        region_info_provider: Arc<dyn RegionInfoProvider>,
     ) -> GcWorker<E, RR> {
         let worker_builder = WorkerBuilder::new("gc-worker").pending_capacity(GC_MAX_PENDING_TASKS);
         let worker = worker_builder.create().lazy_build("gc-worker");
@@ -1226,6 +1250,7 @@ where
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
+            region_info_provider,
         }
     }
 
@@ -1331,6 +1356,7 @@ where
     pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
+        store_id: u64,
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
@@ -1345,9 +1371,11 @@ where
         self.worker_scheduler
             .schedule_force(GcTask::UnsafeDestroyRange {
                 ctx,
+                store_id,
                 start_key,
                 end_key,
                 callback,
+                region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
     }
@@ -1359,6 +1387,7 @@ where
     pub fn physical_scan_lock(
         &self,
         ctx: Context,
+        store_id: u64,
         max_ts: TimeStamp,
         start_key: Key,
         limit: usize,
@@ -1369,10 +1398,12 @@ where
         self.worker_scheduler
             .schedule(GcTask::PhysicalScanLock {
                 ctx,
+                store_id,
                 max_ts,
                 start_key,
                 limit,
                 callback,
+                region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
     }
@@ -1432,7 +1463,10 @@ mod tests {
     use protobuf::RepeatedField;
     use raft::StateRole;
     use raftstore::{
-        coprocessor::{region_info_accessor::RegionInfoAccessor, RegionChangeEvent},
+        coprocessor::{
+            region_info_accessor::{MockRegionInfoProvider, RegionInfoAccessor},
+            RegionChangeEvent,
+        },
         router::RaftStoreBlackHole,
         store::RegionSnapshot,
     };
@@ -1620,8 +1654,10 @@ mod tests {
         commit_ts: impl Into<TimeStamp>,
         start_key: &[u8],
         end_key: &[u8],
+        split_key: &[u8],
     ) -> Result<()> {
         // Return Result from this function so we can use the `wait_op` macro here.
+        let store_id = 1;
 
         let engine = TestEngineBuilder::new().build().unwrap();
         let storage =
@@ -1630,9 +1666,33 @@ mod tests {
                 .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
+
         let (tx, _rx) = mpsc::channel();
-        let mut gc_worker =
-            GcWorker::new(engine, RaftStoreBlackHole, tx, GcConfig::default(), gate);
+
+        let mut region1 = Region::default();
+        region1.set_peers(RepeatedField::from_vec(vec![Peer {
+            store_id,
+            id: 1,
+            ..Default::default()
+        }]));
+        region1.set_end_key(split_key.to_vec());
+
+        let mut region2 = Region::default();
+        region2.set_peers(RepeatedField::from_vec(vec![Peer {
+            store_id,
+            id: 2,
+            ..Default::default()
+        }]));
+        region2.set_start_key(split_key.to_vec());
+
+        let mut gc_worker = GcWorker::new(
+            engine,
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+            Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
+        );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1687,9 +1747,15 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
-            .unwrap()
-            .unwrap();
+        wait_op!(|cb| gc_worker.unsafe_destroy_range(
+            Context::default(),
+            store_id,
+            start_key,
+            end_key,
+            cb
+        ))
+        .unwrap()
+        .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -1711,6 +1777,7 @@ mod tests {
             10,
             b"key2",
             b"key4",
+            b"key3",
         )
         .unwrap();
 
@@ -1720,6 +1787,7 @@ mod tests {
             10,
             b"key3",
             b"key7",
+            b"key5",
         )
         .unwrap();
 
@@ -1735,6 +1803,7 @@ mod tests {
             10,
             b"key1",
             b"key9",
+            b"key5",
         )
         .unwrap();
 
@@ -1750,6 +1819,7 @@ mod tests {
             10,
             b"key2\x00",
             b"key4",
+            b"key3",
         )
         .unwrap();
 
@@ -1764,6 +1834,7 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00\x00",
+            b"key1",
         )
         .unwrap();
 
@@ -1778,12 +1849,14 @@ mod tests {
             10,
             b"key1\x00",
             b"key1\x00",
+            b"key1",
         )
         .unwrap();
     }
 
     #[test]
     fn test_physical_scan_lock() {
+        let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
@@ -1793,19 +1866,32 @@ mod tests {
         .build()
         .unwrap();
         let (tx, _rx) = mpsc::channel();
+        let mut region = Region::default();
+        region.set_peers(RepeatedField::from_vec(vec![Peer {
+            store_id,
+            ..Default::default()
+        }]));
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             FeatureGate::default(),
+            Arc::new(MockRegionInfoProvider::new(vec![region])),
         );
         gc_worker.start().unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {
             let (cb, f) = paired_future_callback();
             gc_worker
-                .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
+                .physical_scan_lock(
+                    Context::default(),
+                    store_id,
+                    max_ts.into(),
+                    start_key,
+                    limit,
+                    cb,
+                )
                 .unwrap();
             block_on(f).unwrap()
         };
@@ -1875,12 +1961,18 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("5.0.0").unwrap();
+
+        let sp_provider = MockSafePointProvider(200);
+        let mut host = CoprocessorHost::<RocksEngine>::default();
+        let ri_provider = RegionInfoAccessor::new(&mut host);
+
         let mut gc_worker = GcWorker::new(
             prefixed_engine.clone(),
             RaftStoreBlackHole,
             tx,
             GcConfig::default(),
             feature_gate,
+            Arc::new(ri_provider.clone()),
         );
         gc_worker.start().unwrap();
 
@@ -1906,9 +1998,6 @@ mod tests {
         r3.mut_peers().push(Peer::default());
         r3.mut_peers()[0].set_store_id(1);
 
-        let sp_provider = MockSafePointProvider(200);
-        let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host);
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
         gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
@@ -2233,6 +2322,7 @@ mod tests {
 
     #[test]
     fn delete_range_when_worker_is_full() {
+        let store_id = 1;
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
         must_commit(&engine, b"key", 10, 20);
@@ -2244,20 +2334,22 @@ mod tests {
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
 
-        let mut gc_worker = GcWorker::new(
-            engine.clone(),
-            RaftStoreBlackHole,
-            tx,
-            GcConfig::default(),
-            gate,
-        );
-
         let mut region = Region::default();
         region.set_peers(RepeatedField::from_vec(vec![Peer {
             store_id: 1,
             id: 1,
             ..Default::default()
         }]));
+
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcConfig::default(),
+            gate,
+            Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+        );
+
         // Before starting gc_worker, fill the scheduler to full.
         for _ in 0..GC_MAX_PENDING_TASKS {
             gc_worker
@@ -2290,6 +2382,7 @@ mod tests {
         gc_worker
             .unsafe_destroy_range(
                 Context::default(),
+                store_id,
                 Key::from_raw(b"a"),
                 Key::from_raw(b"z"),
                 Box::new(move |res| {

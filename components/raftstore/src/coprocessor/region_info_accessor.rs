@@ -12,6 +12,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
+use itertools::Itertools;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::{
@@ -719,23 +720,55 @@ impl RegionInfoProvider for RegionInfoAccessor {
 }
 
 // Use in tests only.
-pub struct MockRegionInfoProvider(Mutex<Vec<Region>>);
+// Note: The `StateRole` in RegionInfo here should not be used
+pub struct MockRegionInfoProvider(Mutex<Vec<RegionInfo>>);
 
 impl MockRegionInfoProvider {
     pub fn new(regions: Vec<Region>) -> Self {
-        MockRegionInfoProvider(Mutex::new(regions))
+        MockRegionInfoProvider(Mutex::new(
+            regions
+                .into_iter()
+                .map(|region| RegionInfo::new(region, StateRole::Leader))
+                .collect_vec(),
+        ))
     }
 }
 
 impl Clone for MockRegionInfoProvider {
     fn clone(&self) -> Self {
-        MockRegionInfoProvider::new(self.0.lock().unwrap().clone())
+        MockRegionInfoProvider::new(
+            self.0
+                .lock()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .map(|region_info| region_info.region)
+                .collect_vec(),
+        )
     }
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
-        Ok(self.0.lock().unwrap().clone())
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .map(|region_info| region_info.region)
+            .collect_vec())
+    }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        let region_infos = self.0.lock().unwrap();
+        let from = RangeKey::from_start_key(from.to_vec());
+        let mut iter = region_infos.iter().filter(|&region_info| {
+            RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= from
+                && from < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+        });
+        callback(&mut iter);
+        Ok(())
     }
 }
 

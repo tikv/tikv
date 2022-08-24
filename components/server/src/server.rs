@@ -597,6 +597,7 @@ where
             self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
+            Arc::new(self.region_info_accessor.clone()),
         );
         gc_worker
             .start()

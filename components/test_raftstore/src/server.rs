@@ -337,6 +337,7 @@ impl ServerCluster {
             tx,
             cfg.gc.clone(),
             Default::default(),
+            Arc::new(region_info_accessor.clone()),
         );
         gc_worker.start().unwrap();
         gc_worker

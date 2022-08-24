@@ -586,6 +586,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.physical_scan_lock(
             req.take_context(),
+            self.store_id,
             req.get_max_ts().into(),
             Key::from_raw(req.get_start_key()),
             req.get_limit() as _,
@@ -636,6 +637,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         let (cb, f) = paired_future_callback();
         let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
+            self.store_id,
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),
             cb,
