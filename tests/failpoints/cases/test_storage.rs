@@ -1425,3 +1425,36 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     );
     assert_eq!(get_resp.value, v);
 }
+
+#[test]
+fn test_raw_put_deadline() {
+    let deadline_fp = "deadline_check_fail";
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = b"k3".to_vec();
+    put_req.value = b"v3".to_vec();
+    fail::cfg(deadline_fp, "return()").unwrap();
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    fail::remove(deadline_fp);
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(!put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+}

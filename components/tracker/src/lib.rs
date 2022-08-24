@@ -40,6 +40,7 @@ impl Tracker {
     }
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
+        detail.set_pessimistic_lock_wait_nanos(self.metrics.pessimistic_lock_wait_nanos);
         detail.set_store_batch_wait_nanos(self.metrics.wf_batch_wait_nanos);
         detail.set_propose_send_wait_nanos(
             self.metrics
@@ -123,6 +124,7 @@ pub struct RequestMetrics {
     pub block_read_nanos: u64,
     pub internal_key_skipped_count: u64,
     pub deleted_key_skipped_count: u64,
+    pub pessimistic_lock_wait_nanos: u64,
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,

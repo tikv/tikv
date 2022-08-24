@@ -200,11 +200,11 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
     }
 }
 
-pub struct CommandResultSubscriber {
+pub struct CmdResSubscriber {
     core: Arc<EventCore<RaftCmdResponse>>,
 }
 
-impl CommandResultSubscriber {
+impl CmdResSubscriber {
     pub async fn wait_proposed(&mut self) -> bool {
         WaitEvent {
             event: CmdResChannel::PROPOSED_EVENT,
@@ -226,8 +226,8 @@ impl CommandResultSubscriber {
     }
 }
 
-unsafe impl Send for CommandResultSubscriber {}
-unsafe impl Sync for CommandResultSubscriber {}
+unsafe impl Send for CmdResSubscriber {}
+unsafe impl Sync for CmdResSubscriber {}
 
 pub struct CmdResChannel {
     core: ManuallyDrop<Arc<EventCore<RaftCmdResponse>>>,
@@ -239,7 +239,7 @@ impl CmdResChannel {
     const COMMITTED_EVENT: u64 = 2;
 
     #[inline]
-    pub fn pair() -> (Self, CommandResultSubscriber) {
+    pub fn pair() -> (Self, CmdResSubscriber) {
         let core = Arc::new(EventCore {
             event: AtomicU64::new(0),
             res: UnsafeCell::new(None),
@@ -249,7 +249,7 @@ impl CmdResChannel {
             Self {
                 core: ManuallyDrop::new(core.clone()),
             },
-            CommandResultSubscriber { core },
+            CmdResSubscriber { core },
         )
     }
 }
