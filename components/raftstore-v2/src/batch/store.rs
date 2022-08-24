@@ -34,7 +34,8 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
-    Error, PeerMsg, PeerTick, Result, StoreMsg,
+    router::{PeerMsg, PeerTick, StoreMsg},
+    Error, Result,
 };
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
@@ -139,6 +140,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
     where
         for<'a> F: FnOnce(&'a batch_system::Config),
     {
+        if self.store_msg_buf.capacity() == 0 || self.peer_msg_buf.capacity() == 0 {
+            self.apply_buf_capacity();
+        }
         // Apply configuration changes.
         if let Some(cfg) = self.cfg_tracker.any_new().map(|c| c.clone()) {
             let last_messages_per_tick = self.messages_per_tick();
@@ -152,8 +156,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
 
     fn handle_control(&mut self, fsm: &mut StoreFsm) -> Option<usize> {
         debug_assert!(self.store_msg_buf.is_empty());
-        let received_cnt = fsm.recv(&mut self.store_msg_buf);
-        let expected_msg_count = if received_cnt == self.messages_per_tick() {
+        let batch_size = self.messages_per_tick();
+        let received_cnt = fsm.recv(&mut self.store_msg_buf, batch_size);
+        let expected_msg_count = if received_cnt == batch_size {
             None
         } else {
             Some(0)
@@ -165,8 +170,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport + 'static> PollHandler<PeerFsm<E
 
     fn handle_normal(&mut self, fsm: &mut impl DerefMut<Target = PeerFsm<EK, ER>>) -> HandleResult {
         debug_assert!(self.peer_msg_buf.is_empty());
-        let received_cnt = fsm.recv(&mut self.peer_msg_buf);
-        let handle_result = if received_cnt == self.messages_per_tick() {
+        let batch_size = self.messages_per_tick();
+        let received_cnt = fsm.recv(&mut self.peer_msg_buf, batch_size);
+        let handle_result = if received_cnt == batch_size {
             HandleResult::KeepProcessing
         } else {
             HandleResult::stop_at(0, false)
