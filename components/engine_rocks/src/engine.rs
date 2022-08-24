@@ -66,7 +66,7 @@ impl RocksEngine {
         self.shared_block_cache = enable;
     }
 
-    pub fn get_shared_block_cache(&self) -> bool {
+    pub fn shared_block_cache(&self) -> bool {
         self.shared_block_cache
     }
 
