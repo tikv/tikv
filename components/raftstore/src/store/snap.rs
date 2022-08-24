@@ -1193,7 +1193,7 @@ impl Snapshot {
         self.hold_tmp_files = false;
         Ok(())
     }
-    
+
     pub fn cf_files(&self) -> &[CfFile] {
         self.cf_files.as_slice()
     }

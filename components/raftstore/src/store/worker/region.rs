@@ -38,6 +38,7 @@ use crate::{
     coprocessor::CoprocessorHost,
     store::{
         self, check_abort,
+        config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
@@ -47,21 +48,6 @@ use crate::{
         ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
     },
 };
-
-// used to periodically check whether we should delete a stale peer's range in
-// region runner
-
-#[cfg(test)]
-pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
-
-#[cfg(not(test))]
-pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
-
-// used to periodically check whether schedule pending applies in region runner
-#[cfg(not(test))]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
-#[cfg(test)]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
 
@@ -641,6 +627,7 @@ where
     pending_applies: VecDeque<Task<EK::Snapshot>>,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
+    clean_stale_tick_max: usize,
     tiflash_stores: HashMap<u64, bool>,
     pd_client: Option<Arc<T>>,
 }
@@ -655,6 +642,8 @@ where
         engine: EK,
         mgr: SnapManager,
         batch_size: usize,
+        region_worker_tick_interval: u64,
+        clean_stale_tick_max: usize,
         use_delete_range: bool,
         snap_generator_pool_size: usize,
         coprocessor_host: CoprocessorHost<EK>,
@@ -676,7 +665,8 @@ where
             },
             pending_applies: VecDeque::new(),
             clean_stale_tick: 0,
-            clean_stale_check_interval: Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+            clean_stale_check_interval: Duration::from_millis(region_worker_tick_interval),
+            clean_stale_tick_max,
             tiflash_stores: HashMap::default(),
             pd_client,
         }
@@ -1044,10 +1034,15 @@ mod tests {
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
+        let region_worker_tick_interval = PENDING_APPLY_CHECK_INTERVAL;
+        let clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+
         let runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
             0,
+            region_worker_tick_interval,
+            clean_stale_tick_max,
             true,
             2,
             CoprocessorHost::<KvTestEngine>::default(),
