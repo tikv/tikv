@@ -412,7 +412,7 @@ impl<'a> PeerMsgHandler<'a> {
         if !self.validate_raft_msg(&msg) {
             return Ok(());
         }
-        if self.fsm.peer.pending_remove || self.fsm.stopped {
+        if self.fsm.peer.pending_remove || self.fsm.stopped || self.peer.is_applying_snapshot() {
             return Ok(());
         }
 
