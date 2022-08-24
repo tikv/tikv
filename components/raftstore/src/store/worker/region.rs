@@ -836,8 +836,9 @@ mod tests {
         RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
     use pd_client::RpcClient;
+    use protobuf::Message;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
@@ -1076,6 +1077,7 @@ mod tests {
                     notifier: tx,
                     for_balance: false,
                     to_store_id: 0,
+                    for_witness: false,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
@@ -1085,11 +1087,14 @@ mod tests {
                 }
                 msg => panic!("expected SnapshotGenerated, but got {:?}", msg),
             }
-            let data = s1.get_data();
+            let mut data = RaftSnapshotData::default();
+            data.merge_from_bytes(s1.get_data()).unwrap();
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
-            let mut s3 = mgr.get_snapshot_for_receiving(&key, data).unwrap();
+            let mut s3 = mgr
+                .get_snapshot_for_receiving(&key, data.take_meta())
+                .unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
             s3.save().unwrap();
 

@@ -76,6 +76,16 @@ pub fn new_learner_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
     peer
 }
 
+// a helper function to create witness peer easily.
+pub fn new_witness_peer(store_id: u64, peer_id: u64) -> metapb::Peer {
+    let mut peer = metapb::Peer::default();
+    peer.set_store_id(store_id);
+    peer.set_id(peer_id);
+    peer.set_role(PeerRole::Voter);
+    peer.set_is_witness(true);
+    peer
+}
+
 /// Check if key in region range (`start_key`, `end_key`).
 pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
     let end_key = region.get_end_key();

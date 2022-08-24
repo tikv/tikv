@@ -81,6 +81,7 @@ pub enum SnapState {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
         receiver: Receiver<Snapshot>,
+        for_witness: bool,
     },
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
@@ -441,6 +442,7 @@ where
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         let peer = util::find_peer_by_id(&self.region, self.peer_id).unwrap();
         if peer.is_witness {
+            // witness could be the leader for a while, do not generate snapshot now
             return Err(raft::Error::Store(
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
@@ -449,10 +451,13 @@ where
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
-        let (mut tried, mut last_canceled, mut snap) = (false, false, None);
+        let to_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
+        let mut tried = false;
+        let mut last_canceled = false;
         if let SnapState::Generating {
             ref canceled,
             ref receiver,
+            for_witness,
             ..
         } = *snap_state
         {
@@ -460,24 +465,17 @@ where
             last_canceled = canceled.load(Ordering::SeqCst);
             match receiver.try_recv() {
                 Err(TryRecvError::Empty) => {
-                    let e = raft::StorageError::SnapshotTemporarilyUnavailable;
-                    return Err(raft::Error::Store(e));
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
                 }
-                Ok(s) if !last_canceled => snap = Some(s),
-                Err(TryRecvError::Disconnected) | Ok(_) => {}
-            }
-        }
-
-        if tried {
-            *snap_state = SnapState::Relax;
-            match snap {
-                Some(s) => {
+                Ok(s) if !last_canceled => {
                     *tried_cnt = 0;
-                    if self.validate_snap(&s, request_index) {
+                    if self.validate_snap(&s, request_index) && for_witness == to_witness {
                         return Ok(s);
                     }
                 }
-                None => {
+                Err(TryRecvError::Disconnected) | Ok(_) => {
                     warn!(
                         "failed to try generating snapshot";
                         "region_id" => self.region.get_id(),
@@ -487,10 +485,7 @@ where
                     );
                 }
             }
-        }
-
-        if SnapState::Relax != *snap_state {
-            panic!("{} unexpected state: {:?}", self.tag, *snap_state);
+            *snap_state = SnapState::Relax;
         }
 
         if *tried_cnt >= MAX_SNAP_TRY_CNT {
@@ -501,20 +496,18 @@ where
                 cnt
             )));
         }
+        if !tried || !last_canceled {
+            *tried_cnt += 1;
+        }
 
-        let is_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
         info!(
             "requesting snapshot";
             "region_id" => self.region.get_id(),
             "peer_id" => self.peer_id,
             "request_index" => request_index,
             "request_peer" => to,
-            "is_witness" => is_witness,
+            "for_witness" => to_witness,
         );
-
-        if !tried || !last_canceled {
-            *tried_cnt += 1;
-        }
 
         let (sender, receiver) = mpsc::sync_channel(1);
         let canceled = Arc::new(AtomicBool::new(false));
@@ -523,23 +516,25 @@ where
             canceled: canceled.clone(),
             index: index.clone(),
             receiver,
+            for_witness: to_witness,
         };
-        let mut to_store_id = 0;
-        if let Some(peer) = self.region().get_peers().iter().find(|p| p.id == to) {
-            to_store_id = peer.store_id;
-        }
-        let task = GenSnapTask::new(
+
+        let store_id = if let Some(peer) = self.region().get_peers().iter().find(|p| p.id == to) {
+            peer.store_id
+        } else {
+            0
+        };
+
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(GenSnapTask::new(
             self.region.get_id(),
             index,
             canceled,
             sender,
-            to_store_id,
-            is_witness,
-        );
-
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(task);
+            store_id,
+            to_witness,
+        ));
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -1178,6 +1173,7 @@ pub mod tests {
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
+            util::{new_peer, new_witness_peer},
             worker::{RaftlogFetchRunner, RegionRunner, RegionTask},
         },
     };
@@ -1807,6 +1803,79 @@ pub mod tests {
     }
 
     #[test]
+    fn test_storage_create_snapshot_for_witness() {
+        let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
+        let mut cs = ConfState::default();
+        cs.set_voters(vec![1, 2, 3]);
+
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
+        let (router, _) = mpsc::sync_channel(100);
+        let runner = RegionRunner::new(
+            s.engines.kv.clone(),
+            mgr,
+            0,
+            true,
+            2,
+            CoprocessorHost::<KvTestEngine>::default(),
+            router,
+            Option::<Arc<TestPdClient>>::None,
+        );
+        worker.start_with_timer(runner);
+
+        let mut r = s.region().clone();
+        r.mut_peers().push(new_peer(2, 2));
+        r.mut_peers().push(new_witness_peer(3, 3));
+
+        let mut kv_wb = s.engines.kv.write_batch();
+        write_peer_state(&mut kv_wb, &r, PeerState::Normal, None).unwrap();
+        kv_wb.write().unwrap();
+        s.set_region(r);
+
+        let wait_snapshot = |snap: raft::Result<Snapshot>| -> Snapshot {
+            let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+            assert_eq!(snap.unwrap_err(), unavailable);
+            assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+            let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+            let snap = match *s.snap_state.borrow() {
+                SnapState::Generating { ref receiver, .. } => {
+                    receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+                }
+                ref s => panic!("unexpected state: {:?}", s),
+            };
+            *s.snap_tried_cnt.borrow_mut() = 0;
+            snap
+        };
+
+        // generate snapshot for peer
+        let snap = wait_snapshot(s.snapshot(0, 2));
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
+        assert!(!snap.get_data().is_empty());
+
+        // generate snapshot for witness peer
+        let snap = wait_snapshot(s.snapshot(0, 3));
+        assert_eq!(snap.get_metadata().get_index(), 5);
+        assert_eq!(snap.get_metadata().get_term(), 5);
+        assert!(!snap.get_data().is_empty());
+
+        let mut data = RaftSnapshotData::default();
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
+        assert_eq!(data.get_region().get_id(), 1);
+        assert_eq!(data.get_region().get_peers().len(), 3);
+        let files = data.get_meta().get_cf_files();
+        for file in files {
+            assert_eq!(file.get_size(), 0);
+        }
+    }
+
+    #[test]
     fn test_storage_apply_snapshot() {
         let ents = vec![
             new_entry(3, 3),
@@ -2108,6 +2177,7 @@ pub mod tests {
             canceled: Arc::new(AtomicBool::new(false)),
             index: Arc::new(AtomicU64::new(0)),
             receiver: rx,
+            for_witness: false,
         }
     }
 }

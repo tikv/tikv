@@ -89,37 +89,33 @@ fn test_witness_leader() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
 
-// #[test]
-// fn test_witness_auto() {
-//     test_util::init_log_for_test();
-//     let mut cluster = new_server_cluster(0, 3);
-//     cluster.run();
-//     let nodes = Vec::from_iter(cluster.get_node_ids());
-//     assert_eq!(nodes.len(), 3);
+#[test]
+fn test_witness_auto() {
+    test_util::init_log_for_test();
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
 
-//     let pd_client = Arc::clone(&cluster.pd_client);
-//     // Disable default max peer number check.
-//     pd_client.disable_default_operator();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer number check.
+    pd_client.disable_default_operator();
 
-//     cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k1", b"v1");
 
-//     std::thread::sleep(Duration::from_millis(1000));
-//     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
-//     let witness = region.get_peers().iter().find(|p| p.get_is_witness());
-//     assert!(witness.is_some());
-//     must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()),
-// b"k1");
+    std::thread::sleep(Duration::from_millis(1000));
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let witness = region.get_peers().iter().find(|p| p.get_is_witness());
+    assert!(witness.is_some());
+    must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()), b"k1");
 
-//     cluster.must_put(b"k2", b"v2");
-//     cluster.must_put(b"k5", b"v5");
-//     let region = cluster.get_region(b"k1");
-//     cluster.must_split(&region, b"k4");
-//     cluster.must_put(b"k3", b"v6");
-//     cluster.must_put(b"k6", b"v6");
-
-//     must_get_none(&cluster.get_engine(witness.unwrap().get_store_id()),
-// b"k3");     must_get_none(&cluster.get_engine(witness.unwrap().
-// get_store_id()), b"k6"); }
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k5", b"v5");
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k4");
+    cluster.must_put(b"k3", b"v6");
+    cluster.must_put(b"k6", b"v6");
+}
 
 #[test]
 fn test_witness_leader_down() {

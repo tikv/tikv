@@ -2237,6 +2237,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
 
@@ -2351,6 +2352,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2366,6 +2368,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2521,6 +2524,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2539,6 +2543,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2612,6 +2617,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s1.exists());
@@ -2630,6 +2636,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         assert!(s2.exists());
@@ -2704,6 +2711,7 @@ pub mod tests {
             &mut snap_data,
             &mut stat,
             true,
+            false,
         )
         .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
@@ -2780,9 +2788,16 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
-            .unwrap();
-        let v = snap_data.write_to_bytes().unwrap();
+        s1.build(
+            &db,
+            &snapshot,
+            &region,
+            &mut snap_data,
+            &mut stat,
+            true,
+            false,
+        )
+        .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
@@ -2801,7 +2816,9 @@ pub mod tests {
 
         // Ensure the snapshot being received will not be deleted on GC.
         dst_mgr.register(key.clone(), SnapEntry::Receiving);
-        let mut s3 = dst_mgr.get_snapshot_for_receiving(&key, &v[..]).unwrap();
+        let mut s3 = dst_mgr
+            .get_snapshot_for_receiving(&key, snap_data.take_meta())
+            .unwrap();
         let n = io::copy(&mut s2, &mut s3).unwrap();
         assert_eq!(n, expected_size);
         s3.save().unwrap();
@@ -2855,7 +2872,7 @@ pub mod tests {
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
-        let recv_head = {
+        let mut recv_head = {
             let mut stat = SnapshotStatistics::new();
             let mut snap_data = RaftSnapshotData::default();
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
@@ -2866,9 +2883,10 @@ pub mod tests {
                 &mut snap_data,
                 &mut stat,
                 true,
+                false,
             )
             .unwrap();
-            snap_data.write_to_bytes().unwrap()
+            snap_data
         };
         let recv_remain = {
             let mut data = Vec::with_capacity(1024);
@@ -2878,7 +2896,7 @@ pub mod tests {
             data
         };
         let mut s = snap_mgr
-            .get_snapshot_for_receiving(&recv_key, &recv_head)
+            .get_snapshot_for_receiving(&recv_key, recv_head.take_meta())
             .unwrap();
         s.write_all(&recv_remain).unwrap();
         s.save().unwrap();
@@ -2898,6 +2916,7 @@ pub mod tests {
                 &mut snap_data,
                 &mut stat,
                 true,
+                false,
             )
             .unwrap();
 
@@ -2971,8 +2990,16 @@ pub mod tests {
             let mut snap_data = RaftSnapshotData::default();
             snap_data.set_region(region.clone());
             let mut stat = SnapshotStatistics::new();
-            s1.build(&db, &snapshot, &region, &mut snap_data, &mut stat, true)
-                .unwrap();
+            s1.build(
+                &db,
+                &snapshot,
+                &region,
+                &mut snap_data,
+                &mut stat,
+                true,
+                false,
+            )
+            .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }

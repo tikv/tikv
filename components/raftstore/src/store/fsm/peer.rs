@@ -5076,13 +5076,7 @@ where
             }
         }
 
-        let mut has_witness = false;
-        for p in self.region().get_peers() {
-            if p.is_witness {
-                has_witness = true;
-                break;
-            }
-        }
+        let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
 
         let mut compact_idx = if force_compact && replicated_idx > first_idx {
             replicated_idx

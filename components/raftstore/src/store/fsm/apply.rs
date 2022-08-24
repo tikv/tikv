@@ -4431,7 +4431,7 @@ mod tests {
         fn new_for_test(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
             let index = Arc::new(AtomicU64::new(0));
             let canceled = Arc::new(AtomicBool::new(false));
-            Self::new(region_id, index, canceled, snap_notifier, 0)
+            Self::new(region_id, index, canceled, snap_notifier, 0, false)
         }
     }
 
@@ -4677,6 +4677,7 @@ mod tests {
             commit_term,
             entries,
             cbs,
+            None,
             None,
         )
     }
