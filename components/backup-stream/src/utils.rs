@@ -830,8 +830,9 @@ mod test {
 
     #[tokio::test]
     async fn test_files_reader() {
-        use tokio::{fs::File, io::AsyncReadExt};
         use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
         use super::FilesReader;
 
         let dir = TempDir::new("test_files").unwrap();
@@ -857,7 +858,10 @@ mod test {
 
         let mut files_reader = FilesReader::new(files);
         let mut read_content = String::new();
-        files_reader.read_to_string(&mut read_content).await.unwrap();
+        files_reader
+            .read_to_string(&mut read_content)
+            .await
+            .unwrap();
         assert_eq!(expect_content, read_content);
     }
 }

@@ -1136,7 +1136,7 @@ impl StreamTaskInfo {
     }
 
     pub async fn flush_meta(&self, metadata_info: MetadataInfoV2) -> Result<()> {
-        if metadata_info.file_groups.len() > 0 {
+        if !metadata_info.file_groups.is_empty() {
             let meta_path = metadata_info.path_to_meta();
             let meta_buff = metadata_info.marshal_to()?;
             let buflen = meta_buff.len();
