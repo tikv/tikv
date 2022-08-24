@@ -106,6 +106,13 @@ impl RangeKey {
             RangeKey::Finite(key)
         }
     }
+
+    pub fn into_key(self) -> Vec<u8> {
+        match self {
+            Self::Finite(key) => key,
+            Self::Infinite => Vec::new(),
+        }
+    }
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;

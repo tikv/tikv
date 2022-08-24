@@ -28,7 +28,7 @@ use kvproto::{
 use pd_client::{FeatureGate, PdClient};
 use protobuf::SingularPtrField;
 use raftstore::{
-    coprocessor::{CoprocessorHost, RegionInfoProvider},
+    coprocessor::{CoprocessorHost, RangeKey, RegionInfoProvider},
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
@@ -346,6 +346,26 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     ctx
 }
 
+fn amend_range_start(range_start_key: &Key, region: &Region) -> Key {
+    let range_start_key = RangeKey::from_start_key(range_start_key.as_encoded().to_vec());
+    let region_start_key = RangeKey::from_start_key(region.get_start_key().to_vec());
+    if range_start_key > region_start_key {
+        Key::from_encoded(range_start_key.into_key())
+    } else {
+        Key::from_encoded(region_start_key.into_key())
+    }
+}
+
+fn amend_range_end(range_end_key: &Key, region: &Region) -> Key {
+    let range_end_key = RangeKey::from_end_key(range_end_key.as_encoded().to_vec());
+    let region_end_key = RangeKey::from_end_key(region.get_end_key().to_vec());
+    if range_end_key < region_end_key {
+        Key::from_encoded(range_end_key.into_key())
+    } else {
+        Key::from_encoded(region_end_key.into_key())
+    }
+}
+
 impl<E, RR> GcRunner<E, RR>
 where
     E: Engine,
@@ -505,7 +525,11 @@ where
                 )
             }
         };
-        reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
+
+        reader.set_range(
+            Some(amend_range_start(&range_start_key, &region)),
+            Some(amend_range_end(&range_end_key, &region)),
+        );
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
@@ -546,7 +570,10 @@ where
                             kv_engine,
                         )
                     };
-                    reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
+                    reader.set_range(
+                        Some(amend_range_start(&range_start_key, region)),
+                        Some(amend_range_end(&range_end_key, region)),
+                    );
                 }
 
                 if gc_info.found_versions > 0 {
@@ -567,7 +594,10 @@ where
                         kv_engine,
                     )
                 };
-                reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
+                reader.set_range(
+                    Some(amend_range_start(&range_start_key, region)),
+                    Some(amend_range_end(&range_end_key, region)),
+                );
                 txn = Self::new_txn();
             }
         }
@@ -582,9 +612,23 @@ where
         safe_point: TimeStamp,
         regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<(usize, usize)> {
+        let range_start_key = keys.first().unwrap().clone();
+        let range_end_key = {
+            let mut k = keys
+                .last()
+                .unwrap()
+                .to_raw()
+                .map_err(|e| EngineError::Codec(e))?;
+            k.push(0);
+            Key::from_raw(&k)
+        };
+
         let mut raw_modifies = MvccRaw::new();
         let (mut keys, region) =
             get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
+        let current_region_id = region.id;
+        let mut amend_start_key = amend_range_start(&range_start_key, &region);
+        let mut amend_end_key = amend_range_end(&range_end_key, &region);
 
         let mut snapshot = self.get_snapshot(store_id, &region)?;
         let kv_engine = snapshot.inner_engine();
@@ -592,10 +636,17 @@ where
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
         let mut next_gc_key = keys.next();
-        while let Some((ref key, _)) = next_gc_key {
+        while let Some((ref key, ref region)) = next_gc_key {
+            if current_region_id != region.id {
+                amend_start_key = amend_range_start(&range_start_key, region);
+                amend_end_key = amend_range_end(&range_end_key, region);
+            }
+
             if let Err(e) = self.raw_gc_key(
                 safe_point,
                 key,
+                &amend_start_key,
+                &amend_end_key,
                 &mut raw_modifies,
                 &mut snapshot,
                 &mut gc_info,
@@ -641,12 +692,16 @@ where
         &mut self,
         safe_point: TimeStamp,
         key: &Key,
+        range_start_key: &Key,
+        range_end_key: &Key,
         raw_modifies: &mut MvccRaw,
         kv_snapshot: &mut <E as Engine>::Snap,
         gc_info: &mut GcInfo,
     ) -> Result<()> {
         let start_key = key.clone().append_ts(safe_point.prev());
-        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT).build()?;
+        let mut cursor = CursorBuilder::new(kv_snapshot, CF_DEFAULT)
+            .range(Some(range_start_key.clone()), Some(range_end_key.clone()))
+            .build()?;
         let mut statistics = CfStatistics::default();
         cursor.seek(&start_key, &mut statistics)?;
 
