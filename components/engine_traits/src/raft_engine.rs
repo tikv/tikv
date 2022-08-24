@@ -160,6 +160,10 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     fn recover_from_raft_db(&self) -> Result<bool>;
 
     fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()>;
+
+    fn scan_region_state_before_index<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
+    where
+        F: FnMut(u64, &RegionLocalState);
 }
 
 pub trait RaftLogBatch: Send {
@@ -184,11 +188,25 @@ pub trait RaftLogBatch: Send {
         relation: &RegionSequenceNumberRelation,
     ) -> Result<()>;
 
+    fn put_snapshot_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &RaftApplyState,
+    ) -> Result<()>;
+
+    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
+
     fn put_region_state_with_index(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
         state: &RegionLocalState,
+    ) -> Result<()>;
+
+    fn delete_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
     ) -> Result<()>;
 
     /// The data size of this RaftLogBatch.

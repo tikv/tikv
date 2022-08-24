@@ -414,6 +414,33 @@ impl RaftEngine for RocksEngine {
             &u8::to_be_bytes(recover_from_raft_db),
         )
     }
+
+    fn scan_region_state_before_index<F>(
+        &self,
+        raft_group_id: u64,
+        index: u64,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(u64, &RegionLocalState),
+    {
+        let start_key = keys::region_state_key_with_index(raft_group_id, 0);
+        let end_key = keys::region_state_key_with_index(raft_group_id, index);
+        self.scan(
+            CF_DEFAULT,
+            &start_key,
+            &end_key,
+            false, // fill_cache
+            |key, value| {
+                let mut state = RegionLocalState::default();
+                state.merge_from_bytes(value)?;
+                let (_, index) = keys::decode_region_state_key_with_index(key).unwrap();
+                f(index, &state);
+                Ok(true)
+            },
+        )?;
+        Ok(())
+    }
 }
 
 impl RaftLogBatch for RocksWriteBatchVec {
@@ -459,6 +486,17 @@ impl RaftLogBatch for RocksWriteBatchVec {
         )
     }
 
+    fn delete_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
+    ) -> Result<()> {
+        self.delete(&keys::region_state_key_with_index(
+            raft_group_id,
+            applied_index,
+        ))
+    }
+
     fn persist_size(&self) -> usize {
         self.data_size()
     }
@@ -489,6 +527,18 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()> {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
+    }
+
+    fn put_snapshot_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        state: &RaftApplyState,
+    ) -> Result<()> {
+        self.put_msg(&keys::snapshot_apply_state_key(raft_group_id), state)
+    }
+
+    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::snapshot_apply_state_key(raft_group_id))
     }
 }
 

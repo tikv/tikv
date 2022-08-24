@@ -223,6 +223,8 @@ where
 
     entry_storage: EntryStorage<ER>,
 
+    save_states_to_raft_db: bool,
+
     pub tag: String,
 }
 
@@ -312,6 +314,7 @@ where
         )?;
 
         Ok(PeerStorage {
+            save_states_to_raft_db: engines.raft.recover_from_raft_db().unwrap(),
             engines,
             peer_id,
             region: region.clone(),
@@ -389,6 +392,12 @@ where
             &keys::apply_state_key(self.region.get_id()),
             self.apply_state(),
         )?;
+        Ok(())
+    }
+
+    #[inline]
+    pub fn save_snapshot_apply_state_to(&self, raft_wb: &mut impl RaftLogBatch) -> Result<()> {
+        raft_wb.put_snapshot_apply_state(self.region.get_id(), self.apply_state())?;
         Ok(())
     }
 
@@ -597,10 +606,32 @@ where
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
+            if self.save_states_to_raft_db {
+                write_peer_state_to_raft(
+                    &self.engines.raft,
+                    raft_wb,
+                    0,
+                    r,
+                    PeerState::Tombstone,
+                    None,
+                    false,
+                )?;
+            }
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
-
         let last_index = snap.get_metadata().get_index();
+
+        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
+        if self.save_states_to_raft_db {
+            write_peer_state_to_raft(
+                &self.engines.raft,
+                raft_wb,
+                0,
+                &region,
+                PeerState::Applying,
+                None,
+                true,
+            )?;
+        }
 
         self.raft_state_mut().set_last_index(last_index);
         self.set_last_term(snap.get_metadata().get_term());
@@ -899,6 +930,7 @@ where
                 write_task.extra_write.v1_mut().unwrap(),
             )?;
             self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
+            self.save_snapshot_apply_state_to(write_task.raft_wb.as_mut().unwrap())?;
         }
 
         if !write_task.has_data() {
@@ -1121,6 +1153,43 @@ pub fn write_peer_state<T: Mutable>(
         "state" => ?region_state,
     );
     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+    Ok(())
+}
+
+pub fn write_peer_state_to_raft<E: RaftEngine>(
+    raft_engine: &E,
+    raft_wb: &mut E::LogBatch,
+    index: u64,
+    region: &metapb::Region,
+    state: PeerState,
+    merge_state: Option<MergeState>,
+    clean_prev_state: bool,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(state);
+    region_state.set_region(region.clone());
+    if let Some(state) = merge_state {
+        region_state.set_merge_state(state);
+    }
+
+    debug!(
+        "writing merge state";
+        "region_id" => region_id,
+        "state" => ?region_state,
+    );
+    if clean_prev_state {
+        raft_engine
+            .scan_region_state_before_index(region_id, u64::MAX, |index, _| {
+                raft_wb
+                    .delete_region_state_with_index(region_id, index)
+                    .unwrap();
+            })
+            .unwrap();
+    }
+    raft_wb
+        .put_region_state_with_index(region_id, index, &region_state)
+        .unwrap();
     Ok(())
 }
 
@@ -1573,7 +1642,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             0,
             true,
@@ -1721,7 +1790,7 @@ pub mod tests {
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
         let runner = RegionRunner::new(
-            s.engines.kv.clone(),
+            s.engines.clone(),
             mgr,
             0,
             true,
@@ -1787,7 +1856,7 @@ pub mod tests {
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
-            s1.engines.kv.clone(),
+            s1.engines.clone(),
             mgr,
             0,
             true,

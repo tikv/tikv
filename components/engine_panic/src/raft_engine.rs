@@ -171,6 +171,13 @@ impl RaftEngine for PanicEngine {
     fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
         panic!()
     }
+
+    fn scan_region_state_before_index<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
+    where
+        F: FnMut(u64, &RegionLocalState),
+    {
+        panic!()
+    }
 }
 
 impl RaftLogBatch for PanicWriteBatch {
@@ -232,6 +239,26 @@ impl RaftLogBatch for PanicWriteBatch {
         applied_index: u64,
         state: &RegionLocalState,
     ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_region_state_with_index(
+        &mut self,
+        raft_group_id: u64,
+        applied_index: u64,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn put_snapshot_apply_state(
+        &mut self,
+        raft_group_id: u64,
+        apply_state: &RaftApplyState,
+    ) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
 }

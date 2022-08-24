@@ -94,6 +94,7 @@ use crate::{
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        peer_storage::write_peer_state_to_raft,
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -1296,6 +1297,7 @@ where
             // Set Tombstone state explicitly
             let mut kv_wb = engines.kv.write_batch();
             let mut raft_wb = engines.raft.log_batch(1024);
+            let save_states_to_raft_db = engines.raft.recover_from_raft_db().unwrap();
             // Raft log gc should be flushed before being destroyed, so last_compacted_idx
             // has to be the minimal index that may still have logs.
             let last_compacted_idx = self.last_compacted_idx;
@@ -1322,6 +1324,31 @@ where
                     None
                 },
             )?;
+            if save_states_to_raft_db {
+                if keep_data {
+                    // We may need to apply logs for source regions after restart.
+                    // TODO: Add a test for it.
+                    write_peer_state_to_raft(
+                        &engines.raft,
+                        &mut raft_wb,
+                        self.get_store().applied_index(),
+                        &region,
+                        PeerState::Tombstone,
+                        self.pending_merge_state.clone(),
+                        false,
+                    )?;
+                } else {
+                    write_peer_state_to_raft(
+                        &engines.raft,
+                        &mut raft_wb,
+                        0,
+                        &region,
+                        PeerState::Tombstone,
+                        None,
+                        true,
+                    )?;
+                }
+            }
 
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
