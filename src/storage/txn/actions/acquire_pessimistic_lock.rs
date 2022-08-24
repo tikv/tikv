@@ -42,9 +42,13 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
     if lock_only_if_exists {
-        assert!(need_value, "when acquire pessimistic lock, lock_only_if_exists is used, but return_value is not");
+        assert!(
+            need_value,
+            "when acquire pessimistic lock, lock_only_if_exists is used, but return_value is not"
+        );
     }
-    // Update max_ts for Insert operation to guarante linearizability and snapshot isolation
+    // Update max_ts for Insert operation to guarante linearizability and snapshot
+    // isolation
     if should_not_exist {
         txn.concurrency_manager.update_max_ts(for_update_ts);
     }
@@ -144,7 +148,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // Following seek_write read the previous write.
     let mut key_exists = false;
     let (prev_write_loaded, mut prev_write) = (true, None);
-    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {        
+    if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
         if need_old_value {
             prev_write = Some(write.clone());
@@ -253,7 +257,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     // otherwise do it when key_exists is trye
     if !lock_only_if_exists || key_exists {
         txn.put_pessimistic_lock(key, lock);
-    } 
+    }
     // TODO don't we need to commit the modifies in txn?
 
     Ok((ret_val(need_value, need_check_existence, val), old_value))
@@ -497,10 +501,7 @@ pub mod tests {
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
-    pub fn lock_must_not_exist<E: Engine>(
-        engine: &E,
-        key: &[u8],
-    ) {
+    pub fn lock_must_not_exist<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap();
@@ -754,7 +755,10 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k, v) = (b"k", b"v");
 
-        assert_eq!(must_succeed_return_value(&engine, k, k, 10, 10, false), None);
+        assert_eq!(
+            must_succeed_return_value(&engine, k, k, 10, 10, false),
+            None
+        );
         must_pessimistic_locked(&engine, k, 10, 10);
         pessimistic_rollback::tests::must_success(&engine, k, 10, 10);
 
@@ -800,9 +804,15 @@ pub mod tests {
         // Delete
         must_prewrite_delete(&engine, k, k, 60);
         must_commit(&engine, k, 60, 70);
-        assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, false), None);
+        assert_eq!(
+            must_succeed_return_value(&engine, k, k, 75, 75, false),
+            None
+        );
         // Duplicated command
-        assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, false), None);
+        assert_eq!(
+            must_succeed_return_value(&engine, k, k, 75, 75, false),
+            None
+        );
         assert_eq!(
             must_succeed_return_value(&engine, k, k, 75, 55, false),
             Some(v.to_vec())
@@ -855,7 +865,10 @@ pub mod tests {
         must_commit(&engine, k, 60, 70);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, true), None);
         // Duplicated command
-        assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, false), None);
+        assert_eq!(
+            must_succeed_return_value(&engine, k, k, 75, 75, false),
+            None
+        );
 
         must_pessimistic_locked(&engine, k, 75, 75);
         pessimistic_rollback::tests::must_success(&engine, k, 75, 75);
@@ -967,13 +980,15 @@ pub mod tests {
             must_unlocked(&engine, key);
 
             // Test getting value.
-            let res = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, false, 51, false);
+            let res =
+                must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, false, 51, false);
             assert_eq!(res, expected_value.map(|v| v.to_vec()));
             must_pessimistic_rollback(&engine, key, 50, 51);
 
             // Test getting value when already locked.
             must_succeed(&engine, key, key, 50, 51);
-            let res2 = must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, false, 51, false);
+            let res2 =
+                must_succeed_impl(&engine, key, key, 50, false, 0, 50, true, false, 51, false);
             assert_eq!(res2, expected_value.map(|v| v.to_vec()));
             must_pessimistic_rollback(&engine, key, 50, 51);
         }
