@@ -349,6 +349,11 @@ impl RfEngine {
             .unwrap_or_default()
     }
 
+    pub fn with_dependents(&self, region_id: u64, f: impl FnOnce(&HashSet<u64>)) {
+        let data = self.get_or_init_region_data(region_id);
+        f(&data.read().unwrap().dependents);
+    }
+
     pub fn has_dependents(&self, region_id: u64) -> bool {
         self.regions
             .get(&region_id)

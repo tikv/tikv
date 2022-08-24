@@ -1033,6 +1033,7 @@ impl<'a> StoreMsgHandler<'a> {
             }
             if let Some(existing) = self.ctx.peers.get(&new_region_id) {
                 let peer_fsm = existing.peer_fsm.lock().unwrap();
+                let tag = peer_fsm.peer.tag();
                 let pending_snap = peer_fsm.peer.has_pending_snapshot();
                 let initialized = peer_fsm.peer.is_initialized();
                 if pending_snap || initialized {

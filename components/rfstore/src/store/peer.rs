@@ -690,6 +690,21 @@ impl Peer {
         self.get_pending_snapshot().is_some()
     }
 
+    pub fn ready_to_handle_pending_snapshot(&self, ctx: &RaftContext) -> bool {
+        // We can't apply snapshot until dependents are empty, because applying snapshot will clear
+        // meta and truncate raft logs which makes other peers fail to recover.
+        // If ourself is the last dependent, we can apply snapshot.
+        let mut ready = true;
+        ctx.global
+            .engines
+            .raft
+            .with_dependents(self.region_id, |dependents| {
+                ready = dependents.is_empty()
+                    || (dependents.len() == 1 && dependents.contains(&self.region_id))
+            });
+        ready
+    }
+
     #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.snap()
@@ -1176,6 +1191,14 @@ impl Peer {
             return;
         }
         if self.has_pending_snapshot() {
+            if !self.ready_to_handle_pending_snapshot(ctx) {
+                debug!(
+                    "not ready to handle pending snapshot, skip";
+                    "tag" => self.tag(),
+                    "peer_id" => self.peer.get_id(),
+                );
+                return;
+            }
             if store_meta.is_none() {
                 ctx.global
                     .router
@@ -1430,8 +1453,7 @@ impl Peer {
         cs.set_split(split);
         cs.set_sequence(entry.index);
         ctx.apply_msgs.msgs.push(ApplyMsg::PendingSplit(cs));
-        for (i, new_meta) in new_metas.iter().enumerate() {
-            let new_region = &regions[i];
+        for (new_meta, new_region) in new_metas.iter().zip(regions.iter()) {
             if new_meta.id == self.region_id {
                 write_peer_state(&mut ctx.raft_wb, self.peer.store_id, new_region);
                 write_engine_meta(&mut ctx.raft_wb, new_meta);
