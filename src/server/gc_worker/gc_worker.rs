@@ -607,7 +607,7 @@ where
         let stats = self
             .stats_map
             .entry(key_mode)
-            .or_insert_with(Statistics::default);
+            .or_insert_with(Default::default);
         stats
     }
 

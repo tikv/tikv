@@ -1,11 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{
-        atomic::AtomicU64,
-        mpsc::{self},
-        Arc,
-    },
+    sync::{atomic::AtomicU64, mpsc, Arc},
     thread,
     time::Duration,
 };
@@ -14,7 +10,7 @@ use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::{util::get_cf_handle, RocksEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
-    kvrpcpb::{Context, *},
+    kvrpcpb::*,
     metapb::{Peer, Region},
 };
 use pd_client::FeatureGate;
