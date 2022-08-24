@@ -6328,6 +6328,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
+ "pin-project",
  "procfs",
  "procinfo",
  "prometheus",

@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, sync::Arc, time::Duration};
+use std::{convert::TryFrom, sync::Arc};
 
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
@@ -19,13 +19,11 @@ use tikv_util::{
     deadline::Deadline,
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
-    time::Instant,
 };
 use tipb::{
     self, Chunk, DagRequest, EncodeType, ExecType, ExecutorExecutionSummary, FieldType,
     SelectResponse, StreamResponse,
 };
-use yatp::task::future::reschedule;
 
 use super::{
     interface::{BatchExecutor, ExecuteStats},
@@ -43,10 +41,6 @@ pub use tidb_query_expr::types::BATCH_MAX_SIZE;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
-
-/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
-/// a coroutine can run without being yielded.
-pub const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration)
@@ -450,16 +444,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
 
-        let mut time_slice_start = Instant::now();
         loop {
-            // Check whether we should yield from the execution
-            // if need_reschedule(time_slice_start) {
-            //     reschedule().await;
-            //     time_slice_start = Instant::now();
-            // }
-
             let mut chunk = Chunk::default();
-
             let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
                 // let _guard = sample.observe_cpu();
@@ -686,10 +672,4 @@ fn grow_batch_size(batch_size: &mut usize) {
             *batch_size = BATCH_MAX_SIZE
         }
     }
-}
-
-#[inline]
-fn need_reschedule(time_slice_start: Instant) -> bool {
-    fail_point!("copr_reschedule", |_| true);
-    time_slice_start.saturating_elapsed() > MAX_TIME_SLICE
 }

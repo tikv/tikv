@@ -9,6 +9,11 @@ use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
+/// Batch executors are run in coroutines. `MAX_TIME_SLICE` is the maximum time
+/// a coroutine can run without being yielded.
+const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
+/// the number of scanned keys that should trigger a reschedule.
+const CHECK_KEYS: usize = 32;
 
 /// A scanner that scans over multiple ranges. Each range can be a point range
 /// containing only one row, or an interval range containing multiple rows.
@@ -31,13 +36,12 @@ pub struct RangesScanner<T> {
     rescheduler: RescheduleChecker,
 }
 
+// TODO: maybe it's better to make it generic to avoid directly depending
+// on yatp's rescheduler.
 struct RescheduleChecker {
     prev_start: Instant,
     prev_key_count: usize,
 }
-
-const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
-const CHECK_KEYS: usize = 32;
 
 impl RescheduleChecker {
     fn new() -> Self {
