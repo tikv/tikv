@@ -81,14 +81,6 @@ impl Engine for BTreeEngine {
         unimplemented!();
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
-        unimplemented!();
-    }
-
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
-        unimplemented!();
-    }
-
     fn async_write(
         &self,
         _ctx: &Context,

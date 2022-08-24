@@ -60,6 +60,7 @@ tidb_query_datatype = { path = "../tidb_query_datatype", default-features = fals
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
 tikv_util = { path = "../tikv_util" }
+tikv_kv = { path = "../tikv_kv" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] } 

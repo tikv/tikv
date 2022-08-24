@@ -462,8 +462,7 @@ where
         }
 
         let mut reader = MvccReader::new(
-            self.engine
-                .snapshot_on_kv_engine(region.get_start_key(), region.get_end_key())?,
+            self.get_snapshot(store_id, &region)?,
             Some(ScanMode::Forward),
             false,
         );
@@ -1467,7 +1466,6 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
-    use engine_traits::KvEngine;
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1492,7 +1490,7 @@ mod tests {
         config::DbConfig,
         storage::{
             kv::{
-                self, write_modifies, Callback as EngineCallback, Modify, Result as EngineResult,
+                self, Callback as EngineCallback, Modify, Result as EngineResult,
                 SnapContext, TestEngineBuilder, WriteData,
             },
             lock_manager::DummyLockManager,
@@ -1523,48 +1521,6 @@ mod tests {
 
         fn kv_engine(&self) -> RocksEngine {
             self.0.kv_engine()
-        }
-
-        fn snapshot_on_kv_engine(
-            &self,
-            start_key: &[u8],
-            end_key: &[u8],
-        ) -> kv::Result<Self::Snap> {
-            let mut region = Region::default();
-            region.set_start_key(start_key.to_owned());
-            region.set_end_key(end_key.to_owned());
-            // Use a fake peer to avoid panic.
-            region.mut_peers().push(Default::default());
-            Ok(RegionSnapshot::from_snapshot(
-                Arc::new(self.kv_engine().snapshot()),
-                Arc::new(region),
-            ))
-        }
-
-        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
-            for modify in &mut modifies {
-                match modify {
-                    Modify::Delete(_, ref mut key) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::Put(_, ref mut key, _) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::PessimisticLock(ref mut key, _) => {
-                        let bytes = keys::data_key(key.as_encoded());
-                        *key = Key::from_encoded(bytes);
-                    }
-                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                        let bytes = keys::data_key(key1.as_encoded());
-                        *key1 = Key::from_encoded(bytes);
-                        let bytes = keys::data_end_key(key2.as_encoded());
-                        *key2 = Key::from_encoded(bytes);
-                    }
-                }
-            }
-            write_modifies(&self.kv_engine(), modifies)
         }
 
         fn amend_modify(&self, modifies: &mut Vec<Modify>) {
@@ -2210,7 +2166,9 @@ mod tests {
         assert_eq!(7, runner.stats.data.next);
         assert_eq!(2, runner.stats.data.seek);
 
-        let snapshot = prefixed_engine.snapshot_on_kv_engine(&[], &[]).unwrap();
+        let snapshot =
+            block_on(async { tikv_kv::snapshot(&prefixed_engine, SnapContext::default()).await })
+                .unwrap();
 
         test_raws
             .clone()

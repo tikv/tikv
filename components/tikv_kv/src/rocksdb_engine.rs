@@ -210,14 +210,6 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(Default::default())
-    }
-
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
-        write_modifies(&self.engines.kv, modifies)
-    }
-
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         if self.not_leader.load(Ordering::SeqCst) {
             return Err(self.not_leader_error());

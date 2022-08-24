@@ -265,11 +265,8 @@ pub trait Engine: Send + Clone + 'static {
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> Result<Self::Snap>;
-
-    /// Write modifications into internal local engine directly.
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
-
+    /// Do some specialization encoding works on `Modify`s according to the
+    /// different implementation of `Engine`
     fn amend_modify(&self, _modifies: &mut Vec<Modify>) {}
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
