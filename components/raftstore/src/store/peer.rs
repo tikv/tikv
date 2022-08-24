@@ -3459,15 +3459,14 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            // schedule
+            // disable schedule
             match req.get_admin_request().get_cmd_type() {
-                 // schedule
                  AdminCmdType::TransferLeader | AdminCmdType::ChangePeer | AdminCmdType::Split => {
                      return false
                  }
                  _ => (),
             };
-            // rw
+            // disable rw
             for req in req.get_requests() {
                 match req.get_cmd_type() {
                     CmdType::Get | CmdType::Snap | CmdType::ReadIndex => return false,

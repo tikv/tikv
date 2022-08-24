@@ -936,7 +936,7 @@ where
 
     fn on_finish_flashback(&mut self) {
         info!(
-            "Unsafe recovery, finish wait apply";
+            "finish flashback";
             "region_id" => self.region().get_id(),
             "peer_id" => self.fsm.peer.peer_id(),
             "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
@@ -2122,7 +2122,7 @@ where
                 {
                     if self.fsm.peer.raft_group.raft.raft_log.applied >= target_index {
                     info!(
-                        "Unsafe recovery, finish wait apply";
+                        "flashback finish wait apply";
                         "region_id" => self.region().get_id(),
                         "peer_id" => self.fsm.peer.peer_id(),
                         "target_index" => target_index,
