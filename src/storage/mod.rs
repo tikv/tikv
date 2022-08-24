@@ -1536,7 +1536,28 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let region_id = ctx.get_region_id();
         // TODO: reject any scheduling, read or write request.
         // TODO: wait for the applied index to reach the latest committed index.
-        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback);
+        let (tx, rx) = sync_channel(1);
+        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback(tx));
+        match rx.recv() {
+            Ok(check) => {
+                if !check {
+                    return Err(Error::from(ErrorInner::Other(
+                        "another process of flashback to version is executing in progress".into(),
+                    )));
+                } else {
+                    info!(
+                        "flashback to version is prepared";
+                        "region_id" => region_id,
+                    );
+                }
+            }
+            Err(recv_err) => {
+                return Err(box_err!(
+                    "failed to wait the flashback txn command result: {:?}",
+                    recv_err
+                ));
+            }
+        }
 
         let (tx, rx) = sync_channel(1);
         self.sched_txn_command(

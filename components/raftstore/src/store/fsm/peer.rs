@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::SyncSender},
     time::{Duration, Instant},
     u64,
 };
@@ -81,6 +81,7 @@ use crate::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
+            FlashbackState, FlashbackWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
@@ -914,12 +915,32 @@ where
         syncer.report_for_self(self_report);
     }
 
-    fn on_prepare_flashback(&mut self) {
-        todo!()
+    // set a flag to stop schedule and rw
+    fn on_prepare_flashback(&mut self, ch: SyncSender<bool>) {
+        if self.fsm.peer.flashback_state.is_some() {
+            warn!(
+                "Flashback can't wait apply, another plan is executing in progress";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
+            ch.send(false).unwrap();
+            return;
+        }
+
+        let wait_apply = FlashbackWaitApplySyncer::new(ch.clone());
+        self.fsm.peer.flashback_state = Some(FlashbackState::WaitApply {
+            syncer: wait_apply.clone(),
+        });
     }
 
     fn on_finish_flashback(&mut self) {
-        todo!();
+        info!(
+            "finish flashback";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+        );
+        self.fsm.peer.flashback_state = None;
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1318,7 +1339,7 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
-            SignificantMsg::PrepareFlashback => self.on_prepare_flashback(),
+            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
             SignificantMsg::FinishFlashback => self.on_finish_flashback(),
         }
     }
@@ -2090,6 +2111,29 @@ where
         }
     }
 
+    fn check_flashback_state(&mut self) {
+        match &self.fsm.peer.flashback_state {
+            Some(FlashbackState::WaitApply { syncer }) => {
+                if let Some(FlashbackState::WaitApply { .. }) =
+                    &self.fsm.peer.flashback_state
+                {
+                    let target_index = self.fsm.peer.raft_group.raft.raft_log.committed;
+                    if self.fsm.peer.raft_group.raft.raft_log.applied >= target_index {
+                        info!(
+                            "flashback finish wait apply";
+                            "region_id" => self.region().get_id(),
+                            "peer_id" => self.fsm.peer.peer_id(),
+                            "target_index" => target_index,
+                            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+                        );
+                        syncer.finish_prepare();
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -2156,6 +2200,9 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
+        }
+        if self.fsm.peer.flashback_state.is_some() {
+            self.check_flashback_state();
         }
     }
 
