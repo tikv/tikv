@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex, mpsc as other_mpsc},
+    sync::{Arc, Mutex, mpsc::SyncSender},
     time::{Duration, Instant},
     u64,
 };
@@ -917,7 +917,7 @@ where
     }
 
     // set a flag to stop schedule and rw
-    fn on_prepare_flashback(&mut self, ch: other_mpsc::SyncSender<bool>) {
+    fn on_prepare_flashback(&mut self, ch: SyncSender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
             warn!(
                 "Flashback can't wait apply, another plan is executing in progress";
@@ -2115,22 +2115,21 @@ where
     fn check_flashback_state(&mut self) {
         match &self.fsm.peer.flashback_state {
             Some(FlashbackState::WaitApply { syncer }) => {
-                let target_index = self.fsm.peer.raft_group.raft.raft_log.committed;
-
                 if let Some(FlashbackState::WaitApply { .. }) =
                     &self.fsm.peer.flashback_state
                 {
+                    let target_index = self.fsm.peer.raft_group.raft.raft_log.committed;
                     if self.fsm.peer.raft_group.raft.raft_log.applied >= target_index {
-                    info!(
-                        "flashback finish wait apply";
-                        "region_id" => self.region().get_id(),
-                        "peer_id" => self.fsm.peer.peer_id(),
-                        "target_index" => target_index,
-                        "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
-                    );
+                        info!(
+                            "flashback finish wait apply";
+                            "region_id" => self.region().get_id(),
+                            "peer_id" => self.fsm.peer.peer_id(),
+                            "target_index" => target_index,
+                            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+                        );
+                        syncer.finished_prepare();
+                    }
                 }
-                }
-                syncer.abort();
             }
             None => {}
         }

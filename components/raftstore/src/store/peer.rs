@@ -708,31 +708,33 @@ pub enum UnsafeRecoveryState {
 pub struct FlashbackWaitApplySyncer {
     _closure: Arc<InvokeClosureOnDrop>,
     abort: Arc<Mutex<bool>>,
-    _ch: mpsc::SyncSender<bool>,
+    ch: mpsc::SyncSender<bool>,
 }
 
 impl FlashbackWaitApplySyncer {
     pub fn new(ch: mpsc::SyncSender<bool>) -> Self {
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
-        let ch_clone = ch.clone();
         let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Unsafe recovery, wait apply finished");
+            info!("Flashback, wait apply finished");
             if *abort_clone.lock().unwrap() {
-                warn!("Unsafe recovery, wait apply aborted");
+                warn!("Flashback, wait apply aborted");
                 return;
             }
-            ch_clone.send(true).unwrap();
         }));
         FlashbackWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
-            _ch: ch,
+            ch,
         }
     }
 
     pub fn abort(&self) {
         *self.abort.lock().unwrap() = true;
+    }
+    
+    pub fn finished_prepare(&self) {
+        self.ch.send(true).unwrap();
     }
 }
 

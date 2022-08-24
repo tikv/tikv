@@ -1509,6 +1509,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         )?;
 
         let region_id = ctx.get_region_id();
+        // TODO: reject any scheduling, read or write request.
+        // TODO: wait for the applied index to reach the latest committed index.
         let (tx, rx) = mpsc::sync_channel(1);
         let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback(tx));
         match rx.recv() {
