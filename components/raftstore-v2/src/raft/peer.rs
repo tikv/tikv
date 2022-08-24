@@ -4,12 +4,12 @@ use std::{mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
+use fail::fail_point;
 use kvproto::{
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{self, RaftCmdRequest},
 };
-use pd_client::BucketMeta;
 use protobuf::Message;
 use raft::{RawNode, StateRole};
 use raftstore::{
@@ -17,7 +17,7 @@ use raftstore::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
         peer::{
-            get_sync_log_from_request, CmdEpochChecker, ProposalContext, ProposalQueue, RaftPeer,
+            get_sync_log_from_request, CmdEpochChecker, ProposalContext, ProposalQueue,
             RequestInspector,
         },
         read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -59,7 +59,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     pub(crate) logger: Logger,
     pub(crate) pending_reads: ReadIndexQueue<QueryResChannel>,
-    read_progress: Arc<RegionReadProgress>,
+    pub(crate) read_progress: Arc<RegionReadProgress>,
     pub(crate) tag: String,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     /// Transaction extensions related to this peer.
@@ -71,7 +71,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Time of the last attempt to wake up inactive leader.
     pub(crate) bcast_wake_up_time: Option<TiInstant>,
     pub(crate) leader_lease: Lease,
-    pending_remove: bool,
+    pub(crate) pending_remove: bool,
 
     /// Check whether this proposal can be proposed based on its epoch.
     cmd_epoch_checker: CmdEpochChecker<QueryResChannel>,
@@ -177,17 +177,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    pub fn region(&self) -> &metapb::Region {
+        self.raft_group.store().region()
+    }
+
+    #[inline]
+    pub fn region_id(&self) -> u64 {
+        self.region().get_id()
+    }
+
+    #[inline]
+    pub fn peer(&self) -> &metapb::Peer {
+        self.raft_group.store().peer()
+    }
+
+    #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.peer().get_id()
+    }
+
+    #[inline]
     pub fn storage(&self) -> &Storage<ER> {
-        self.raft_group.store()
-    }
-
-    #[inline]
-    pub fn logger(&self) -> &Logger {
-        &self.logger
-    }
-
-    #[inline]
-    pub fn get_store(&self) -> &Storage<ER> {
         self.raft_group.store()
     }
 
@@ -242,7 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // checker.
             return Err(box_err!(
                 "{} peer has not applied to current term, applied_term {}, current_term {}",
-                self.tag(),
+                &self.tag,
                 self.store_applied_term(),
                 self.term()
             ));
@@ -274,7 +284,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         }
 
-        self.maybe_inject_propose_error(&req)?;
+        fail_point!("raft_propose");
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
@@ -380,6 +390,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .cloned()
     }
 
+    #[inline]
+    pub fn is_leader(&self) -> bool {
+        self.raft_group.raft.state == StateRole::Leader
+    }
+
+    #[inline]
+    pub fn leader_id(&self) -> u64 {
+        self.raft_group.raft.leader_id
+    }
+
     /// Get the leader peer meta.
     ///
     /// `None` is returned if there is no leader or the meta can't be found.
@@ -398,140 +418,42 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
     }
-}
-
-impl<EK, ER> RaftPeer<EK, ER> for Peer<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    type Callback = QueryResChannel;
-    #[inline]
-    fn region(&self) -> &metapb::Region {
-        self.get_store().region_state().get_region()
-    }
-
-    #[inline]
-    fn peer_id(&self) -> u64 {
-        self.raft_group.store().peer().get_id()
-    }
 
     #[inline]
     // TODO
-    fn is_splitting(&self) -> bool {
+    pub fn is_splitting(&self) -> bool {
         false
     }
 
     #[inline]
     // TODO
-    fn is_merging(&self) -> bool {
+    pub fn is_merging(&self) -> bool {
         false
     }
 
     #[inline]
-    fn is_leader(&self) -> bool {
-        self.raft_group.raft.state == StateRole::Leader
-    }
-
-    #[inline]
-    fn term(&self) -> u64 {
-        self.raft_group.raft.term
-    }
-
-    #[inline]
-    fn store_commit_index(&self) -> u64 {
-        self.get_store().commit_index()
-    }
-
-    #[inline]
-    fn leader_id(&self) -> u64 {
-        self.raft_group.raft.leader_id
-    }
-
-    #[inline]
-    fn region_id(&self) -> u64 {
-        self.raft_group.store().region_state().get_region().get_id()
-    }
-
-    #[inline]
-    fn tag(&self) -> &String {
-        &self.tag
-    }
-
-    #[inline]
-    fn txn_ext(&self) -> Arc<TxnExt> {
-        self.txn_ext.clone()
-    }
-
-    #[inline]
-    fn read_progress(&self) -> Arc<RegionReadProgress> {
-        self.read_progress.clone()
-    }
-
-    #[inline]
-    fn peer(&self) -> &metapb::Peer {
-        self.raft_group.store().peer()
+    pub fn store_commit_index(&self) -> u64 {
+        self.raft_group.store().commit_index()
     }
 
     #[inline]
     // TODO
-    fn bucket_meta(&self) -> Option<Arc<BucketMeta>> {
-        None
-    }
-
-    #[inline]
-    fn txn_extra_op(&self) -> Arc<AtomicCell<TxnExtraOp>> {
-        self.txn_extra_op.clone()
-    }
-
-    #[inline]
-    fn mut_pending_reads(&mut self) -> &mut ReadIndexQueue<Self::Callback> {
-        &mut self.pending_reads
-    }
-
-    #[inline]
-    fn mut_bcast_wake_up_time(&mut self) -> &mut Option<TiInstant> {
-        &mut self.bcast_wake_up_time
-    }
-
-    #[inline]
-    fn set_should_wake_up(&mut self, should_wake_up: bool) {
-        self.should_wake_up = should_wake_up;
-    }
-
-    #[inline]
-    fn pending_remove(&self) -> bool {
-        self.pending_remove
-    }
-
-    #[inline]
-    fn has_force_leader(&self) -> bool {
+    pub fn has_force_leader(&self) -> bool {
         false
     }
 
     #[inline]
-    fn mut_leader_lease(&mut self) -> &mut Lease {
-        &mut self.leader_lease
+    pub fn store_applied_term(&self) -> u64 {
+        self.raft_group.store().applied_term()
     }
 
     #[inline]
-    fn store_applied_term(&self) -> u64 {
-        self.get_store().applied_term()
+    pub fn store_applied_index(&self) -> u64 {
+        self.raft_group.store().applied_index()
     }
 
     #[inline]
-    fn store_applied_index(&self) -> u64 {
-        self.get_store().applied_index()
-    }
-
-    #[inline]
-    fn has_pending_merge_state(&self) -> bool {
-        // TODOTODO
-        false
-    }
-
-    #[inline]
-    fn is_handling_snapshot(&self) -> bool {
+    pub fn has_pending_merge_state(&self) -> bool {
         // TODOTODO
         false
     }
@@ -543,7 +465,7 @@ where
     ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
-        self.get_store().applied_term() == self.term()
+        self.raft_group.store().applied_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {

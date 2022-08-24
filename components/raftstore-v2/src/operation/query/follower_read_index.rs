@@ -2,12 +2,13 @@
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{self, CmdType, RaftCmdRequest, RaftCmdResponse};
+use pd_client::INVALID_ID;
 use raftstore::{
     store::{
         cmd_resp,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        peer::{propose_read_index, RaftPeer},
+        peer::propose_read_index,
         Transport,
     },
     Error,
@@ -23,6 +24,9 @@ use crate::{
     Result,
 };
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// read index on follower
+    ///
+    /// return true if it's proposed.
     pub(crate) fn follower_read_index<T: Transport>(
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
@@ -31,16 +35,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         cb: QueryResChannel,
         now: Timespec,
     ) -> bool {
-        if self.read_index_no_leader(
-            &mut poll_ctx.trans,
-            &mut poll_ctx.pd_scheduler,
-            &mut err_resp,
-        ) {
+        if !self.is_leader() && self.leader_id() == INVALID_ID {
             poll_ctx
                 .raft_metrics
                 .invalid_proposal
                 .read_index_no_leader
                 .inc();
+            cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id(), None));
             cb.report_error(err_resp);
             return false;
         }
@@ -83,7 +84,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.response_replica_read(&mut read, ctx);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
-                self.mut_pending_reads().push_front(read);
+                self.pending_reads.push_front(read);
                 break;
             }
         }

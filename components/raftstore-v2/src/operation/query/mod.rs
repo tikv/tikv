@@ -27,7 +27,6 @@ mod follower_read_index;
 mod local;
 mod read_index;
 mod replica_read;
-use raftstore::store::RaftPeer;
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
     #[inline]

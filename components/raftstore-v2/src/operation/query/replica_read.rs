@@ -8,7 +8,7 @@ use kvproto::{
 use raftstore::{
     store::{
         cmd_resp, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        peer::RaftPeer, read_queue::ReadIndexRequest, util::check_region_epoch, ReadCallback,
+        read_queue::ReadIndexRequest, util::check_region_epoch, ReadCallback,
     },
     Error,
 };
@@ -82,14 +82,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-            let safe_ts = self.read_progress().safe_ts();
+            let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
                 warn!(
                     self.logger,
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
                     "read ts" => read_ts,
-                    "tag" => self.tag(),
+                    "tag" => &self.tag,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {
                     region_id: region.get_id(),
@@ -102,5 +102,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         QueryResult::Read(ReadResponse::new(read_index.unwrap_or(0)))
+    }
+
+    // Note: comparing with v1, it removes the snapshot check because in v2 the
+    // snapshot will not delete the data anymore.
+    pub(crate) fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
+        // Wait until the follower applies all values before the read. There is still a
+        // problem if the leader applies fewer values than the follower, the follower
+        // read could get a newer value, and after that, the leader may read a stale
+        // value, which violates linearizability.
+        self.store_applied_index() >= read_index
+            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
+            // TODO: Add a test to cover this case
+            && !self.has_pending_merge_state()
     }
 }

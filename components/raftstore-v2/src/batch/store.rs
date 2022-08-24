@@ -22,15 +22,12 @@ use raft::INVALID_ID;
 use raftstore::{
     bytes_capacity,
     store::{
-        fsm::store::{PeerTickBatch, StoreMeta},
-        local_metrics::RaftMetrics,
-        memory::*,
-        Config, InspectedRaftMessage, PdTask, RaftRouter, RaftlogFetchRunner, RaftlogFetchTask,
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, memory::*, Config,
+        InspectedRaftMessage, PdTask, RaftRouter, RaftlogFetchRunner, RaftlogFetchTask,
         StoreWriters, Transport, WriteMsg, WriteSenders,
     },
 };
 use slog::Logger;
-use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     config::{Tracker, VersionTrack},
@@ -45,7 +42,7 @@ use time::Timespec;
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
+    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Peer,
     router::{PeerMsg, PeerTick, QueryResChannel, RaftRequest, StoreMsg},
     Error, Result,
@@ -71,7 +68,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// pd task scheduler
     pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     /// store meta
-    pub store_meta: Arc<Mutex<StoreMeta>>,
+    pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub current_time: Option<Timespec>,
 }
 
@@ -83,7 +80,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         write_senders: WriteSenders<EK, ER>,
         logger: Logger,
         pd_scheduler: Scheduler<PdTask<EK, ER>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         Self {
             logger,
@@ -251,7 +248,7 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     logger: Logger,
     /// pd task scheduler
     pd_scheduler: Scheduler<PdTask<EK, ER>>,
-    store_meta: Arc<Mutex<StoreMeta>>,
+    store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
@@ -266,7 +263,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
         pd_scheduler: Scheduler<PdTask<EK, ER>>,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         StorePollerBuilder {
             cfg,
@@ -384,7 +381,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         router: &StoreRouter<EK, ER>,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         raft_log_worker: Worker,
-        store_meta: Arc<Mutex<StoreMeta>>,
+        store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
         T: Transport + 'static,

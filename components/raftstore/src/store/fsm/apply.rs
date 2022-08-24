@@ -84,7 +84,7 @@ use crate::{
         memory::*,
         metrics::*,
         msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
-        peer::{Peer, RaftPeer},
+        peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{

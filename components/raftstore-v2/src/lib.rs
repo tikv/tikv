@@ -26,7 +26,7 @@
 
 mod batch;
 mod bootstrap;
-mod fsm;
+pub mod fsm;
 mod operation;
 mod raft;
 pub mod router;

@@ -31,11 +31,12 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{fsm::store::StoreMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
     router::{PeerMsg, QueryResult},
     Bootstrap, StoreRouter, StoreSystem,
+    fsm::StoreMeta,
 };
 use slog::{o, Logger};
 use tempfile::TempDir;
@@ -156,7 +157,7 @@ impl TestNode {
 
         let pd_worker = LazyWorker::new("test-pd-worker");
         let raft_log_worker = Worker::new("raftlog-fetch-worker");
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(10)));
+        let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         system
             .start(
                 self.store.clone(),

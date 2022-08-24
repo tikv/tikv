@@ -24,7 +24,7 @@ use error_code::ErrorCodeExt;
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::Message as _;
 use raft::{eraftpb, Ready};
-use raftstore::store::{FetchedLogs, RaftPeer, Transport, WriteTask};
+use raftstore::store::{FetchedLogs, Transport, WriteTask};
 use slog::{debug, error, trace, warn};
 
 pub use self::async_writer::AsyncWriter;

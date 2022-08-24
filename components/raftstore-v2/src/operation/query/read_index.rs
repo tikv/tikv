@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
@@ -15,9 +16,9 @@ use raftstore::{
         fsm::{apply::notify_stale_req, Proposal},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        peer::{propose_read_index, RaftPeer, RequestInspector},
+        peer::{can_amend_read, propose_read_index, should_renew_lease, RequestInspector},
         read_queue::{ReadIndexContext, ReadIndexRequest},
-        Transport,
+        ReadDelegate, ReadProgress, Transport,
     },
     Error,
 };
@@ -27,6 +28,7 @@ use time::Timespec;
 
 use crate::{
     batch::StoreContext,
+    fsm::StoreMeta,
     raft::Peer,
     router::{
         message::RaftRequest,
@@ -83,7 +85,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         now: Timespec,
     ) -> bool {
         let lease_state = self.inspect_lease();
-        if self.can_amend_read::<Peer<EK, ER>>(
+        if can_amend_read::<Peer<EK, ER>, QueryResChannel>(
+            self.pending_reads.back(),
             &req,
             lease_state,
             poll_ctx.cfg.raft_store_max_leader_lease(),
@@ -92,7 +95,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
             let commit_index = self.store_commit_index();
-            if let Some(read) = self.mut_pending_reads().back_mut() {
+            if let Some(read) = self.pending_reads.back_mut() {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
                 read.push_command(req, cb, commit_index);
@@ -136,18 +139,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         mut err_resp: RaftCmdResponse,
         cb: QueryResChannel,
     ) -> bool {
-        if let Err(e) = self.pre_read_index() {
-            debug!(
-                self.logger,
-                "prevents unsafe read index";
-                "err" => ?e,
-            );
-            poll_ctx.raft_metrics.propose.unsafe_read_index.inc();
-            cmd_resp::bind_error(&mut err_resp, e);
-            cb.report_error(err_resp);
-            self.should_wake_up = true;
-            return false;
-        }
         let now = monotonic_raw_now();
         if self.is_leader() {
             self.leader_read_index(poll_ctx, req, err_resp, cb, now)
@@ -264,5 +255,51 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted_on_role_change(term);
         }
+    }
+
+    /// Try to renew leader lease.
+    fn maybe_renew_leader_lease(
+        &mut self,
+        ts: Timespec,
+        store_meta: &mut Arc<Mutex<StoreMeta<EK>>>,
+        progress: Option<ReadProgress>,
+    ) {
+        // A nonleader peer should never has leader lease.
+        let read_progress = if !should_renew_lease(
+            self.is_leader(),
+            self.is_splitting(),
+            self.is_merging(),
+            self.has_force_leader(),
+        ) {
+            None
+        } else {
+            self.leader_lease.renew(ts);
+            let term = self.term();
+            self.leader_lease
+                .maybe_new_remote_lease(term)
+                .map(ReadProgress::leader_lease)
+        };
+        if let Some(progress) = progress {
+            let mut meta = store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+        if let Some(progress) = read_progress {
+            let mut meta = store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id()).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+    }
+
+    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
+        if self.pending_remove {
+            return;
+        }
+        debug!(
+            self.logger,
+            "update read progress";
+            "progress" => ?progress,
+        );
+        reader.update(progress);
     }
 }
