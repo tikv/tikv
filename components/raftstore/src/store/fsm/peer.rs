@@ -932,16 +932,16 @@ where
         self.fsm.peer.flashback_state = Some(FlashbackState::WaitApply {
             syncer: wait_apply.clone(),
         });
-
-        self.fsm
-            .peer
-            .maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
     fn on_finish_flashback(&mut self) {
-        self.fsm
-            .peer
-            .maybe_finish_wait_apply(true);
+        info!(
+            "Unsafe recovery, finish wait apply";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+        );
+        self.fsm.peer.flashback_state = None;
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -2114,11 +2114,24 @@ where
 
     fn check_flashback_state(&mut self) {
         match &self.fsm.peer.flashback_state {
-            Some(FlashbackState::WaitApply { .. }) => self
-                .fsm
-                .peer
-                .maybe_finish_wait_apply(/* force= */ false),
-            // 
+            Some(FlashbackState::WaitApply { syncer }) => {
+                let target_index = self.fsm.peer.raft_group.raft.raft_log.committed;
+
+                if let Some(FlashbackState::WaitApply { .. }) =
+                    &self.fsm.peer.flashback_state
+                {
+                    if self.fsm.peer.raft_group.raft.raft_log.applied >= target_index {
+                    info!(
+                        "Unsafe recovery, finish wait apply";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.fsm.peer.peer_id(),
+                        "target_index" => target_index,
+                        "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+                    );
+                }
+                }
+                syncer.abort();
+            }
             None => {}
         }
     }

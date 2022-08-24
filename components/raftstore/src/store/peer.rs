@@ -4998,35 +4998,6 @@ where
             }
         }
     }
-
-    pub fn maybe_finish_wait_apply(&mut self, force: bool) {
-        let target_index = if self.force_leader.is_some() {
-            // For regions that lose quorum (or regions have force leader), whatever has
-            // been proposed will be committed. Based on that fact, we simply use "last
-            // index" here to avoid implementing another "wait commit" process.
-            self.raft_group.raft.raft_log.last_index()
-        } else {
-            self.raft_group.raft.raft_log.committed
-        };
-        
-        if let Some(FlashbackState::WaitApply { .. }) =
-        &self.flashback_state
-        {
-            if self.raft_group.raft.raft_log.applied >= target_index || force {
-                if self.is_force_leader() {
-                    info!(
-                        "Unsafe recovery, finish wait apply";
-                        "region_id" => self.region().get_id(),
-                        "peer_id" => self.peer_id(),
-                        "target_index" => target_index,
-                        "applied" =>  self.raft_group.raft.raft_log.applied,
-                        "force" => force,
-                    );
-                }
-                self.flashback_state = None;
-            }
-        }
-    }
 }
 
 #[derive(Default, Debug)]
