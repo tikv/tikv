@@ -733,7 +733,6 @@ impl Peer {
                 // to suspect.
                 self.leader_lease.suspect(monotonic_raw_now());
             }
-
             let to_peer_id = msg.get_to_peer().get_id();
             let to_store_id = msg.get_to_peer().get_store_id();
 
@@ -766,6 +765,10 @@ impl Peer {
                 }
                 ctx.raft_metrics.send_message.add(msg_type, false);
             } else {
+                if msg_type == MessageType::MsgSnapshot {
+                    self.raft_group
+                        .report_snapshot(to_peer_id, SnapshotStatus::Finish);
+                }
                 ctx.raft_metrics.send_message.add(msg_type, true);
             }
         }
