@@ -60,7 +60,8 @@ fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb
     );
 }
 
-/// Test a peer can be created by general raft message and tombstone message.
+/// Test a peer can be created by general raft message and destroyed tombstone
+/// message.
 #[test]
 fn test_life_by_message() {
     let (mut node, _transport, router) = super::setup_default_cluster();
