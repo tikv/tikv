@@ -130,6 +130,7 @@ impl RaftSendMessageMetrics {
         // reset all buffered metrics once they have been added
         flush_send_status!(append, self);
         flush_send_status!(append_resp, self);
+        flush_send_status!(group_broadcast, self);
         flush_send_status!(prevote, self);
         flush_send_status!(prevote_resp, self);
         flush_send_status!(vote, self);

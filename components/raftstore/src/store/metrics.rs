@@ -65,6 +65,7 @@ make_auto_flush_static_metric! {
     pub label_enum MessageCounterType {
         append,
         append_resp,
+        group_broadcast,
         prevote,
         prevote_resp,
         vote,
