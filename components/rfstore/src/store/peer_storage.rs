@@ -86,7 +86,7 @@ pub(crate) struct PeerStorage {
 
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
-    pub(crate) on_persist_apply_result: Option<MsgApplyResult>,
+    pub(crate) on_persist_snapshot_apply_result: Option<MsgApplyResult>,
     pub(crate) on_apply_snapshot_msgs: Vec<RaftMessage>,
 }
 
@@ -240,7 +240,7 @@ impl PeerStorage {
             snap_state: SnapState::Relax,
             initial_flushed,
             shard_meta,
-            on_persist_apply_result: None,
+            on_persist_snapshot_apply_result: None,
             on_apply_snapshot_msgs: vec![],
         })
     }
@@ -354,7 +354,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        self.snap_state == SnapState::Applying
+        self.snap_state == SnapState::Applying || self.on_persist_snapshot_apply_result.is_some()
     }
 
     pub fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {

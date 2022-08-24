@@ -1017,10 +1017,15 @@ impl<'a> PeerMsgHandler<'a> {
                     apply_state,
                     metrics: ApplyMetrics::default(),
                 };
-                if self.peer.raft_group.raft.raft_log.persisted >= apply_state.applied_index {
+                let persisted = self.peer.raft_group.raft.raft_log.persisted;
+                info!(
+                    "{} apply snapshot finished, persisted index {}, snapshot index {}",
+                    tag, persisted, apply_state.applied_index
+                );
+                if persisted >= apply_state.applied_index {
                     self.fsm.peer.post_apply(self.ctx, &apply_result);
                 } else {
-                    self.peer.mut_store().on_persist_apply_result = Some(apply_result);
+                    self.peer.mut_store().on_persist_snapshot_apply_result = Some(apply_result);
                 }
                 let on_apply_snapshot_msgs =
                     std::mem::take(&mut self.peer.mut_store().on_apply_snapshot_msgs);
@@ -1048,7 +1053,16 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         self.peer.raft_group.on_persist_ready(ready.ready_number);
-        if let Some(apply_result) = self.peer.mut_store().on_persist_apply_result.take() {
+        if let Some(apply_result) = self
+            .peer
+            .mut_store()
+            .on_persist_snapshot_apply_result
+            .take()
+        {
+            info!(
+                "{} handle on persist snapshot apply result",
+                self.peer.tag()
+            );
             self.fsm.peer.post_apply(self.ctx, &apply_result);
         }
     }
