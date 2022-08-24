@@ -1102,7 +1102,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        // self.gc_ok(2000);
+        self.gc_ok(0, metapb::Region::default(), 2000);
         self.get_none(&key, 3000);
     }
 }
