@@ -1,8 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::WriteData;
 // #[PerformanceCriticalPath]
-use txn_types::{Key, TimeStamp};
+use tikv_kv::WriteData;
+use txn_types::{Key, TimeStamp, TxnExtra};
 
 use crate::storage::{
     lock_manager::LockManager,
@@ -58,7 +58,9 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             Some(self.end_key),
         );
         flashback_to_version(&mut txn, &mut reader)?;
-        let mut write_data = WriteData::from_modifies(txn.into_modifies());
+        let mut txn_extra = TxnExtra::default();
+        txn_extra.flashback = true;
+        let mut write_data = WriteData::new(txn.into_modifies(), txn_extra);
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
             ctx: self.ctx,

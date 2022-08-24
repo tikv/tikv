@@ -8,7 +8,8 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, mpsc::SyncSender,
+        mpsc::SyncSender,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
     u64, usize,
@@ -39,7 +40,7 @@ use kvproto::{
     },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
-    }, 
+    },
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{BucketStat, INVALID_ID};
@@ -704,51 +705,21 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-#[derive(Clone, Debug)]
-pub struct FlashbackWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-    ch: SyncSender<bool>,
-}
+// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
+// it is checked every time this peer applies a new entry or a snapshot,
+// if the latest committed index is met, the syncer will be called to notify the
+// result.
+pub struct FlashbackState(SyncSender<bool>);
 
-impl FlashbackWaitApplySyncer {
+impl FlashbackState {
     pub fn new(ch: SyncSender<bool>) -> Self {
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Box::new(move || {
-            info!("Flashback, wait apply finished");
-            if *abort_clone.lock().unwrap() {
-                warn!("Flashback, wait apply aborted");
-                return;
-            }
-        }));
-        FlashbackWaitApplySyncer {
-            _closure: Arc::new(closure),
-            abort,
-            ch,
-        }
+        FlashbackState(ch)
     }
 
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-    
-    pub fn finish_prepare(&self) {
-        self.ch.send(true).unwrap();
+    pub fn finish_wait_apply(&self) {
+        self.0.send(true).unwrap();
     }
 }
-
-pub enum FlashbackState {
-    // Stores the state is for the wait apply stage of flashback process.
-    // This state is set by the peer fsm when invoke msg PrepareFlashback. Once set, 
-    // it is checked every time this peer applies a new entry or a snapshot, 
-    // if the target index is met, this state will be dropped. 
-    // The syncer holds a channer inner object that is callback for the next step of flashback process.
-    WaitApply {
-        syncer: FlashbackWaitApplySyncer,
-    },
-}
-
 
 #[derive(Getters)]
 pub struct Peer<EK, ER>
@@ -3453,6 +3424,19 @@ where
         if self.pending_remove {
             return false;
         }
+        // When in the flashback state, we should not allow any other request to be
+        // proposed.
+        if self.flashback_state.is_some() {
+            info!(
+                "cannot propose any other request when in flashback state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            let flags = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags());
+            if !flags.contains(WriteBatchFlags::FLASHBACK) {
+                return false;
+            }
+        }
 
         ctx.raft_metrics.propose.all.inc();
 
@@ -3461,34 +3445,6 @@ where
         } else {
             Some(req.get_admin_request().get_cmd_type())
         };
-
-        // when enable flashback, we should not allow request to be proposed
-        if self.flashback_state.is_some() {
-            // TODO allow flashback to propose
-            info!(
-                "cannot propose request when flashback is enabled";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            // disable schedule
-            match req.get_admin_request().get_cmd_type() {
-                 AdminCmdType::TransferLeader | AdminCmdType::ChangePeer | AdminCmdType::Split => {
-                     return false
-                 }
-                 _ => (),
-            };
-            // disable rw
-            for req in req.get_requests() {
-                match req.get_cmd_type() {
-                    CmdType::Get | CmdType::Snap | CmdType::ReadIndex => return false,
-                    CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
-                        return false
-                    }
-                    CmdType::Invalid | CmdType::Prewrite => (),
-                }
-            }
-        }
-
         let is_urgent = is_request_urgent(&req);
 
         let policy = self.inspect(&req);

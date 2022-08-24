@@ -1697,7 +1697,7 @@ fn future_flashback_to_version<
     req: FlashbackToVersionRequest,
 ) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
     let (cb, f) = paired_future_callback();
-    let res = storage.flashback_to_version(req, raft_router, cb);
+    let res = storage.flashback_to_version(req, raft_router.clone(), cb);
 
     async move {
         let v = match res {

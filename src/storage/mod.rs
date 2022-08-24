@@ -67,7 +67,7 @@ use std::{
     sync::{
         atomic::{self, AtomicBool},
         mpsc::sync_channel,
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -1522,8 +1522,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     pub fn flashback_to_version<R: RaftStoreRouter<E::Local> + 'static>(
         &self,
         mut req: FlashbackToVersionRequest,
-        raft_router: &R,
-        _callback: Callback<()>,
+        raft_router: R,
+        callback: Callback<()>,
     ) -> Result<()> {
         let ctx = req.take_context();
         Self::check_api_version_ranges(
@@ -1534,50 +1534,56 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         )?;
 
         let region_id = ctx.get_region_id();
-        // TODO: reject any scheduling, read or write request.
-        // TODO: wait for the applied index to reach the latest committed index.
+        // Reject any following scheduling, read or writing request, and wait for the
+        // applied index to reach the latest committed index.
         let (tx, rx) = sync_channel(1);
-        let _ = raft_router.significant_send(region_id, SignificantMsg::PrepareFlashback(tx));
+        raft_router
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
+            .map_err(|raft_err| {
+                Error::from(ErrorInner::Other(box_err!(
+                    "failed to send the prepare flashback msg: {:?}",
+                    raft_err
+                )))
+            })?;
         match rx.recv() {
-            Ok(check) => {
-                if !check {
-                    return Err(Error::from(ErrorInner::Other(
-                        "another process of flashback to version is executing in progress".into(),
-                    )));
-                } else {
-                    info!(
-                        "flashback to version is prepared";
-                        "region_id" => region_id,
-                    );
+            Ok(prepared) => {
+                if !prepared {
+                    return Err(Error::from(ErrorInner::Other(box_err!(
+                        "another process of flashback is executing in progress"
+                    ))));
                 }
+                info!(
+                    "flashback is prepared";
+                    "region_id" => region_id,
+                );
             }
             Err(recv_err) => {
-                return Err(box_err!(
-                    "failed to wait the flashback txn command result: {:?}",
+                return Err(Error::from(ErrorInner::Other(box_err!(
+                    "failed to wait the flashback preparation result: {:?}",
                     recv_err
-                ));
+                ))));
             }
         }
 
-        let (tx, rx) = sync_channel(1);
+        let thread_safe_raft_router = Mutex::new(raft_router);
         self.sched_txn_command(
             req.into(),
-            Box::new(move |x| {
-                tx.send(x).unwrap();
+            Box::new(move |txn_res| {
+                // Resume the scheduling, read and writing request.
+                if let Err(raft_err) = thread_safe_raft_router
+                    .lock()
+                    .unwrap()
+                    .significant_send(region_id, SignificantMsg::FinishFlashback)
+                {
+                    callback(Err(Error::from(ErrorInner::Other(box_err!(
+                        "failed to send the finish flashback msg: {:?}",
+                        raft_err
+                    )))));
+                } else {
+                    callback(txn_res);
+                }
             }),
         )?;
-        match rx.recv() {
-            Ok(txn_res) => txn_res?,
-            Err(recv_err) => {
-                return Err(box_err!(
-                    "failed to wait the flashback txn command result: {:?}",
-                    recv_err
-                ));
-            }
-        }
-
-        // TODO: resume the scheduling, reading and writing.
-        let _ = raft_router.significant_send(region_id, SignificantMsg::FinishFlashback);
 
         KV_COMMAND_COUNTER_VEC_STATIC.flashback_to_version.inc();
         Ok(())

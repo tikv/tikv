@@ -11,7 +11,7 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{Arc, Mutex, mpsc::SyncSender},
+    sync::{mpsc::SyncSender, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -78,10 +78,9 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
+            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
-            FlashbackState, FlashbackWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
@@ -919,18 +918,14 @@ where
     fn on_prepare_flashback(&mut self, ch: SyncSender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
             warn!(
-                "Flashback can't wait apply, another plan is executing in progress";
+                "can not prepare the flashback, another flashback is executing in progress";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
             );
             ch.send(false).unwrap();
             return;
         }
-
-        let wait_apply = FlashbackWaitApplySyncer::new(ch.clone());
-        self.fsm.peer.flashback_state = Some(FlashbackState::WaitApply {
-            syncer: wait_apply.clone(),
-        });
+        self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
     }
 
     fn on_finish_flashback(&mut self) {
@@ -938,9 +933,8 @@ where
             "finish flashback";
             "region_id" => self.region().get_id(),
             "peer_id" => self.fsm.peer.peer_id(),
-            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
         );
-        self.fsm.peer.flashback_state = None;
+        self.fsm.peer.flashback_state.take();
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -2111,26 +2105,21 @@ where
         }
     }
 
-    fn check_flashback_state(&mut self) {
-        match &self.fsm.peer.flashback_state {
-            Some(FlashbackState::WaitApply { syncer }) => {
-                if let Some(FlashbackState::WaitApply { .. }) =
-                    &self.fsm.peer.flashback_state
-                {
-                    let target_index = self.fsm.peer.raft_group.raft.raft_log.committed;
-                    if self.fsm.peer.raft_group.raft.raft_log.applied >= target_index {
-                        info!(
-                            "flashback finish wait apply";
-                            "region_id" => self.region().get_id(),
-                            "peer_id" => self.fsm.peer.peer_id(),
-                            "target_index" => target_index,
-                            "applied" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
-                        );
-                        syncer.finish_prepare();
-                    }
-                }
+    fn maybe_finish_flashback_wait_apply(&mut self) {
+        if let Some(flashback_state) = &self.fsm.peer.flashback_state {
+            // TODO: do we need to handle the just-proposed but uncommitted entry?
+            if self.fsm.peer.raft_group.raft.raft_log.applied
+                == self.fsm.peer.raft_group.raft.raft_log.committed
+            {
+                info!(
+                    "flashback finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.fsm.peer.peer_id(),
+                    "committed_index" => self.fsm.peer.raft_group.raft.raft_log.committed,
+                    "applied_index" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+                );
+                flashback_state.finish_wait_apply();
             }
-            None => {}
         }
     }
 
@@ -2202,7 +2191,7 @@ where
             self.check_unsafe_recovery_state();
         }
         if self.fsm.peer.flashback_state.is_some() {
-            self.check_flashback_state();
+            self.maybe_finish_flashback_wait_apply();
         }
     }
 
