@@ -8,14 +8,15 @@ use kvproto::{
     cdcpb::Event,
     metapb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
+    raft_serverpb::RaftMessage,
 };
-use raftstore::store::{
-    metrics::RaftEventDurationType, FetchedLogs, InspectedRaftMessage, RegionSnapshot,
-};
+use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, RegionSnapshot};
 use tikv_util::time::Instant;
 
 use super::{
-    response_channel::{CmdResChannel, CmdResSubscriber, QueryResChannel, QueryResSubscriber},
+    response_channel::{
+        CmdResChannel, CmdResSubscriber, DebugInfoChannel, QueryResChannel, QueryResSubscriber,
+    },
     ApplyRes,
 };
 
@@ -116,7 +117,7 @@ pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(Box<RaftMessage>),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
     RaftQuery(RaftRequest<QueryResChannel>),
@@ -138,6 +139,7 @@ pub enum PeerMsg {
         peer_id: u64,
         ready_number: u64,
     },
+    QueryDebugInfo(DebugInfoChannel),
 }
 
 impl PeerMsg {
@@ -175,14 +177,15 @@ impl fmt::Debug for PeerMsg {
                 peer_id, ready_number
             ),
             PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
+            PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
         }
     }
 }
 
 pub enum StoreMsg {
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(Box<RaftMessage>),
     Tick(StoreTick),
-    Start { store: metapb::Store },
+    Start,
 }
 
 impl fmt::Debug for StoreMsg {
@@ -190,7 +193,7 @@ impl fmt::Debug for StoreMsg {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start => write!(fmt, "Start store"),
         }
     }
 }
