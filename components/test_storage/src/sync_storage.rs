@@ -122,7 +122,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             tx,
             config,
             Default::default(),
-            Arc::new(MockRegionInfoProvider::new(Vec::new())), // todo(SpadeA): any problem?
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
         gc_worker.start()?;
         Ok(Self {

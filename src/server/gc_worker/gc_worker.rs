@@ -294,8 +294,17 @@ fn get_keys_in_regions(
                     .filter(move |r| find_peer(r, store_id).is_some())
                     .peekable();
 
-                // todo(SpadeA): what if no region has been returned
-                let region = regions.peek().unwrap().clone();
+                let region = match regions.peek() {
+                    Some(region) => region.clone(),
+                    None => {
+                        return Err(box_err!(
+                            "No region has been found for range [{:?}, {:?})",
+                            start,
+                            end
+                        ));
+                    }
+                };
+
                 let keys = keys.into_iter().peekable();
                 Ok((Box::new(KeysInRegions { keys, regions }), region))
             } else {
@@ -316,6 +325,7 @@ fn get_keys_in_regions(
     }
 }
 
+// Ok(None) means no region has been found
 fn seek_region(
     store_id: u64,
     key: &[u8],
@@ -335,9 +345,12 @@ fn seek_region(
         }),
     ));
 
-    match rx.recv() {
-        Ok(Some(region)) => Ok(region),
-        _ => unimplemented!(), // todo(SpadeA): when it can receive error or None?
+    match box_try!(rx.recv()) {
+        Some(region) => Ok(region),
+        None => Err(box_err!(
+            "The region that contains {:?} has not been found",
+            key
+        )),
     }
 }
 
