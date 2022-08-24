@@ -159,7 +159,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub(crate) fn send_read_command<T>(
         &self,
         ctx: &mut StoreContext<EK, ER, T>,
-        read_cmd: RaftRequest<QueryResChannel>,
+        read_cmd: RaftRequest,
     ) {
         let mut err = errorpb::Error::default();
         let read_ch = match ctx.router.send_read_command(read_cmd) {

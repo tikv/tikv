@@ -140,7 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let raft_group = RawNode::new(&raft_cfg, s, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
-        let peer = Peer {
+        let mut peer = Peer {
             raft_group,
             tablet: CachedTablet::new(tablet),
             has_ready: false,
@@ -380,6 +380,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .cloned()
     }
 
+    /// Get the leader peer meta.
+    ///
+    /// `None` is returned if there is no leader or the meta can't be found.
+    #[inline]
+    pub fn leader(&self) -> Option<metapb::Peer> {
+        let leader_id = self.leader_id();
+        if leader_id != 0 {
+            self.peer_from_cache(leader_id)
+        } else {
+            None
+        }
+    }
+
     /// Term of the state machine.
     #[inline]
     pub fn term(&self) -> u64 {
@@ -418,19 +431,6 @@ where
     #[inline]
     fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
-    }
-
-    /// Get the leader peer meta.
-    ///
-    /// `None` is returned if there is no leader or the meta can't be found.
-    #[inline]
-    fn leader(&self) -> Option<metapb::Peer> {
-        let leader_id = self.leader_id();
-        if leader_id != 0 {
-            self.peer_from_cache(leader_id)
-        } else {
-            None
-        }
     }
 
     #[inline]

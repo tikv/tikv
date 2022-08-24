@@ -12,7 +12,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };

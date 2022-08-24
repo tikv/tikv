@@ -119,7 +119,7 @@ pub enum PeerMsg {
     RaftMessage(InspectedRaftMessage),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
-    RaftQuery(RaftRequest<QueryResChannel>),
+    RaftRequest(RaftRequest<QueryResChannel>),
     /// Command changes the inernal states. It will be transformed into logs and
     /// applied on all replicas.
     RaftCommand(RaftRequest<CmdResChannel>),
@@ -143,7 +143,7 @@ pub enum PeerMsg {
 impl PeerMsg {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
         let (ch, sub) = QueryResChannel::pair();
-        (PeerMsg::RaftQuery(RaftRequest::new(req, ch)), sub)
+        (PeerMsg::RaftRequest(RaftRequest::new(req, ch)), sub)
     }
 
     pub fn raft_command(req: RaftCmdRequest) -> (Self, CmdResSubscriber) {
@@ -156,7 +156,7 @@ impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            PeerMsg::RaftQuery(_) => write!(fmt, "Raft Query"),
+            PeerMsg::RaftRequest(_) => write!(fmt, "Raft Query"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,

@@ -47,7 +47,7 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
     raft::Peer,
-    router::{PeerMsg, PeerTick, StoreMsg},
+    router::{PeerMsg, PeerTick, QueryResChannel, RaftRequest, StoreMsg},
     Error, Result,
 };
 
@@ -477,13 +477,13 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     #[inline]
     pub fn send_read_command(
         &self,
-        cmd: RaftQuery,
-    ) -> std::result::Result<(), TrySendError<RaftQuery>> {
-        let region_id = cmd.req.request.get_header().get_region_id();
-        match self.send(region_id, PeerMsg::RaftQuery(cmd)) {
+        cmd: RaftRequest<QueryResChannel>,
+    ) -> std::result::Result<(), TrySendError<RaftRequest<QueryResChannel>>> {
+        let region_id = cmd.request.get_header().get_region_id();
+        match self.send(region_id, PeerMsg::RaftRequest(cmd)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => Err(TrySendError::Full(cmd)),
-            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
+            Err(TrySendError::Full(PeerMsg::RaftRequest(cmd))) => Err(TrySendError::Full(cmd)),
+            Err(TrySendError::Disconnected(PeerMsg::RaftRequest(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
             }
             _ => unreachable!(),
