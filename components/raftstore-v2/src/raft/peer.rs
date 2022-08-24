@@ -65,11 +65,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// Transaction extensions related to this peer.
     txn_ext: Arc<TxnExt>,
 
-    /// Indicates whether the peer should be woken up.
-    pub(crate) should_wake_up: bool,
-
-    /// Time of the last attempt to wake up inactive leader.
-    pub(crate) bcast_wake_up_time: Option<TiInstant>,
     pub(crate) leader_lease: Lease,
     pub(crate) pending_remove: bool,
 
@@ -157,8 +152,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             tag: tag.clone(),
             txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
             txn_ext: Arc::new(TxnExt::default()),
-            should_wake_up: false,
-            bcast_wake_up_time: None,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
@@ -201,6 +194,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.store()
     }
 
+    #[inline]
     pub fn push_pending_read(&mut self, read: ReadIndexRequest<QueryResChannel>, is_leader: bool) {
         self.pending_reads.push_back(read, is_leader);
     }

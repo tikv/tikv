@@ -89,6 +89,16 @@ impl<ER> Storage<ER> {
     }
 }
 
+impl<ER: RaftEngine> Debug for Storage<ER> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage")
+            .field("peer", &self.peer)
+            .field("region_state", &self.region_state)
+            .field("raft_state", &self.entry_storage.raft_state())
+            .finish()
+    }
+}
+
 impl<ER: RaftEngine> Storage<ER> {
     /// Creates a new storage.
     ///
@@ -244,16 +254,6 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         unimplemented!()
-    }
-}
-
-impl<ER: RaftEngine> std::fmt::Debug for Storage<ER> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Storage")
-            .field("peer", &self.peer)
-            .field("region_state", &self.region_state)
-            .field("raft_state", &self.entry_storage.raft_state())
-            .finish()
     }
 }
 

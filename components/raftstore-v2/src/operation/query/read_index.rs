@@ -47,7 +47,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         now: Timespec,
     ) -> bool {
         poll_ctx.raft_metrics.propose.read_index.inc();
-        self.bcast_wake_up_time = None;
 
         let request = req
             .mut_requests()
@@ -65,7 +64,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
         self.push_pending_read(read, is_leader);
-        self.should_wake_up = true;
         debug!(
             self.logger,
             "request to get a read index";

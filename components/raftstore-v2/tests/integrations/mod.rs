@@ -34,9 +34,9 @@ use pd_client::RpcClient;
 use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
+    fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
     Bootstrap, StoreRouter, StoreSystem,
-    fsm::StoreMeta,
 };
 use slog::{o, Logger};
 use tempfile::TempDir;
@@ -155,8 +155,6 @@ impl TestNode {
             self.logger.clone(),
         );
 
-        let pd_worker = LazyWorker::new("test-pd-worker");
-        let raft_log_worker = Worker::new("raftlog-fetch-worker");
         let store_meta = Arc::new(Mutex::new(StoreMeta::<KvTestEngine>::new()));
         system
             .start(
@@ -166,8 +164,6 @@ impl TestNode {
                 self.factory.clone().unwrap(),
                 trans,
                 &router,
-                pd_worker,
-                raft_log_worker,
                 store_meta,
             )
             .unwrap();

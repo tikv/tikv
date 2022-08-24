@@ -22,9 +22,8 @@ use raft::INVALID_ID;
 use raftstore::{
     bytes_capacity,
     store::{
-        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, memory::*, Config,
-        InspectedRaftMessage, PdTask, RaftRouter, RaftlogFetchRunner, RaftlogFetchTask,
-        StoreWriters, Transport, WriteMsg, WriteSenders,
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+        RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
     },
 };
 use slog::Logger;
@@ -65,8 +64,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     /// The precise timer for scheduling tick.
     pub timer: SteadyTimer,
     pub write_senders: WriteSenders<EK, ER>,
-    /// pd task scheduler
-    pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
     pub current_time: Option<Timespec>,
@@ -79,7 +76,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
         router: StoreRouter<EK, ER>,
         write_senders: WriteSenders<EK, ER>,
         logger: Logger,
-        pd_scheduler: Scheduler<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         Self {
@@ -92,7 +88,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             tick_batch: vec![PeerTickBatch::default(); PeerTick::VARIANT_COUNT],
             timer: SteadyTimer::default(),
             write_senders,
-            pd_scheduler,
             store_meta,
             current_time: None,
         }
@@ -247,7 +242,6 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
     /// pd task scheduler
-    pd_scheduler: Scheduler<PdTask<EK, ER>>,
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 
@@ -262,7 +256,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         store_writers: &mut StoreWriters<EK, ER>,
         logger: Logger,
-        pd_scheduler: Scheduler<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Self {
         StorePollerBuilder {
@@ -275,7 +268,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StorePollerBuilder<EK, ER, T> {
             log_fetch_scheduler,
             logger,
             write_senders: store_writers.senders(),
-            pd_scheduler,
             store_meta,
         }
     }
@@ -336,7 +328,6 @@ where
             self.router.clone(),
             self.write_senders.clone(),
             self.logger.clone(),
-            self.pd_scheduler.clone(),
             self.store_meta.clone(),
         );
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
@@ -379,8 +370,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         tablet_factory: Arc<dyn TabletFactory<EK>>,
         trans: T,
         router: &StoreRouter<EK, ER>,
-        pd_worker: LazyWorker<PdTask<EK, ER>>,
-        raft_log_worker: Worker,
         store_meta: Arc<Mutex<StoreMeta<EK>>>,
     ) -> Result<()>
     where
@@ -410,7 +399,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
             log_fetch_scheduler,
             &mut workers.store_writers,
             self.logger.clone(),
-            pd_worker.scheduler(),
             store_meta,
         );
         self.workers = Some(workers);
@@ -477,10 +465,10 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
         cmd: RaftRequest<QueryResChannel>,
     ) -> std::result::Result<(), TrySendError<RaftRequest<QueryResChannel>>> {
         let region_id = cmd.request.get_header().get_region_id();
-        match self.send(region_id, PeerMsg::RaftRequest(cmd)) {
+        match self.send(region_id, PeerMsg::RaftQuery(cmd)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::RaftRequest(cmd))) => Err(TrySendError::Full(cmd)),
-            Err(TrySendError::Disconnected(PeerMsg::RaftRequest(cmd))) => {
+            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => Err(TrySendError::Full(cmd)),
+            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
             }
             _ => unreachable!(),
