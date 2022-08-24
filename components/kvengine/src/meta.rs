@@ -204,6 +204,13 @@ impl ShardMeta {
             info!("{} skip duplicated change {:?}", self.tag(), cs);
             return true;
         }
+        if cs.has_initial_flush() && self.parent.is_none() {
+            info!(
+                "{} skip duplicated initial flush, already flushed",
+                self.tag()
+            );
+            return true;
+        }
         if cs.has_flush() {
             let flush = cs.get_flush();
             if flush.get_version() <= self.data_version() {
@@ -390,10 +397,11 @@ impl ShardMeta {
                 new_shard,
                 Box::new(old.clone()),
             );
+            meta.engine_id = self.engine_id;
             if id == old.id {
                 meta.base_version = old.base_version;
-                meta.data_sequence = old.data_sequence;
-                meta.seq = old.seq;
+                meta.data_sequence = sequence;
+                meta.seq = sequence;
             } else {
                 debug!(
                     "new base for {}, {} {}",
