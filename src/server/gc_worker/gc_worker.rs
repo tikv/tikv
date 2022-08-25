@@ -946,6 +946,7 @@ where
         let ctx = init_snap_ctx(store_id, region);
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
+            gc: true,
             ..Default::default()
         };
 
