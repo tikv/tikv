@@ -704,6 +704,15 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
+/// Leadership transfer metadata for the follower who receives pre-transfer
+/// request.
+#[derive(Clone, Debug)]
+pub struct PreAckTransferLeaderMeta {
+    // TODO(cosven): save index/term/... instead of a message object?
+    pub msg: eraftpb::Message,
+    receive_time: TiInstant,
+}
+
 #[derive(Getters)]
 pub struct Peer<EK, ER>
 where
@@ -884,6 +893,8 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
+    /// TODO(cosven): add some comments.
+    pub pre_ack_transfer_leader_meta: Option<PreAckTransferLeaderMeta>,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
 }
 
@@ -1015,6 +1026,7 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
+            pre_ack_transfer_leader_meta: None,
             unsafe_recovery_state: None,
         };
 
@@ -3249,9 +3261,20 @@ where
             self.raft_group.store().region(),
         );
 
+        // If the follower is about to ack transfer leader, it should not compact entry
+        // cache.
         if !self.is_leader() {
-            self.mut_store()
-                .compact_entry_cache(apply_state.applied_index + 1);
+            let mut need_compact = true;
+            if let Some(meta) = &self.pre_ack_transfer_leader_meta {
+                if meta.receive_time.saturating_elapsed_secs() > 60.0 {
+                    self.pre_ack_transfer_leader_meta = None;
+                    need_compact = false;
+                }
+            }
+            if need_compact {
+                self.mut_store()
+                    .compact_entry_cache(apply_state.applied_index + 1);
+            }
         }
 
         let progress_to_be_updated = self.mut_store().applied_term() != applied_term;
@@ -3666,7 +3689,10 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    /// pre-transfer leader.
+    ///
+    /// If min_matched index is 0, there is no need to pre-fill entry cache.
+    fn pre_transfer_leader(&mut self, peer: &metapb::Peer, min_matched: u64) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
             info!(
@@ -3683,6 +3709,7 @@ where
         self.raft_group.ping();
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
+        msg.set_index(min_matched);
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
         // log term here represents the term of last log. For leader, the term of last
@@ -4377,6 +4404,51 @@ where
         Ok(Either::Left(propose_index))
     }
 
+    /// Before ack MsgTransferLeader sent by leader.
+    ///
+    /// Return true means the msg can be acked.
+    pub fn pre_ack_transfer_leader_msg(&mut self, msg: eraftpb::Message) -> bool {
+        // min_matched refers to the slowest peer's match index.
+        let min_matched = msg.get_index();
+
+        // When min_matched index is not 0, entry cache should cover it.
+        if min_matched == 0 {
+            true
+        } else {
+            let store = self.get_store();
+
+            let mut high = store.commit_index();
+            if let Some(first_index) = store.entry_cache_first_index() {
+                // Already filled.
+                if first_index <= min_matched + 1 {
+                    return true;
+                }
+                high = first_index;
+            }
+
+            self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
+                msg,
+                receive_time: TiInstant::now(),
+            });
+
+            // TODO(cosven): no need to use two vars.
+            let mut low = min_matched;
+            if min_matched < self.last_compacted_idx {
+                warn!(
+                    "(this_pr) min matched is less than last compatecd";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                low = self.last_compacted_idx
+            }
+
+            // Fill entry cache.
+            self.get_store()
+                .entries(low, high, u64::MAX, GetEntriesContext::empty(true))
+                .is_ok()
+        }
+    }
+
     pub fn execute_transfer_leader<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -4416,6 +4488,17 @@ where
         self.raft_group.raft.msgs.push(msg);
     }
 
+    pub fn ack_transfer_leader_msg(&mut self) {
+        // TODO(cosven): maybe check pending snapshot. I think maybe it does not need :)
+        let mut msg = eraftpb::Message::new();
+        msg.set_from(self.peer_id());
+        msg.set_to(self.leader_id());
+        msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
+        msg.set_index(self.get_store().applied_index());
+        msg.set_log_term(self.term());
+        self.raft_group.raft.msgs.push(msg);
+    }
+
     /// Return true to if the transfer leader request is accepted.
     ///
     /// When transferring leadership begins, leader sends a pre-transfer
@@ -4443,34 +4526,60 @@ where
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
 
-        let (_, peers) = transfer_leader
+        // Transform the peers array to a map.
+        let candidates: HashMap<u64, metapb::Peer> = transfer_leader
             .get_peers()
             .iter()
             .filter(|peer| peer.id != self.peer.id)
-            .fold((0, vec![]), |(max_matched, mut chosen), peer| {
-                if let Some(pr) = prs.get(peer.id) {
-                    match pr.matched.cmp(&max_matched) {
-                        cmp::Ordering::Greater => (pr.matched, vec![peer]),
-                        cmp::Ordering::Equal => {
-                            chosen.push(peer);
-                            (max_matched, chosen)
-                        }
-                        cmp::Ordering::Less => (max_matched, chosen),
+            .map(|peer| (peer.id, peer.clone()))
+            .collect();
+
+        // Find good candidates and min matched index.
+        // TODO(cosven): only consider voters' progress? may be not.
+        let (_, mut min_matched, good_candidates) = prs
+            .iter()
+            // TODO(cosven): Does progress stores self's progress? may be not.
+            .filter(|(&peer_id, _)| peer_id != self.peer.id)
+            .fold(
+                (0, u64::MAX, vec![]),
+                |(mut max_matched, mut min_matched, mut good_candidates), (peer_id, pr)| {
+                    // If the matched index is 0, this peer will first receive a snapshot.
+                    // TODO(cosven): not sure.
+                    if 0 < pr.matched && pr.matched < min_matched {
+                        min_matched = pr.matched
                     }
-                } else {
-                    (max_matched, chosen)
+                    if let Some(peer) = candidates.get(peer_id) {
+                        if pr.matched >= max_matched {
+                            max_matched = pr.matched;
+                            good_candidates.push(peer);
+                        }
+                    }
+                    (max_matched, min_matched, good_candidates)
                 }
-            });
-        let peer = match peers.len() {
+            );
+
+        // TODO(cosven): I think this should not happen.
+        // 1. This is a one-replica raft group? may be not.
+        // 2. This is a newly created raft group? may be.
+        if min_matched == u64::MAX {
+            warn!(
+                "(this_pr) min matched index is u64::MAX";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            min_matched = 0;
+        }
+
+        let best_candidate = match good_candidates.len() {
             0 => transfer_leader.get_peer(),
-            1 => peers.get(0).unwrap(),
-            _ => peers.choose(&mut rand::thread_rng()).unwrap(),
+            1 => good_candidates.get(0).unwrap(),
+            _ => good_candidates.choose(&mut rand::thread_rng()).unwrap(),
         };
 
-        let transferred = if peer.id == self.peer.id {
+        let transferred = if best_candidate.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer)
+            self.pre_transfer_leader(best_candidate, min_matched)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -4845,7 +4954,8 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p);
+                    // TODO(cosven): maybe provide a correct min_matched index here.
+                    self.pre_transfer_leader(&p, 0);
                 }
             }
         } else {

@@ -1689,6 +1689,11 @@ where
                 .peer
                 .mut_store()
                 .update_async_fetch_res(low, Some(res));
+            if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
+                if meta.msg.get_index() == low {
+                    self.fsm.peer.ack_transfer_leader_msg();
+                }
+            }
         }
         self.fsm.peer.raft_group.on_entries_fetched(context);
         // clean the async fetch result immediately if not used to free memory
@@ -3042,9 +3047,16 @@ where
                 }
             }
         } else {
-            self.fsm
-                .peer
-                .execute_transfer_leader(self.ctx, msg.get_from(), peer_disk_usage, false);
+            // TODO(cosven): check disk usage in pre_ack.
+            if self.fsm.peer.pre_ack_transfer_leader_msg(msg.clone()) {
+                // TODO(cosven): rename execute_transfer_leader to ack_transfer_leader_msg.
+                self.fsm.peer.execute_transfer_leader(
+                    self.ctx,
+                    msg.get_from(),
+                    peer_disk_usage,
+                    false,
+                );
+            }
         }
     }
 
