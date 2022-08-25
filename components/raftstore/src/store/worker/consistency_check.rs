@@ -128,7 +128,7 @@ mod tests {
 
     use byteorder::{BigEndian, WriteBytesExt};
     use engine_test::kv::{new_engine, KvTestEngine};
-    use engine_traits::{KvEngine, SyncMutable, CF_DEFAULT, CF_RAFT};
+    use engine_traits::{KvEngine, SyncMutable, ALL_CFS};
     use kvproto::metapb::*;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_consistency_check() {
         let path = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
 
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());

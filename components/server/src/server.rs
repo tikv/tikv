@@ -45,7 +45,7 @@ use engine_rocks::{
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
 use engine_traits::{
     CfOptions, CfOptionsExt, Engines, FlowControlFactorsExt, KvEngine, MiscExt, RaftEngine,
-    TabletAccessor, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use file_system::{
@@ -98,8 +98,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         status_server::StatusServer,
         ttl::TtlChecker,
-        KvEngineFactory, KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
-        DEFAULT_CLUSTER_ID, GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, DEFAULT_CLUSTER_ID,
+        GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
@@ -574,6 +574,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders(),
         );
 
         self.engines = Some(TikvEngines {
@@ -1280,12 +1281,19 @@ where
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
+
+        // region_id -> (suffix, tablet)
+        // `update` of EnginesResourceInfo is called perodically which needs this map
+        // for recording the latest tablet for each region.
+        // `cached_latest_tablets` is passed to `update` to avoid memory
+        // allocation each time when calling `update`.
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                engines_info_clone.update(now);
+                engines_info_clone.update(now, &mut cached_latest_tablets);
             });
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
@@ -1844,13 +1852,8 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 }
 
 pub struct EnginesResourceInfo {
-    tablet_factory: Arc<KvEngineFactory>,
+    tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
     raft_engine: Option<RocksEngine>,
-    // region_id -> (suffix, tablet)
-    // `update` is called perodically which needs this map for recording the latest tablet for each
-    // region and cached_latest_tablets is used to avoid memory allocation each time when
-    // calling `update`.
-    cached_latest_tablets: Arc<Mutex<HashMap<u64, (u64, RocksEngine)>>>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
 }
@@ -1859,20 +1862,23 @@ impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
     fn new(
-        tablet_factory: Arc<KvEngineFactory>,
+        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
         EnginesResourceInfo {
             tablet_factory,
             raft_engine,
-            cached_latest_tablets: Arc::default(),
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
     }
 
-    pub fn update(&self, _now: Instant) {
+    pub fn update(
+        &self,
+        _now: Instant,
+        cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
+    ) {
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1893,8 +1899,6 @@ impl EnginesResourceInfo {
         if let Some(raft_engine) = &self.raft_engine {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
-
-        let mut cached_latest_tablets = self.cached_latest_tablets.as_ref().lock().unwrap();
 
         self.tablet_factory
             .for_each_opened_tablet(
@@ -1953,5 +1957,95 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        collections::HashMap,
+        sync::{atomic::Ordering, Arc},
+    };
+
+    use engine_rocks::{raw::Env, RocksEngine};
+    use engine_traits::{
+        FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
+    };
+    use tempfile::Builder;
+    use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
+    use tikv_util::{config::ReadableSize, time::Instant};
+
+    use super::EnginesResourceInfo;
+
+    #[test]
+    fn test_engines_resource_info_update() {
+        let mut config = TikvConfig::default();
+        config.rocksdb.defaultcf.disable_auto_compactions = true;
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        let env = Arc::new(Env::default());
+        let path = Builder::new().prefix("test-update").tempdir().unwrap();
+
+        let builder = KvEngineFactoryBuilder::new(env, &config, path.path());
+        let factory = builder.build_v2();
+
+        for i in 1..6 {
+            let _ = factory
+                .open_tablet(i, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+        }
+
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap();
+        // Prepare some data for two tablets of the same region. So we can test whether
+        // we fetch the bytes from the latest one.
+        for i in 1..21 {
+            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            if i % 2 == 0 {
+                tablet.flush_cf(CF_DEFAULT, true).unwrap();
+            }
+        }
+        let old_pending_compaction_bytes = tablet
+            .get_cf_pending_compaction_bytes(CF_DEFAULT)
+            .unwrap()
+            .unwrap();
+
+        let tablet = factory
+            .open_tablet(1, Some(20), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        for i in 1..11 {
+            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            if i % 2 == 0 {
+                tablet.flush_cf(CF_DEFAULT, true).unwrap();
+            }
+        }
+        let new_pending_compaction_bytes = tablet
+            .get_cf_pending_compaction_bytes(CF_DEFAULT)
+            .unwrap()
+            .unwrap();
+
+        assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
+
+        let engines_info = Arc::new(EnginesResourceInfo::new(Arc::new(factory), None, 10));
+
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
+        engines_info.update(Instant::now(), &mut cached_latest_tablets);
+
+        // The memory allocation should be reserved
+        assert!(cached_latest_tablets.capacity() >= 5);
+        // The tablet cache should be cleared
+        assert!(cached_latest_tablets.is_empty());
+
+        // The latest_normalized_pending_bytes should be equal to the pending compaction
+        // bytes of tablet_1_20
+        assert_eq!(
+            (new_pending_compaction_bytes * 100) as u32,
+            engines_info
+                .latest_normalized_pending_bytes
+                .load(Ordering::Relaxed)
+        );
     }
 }

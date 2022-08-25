@@ -107,6 +107,8 @@ pub fn commit<S: Snapshot>(
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -275,7 +277,7 @@ pub mod tests {
             k,
             &None,
             ts(60, 0),
-            true,
+            DoPessimisticCheck,
             50,
             ts(60, 0),
             1,
