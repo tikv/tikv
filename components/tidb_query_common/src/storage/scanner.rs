@@ -51,6 +51,7 @@ impl RescheduleChecker {
         }
     }
 
+    #[inline(always)]
     async fn check_reschedule(&mut self, force_check: bool) {
         self.prev_key_count += 1;
         if (force_check || self.prev_key_count % CHECK_KEYS == 0)
