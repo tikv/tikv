@@ -906,7 +906,7 @@ pub mod tests {
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 85, true), None);
         must_pessimistic_locked(&engine, k, 75, 85);
         pessimistic_rollback::tests::must_success(&engine, k, 75, 85);
-        // must_no_lock(&engine, k);
+        must_no_lock(&engine, k);
     }
 
     #[test]
