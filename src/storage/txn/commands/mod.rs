@@ -162,12 +162,12 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 req.take_context(),
             )
         } else {
-            let is_pessimistic_lock = req.take_is_pessimistic_lock();
+            let pessimistic_actions = req.take_pessimistic_actions();
             let mutations = req
                 .take_mutations()
                 .into_iter()
                 .map(Into::into)
-                .zip(is_pessimistic_lock.into_iter())
+                .zip(pessimistic_actions)
                 .collect();
             PrewritePessimistic::new(
                 mutations,
@@ -803,7 +803,7 @@ pub mod test_util {
     pub fn pessimistic_prewrite<E: Engine>(
         engine: &E,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -826,7 +826,7 @@ pub mod test_util {
         engine: &E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, bool)>,
+        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
