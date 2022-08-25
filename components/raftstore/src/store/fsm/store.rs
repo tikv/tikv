@@ -383,13 +383,7 @@ where
             _ => unreachable!(),
         }
     }
-}
 
-impl<EK, ER> RaftRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
     fn report_unreachable(&self, store_id: u64) {
         self.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })

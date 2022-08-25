@@ -12,12 +12,9 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
-use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
-use kvproto::{
-    metapb::Store,
-    raft_serverpb::{PeerState, RaftMessage},
-};
+use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raft::INVALID_ID;
 use raftstore::{
     bytes_capacity,
@@ -34,7 +31,7 @@ use tikv_util::{
     future::poll_future_notify,
     time::Instant as TiInstant,
     timer::SteadyTimer,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Scheduler, Worker},
     Either,
 };
 use time::Timespec;
@@ -241,7 +238,6 @@ struct StorePollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
     write_senders: WriteSenders<EK, ER>,
     logger: Logger,
-    /// pd task scheduler
     store_meta: Arc<Mutex<StoreMeta<EK>>>,
 }
 

@@ -6,10 +6,13 @@ use futures::executor::block_on;
 use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use raftstore::store::util::new_peer;
 use raftstore_v2::router::{PeerMsg, PeerTick, QueryResChannel, QueryResult, RaftRequest};
+use tikv_util::thread_group::{set_properties, GroupProperties};
 
 #[test]
 fn test_status() {
+    set_properties(Some(GroupProperties::default()));
     let (_node, _transport, router) = super::setup_default_cluster();
+
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_peer(new_peer(1, 3));

@@ -6,7 +6,6 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use fail::fail_point;
 use kvproto::{
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{self, RaftCmdRequest},
 };
@@ -23,7 +22,7 @@ use raftstore::{
         read_queue::{ReadIndexQueue, ReadIndexRequest},
         util::{Lease, LeaseState, RegionReadProgress},
         worker::{LocalReadContext, ReadExecutor},
-        Config, EntryStorage, RaftlogFetchTask, Transport, TxnExt,
+        Config, EntryStorage, RaftlogFetchTask, Transport,
     },
     Error,
 };
@@ -61,9 +60,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) pending_reads: ReadIndexQueue<QueryResChannel>,
     pub(crate) read_progress: Arc<RegionReadProgress>,
     pub(crate) tag: String,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    /// Transaction extensions related to this peer.
-    txn_ext: Arc<TxnExt>,
 
     pub(crate) leader_lease: Lease,
     pub(crate) pending_remove: bool,
@@ -150,8 +146,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 tag.clone(),
             )),
             tag: tag.clone(),
-            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
-            txn_ext: Arc::new(TxnExt::default()),
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
