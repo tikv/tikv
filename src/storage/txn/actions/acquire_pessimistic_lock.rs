@@ -41,11 +41,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     fail_point!("acquire_pessimistic_lock", |err| Err(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
-    if lock_only_if_exists {
-        assert!(
-            need_value,
-            "when acquire pessimistic lock, lock_only_if_exists is used, but return_value is not"
-        );
+    if lock_only_if_exists && !need_value {
+        return Err(ErrorInner::Other(box_err!("when acquire pessimistic lock, lock_only_if_exists is set, but return_value is not")).into());
     }
     // Update max_ts for Insert operation to guarante linearizability and snapshot
     // isolation
@@ -146,7 +143,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     }
 
     // Following seek_write read the previous write.
-    let mut key_exists = false;
     let (prev_write_loaded, mut prev_write) = (true, None);
     if let Some((commit_ts, write)) = reader.seek_write(&key, TimeStamp::max())? {
         // Find a previous write.
@@ -231,8 +227,6 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 }
             };
         }
-        // this flag is used for lock_only_if_exists is true
-        key_exists = lock_only_if_exists && val.is_some();
     }
 
     let old_value = load_old_value(
@@ -253,9 +247,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
     };
 
-    // when lock_only_if_exists is false, always accquire pessimitic lock,
-    // otherwise do it when key_exists is trye
-    if !lock_only_if_exists || key_exists {
+    // when lock_only_if_exists is false, always accquire pessimitic lock,otherwise do it when val exists
+    if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
     }
     // TODO don't we need to commit the modifies in txn?
@@ -430,10 +423,34 @@ pub mod tests {
             false,
             false,
             TimeStamp::zero(),
+            false,
         )
     }
 
     pub fn must_err_return_value<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        for_update_ts: impl Into<TimeStamp>,
+        lock_only_if_exists: bool,
+    ) -> MvccError {
+        must_err_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            false,
+            for_update_ts,
+            true,
+            false,
+            TimeStamp::zero(),
+            lock_only_if_exists,
+        )
+    }
+
+    #[cfg(test)]
+    pub fn must_err_lock_only_if_exists<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],
@@ -447,9 +464,10 @@ pub mod tests {
             start_ts,
             false,
             for_update_ts,
-            true,
+            false,
             false,
             TimeStamp::zero(),
+            true,
         )
     }
 
@@ -463,6 +481,7 @@ pub mod tests {
         need_value: bool,
         need_check_existence: bool,
         min_commit_ts: impl Into<TimeStamp>,
+        lock_only_if_exists: bool,
     ) -> MvccError {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
@@ -482,7 +501,7 @@ pub mod tests {
             need_check_existence,
             min_commit_ts,
             false,
-            false,
+            lock_only_if_exists,
         )
         .unwrap_err()
     }
@@ -501,7 +520,10 @@ pub mod tests {
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
-    pub fn lock_must_not_exist<E: Engine>(engine: &E, key: &[u8]) {
+    pub fn must_no_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+    ) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap();
@@ -765,13 +787,13 @@ pub mod tests {
         // Put
         must_prewrite_put(&engine, k, v, k, 10);
         // KeyIsLocked
-        match must_err_return_value(&engine, k, k, 20, 20) {
+        match must_err_return_value(&engine, k, k, 20, 20, false) {
             MvccError(box ErrorInner::KeyIsLocked(_)) => (),
             e => panic!("unexpected error: {}", e),
         };
         must_commit(&engine, k, 10, 20);
         // WriteConflict
-        match must_err_return_value(&engine, k, k, 15, 15) {
+        match must_err_return_value(&engine, k, k, 15, 15, false) {
             MvccError(box ErrorInner::WriteConflict { .. }) => (),
             e => panic!("unexpected error: {}", e),
         };
@@ -826,9 +848,14 @@ pub mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let (k, v) = (b"k", b"v");
 
-        // key doesn't exist, no pessimistic lock generated
+        // The key doesn't exist, no pessimistic lock is generated
         assert_eq!(must_succeed_return_value(&engine, k, k, 10, 10, true), None);
-        lock_must_not_exist(&engine, k);
+        must_no_lock(&engine, k);
+
+        match must_err_lock_only_if_exists(&engine, k, k, 10, 10) {
+            MvccError(box ErrorInner::Other(_)) => (),
+            e => panic!("unexpected error: {}", e),
+        };
 
         // Put the value, writecf: k_20_put_v
         must_prewrite_put(&engine, k, v, k, 10);
@@ -865,14 +892,11 @@ pub mod tests {
         must_commit(&engine, k, 60, 70);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, true), None);
         // Duplicated command
-        assert_eq!(
-            must_succeed_return_value(&engine, k, k, 75, 75, false),
-            None
-        );
-
         must_pessimistic_locked(&engine, k, 75, 75);
-        pessimistic_rollback::tests::must_success(&engine, k, 75, 75);
-        lock_must_not_exist(&engine, k);
+        assert_eq!(must_succeed_return_value(&engine, k, k, 75, 85, true), None);
+        must_pessimistic_locked(&engine, k, 75, 85);
+        pessimistic_rollback::tests::must_success(&engine, k, 75, 85);
+        // must_no_lock(&engine, k);
     }
 
     #[test]
@@ -975,7 +999,7 @@ pub mod tests {
                 );
                 must_pessimistic_rollback(&engine, key, 50, 51);
             } else {
-                must_err_impl(&engine, key, key, 50, true, 50, false, false, 51);
+                must_err_impl(&engine, key, key, 50, true, 50, false, false, 51, false);
             }
             must_unlocked(&engine, key);
 
