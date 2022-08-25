@@ -88,14 +88,22 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
-        Ok(Some(Peer {
+        let mut peer = Peer {
             raft_group: RawNode::new(&raft_cfg, s, &logger)?,
             tablet: CachedTablet::new(tablet),
             has_ready: false,
             async_writer: AsyncWriter::new(region_id, peer_id),
             logger,
             peer_cache: vec![],
-        }))
+        };
+
+        // If this region has only one peer and I am the one, campaign directly.
+        let region = peer.region();
+        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
+            peer.raft_group.campaign()?;
+        }
+
+        Ok(Some(peer))
     }
 
     #[inline]
@@ -193,7 +201,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+    pub fn peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
         for p in self.raft_group.store().region().get_peers() {
             if p.get_id() == peer_id {
                 return Some(p.clone());
@@ -208,6 +216,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
+    }
+
+    #[inline]
+    pub fn leader_id(&self) -> u64 {
+        self.raft_group.raft.leader_id
+    }
+
+    /// Get the leader peer meta.
+    ///
+    /// `None` is returned if there is no leader or the meta can't be found.
+    #[inline]
+    pub fn leader(&self) -> Option<metapb::Peer> {
+        let leader_id = self.leader_id();
+        if leader_id != 0 {
+            self.peer_from_cache(leader_id)
+        } else {
+            None
+        }
     }
 
     /// Term of the state machine.
