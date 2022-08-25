@@ -19,7 +19,6 @@ use rusoto_s3::{util::AddressingStyle, *};
 use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
-
 use crate::util::{self, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -50,6 +49,7 @@ pub struct Config {
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
+    object_lock_enabled: bool,
 }
 
 impl Config {
@@ -64,6 +64,7 @@ impl Config {
             sse_kms_key_id: None,
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
+            object_lock_enabled: false,
         }
     }
 
@@ -96,6 +97,7 @@ impl Config {
             force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
             multi_part_size: MINIMUM_PART_SIZE,
+            object_lock_enabled: false,
         })
     }
 
@@ -128,6 +130,8 @@ impl Config {
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
             multi_part_size: MINIMUM_PART_SIZE,
+            // FIXME after kvproto build
+            object_lock_enabled: true,
         })
     }
 }
@@ -232,6 +236,7 @@ struct S3Uploader<'client> {
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
+    object_lock_enabled: bool,
 
     upload_id: String,
     parts: Vec<CompletedPart>,
@@ -292,8 +297,18 @@ impl<'client> S3Uploader<'client> {
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
             multi_part_size: config.multi_part_size,
+            object_lock_enabled: config.object_lock_enabled,
             upload_id: "".to_owned(),
             parts: Vec::new(),
+        }
+    }
+
+    fn get_content_md5(&self, content: &[u8]) -> Option<String> {
+        if self.object_lock_enabled {
+            let digest = md5::compute(content);
+            Some(base64::encode(digest.0))
+        } else {
+            None
         }
     }
 
@@ -432,6 +447,7 @@ impl<'client> S3Uploader<'client> {
                     upload_id: self.upload_id.clone(),
                     part_number,
                     content_length: Some(data.len() as i64),
+                    content_md5: self.get_content_md5(data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -492,6 +508,7 @@ impl<'client> S3Uploader<'client> {
                     ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
                     storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                     content_length: Some(data.len() as i64),
+                    content_md5: self.get_content_md5(data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
