@@ -589,7 +589,7 @@ pub fn should_renew_lease(
     // Because we merge regions asynchronous, the leader may read stale results
     // if commit merge runs slow on sibling peers.
     // when it enters force leader mode, should not renew lease.
-    return !(!is_leader || is_splitting || is_merging || has_force_leader);
+    !(!is_leader || is_splitting || is_merging || has_force_leader)
 }
 
 // check if the request can be amended to the last pending read?

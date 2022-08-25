@@ -32,7 +32,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: QueryResChannel,
+        ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
         if !self.is_leader() && self.leader_id() == INVALID_ID {
@@ -42,11 +42,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .read_index_no_leader
                 .inc();
             cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id(), None));
-            cb.report_error(err_resp);
+            ch.report_error(err_resp);
             return false;
         }
 
-        self.propose_read_index(poll_ctx, req, self.is_leader(), cb, now)
+        self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now)
     }
 
     /// Responses to the ready read index request on the replica, the replica is

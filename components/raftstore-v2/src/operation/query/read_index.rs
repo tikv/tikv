@@ -43,7 +43,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         is_leader: bool,
-        cb: QueryResChannel,
+        ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
         poll_ctx.raft_metrics.propose.read_index.inc();
@@ -56,12 +56,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let (id, dropped) = propose_read_index(&mut self.raft_group, request.as_ref(), None);
         if dropped && is_leader {
             // The message gets dropped silently, can't be handled anymore.
-            notify_stale_req(self.term(), cb);
+            notify_stale_req(self.term(), ch);
             poll_ctx.raft_metrics.propose.dropped_read_index.inc();
             return false;
         }
 
-        let mut read = ReadIndexRequest::with_command(id, req, cb, now);
+        let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
         self.push_pending_read(read, is_leader);
         debug!(
@@ -79,7 +79,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: QueryResChannel,
+        ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
         let lease_state = self.inspect_lease();
@@ -96,12 +96,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if let Some(read) = self.pending_reads.back_mut() {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
-                read.push_command(req, cb, commit_index);
+                read.push_command(req, ch, commit_index);
                 return false;
             }
         }
 
-        if !self.propose_read_index(poll_ctx, req, self.is_leader(), cb, now) {
+        if !self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
             return false;
         }
 
@@ -130,18 +130,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T: Transport>(
+    pub fn read_index<T: Transport>(
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: QueryResChannel,
+        ch: QueryResChannel,
     ) -> bool {
         let now = monotonic_raw_now();
         if self.is_leader() {
-            self.leader_read_index(poll_ctx, req, err_resp, cb, now)
+            self.leader_read_index(poll_ctx, req, err_resp, ch, now)
         } else {
-            self.follower_read_index(poll_ctx, req, err_resp, cb, now)
+            self.follower_read_index(poll_ctx, req, err_resp, ch, now)
         }
     }
 

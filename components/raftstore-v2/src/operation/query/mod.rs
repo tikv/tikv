@@ -12,7 +12,11 @@
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
-    store::{cmd_resp, util, ReadCallback},
+    store::{
+        cmd_resp,
+        peer::{RequestInspector, RequestPolicy},
+        util, ReadCallback,
+    },
     Error, Result,
 };
 use tikv_util::box_err;
@@ -28,11 +32,26 @@ mod local;
 mod read_index;
 mod replica_read;
 
-impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
+impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
+    PeerFsmDelegate<'a, EK, ER, T>
+{
     #[inline]
     pub fn on_query(&mut self, req: RaftCmdRequest, ch: QueryResChannel) {
         if !req.has_status_request() {
-            unimplemented!();
+            let mut resp = RaftCmdResponse::default();
+            let term = self.fsm.peer().term();
+            cmd_resp::bind_term(&mut resp, term);
+            let policy = self.fsm.peer_mut().inspect(&req);
+            match policy {
+                Ok(RequestPolicy::ReadIndex) => {
+                    self.fsm
+                        .peer_mut()
+                        .read_index(self.store_ctx, req, resp, ch)
+                }
+                _ => {
+                    unimplemented!();
+                }
+            };
         } else {
             self.fsm.peer_mut().on_query_status(&req, ch);
         }
