@@ -582,22 +582,14 @@ pub fn should_renew_lease(
     is_merging: bool,
     has_force_leader: bool,
 ) -> bool {
-    if !is_leader {
-        return false;
-    } else if is_splitting {
-        // A splitting leader should not renew its lease.
-        // Because we split regions asynchronous, the leader may read stale results
-        // if splitting runs slow on the leader.
-        return false;
-    } else if is_merging {
-        // A merging leader should not renew its lease.
-        // Because we merge regions asynchronous, the leader may read stale results
-        // if commit merge runs slow on sibling peers.
-        return false;
-    } else if has_force_leader {
-        return false;
-    }
-    true
+    // A splitting leader should not renew its lease.
+    // Because we split regions asynchronous, the leader may read stale results
+    // if splitting runs slow on the leader.
+    // A merging leader should not renew its lease.
+    // Because we merge regions asynchronous, the leader may read stale results
+    // if commit merge runs slow on sibling peers.
+    // when it enters force leader mode, should not renew lease.
+    return !(!is_leader || is_splitting || is_merging || has_force_leader);
 }
 
 // check if the request can be amended to the last pending read?
