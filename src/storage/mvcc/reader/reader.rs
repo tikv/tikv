@@ -131,6 +131,8 @@ pub struct MvccReader<S: EngineSnapshot> {
     // Records the current key for prefix seek. Will Reset the write cursor when switching to
     // another key.
     current_key: Option<Key>,
+    // The minimal MVCC version hint for all cursors.
+    hint_min_version: Option<TimeStamp>,
 
     fill_cache: bool,
 
@@ -151,6 +153,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             scan_mode,
             current_key: None,
+            hint_min_version: None,
             fill_cache,
             term: 0,
             version: 0,
@@ -166,6 +169,28 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             scan_mode,
             current_key: None,
+            hint_min_version: None,
+            fill_cache: !ctx.get_not_fill_cache(),
+            term: ctx.get_term(),
+            version: ctx.get_region_epoch().get_version(),
+        }
+    }
+
+    pub fn new_min_version_hint_with_ctx(
+        snapshot: S,
+        scan_mode: Option<ScanMode>,
+        hint_min_version: TimeStamp,
+        ctx: &Context,
+    ) -> Self {
+        Self {
+            snapshot,
+            statistics: Statistics::default(),
+            data_cursor: None,
+            lock_cursor: None,
+            write_cursor: None,
+            scan_mode,
+            current_key: None,
+            hint_min_version: Some(hint_min_version),
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
@@ -421,6 +446,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .hint_min_ts(self.hint_min_version)
                 .build()?;
             self.data_cursor = Some(cursor);
         }
@@ -434,6 +460,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
+                .hint_min_ts(self.hint_min_version)
                 .build()?;
             self.write_cursor = Some(cursor);
         }
@@ -445,6 +472,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .hint_min_ts(self.hint_min_version)
                 .build()?;
             self.lock_cursor = Some(cursor);
         }
@@ -471,11 +499,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
         Ok(None)
     }
 
-    /// Scan locks that satisfies `filter(lock)` returns true, from the given
-    /// start key `start`. At most `limit` locks will be returned. If `limit` is
+    /// Scan locks that satisfies `filter(lock)` returns true in the key range
+    /// [start, end). At most `limit` locks will be returned. If `limit` is
     /// set to `0`, it means unlimited.
     ///
-    /// The return type is `(locks, is_remain)`. `is_remain` indicates whether
+    /// The return type is `(locks, has_remain)`. `has_remain` indicates whether
     /// there MAY be remaining locks that can be scanned.
     pub fn scan_locks<F>(
         &mut self,
@@ -518,6 +546,56 @@ impl<S: EngineSnapshot> MvccReader<S> {
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more
         // locks.
         Ok((locks, false))
+    }
+
+    /// Scan writes that satisfies `filter(key)` returns true in the key range
+    /// [start, end). At most `limit` locks will be returned. If `limit` is
+    /// set to `0`, it means unlimited.
+    ///
+    /// The return type is `(writes, has_remain)`. `has_remain` indicates
+    /// whether there MAY be remaining writes that can be scanned.
+    pub fn scan_writes<F>(
+        &mut self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        filter: F,
+        limit: usize,
+    ) -> Result<(Vec<(Key, Write)>, bool)>
+    where
+        F: Fn(&Key) -> bool,
+    {
+        self.create_write_cursor()?;
+        let cursor = self.write_cursor.as_mut().unwrap();
+        let ok = match start {
+            Some(x) => cursor.seek(x, &mut self.statistics.write)?,
+            None => cursor.seek_to_first(&mut self.statistics.write),
+        };
+        if !ok {
+            return Ok((vec![], false));
+        }
+        let mut writes = Vec::with_capacity(limit);
+        while cursor.valid()? {
+            let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
+            if let Some(end) = end {
+                if key >= *end {
+                    return Ok((writes, false));
+                }
+            }
+
+            if filter(&key) {
+                writes.push((
+                    key,
+                    WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned(),
+                ));
+                if limit > 0 && writes.len() == limit {
+                    return Ok((writes, true));
+                }
+            }
+            cursor.next(&mut self.statistics.lock);
+        }
+        self.statistics.write.processed_keys += writes.len();
+        resource_metering::record_read_keys(writes.len() as u32);
+        Ok((writes, false))
     }
 
     pub fn scan_keys(
@@ -1601,6 +1679,170 @@ pub mod tests {
             2,
             &visible_locks[..2],
             true,
+        );
+    }
+
+    #[test]
+    fn test_scan_writes() {
+        let path = tempfile::Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_writes")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        // Put some writes to the db.
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@1".to_vec()),
+            b"k1",
+            1,
+        );
+        engine.commit(b"k1", 1, 2);
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@3".to_vec()),
+            b"k1",
+            3,
+        );
+        engine.commit(b"k1", 3, 4);
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k1"), b"v1@5".to_vec()),
+            b"k1",
+            5,
+        );
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2@1".to_vec()),
+            b"k2",
+            1,
+        );
+        engine.commit(b"k2", 1, 2);
+        engine.prewrite(
+            Mutation::make_put(Key::from_raw(b"k2"), b"v2@3".to_vec()),
+            b"k2",
+            3,
+        );
+        engine.commit(b"k2", 3, 4);
+
+        // Creates a reader and scan writes.
+        let check_scan_write = |start_key: Option<Key>,
+                                end_key: Option<Key>,
+                                filter: Box<dyn Fn(&Key) -> bool>,
+                                limit,
+                                expect_res: &[_],
+                                expect_is_remain: bool| {
+            let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
+            let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
+            let res = reader
+                .scan_writes(start_key.as_ref(), end_key.as_ref(), filter, limit)
+                .unwrap();
+            assert_eq!(res.0, expect_res);
+            assert_eq!(res.1, expect_is_remain);
+        };
+
+        check_scan_write(
+            None,
+            None,
+            Box::new(|key| key.decode_ts().unwrap() >= 1.into()),
+            1,
+            &[(
+                Key::from_raw(b"k1").append_ts(4.into()),
+                Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec())),
+            )],
+            true,
+        );
+        check_scan_write(
+            None,
+            None,
+            Box::new(|key| key.decode_ts().unwrap() >= 1.into()),
+            5,
+            &[
+                (
+                    Key::from_raw(b"k1").append_ts(4.into()),
+                    Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k1").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k2").append_ts(4.into()),
+                    Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k2").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec())),
+                ),
+            ],
+            false,
+        );
+        check_scan_write(
+            Some(Key::from_raw(b"k2")),
+            None,
+            Box::new(|key| key.decode_ts().unwrap() >= 1.into()),
+            3,
+            &[
+                (
+                    Key::from_raw(b"k2").append_ts(4.into()),
+                    Write::new(WriteType::Put, 3.into(), Some(b"v2@3".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k2").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec())),
+                ),
+            ],
+            false,
+        );
+        check_scan_write(
+            None,
+            Some(Key::from_raw(b"k2")),
+            Box::new(|key| key.decode_ts().unwrap() >= 1.into()),
+            4,
+            &[
+                (
+                    Key::from_raw(b"k1").append_ts(4.into()),
+                    Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k1").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec())),
+                ),
+            ],
+            false,
+        );
+        check_scan_write(
+            Some(Key::from_raw(b"k1")),
+            Some(Key::from_raw(b"k2")),
+            Box::new(|key| key.decode_ts().unwrap() >= 1.into()),
+            4,
+            &[
+                (
+                    Key::from_raw(b"k1").append_ts(4.into()),
+                    Write::new(WriteType::Put, 3.into(), Some(b"v1@3".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k1").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec())),
+                ),
+            ],
+            false,
+        );
+        check_scan_write(
+            None,
+            None,
+            Box::new(|key| key.decode_ts().unwrap() < 4.into()),
+            4,
+            &[
+                (
+                    Key::from_raw(b"k1").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v1@1".to_vec())),
+                ),
+                (
+                    Key::from_raw(b"k2").append_ts(2.into()),
+                    Write::new(WriteType::Put, 1.into(), Some(b"v2@1".to_vec())),
+                ),
+            ],
+            false,
         );
     }
 

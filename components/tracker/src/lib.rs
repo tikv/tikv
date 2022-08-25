@@ -110,6 +110,7 @@ pub enum RequestType {
     KvTxnHeartBeat,
     KvRollback,
     KvPessimisticRollback,
+    KvFlashbackToVersion,
     CoprocessorDag,
     CoprocessorAnalyze,
     CoprocessorChecksum,
