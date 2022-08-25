@@ -9,6 +9,7 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        mpsc::SyncSender,
     },
     time::{Duration, Instant},
     u64, usize,
@@ -704,6 +705,22 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
+// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
+// it is checked every time this peer applies a new entry or a snapshot,
+// if the latest committed index is met, the syncer will be called to notify the
+// result.
+pub struct FlashbackState(SyncSender<bool>);
+
+impl FlashbackState {
+    pub fn new(ch: SyncSender<bool>) -> Self {
+        FlashbackState(ch)
+    }
+
+    pub fn finish_wait_apply(&self) {
+        self.0.send(true).unwrap();
+    }
+}
+
 #[derive(Getters)]
 pub struct Peer<EK, ER>
 where
@@ -885,6 +902,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    pub flashback_state: Option<FlashbackState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1016,6 +1034,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
+            flashback_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
