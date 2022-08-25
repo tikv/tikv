@@ -252,8 +252,8 @@ pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
     pub start_ts: TimeStamp,
-    // `gc` is used by gc oeprations to bypass the start_ts check.
-    pub gc: bool,
+    // `is_snap_for_gc` is used by gc oeprations to bypass the start_ts check.
+    pub is_snap_for_gc: bool,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,

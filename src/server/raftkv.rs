@@ -200,7 +200,7 @@ where
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
-        if ctx.pb_ctx.get_stale_read() && (!ctx.start_ts.is_zero() || ctx.gc) {
+        if ctx.pb_ctx.get_stale_read() && (!ctx.start_ts.is_zero() || ctx.is_snap_for_gc) {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.into_inner())

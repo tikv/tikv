@@ -735,7 +735,6 @@ pub fn test_txn_store_gc_multiple_keys_cluster_storage(n: usize, prefix: String)
         let region = cluster.get_region(k.as_bytes());
         if last_region != region {
             store.gc_ok_for_cluster(&mut cluster, k.as_bytes(), region.clone(), 30);
-            println!("Last region {:?} region {:?}", last_region, region);
             last_region = region;
         }
     }

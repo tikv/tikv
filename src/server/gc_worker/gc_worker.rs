@@ -271,58 +271,37 @@ impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
 // If `region_or_provider` is Region, it means all keys are located in the same
 // region. If `region_or_provider` is RegionInfoProvider, then we should find
 // all regions of thoes keys.
-// We return an iterator which yeild item of `Key` and the region taht the key
-// is located. We also return the reion of the first key.
+// We return an iterator which yields items of `Key` and the region taht the key
+// is located.
 fn get_keys_in_regions(
     store_id: u64,
     keys: Vec<Key>,
     region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
-) -> Result<(Box<dyn Iterator<Item = (Key, Region)>>, Region)> {
+) -> Result<Box<dyn Iterator<Item = (Key, Region)>>> {
     assert!(!keys.is_empty());
 
     match region_or_provider {
-        Either::Left(region) => {
-            let region_clone = region.clone();
-            Ok((
-                Box::new(keys.into_iter().map(move |k| (k, region.clone()))),
-                region_clone,
-            ))
-        }
+        Either::Left(region) => Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone())))),
         Either::Right(region_provider) => {
             if keys.len() >= 2 {
                 let start = keys.first().unwrap().as_encoded();
                 let end = keys.last().unwrap().as_encoded();
-                let mut regions = box_try!(region_provider.get_regions_in_range(start, end))
+                let regions = box_try!(region_provider.get_regions_in_range(start, end))
                     .into_iter()
                     .filter(move |r| find_peer(r, store_id).is_some())
                     .peekable();
 
-                let region = match regions.peek() {
-                    Some(region) => region.clone(),
-                    None => {
-                        return Err(box_err!(
-                            "No region has been found for range [{:?}, {:?})",
-                            start,
-                            end
-                        ));
-                    }
-                };
-
                 let keys = keys.into_iter().peekable();
-                Ok((Box::new(KeysInRegions { keys, regions }), region))
+                Ok(Box::new(KeysInRegions { keys, regions }))
             } else {
-                // We only have on key.
+                // We only have one key.
                 let region = seek_region(
                     store_id,
                     keys.first().unwrap().as_encoded(),
                     region_provider,
                 )?;
 
-                let region_clone = region.clone();
-                Ok((
-                    Box::new(keys.into_iter().map(move |k| (k, region.clone()))),
-                    region_clone,
-                ))
+                Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone()))))
             }
         }
     }
@@ -514,10 +493,16 @@ where
             Key::from_raw(&k)
         };
 
-        let (mut keys, region) = get_keys_in_regions(store_id, keys, region_or_provider)?;
-        let mut current_region_id = region.id;
+        let (mut handled_keys, mut wasted_keys) = (0, 0);
+        let mut keys = get_keys_in_regions(store_id, keys, region_or_provider)?;
+        let mut next_gc_key = keys.next();
 
-        let mut txn = Self::new_txn();
+        if next_gc_key.is_none() {
+            return Ok((handled_keys, wasted_keys));
+        }
+
+        let region = next_gc_key.as_ref().unwrap().1.clone();
+        let mut current_region_id = region.id;
 
         let (mut reader, mut kv_engine) = {
             let snapshot = self.get_snapshot(store_id, &region)?;
@@ -536,9 +521,8 @@ where
         };
         reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
 
-        let (mut handled_keys, mut wasted_keys) = (0, 0);
+        let mut txn = Self::new_txn();
         let mut gc_info = GcInfo::default();
-        let mut next_gc_key = keys.next();
         while let Some((ref key, ref region)) = next_gc_key {
             if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                 GC_KEY_FAILURES.inc();
@@ -623,15 +607,20 @@ where
         };
 
         let mut raw_modifies = MvccRaw::new();
-        let (mut keys, region) =
-            get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
+        let (mut handled_keys, mut wasted_keys) = (0, 0);
+        let mut keys = get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
+        let mut next_gc_key = keys.next();
+
+        if next_gc_key.is_none() {
+            return Ok((handled_keys, wasted_keys));
+        }
+
+        let region = next_gc_key.as_ref().unwrap().1.clone();
 
         let mut snapshot = self.get_snapshot(store_id, &region)?;
         let kv_engine = snapshot.inner_engine();
 
-        let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut gc_info = GcInfo::default();
-        let mut next_gc_key = keys.next();
         while let Some((ref key, _)) = next_gc_key {
             if let Err(e) = self.raw_gc_key(
                 safe_point,
@@ -946,7 +935,7 @@ where
         let ctx = init_snap_ctx(store_id, region);
         let snap_ctx = SnapContext {
             pb_ctx: &ctx,
-            gc: true,
+            is_snap_for_gc: true,
             ..Default::default()
         };
 

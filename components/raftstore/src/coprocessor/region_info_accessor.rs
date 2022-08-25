@@ -107,13 +107,6 @@ impl RangeKey {
             RangeKey::Finite(key)
         }
     }
-
-    pub fn into_key(self) -> Vec<u8> {
-        match self {
-            Self::Finite(key) => key,
-            Self::Infinite => Vec::new(),
-        }
-    }
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
@@ -762,10 +755,9 @@ impl RegionInfoProvider for MockRegionInfoProvider {
 
     fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
         let region_infos = self.0.lock().unwrap();
-        let from = RangeKey::from_start_key(from.to_vec());
         let mut iter = region_infos.iter().filter(|&region_info| {
-            RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= from
-                && from < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+            RangeKey::from_start_key(region_info.region.get_start_key().to_vec())
+                <= RangeKey::from_start_key(from.to_vec())
         });
         callback(&mut iter);
         Ok(())
