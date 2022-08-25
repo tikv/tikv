@@ -2783,8 +2783,8 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.kv_engine()
     }
 
-    fn amend_modify(&self, modifies: &mut Vec<Modify>) {
-        self.engine.amend_modify(modifies)
+    fn adjust_modify(&self, modifies: &mut Vec<Modify>) {
+        self.engine.adjust_modify(modifies)
     }
 
     fn async_snapshot(

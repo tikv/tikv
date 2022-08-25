@@ -152,8 +152,8 @@ impl Engine for MockEngine {
         self.base.kv_engine()
     }
 
-    fn amend_modify(&self, modifies: &mut Vec<Modify>) {
-        self.base.amend_modify(modifies);
+    fn adjust_modify(&self, modifies: &mut Vec<Modify>) {
+        self.base.adjust_modify(modifies);
     }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {

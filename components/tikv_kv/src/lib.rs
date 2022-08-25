@@ -267,7 +267,7 @@ pub trait Engine: Send + Clone + 'static {
 
     /// Do some specialization encoding works on `Modify`s according to the
     /// different implementation of `Engine`
-    fn amend_modify(&self, _modifies: &mut Vec<Modify>) {}
+    fn adjust_modify(&self, _modifies: &mut Vec<Modify>) {}
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 

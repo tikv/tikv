@@ -317,7 +317,7 @@ where
         self.engine.clone()
     }
 
-    fn amend_modify(&self, modifies: &mut Vec<Modify>) {
+    fn adjust_modify(&self, modifies: &mut Vec<Modify>) {
         for modify in modifies {
             match modify {
                 Modify::Delete(_, ref mut key) => {
