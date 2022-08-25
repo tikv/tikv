@@ -71,7 +71,15 @@ impl<S: Store> Storage for TikvStorage<S> {
         // Unwrap is fine because we must have called `reset_range` before calling
         // `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
-        Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
+        Ok(kv.map(|(k, v)| {
+            let key = k.clone().into_raw();
+            if key.is_err() {
+                error!("key is not valid"; "key" => log_wrappers::Value::key(k.as_encoded()));
+                unimplemented!("key is not valid");
+            }  else {
+                (key.unwrap(),v)
+            }
+        }))
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QeResult<Option<OwnedKvPair>> {
