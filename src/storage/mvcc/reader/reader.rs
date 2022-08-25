@@ -131,8 +131,6 @@ pub struct MvccReader<S: EngineSnapshot> {
     // Records the current key for prefix seek. Will Reset the write cursor when switching to
     // another key.
     current_key: Option<Key>,
-    // The minimal MVCC version hint for all cursors.
-    hint_min_version: Option<TimeStamp>,
 
     fill_cache: bool,
 
@@ -153,7 +151,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             scan_mode,
             current_key: None,
-            hint_min_version: None,
             fill_cache,
             term: 0,
             version: 0,
@@ -169,28 +166,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
             write_cursor: None,
             scan_mode,
             current_key: None,
-            hint_min_version: None,
-            fill_cache: !ctx.get_not_fill_cache(),
-            term: ctx.get_term(),
-            version: ctx.get_region_epoch().get_version(),
-        }
-    }
-
-    pub fn new_min_version_hint_with_ctx(
-        snapshot: S,
-        scan_mode: Option<ScanMode>,
-        hint_min_version: TimeStamp,
-        ctx: &Context,
-    ) -> Self {
-        Self {
-            snapshot,
-            statistics: Statistics::default(),
-            data_cursor: None,
-            lock_cursor: None,
-            write_cursor: None,
-            scan_mode,
-            current_key: None,
-            hint_min_version: Some(hint_min_version),
             fill_cache: !ctx.get_not_fill_cache(),
             term: ctx.get_term(),
             version: ctx.get_region_epoch().get_version(),
@@ -306,7 +281,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             self.current_key = Some(key.clone());
             self.write_cursor.take();
         }
-        self.create_write_cursor()?;
+        self.create_write_cursor(None)?;
         let cursor = self.write_cursor.as_mut().unwrap();
         // find a `ts` encoded key which is less than the `ts` encoded version of the
         // `key`
@@ -446,21 +421,20 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
-                .hint_min_ts(self.hint_min_version)
                 .build()?;
             self.data_cursor = Some(cursor);
         }
         Ok(())
     }
 
-    fn create_write_cursor(&mut self) -> Result<()> {
+    fn create_write_cursor(&mut self, hint_min_ts: Option<TimeStamp>) -> Result<()> {
         if self.write_cursor.is_none() {
             let cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
                 .fill_cache(self.fill_cache)
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
-                .hint_min_ts(self.hint_min_version)
+                .hint_min_ts(hint_min_ts)
                 .build()?;
             self.write_cursor = Some(cursor);
         }
@@ -472,7 +446,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
-                .hint_min_ts(self.hint_min_version)
                 .build()?;
             self.lock_cursor = Some(cursor);
         }
@@ -482,7 +455,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     /// Return the first committed key for which `start_ts` equals to `ts`
     pub fn seek_ts(&mut self, ts: TimeStamp) -> Result<Option<Key>> {
         assert!(self.scan_mode.is_some());
-        self.create_write_cursor()?;
+        self.create_write_cursor(None)?;
 
         let cursor = self.write_cursor.as_mut().unwrap();
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
@@ -560,11 +533,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
         end: Option<&Key>,
         filter: F,
         limit: usize,
+        hint_min_ts: Option<TimeStamp>,
     ) -> Result<(Vec<(Key, Write)>, bool)>
     where
         F: Fn(&Key) -> bool,
     {
-        self.create_write_cursor()?;
+        self.create_write_cursor(hint_min_ts)?;
         let cursor = self.write_cursor.as_mut().unwrap();
         let ok = match start {
             Some(x) => cursor.seek(x, &mut self.statistics.write)?,
@@ -1734,7 +1708,7 @@ pub mod tests {
             let snap = RegionSnapshot::<RocksSnapshot>::from_raw(db.clone(), region.clone());
             let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
             let res = reader
-                .scan_writes(start_key.as_ref(), end_key.as_ref(), filter, limit)
+                .scan_writes(start_key.as_ref(), end_key.as_ref(), filter, limit, None)
                 .unwrap();
             assert_eq!(res.0, expect_res);
             assert_eq!(res.1, expect_is_remain);

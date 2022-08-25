@@ -42,12 +42,7 @@ impl CommandExt for FlashbackToVersionReadPhase {
 
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
-        let mut reader = MvccReader::new_min_version_hint_with_ctx(
-            snapshot,
-            Some(ScanMode::Forward),
-            self.version,
-            &self.ctx,
-        );
+        let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
         // Scan the locks.
         let mut key_locks = Vec::with_capacity(0);
         let mut has_remain_locks = false;
@@ -74,6 +69,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 // commit_ts is greater than the specified version.
                 |key| key.decode_ts().unwrap() > self.version,
                 FLASHBACK_BATCH_SIZE - key_locks.len(),
+                Some(self.version),
             );
             statistics.add(&reader.statistics);
             (key_writes, has_remain_writes) = key_writes_result?;
