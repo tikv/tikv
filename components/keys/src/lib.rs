@@ -58,6 +58,7 @@ pub const SNAPSHOT_APPLY_STATE_SUFFIX: u8 = 0x06;
 
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
+pub const PENDING_REGION_STATE_SUFFIX: u8 = 0x02;
 
 #[inline]
 fn make_region_prefix(region_id: u64, suffix: u8) -> [u8; 11] {
@@ -209,9 +210,9 @@ pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
 }
 
-pub fn region_state_key_with_index(region_id: u64, index: u64) -> [u8; 19] {
+pub fn pending_region_state_key(region_id: u64, index: u64) -> [u8; 19] {
     let mut key = [0; 19];
-    let meta_key = make_region_meta_key(region_id, REGION_STATE_SUFFIX);
+    let meta_key = make_region_meta_key(region_id, PENDING_REGION_STATE_SUFFIX);
     key[0..11].copy_from_slice(&meta_key);
     BigEndian::write_u64(&mut key[11..19], index);
     key

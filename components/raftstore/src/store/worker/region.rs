@@ -423,7 +423,7 @@ where
         region_state.set_state(PeerState::Normal);
 
         let mut raft_wb = self.engines.raft.log_batch(0);
-        box_try!(raft_wb.put_region_state_with_index(region_id, 0, &region_state));
+        box_try!(raft_wb.put_pending_region_state(region_id, 0, &region_state));
         box_try!(raft_wb.delete_snapshot_apply_state(region_id));
         self.engines
             .raft

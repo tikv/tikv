@@ -610,11 +610,10 @@ where
                 write_peer_state_to_raft(
                     &self.engines.raft,
                     raft_wb,
-                    0,
+                    None,
                     r,
                     PeerState::Tombstone,
                     None,
-                    false,
                 )?;
             }
         }
@@ -625,11 +624,10 @@ where
             write_peer_state_to_raft(
                 &self.engines.raft,
                 raft_wb,
-                0,
+                None,
                 &region,
                 PeerState::Applying,
                 None,
-                true,
             )?;
         }
 
@@ -1159,11 +1157,10 @@ pub fn write_peer_state<T: Mutable>(
 pub fn write_peer_state_to_raft<E: RaftEngine>(
     raft_engine: &E,
     raft_wb: &mut E::LogBatch,
-    index: u64,
+    index: Option<u64>,
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
-    clean_prev_state: bool,
 ) -> Result<()> {
     let region_id = region.get_id();
     let mut region_state = RegionLocalState::default();
@@ -1178,18 +1175,20 @@ pub fn write_peer_state_to_raft<E: RaftEngine>(
         "region_id" => region_id,
         "state" => ?region_state,
     );
-    if clean_prev_state {
+    if let Some(index) = index {
+        raft_wb
+            .put_pending_region_state(region_id, index, &region_state)
+            .unwrap();
+    } else {
         raft_engine
-            .scan_region_state_before_index(region_id, u64::MAX, |index, _| {
+            .scan_pending_region_state(region_id, u64::MAX, |index, _| {
                 raft_wb
-                    .delete_region_state_with_index(region_id, index)
+                    .delete_pending_region_state(region_id, index)
                     .unwrap();
             })
             .unwrap();
+        raft_wb.put_region_state(region_id, &region_state).unwrap();
     }
-    raft_wb
-        .put_region_state_with_index(region_id, index, &region_state)
-        .unwrap();
     Ok(())
 }
 

@@ -1331,21 +1331,19 @@ where
                     write_peer_state_to_raft(
                         &engines.raft,
                         &mut raft_wb,
-                        self.get_store().applied_index(),
+                        Some(self.get_store().applied_index()),
                         &region,
                         PeerState::Tombstone,
                         self.pending_merge_state.clone(),
-                        false,
                     )?;
                 } else {
                     write_peer_state_to_raft(
                         &engines.raft,
                         &mut raft_wb,
-                        0,
+                        None,
                         &region,
                         PeerState::Tombstone,
                         None,
-                        true,
                     )?;
                 }
             }

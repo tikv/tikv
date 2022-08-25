@@ -172,7 +172,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn scan_region_state_before_index<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
+    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
     where
         F: FnMut(u64, &RegionLocalState),
     {
@@ -233,7 +233,7 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn put_region_state_with_index(
+    fn put_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
@@ -242,7 +242,7 @@ impl RaftLogBatch for PanicWriteBatch {
         panic!()
     }
 
-    fn delete_region_state_with_index(
+    fn delete_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,

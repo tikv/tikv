@@ -350,6 +350,7 @@ const APPLY_STATE_KEY: &[u8] = &[0x04];
 const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
+const PENDING_REGION_STATE_KEY: &[u8] = &[0x03];
 
 fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
@@ -361,6 +362,13 @@ fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
 fn region_local_state_key(applied_index: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(REGION_STATE_KEY.len() + 8);
     key.extend_from_slice(REGION_STATE_KEY);
+    key.extend_from_slice(&applied_index.to_be_bytes());
+    key
+}
+
+fn pending_region_local_state_key(applied_index: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(PENDING_REGION_STATE_KEY.len() + 8);
+    key.extend_from_slice(PENDING_REGION_STATE_KEY);
     key.extend_from_slice(&applied_index.to_be_bytes());
     key
 }
@@ -404,24 +412,28 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
-    fn put_region_state_with_index(
+    fn put_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
         state: &RegionLocalState,
     ) -> Result<()> {
         self.0
-            .put_message(raft_group_id, region_local_state_key(applied_index), state)
+            .put_message(
+                raft_group_id,
+                pending_region_local_state_key(applied_index),
+                state,
+            )
             .map_err(transfer_error)
     }
 
-    fn delete_region_state_with_index(
+    fn delete_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<()> {
         self.0
-            .delete(raft_group_id, region_local_state_key(applied_index));
+            .delete(raft_group_id, pending_region_local_state_key(applied_index));
         Ok(())
     }
 
@@ -759,12 +771,7 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn scan_region_state_before_index<F>(
-        &self,
-        raft_group_id: u64,
-        index: u64,
-        mut f: F,
-    ) -> Result<()>
+    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, mut f: F) -> Result<()>
     where
         F: FnMut(u64, &RegionLocalState),
     {

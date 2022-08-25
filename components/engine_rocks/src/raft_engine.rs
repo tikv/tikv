@@ -31,7 +31,7 @@ impl RaftEngineReadOnly for RocksEngine {
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<Option<RegionLocalState>> {
-        let key = keys::region_state_key_with_index(raft_group_id, applied_index);
+        let key = keys::pending_region_state_key(raft_group_id, applied_index);
         let res = if let Some((_, value)) = self.seek(CF_DEFAULT, &key)? {
             Some(parse_from_bytes::<RegionLocalState>(&value)?)
         } else {
@@ -415,17 +415,12 @@ impl RaftEngine for RocksEngine {
         )
     }
 
-    fn scan_region_state_before_index<F>(
-        &self,
-        raft_group_id: u64,
-        index: u64,
-        mut f: F,
-    ) -> Result<()>
+    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, mut f: F) -> Result<()>
     where
         F: FnMut(u64, &RegionLocalState),
     {
-        let start_key = keys::region_state_key_with_index(raft_group_id, 0);
-        let end_key = keys::region_state_key_with_index(raft_group_id, index);
+        let start_key = keys::pending_region_state_key(raft_group_id, 0);
+        let end_key = keys::pending_region_state_key(raft_group_id, index);
         self.scan(
             CF_DEFAULT,
             &start_key,
@@ -474,24 +469,24 @@ impl RaftLogBatch for RocksWriteBatchVec {
         )
     }
 
-    fn put_region_state_with_index(
+    fn put_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
         state: &RegionLocalState,
     ) -> Result<()> {
         self.put_msg(
-            &keys::region_state_key_with_index(raft_group_id, applied_index),
+            &keys::pending_region_state_key(raft_group_id, applied_index),
             state,
         )
     }
 
-    fn delete_region_state_with_index(
+    fn delete_pending_region_state(
         &mut self,
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<()> {
-        self.delete(&keys::region_state_key_with_index(
+        self.delete(&keys::pending_region_state_key(
             raft_group_id,
             applied_index,
         ))

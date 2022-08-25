@@ -195,7 +195,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_local_state.set_state(state);
                     region_local_state.clear_merge_state();
                     self.wb
-                        .put_region_state_with_index(
+                        .put_pending_region_state(
                             region_id,
                             apply_state.applied_index,
                             &region_local_state,
@@ -213,7 +213,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         region_local_state.set_state(PeerState::Normal);
                         region_local_state.clear_merge_state();
                         self.wb
-                            .put_region_state_with_index(
+                            .put_pending_region_state(
                                 region.get_id(),
                                 applied_index,
                                 &region_local_state,
@@ -226,7 +226,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_local_state.set_state(PeerState::Merging);
                     region_local_state.set_merge_state(state.clone());
                     self.wb
-                        .put_region_state_with_index(
+                        .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
                             &region_local_state,
@@ -242,7 +242,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_local_state.set_state(PeerState::Normal);
                     region_local_state.clear_merge_state();
                     self.wb
-                        .put_region_state_with_index(
+                        .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
                             &region_local_state,
@@ -255,7 +255,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_local_state.set_state(PeerState::Tombstone);
                     region_local_state.set_merge_state(merging_state);
                     self.wb
-                        .put_region_state_with_index(source.get_id(), *index, &region_local_state)
+                        .put_pending_region_state(source.get_id(), *index, &region_local_state)
                         .unwrap();
                 }
                 ExecResult::RollbackMerge { region, .. } => {
@@ -263,7 +263,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     region_local_state.set_state(PeerState::Normal);
                     region_local_state.clear_merge_state();
                     self.wb
-                        .put_region_state_with_index(
+                        .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
                             &region_local_state,
