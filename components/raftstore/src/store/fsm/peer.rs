@@ -2105,6 +2105,23 @@ where
         }
     }
 
+    fn maybe_finish_flashback_wait_apply(&mut self) {
+        if let Some(flashback_state) = &self.fsm.peer.flashback_state {
+            if self.fsm.peer.raft_group.raft.raft_log.applied
+                == self.fsm.peer.get_store().last_index()
+            {
+                info!(
+                    "flashback finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.fsm.peer.peer_id(),
+                    "last_index" => self.fsm.peer.get_store().last_index(),
+                    "applied_index" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
+                );
+                flashback_state.finish_wait_apply();
+            }
+        }
+    }
+
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -2171,6 +2188,9 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
+        }
+        if self.fsm.peer.flashback_state.is_some() {
+            self.maybe_finish_flashback_wait_apply();
         }
     }
 
