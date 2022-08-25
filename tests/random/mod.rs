@@ -9,9 +9,7 @@ use std::{
 use futures::executor::block_on;
 use pd_client::PdClient;
 use rand::{Rng, RngCore};
-use test_cloud_server::{
-    client::ClusterClient, scheduler::RegionScheduler, try_wait, ServerCluster,
-};
+use test_cloud_server::{client::ClusterClient, scheduler::Scheduler, try_wait, ServerCluster};
 use tikv::config::TiKvConfig;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -22,6 +20,7 @@ use tikv_util::{
 static NODE_ALLOCATOR: AtomicU16 = AtomicU16::new(1);
 static WRITE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static MOVE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static TRANSFER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const TIMEOUT: Duration = Duration::from_secs(60);
 const CONCURRENCY: usize = 4;
 
@@ -49,11 +48,13 @@ fn test_random_workload() {
     };
     let mut cluster = ServerCluster::new(nodes.clone(), update_conf_fn);
     cluster.wait_region_replicated(&[], 3);
+    cluster.get_pd_client().disable_default_operator();
     let mut handles = vec![];
     for i in 0..CONCURRENCY {
         handles.push(spawn_write(i, cluster.new_client()));
     }
-    handles.push(spawn_move(cluster.new_region_scheduler()));
+    handles.push(spawn_move(cluster.new_scheduler()));
+    handles.push(spawn_transfer(cluster.new_scheduler()));
     let start_time = Instant::now();
     let pd_client = cluster.get_pd_client();
     while start_time.saturating_elapsed() < TIMEOUT {
@@ -99,10 +100,11 @@ fn test_random_workload() {
     cluster.stop();
     let total_write_count = WRITE_COUNTER.load(Ordering::SeqCst);
     let total_move_count = MOVE_COUNTER.load(Ordering::SeqCst);
+    let total_transfer_count = TRANSFER_COUNTER.load(Ordering::SeqCst);
     let region_number = pd_client.get_regions_number();
     info!(
-        "total_write_count {}, region number {}, move count {}",
-        total_write_count, region_number, total_move_count
+        "total_write_count {}, region number {}, move count {}, transfer count {}",
+        total_write_count, region_number, total_move_count, total_transfer_count,
     );
 }
 
@@ -122,7 +124,7 @@ fn spawn_write(idx: usize, mut client: ClusterClient) -> JoinHandle<()> {
     })
 }
 
-fn spawn_move(scheduler: RegionScheduler) -> JoinHandle<()> {
+fn spawn_move(scheduler: Scheduler) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let start_time = Instant::now();
         while start_time.saturating_elapsed() < TIMEOUT {
@@ -131,6 +133,19 @@ fn spawn_move(scheduler: RegionScheduler) -> JoinHandle<()> {
             MOVE_COUNTER.fetch_add(1, Ordering::SeqCst);
         }
         info!("move thread exit");
+    })
+}
+
+fn spawn_transfer(scheduler: Scheduler) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let start_time = Instant::now();
+        while start_time.saturating_elapsed() < TIMEOUT {
+            sleep(Duration::from_millis(100));
+            if scheduler.transfer_random_leader() {
+                TRANSFER_COUNTER.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        info!("transfer thread exit");
     })
 }
 

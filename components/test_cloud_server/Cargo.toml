@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 cloud_server = { path = "../cloud_server" }
+dashmap = "4.0"
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 kvengine = { path = "../kvengine" }

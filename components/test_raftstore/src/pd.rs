@@ -996,6 +996,15 @@ impl TestPdClient {
         self.schedule_operator(region_id, op);
     }
 
+    pub fn try_transfer_leader(&self, region_id: u64, peer: metapb::Peer) {
+        let op = Operator::TransferLeader {
+            peer,
+            peers: vec![],
+            policy: SchedulePolicy::Repeat(5),
+        };
+        self.schedule_operator(region_id, op);
+    }
+
     pub fn add_peer(&self, region_id: u64, peer: metapb::Peer) {
         let op = Operator::AddPeer {
             peer: Either::Left(peer),

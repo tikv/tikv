@@ -9,6 +9,7 @@ use std::{
 };
 
 use cloud_server::TiKVServer;
+use dashmap::DashMap;
 use futures::executor::block_on;
 use grpcio::{Channel, ChannelBuilder, EnvBuilder, Environment};
 use kvengine::{dfs::InMemFS, ShardStats};
@@ -28,7 +29,7 @@ use tikv_util::{
     time::Instant,
 };
 
-use crate::{client::ClusterClient, scheduler::RegionScheduler};
+use crate::{client::ClusterClient, scheduler::Scheduler};
 
 #[allow(dead_code)]
 pub struct ServerCluster {
@@ -41,6 +42,7 @@ pub struct ServerCluster {
     dfs: Arc<InMemFS>,
     channels: HashMap<u64, Channel>,
     ref_store: Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>,
+    schedule_lock: Arc<DashMap<u64, Arc<Mutex<()>>>>,
 }
 
 impl ServerCluster {
@@ -60,6 +62,7 @@ impl ServerCluster {
             dfs: Arc::new(InMemFS::new()),
             channels: HashMap::new(),
             ref_store: Arc::new(Mutex::new(HashMap::new())),
+            schedule_lock: Arc::new(DashMap::new()),
         };
         for node_id in nodes {
             cluster.start_node(node_id, &update_conf);
@@ -232,10 +235,11 @@ impl ServerCluster {
         }
     }
 
-    pub fn new_region_scheduler(&self) -> RegionScheduler {
-        RegionScheduler {
+    pub fn new_scheduler(&self) -> Scheduler {
+        Scheduler {
             pd: self.pd_client.clone(),
             store_ids: self.get_stores(),
+            lock: self.schedule_lock.clone(),
         }
     }
 
