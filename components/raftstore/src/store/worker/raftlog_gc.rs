@@ -21,6 +21,7 @@ use crate::store::worker::metrics::*;
 
 const MAX_GC_REGION_BATCH: usize = 512;
 const MAX_REGION_NORMAL_GC_LOG_NUMBER: u64 = 10240;
+const FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD: u64 = 1024 * 10;
 
 pub enum Task {
     Gc(GcTask),
@@ -97,7 +98,9 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     gc_entries: Option<Sender<usize>>,
     compact_sync_interval: Duration,
     // region_id -> end index
-    residual_log_regions: HashMap<u64, u64>,
+    residual_log_regions: HashMap<u64, (u64, u64)>,
+    residual_log_count: u64,
+    residual_log_count_sender: Option<Sender<u64>>,
     flushed_seqno: Option<u64>,
 }
 
@@ -114,6 +117,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             gc_entries: None,
             compact_sync_interval: compact_log_interval,
             residual_log_regions: HashMap::default(),
+            residual_log_count: 0,
+            residual_log_count_sender: None,
         }
     }
 
@@ -171,11 +176,18 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     .unwrap_or_default();
                 if t.end_idx > max_compact_to {
                     let end_idx = t.end_idx;
+                    let gap_count = end_idx - max_compact_to;
+                    let residual_log_count = &mut self.residual_log_count;
                     self.residual_log_regions
                         .entry(t.region_id)
-                        .and_modify(|v| *v = u64::max(*v, end_idx))
-                        .or_insert(t.end_idx);
+                        .and_modify(|(idx, gap)| {
+                            *idx = u64::max(*idx, end_idx);
+                            *residual_log_count -= *gap;
+                            *gap = gap_count;
+                        })
+                        .or_insert((t.end_idx, gap_count));
                     t.end_idx = max_compact_to;
+                    *residual_log_count += gap_count;
                 }
                 if t.start_idx >= max_compact_to {
                     continue;
@@ -214,6 +226,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         for cb in cbs {
             cb()
         }
+
+        if self.residual_log_count > FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD {
+            self.engines.kv.flush_cfs(true).unwrap();
+        }
+        if let Some(ref ch) = self.residual_log_count_sender {
+            ch.send(self.residual_log_count).unwrap();
+        }
     }
 }
 
@@ -235,7 +254,7 @@ where
             Task::MemtableFlushed(seqno) => {
                 assert!(self.flushed_seqno.is_some());
                 self.flushed_seqno = Some(seqno);
-                for (region_id, end_idx) in self.residual_log_regions.drain() {
+                for (region_id, (end_idx, gap_count)) in self.residual_log_regions.drain() {
                     self.tasks.push(GcTask {
                         region_id,
                         start_idx: 0,
@@ -243,6 +262,7 @@ where
                         cb: None,
                         flush: false,
                     });
+                    self.residual_log_count -= gap_count;
                 }
             }
         }
@@ -299,6 +319,8 @@ mod tests {
             compact_sync_interval: Duration::from_secs(5),
             residual_log_regions: HashMap::default(),
             flushed_seqno: None,
+            residual_log_count: 0,
+            residual_log_count_sender: None,
         };
 
         // generate raft logs
@@ -360,14 +382,17 @@ mod tests {
         let engines = Engines::new(kv_db.clone(), raft_db.clone());
         let init_seqno = kv_db.get_latest_sequence_number();
 
-        let (tx, rx) = mpsc::channel();
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let (log_tx, log_rx) = mpsc::channel();
         let mut runner = Runner {
-            gc_entries: Some(tx),
+            gc_entries: Some(gc_tx),
             engines,
             tasks: vec![],
             compact_sync_interval: Duration::from_millis(100),
             residual_log_regions: HashMap::default(),
             flushed_seqno: Some(init_seqno),
+            residual_log_count: 0,
+            residual_log_count_sender: Some(log_tx),
         };
 
         // generate raft logs
@@ -381,11 +406,12 @@ mod tests {
         raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
 
         let tbls = vec![
-            (Task::gc(region_id, 0, 10), 0, (0, 0), (10, 100), None),
+            (Task::gc(region_id, 0, 10), 0, 10, (0, 0), (10, 100), None),
             (
                 Task::gc(region_id, 0, 50),
                 // Gc [0, 10) would be executed twice.
                 20,
+                40,
                 (0, 10),
                 (10, 100),
                 Some((init_seqno + 10, 10)),
@@ -393,6 +419,7 @@ mod tests {
             (
                 Task::gc(region_id, 50, 50),
                 30,
+                10,
                 (0, 40),
                 (40, 100),
                 Some((init_seqno + 20, 40)),
@@ -401,6 +428,7 @@ mod tests {
                 Task::gc(region_id, 40, 50),
                 // Gc [40, 50) would be executed twice.
                 20,
+                0,
                 (0, 50),
                 (50, 100),
                 Some((init_seqno + 30, 50)),
@@ -408,13 +436,16 @@ mod tests {
             (
                 Task::gc(region_id, 0, 60),
                 10,
+                0,
                 (0, 60),
                 (60, 100),
                 Some((init_seqno + 40, 60)),
             ),
         ];
 
-        for (task, expected_collectd, not_exist_range, exist_range, relation) in tbls {
+        for (task, expected_collectd, expected_residual, not_exist_range, exist_range, relation) in
+            tbls
+        {
             if let Some(r) = relation {
                 let mut relation = RegionSequenceNumberRelation::default();
                 relation.set_sequence_number(r.0);
@@ -426,8 +457,10 @@ mod tests {
             }
             runner.run(task);
             runner.flush();
-            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let res = gc_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             assert_eq!(res, expected_collectd);
+            let res = log_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(res, expected_residual);
             raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
             raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }
