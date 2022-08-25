@@ -550,14 +550,14 @@ impl SstImporter {
         let old_region_prefix = encode_prefix(&old_prefix);
 
         let range_start =
-            keys::rewrite::rewrite_prefix_of_start_bound(&new_prefix, &old_prefix, range_start_bound)
+            keys::rewrite::rewrite_prefix_of_start_bound(&new_region_prefix, &old_region_prefix, range_start_bound)
                 .map_err(|_| Error::WrongKeyPrefix {
                     what: "SST start range",
                     key: range_start.to_vec(),
                     prefix: new_prefix.to_vec(),
                 })?;
         let range_end =
-            keys::rewrite::rewrite_prefix_of_end_bound(&new_prefix, &old_prefix, range_end_bound)
+            keys::rewrite::rewrite_prefix_of_end_bound(&new_region_prefix, &old_region_prefix, range_end_bound)
                 .map_err(|_| Error::WrongKeyPrefix {
                     what: "SST end range",
                     key: range_end.to_vec(),
