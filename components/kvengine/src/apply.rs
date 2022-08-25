@@ -115,7 +115,17 @@ impl EngineCore {
             let old_data = shard.get_data();
             let mut new_mem_tbls = old_data.mem_tbls.clone();
             let last = new_mem_tbls.pop().unwrap();
-            assert_eq!(last.get_version(), l0_tbl.version(), "{}", shard.tag());
+            let last_version = last.get_version();
+            if last_version != l0_tbl.version() {
+                panic!(
+                    "{} mem table last version {} not match L0 version {}, shard meta seq {}, flush seq {}",
+                    shard.tag(),
+                    last_version,
+                    l0_tbl.version(),
+                    shard.get_meta_sequence(),
+                    cs.sequence,
+                );
+            }
             let mut new_l0_tbls = Vec::with_capacity(old_data.l0_tbls.len() + 1);
             new_l0_tbls.push(l0_tbl);
             new_l0_tbls.extend_from_slice(old_data.l0_tbls.as_slice());

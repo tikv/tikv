@@ -356,19 +356,22 @@ impl Applier {
         }
         // TODO: investigate why there is duplicated commit.
         let item = snap.get(mvcc::WRITE_CF, key, u64::MAX);
-        if item.user_meta_len() == 0 {
+        let old_commit_ts = if item.user_meta_len() == 0 {
+            0
+        } else {
+            UserMeta::from_slice(item.user_meta()).commit_ts
+        };
+        if old_commit_ts != commit_ts {
             panic!(
-                "failed to get lock for key {:?}, {}, snap_write_sequence: {}, snap_files: {:?}, log_index:{}",
-                key,
+                "{} failed to get lock for key {:?}, snap_write_sequence: {}, snap_files: {:?}, log_index:{}",
                 snap.get_tag(),
+                key,
                 snap.get_write_sequence(),
                 snap.get_all_files(),
                 log_index,
             );
         }
-        let user_meta = mvcc::UserMeta::from_slice(item.user_meta());
-        assert_eq!(user_meta.commit_ts, commit_ts);
-        warn!("duplicated commit for key {:?}, {}", key, snap.get_tag(),);
+        warn!("duplicated commit for key {:?}, {}", key, snap.get_tag());
         vec![]
     }
 

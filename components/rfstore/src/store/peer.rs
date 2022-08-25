@@ -1207,6 +1207,10 @@ impl Peer {
             }
         }
         let mut ready = self.raft_group.ready();
+        if ready.entries().len() + ready.committed_entries().len() > 0 {
+            let ready_debug = ReadyDebug(&ready);
+            debug!("{} handle ready {}", self.tag(), ready_debug);
+        }
         self.on_role_changed(ctx, &ready);
         ctx.raft_metrics.ready.has_ready_region += 1;
         ctx.raft_metrics.ready.commit += ready.committed_entries().len() as u64;
@@ -2837,6 +2841,25 @@ pub(crate) fn get_preprocess_cmd(entry: &eraftpb::Entry) -> Option<RaftCmdReques
     let mut cmd = RaftCmdRequest::default();
     cmd.merge_from_bytes(&entry.data).unwrap();
     Some(cmd)
+}
+
+pub struct ReadyDebug<'a>(pub &'a Ready);
+
+impl std::fmt::Display for ReadyDebug<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ready = self.0;
+        let committed: Vec<u64> = ready.committed_entries().iter().map(|e| e.index).collect();
+        let entries: Vec<u64> = ready.entries().iter().map(|e| e.index).collect();
+        write!(
+            f,
+            "ready {}, ss: {:?}, hs: {:?}, committed: {:?}, entries: {:?}",
+            ready.number(),
+            ready.ss(),
+            ready.hs(),
+            committed,
+            entries,
+        )
+    }
 }
 
 #[cfg(test)]
