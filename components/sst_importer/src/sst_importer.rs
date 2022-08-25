@@ -4,39 +4,41 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     fs::File,
-    io::{self, prelude::*, BufReader},
+    io::{self, BufReader, prelude::*},
     ops::Bound,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use dashmap::DashMap;
-use encryption::{to_engine_encryption_method, DataKeyManager};
-use engine_rocks::{get_env, RocksSstReader};
-use engine_traits::{
-    name_to_cf, util::check_key_in_range, CfName, EncryptionKeyManager, FileEncryptionInfo,
-    IterOptions, Iterator, KvEngine, RefIterable, SstCompressionType, SstExt, SstMetaInfo,
-    SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT, CF_WRITE,
-};
-use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
     kvrpcpb::ApiVersion,
 };
+
+use encryption::{DataKeyManager, to_engine_encryption_method};
+use engine_rocks::{get_env, RocksSstReader};
+use engine_traits::{
+    CF_DEFAULT, CF_WRITE, CfName, EncryptionKeyManager, FileEncryptionInfo,
+    Iterator, IterOptions, KvEngine, name_to_cf, RefIterable, SstCompressionType, SstExt,
+    SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, util::check_key_in_range,
+};
+use file_system::{get_io_rate_limiter, OpenOptions};
 use tikv_util::{
     codec::stream_event::{EventIterator, Iterator as EIterator},
     time::{Instant, Limiter},
 };
+use tikv_util::codec::bytes::{decode_bytes_in_place, encode_bytes};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
+    Config,
+    Error,
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
-    metrics::*,
-    sst_writer::{RawSstWriter, TxnSstWriter},
-    Config, Error, Result,
+    metrics::*, Result, sst_writer::{RawSstWriter, TxnSstWriter},
 };
 
 /// SstImporter manages SST files that are waiting for ingesting.
@@ -184,7 +186,7 @@ impl SstImporter {
         speed_limiter: Limiter,
         engine: E,
     ) -> Result<Option<Range>> {
-        debug!("download start";
+        warn!("download start";
             "meta" => ?meta,
             "url" => ?backend,
             "name" => name,
@@ -511,7 +513,7 @@ impl SstImporter {
         let sst_reader = RocksSstReader::open_with_env(dst_file_name, Some(env))?;
         sst_reader.verify_checksum()?;
 
-        debug!("downloaded file and verified";
+        warn!("downloaded file and verified";
             "meta" => ?meta,
             "name" => name,
             "path" => dst_file_name,
@@ -520,6 +522,12 @@ impl SstImporter {
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();
+
+        info!(
+            "rewrite key";
+            "old prefix" => log_wrappers::Value::key(old_prefix),
+            "new prefix" => log_wrappers::Value::key(new_prefix)
+        );
 
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
@@ -530,15 +538,26 @@ impl SstImporter {
             key_to_bound(range_end)
         };
 
+        fn encode_prefix(prefix: &[u8]) -> Vec<u8> {
+            let ungrouped_len = prefix.len() % 8;
+            let encoded = encode_bytes(&prefix[..prefix.len() - ungrouped_len]);
+            let mut key = encoded[..encoded.len() - 9].to_vec();
+            key.extend_from_slice(&prefix[prefix.len() - ungrouped_len..]);
+            key
+        }
+
+        let new_region_prefix = encode_prefix(&new_prefix);
+        let old_region_prefix = encode_prefix(&old_prefix);
+
         let range_start =
-            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
+            keys::rewrite::rewrite_prefix_of_start_bound(&new_prefix, &old_prefix, range_start_bound)
                 .map_err(|_| Error::WrongKeyPrefix {
                     what: "SST start range",
                     key: range_start.to_vec(),
                     prefix: new_prefix.to_vec(),
                 })?;
         let range_end =
-            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
+            keys::rewrite::rewrite_prefix_of_end_bound(&new_prefix, &old_prefix, range_end_bound)
                 .map_err(|_| Error::WrongKeyPrefix {
                     what: "SST end range",
                     key: range_end.to_vec(),
@@ -563,6 +582,7 @@ impl SstImporter {
             let start_key = keys::origin_key(iter.key());
             if is_before_start_bound(start_key, &range_start) {
                 // SST's start is before the range to consume, so needs to iterate to skip over
+                info!("oops! early return");
                 return Ok(None);
             }
             let start_key = start_key.to_vec();
@@ -610,8 +630,10 @@ impl SstImporter {
         }
 
         // perform iteration and key rewrite.
-        let mut key = keys::data_key(new_prefix);
-        let new_prefix_data_key_len = key.len();
+        let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
+        let data_key_prefix_len = data_key.len();
+        let mut user_key = new_prefix.to_vec();
+        let user_key_prefix_len = user_key.len();
         let mut first_key = None;
 
         match range_start {
@@ -635,6 +657,9 @@ impl SstImporter {
             if is_after_end_bound(old_key, &range_end) {
                 break;
             }
+
+            let mut old_key = old_key.to_vec();
+            decode_bytes_in_place(&mut old_key, false)?;
             if !old_key.starts_with(old_prefix) {
                 return Err(Error::WrongKeyPrefix {
                     what: "Key in SST",
@@ -642,12 +667,15 @@ impl SstImporter {
                     prefix: old_prefix.to_vec(),
                 });
             }
-            key.truncate(new_prefix_data_key_len);
-            key.extend_from_slice(&old_key[old_prefix.len()..]);
+            data_key.truncate(data_key_prefix_len);
+            user_key.truncate(user_key_prefix_len);
+            user_key.extend_from_slice(&old_key[old_prefix.len()..]);
+            data_key.extend(encode_bytes(&user_key));
+
             let mut value = Cow::Borrowed(iter.value());
 
             if rewrite_rule.new_timestamp != 0 {
-                key = Key::from_encoded(key)
+                data_key = Key::from_encoded(data_key)
                     .truncate_ts()
                     .map_err(|e| {
                         Error::BadFormat(format!(
@@ -671,10 +699,11 @@ impl SstImporter {
                 }
             }
 
-            sst_writer.put(&key, &value)?;
+            info!("rewrite key"; "key" => log_wrappers::Value::key(&data_key));
+            sst_writer.put(&data_key, &value)?;
             iter.next()?;
             if first_key.is_none() {
-                first_key = Some(keys::origin_key(&key).to_vec());
+                first_key = Some(keys::origin_key(&data_key).to_vec());
             }
         }
 
@@ -693,7 +722,7 @@ impl SstImporter {
 
             let mut final_range = Range::default();
             final_range.set_start(start_key);
-            final_range.set_end(keys::origin_key(&key).to_vec());
+            final_range.set_end(keys::origin_key(&data_key).to_vec());
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
@@ -796,21 +825,23 @@ fn is_after_end_bound<K: AsRef<[u8]>>(value: &[u8], bound: &Bound<K>) -> bool {
 mod tests {
     use std::io::{self, BufWriter};
 
-    use engine_traits::{
-        collect, EncryptionMethod, Error as TraitError, ExternalSstFileInfo, Iterable, Iterator,
-        RefIterable, SstReader, SstWriter, CF_DEFAULT, DATA_CFS,
-    };
-    use file_system::File;
     use openssl::hash::{Hasher, MessageDigest};
     use tempfile::Builder;
+    use uuid::Uuid;
+
+    use engine_traits::{
+        CF_DEFAULT, collect, DATA_CFS, EncryptionMethod, Error as TraitError, ExternalSstFileInfo,
+        Iterable, Iterator, RefIterable, SstReader, SstWriter,
+    };
+    use file_system::File;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
     use txn_types::{Value, WriteType};
-    use uuid::Uuid;
+
+    use crate::{*, import_file::ImportPath};
 
     use super::*;
-    use crate::{import_file::ImportPath, *};
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
@@ -986,8 +1017,8 @@ mod tests {
     fn create_external_sst_file_with_write_fn<F>(
         write_fn: F,
     ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)>
-    where
-        F: FnOnce(&mut RocksSstWriter) -> Result<()>,
+        where
+            F: FnOnce(&mut RocksSstWriter) -> Result<()>,
     {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer =
@@ -1095,7 +1126,7 @@ mod tests {
     }
 
     fn create_sample_external_sst_file_txn_default()
-    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -1125,7 +1156,7 @@ mod tests {
     }
 
     fn create_sample_external_sst_file_txn_write()
-    -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+        -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -1208,7 +1239,7 @@ mod tests {
             Some(hash256),
             8192,
         ))
-        .unwrap();
+            .unwrap();
         assert_eq!(&*output, data);
     }
 
@@ -1226,7 +1257,7 @@ mod tests {
             None,
             usize::MAX,
         ))
-        .unwrap_err();
+            .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 
@@ -1244,7 +1275,7 @@ mod tests {
             Some(key_manager.clone()),
             ApiVersion::V1,
         )
-        .unwrap();
+            .unwrap();
 
         // perform download file into .temp dir.
         let file_name = "sample.sst";
@@ -1280,7 +1311,7 @@ mod tests {
             Some(key_manager),
             ApiVersion::V1,
         )
-        .unwrap();
+            .unwrap();
 
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
         importer
@@ -1366,7 +1397,7 @@ mod tests {
             Some(key_manager.clone()),
             ApiVersion::V1,
         )
-        .unwrap();
+            .unwrap();
 
         let db_path = temp_dir.path().join("db");
         let env = get_env(Some(key_manager), None /* io_rate_limiter */).unwrap();
@@ -1753,7 +1784,7 @@ mod tests {
         );
         match &result {
             Err(Error::EngineTraits(TraitError::Engine(s)))
-                if s.state().starts_with("Corruption:") => {}
+            if s.state().starts_with("Corruption:") => {}
             _ => panic!("unexpected download result: {:?}", result),
         }
     }

@@ -338,7 +338,7 @@ impl<E: Engine> Endpoint<E> {
                 self.check_memory_locks(&req_ctx)?;
 
                 builder = Box::new(move |snap, req_ctx| {
-                    checksum::ChecksumContext::<_,F>::new(
+                    checksum::ChecksumContext::new(
                         checksum,
                         req_ctx.ranges.clone(),
                         start_ts,
