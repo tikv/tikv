@@ -22,7 +22,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
 
-    fn get_region_state_with_index(
+    fn get_pending_region_state(
         &self,
         raft_group_id: u64,
         applied_index: u64,
@@ -157,13 +157,13 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// replay raft logs.
     /// Generally it would be true when write-ahead-log of kvdb was disabled
     /// before.
-    fn recover_from_raft_db(&self) -> Result<bool>;
+    fn recover_from_raft_db(&self) -> Result<Option<u64>>;
 
-    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()>;
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
 
-    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
+    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, f: F) -> Result<()>
     where
-        F: FnMut(u64, &RegionLocalState);
+        F: FnMut(u64, &RegionSequenceNumberRelation);
 }
 
 pub trait RaftLogBatch: Send {
@@ -187,6 +187,8 @@ pub trait RaftLogBatch: Send {
         raft_group_id: u64,
         relation: &RegionSequenceNumberRelation,
     ) -> Result<()>;
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()>;
 
     fn put_snapshot_apply_state(
         &mut self,

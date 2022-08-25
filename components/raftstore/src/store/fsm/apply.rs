@@ -3276,6 +3276,16 @@ impl ChangeObserver {
     }
 }
 
+pub enum RecoverStatus {
+    VersionChanged {
+        new_version: u64,
+        applied_index: u64,
+    },
+    Finished,
+}
+
+pub type BoxRecoverCallback = Box<dyn FnOnce(RecoverStatus) + Send>;
+
 pub enum Msg<EK>
 where
     EK: KvEngine,
@@ -3293,6 +3303,14 @@ where
         cmd: ChangeObserver,
         region_epoch: RegionEpoch,
         cb: Callback<EK::Snapshot>,
+    },
+    Recover {
+        region_id: u64,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        entries: Vec<Entry>,
+        cb: BoxRecoverCallback,
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
@@ -3320,6 +3338,24 @@ where
             merge_from_snapshot,
         })
     }
+
+    pub fn recover(
+        region_id: u64,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        entries: Vec<Entry>,
+        cb: BoxRecoverCallback,
+    ) -> Msg<EK> {
+        Msg::Recover {
+            region_id,
+            term,
+            commit_index,
+            commit_term,
+            entries,
+            cb,
+        }
+    }
 }
 
 impl<EK> Debug for Msg<EK>
@@ -3344,6 +3380,7 @@ where
             } => write!(f, "[region {}] change cmd", region_id),
             #[cfg(any(test, feature = "testexport"))]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
+            Msg::Recover { region_id, .. } => write!(f, "[regopm {}] recover", region_id),
         }
     }
 }
@@ -3517,6 +3554,115 @@ where
         self.delegate
             .handle_raft_committed_entries(apply_ctx, entries.drain(..));
         fail_point!("post_handle_apply_1003", self.delegate.id() == 1003, |_| {});
+    }
+
+    /// Handles apply tasks, and uses the apply delegate to handle the committed
+    /// entries.
+    fn handle_recover(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK>,
+        term: u64,
+        commit_index: u64,
+        commit_term: u64,
+        mut entries: Vec<Entry>,
+        cb: BoxRecoverCallback,
+    ) {
+        if apply_ctx.timer.is_none() {
+            apply_ctx.timer = Some(Instant::now_coarse());
+        }
+
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        self.delegate.term = term;
+
+        let prev_state = (
+            self.delegate.apply_state.get_commit_index(),
+            self.delegate.apply_state.get_commit_term(),
+        );
+        let cur_state = (commit_index, commit_term);
+        if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
+            panic!(
+                "{} commit state jump backward {:?} -> {:?}",
+                self.delegate.tag, prev_state, cur_state
+            );
+        }
+        self.delegate.apply_state.set_commit_index(cur_state.0);
+        self.delegate.apply_state.set_commit_term(cur_state.1);
+
+        // If there is any apply task, we change this fsm to normal-priority.
+        // When it meets a ingest-request or a delete-range request, it will change to
+        // low-priority.
+        self.delegate.priority = Priority::Normal;
+        if entries.is_empty() {
+            cb(RecoverStatus::Finished);
+            return;
+        }
+        apply_ctx.prepare_for(&mut self.delegate);
+        // If we send multiple ConfChange commands, only first one will be proposed
+        // correctly, others will be saved as a normal entry with no data, so we
+        // must re-propose these commands again.
+        apply_ctx.committed_count += entries.len();
+        let mut results = VecDeque::new();
+        let mut entries_drainer = entries.drain(..);
+        for entry in entries_drainer.by_ref() {
+            if self.delegate.pending_remove {
+                // This peer is about to be destroyed, skip everything.
+                break;
+            }
+
+            let expect_index = self.delegate.apply_state.get_applied_index() + 1;
+            if expect_index != entry.get_index() {
+                panic!(
+                    "{} expect index {}, but got {}, ctx {}",
+                    self.delegate.tag,
+                    expect_index,
+                    entry.get_index(),
+                    apply_ctx.tag,
+                );
+            }
+
+            let prev_version = self.delegate.region.get_region_epoch().get_version();
+            let res = match entry.get_entry_type() {
+                EntryType::EntryNormal => self.delegate.handle_raft_entry_normal(apply_ctx, &entry),
+                EntryType::EntryConfChange | EntryType::EntryConfChangeV2 => self
+                    .delegate
+                    .handle_raft_entry_conf_change(apply_ctx, &entry),
+            };
+
+            match res {
+                ApplyResult::None => {}
+                ApplyResult::Res(res) => {
+                    results.push_back(res);
+                    let new_version = self.delegate.region.get_region_epoch().get_version();
+                    if prev_version != new_version {
+                        break;
+                    }
+                }
+                ApplyResult::WaitMergeSource(_) => {
+                    // Should not exist because we recover regions in version order.
+                    panic!(
+                        "region {} wait merge source during recovery",
+                        self.delegate.region_id()
+                    );
+                }
+                ApplyResult::Yield => (),
+            }
+        }
+        apply_ctx.finish_for(&mut self.delegate, results);
+
+        if entries_drainer.len() == 0 || self.delegate.pending_remove {
+            cb(RecoverStatus::Finished);
+        } else {
+            cb(RecoverStatus::VersionChanged {
+                new_version: self.delegate.region.get_region_epoch().get_version(),
+                applied_index: self.delegate.apply_state.get_applied_index(),
+            });
+        }
+        if self.delegate.pending_remove {
+            self.destroy(apply_ctx);
+        }
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
@@ -3863,6 +4009,16 @@ where
                 Msg::Validate(_, f) => {
                     let delegate = &self.delegate as *const ApplyDelegate<EK> as *const u8;
                     f(delegate)
+                }
+                Msg::Recover {
+                    term,
+                    commit_index,
+                    commit_term,
+                    entries,
+                    cb,
+                    ..
+                } => {
+                    self.handle_recover(apply_ctx, term, commit_index, commit_term, entries, cb);
                 }
             }
         }
@@ -4277,6 +4433,9 @@ where
                 }
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => return,
+                Msg::Recover { region_id, .. } => {
+                    panic!("region {} schedule reocver failed", region_id)
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -4406,7 +4565,8 @@ mod memtrace {
                 | Msg::Snapshot(_)
                 | Msg::Destroy(_)
                 | Msg::Noop
-                | Msg::Change { .. } => 0,
+                | Msg::Change { .. }
+                | Msg::Recover { .. } => 0,
                 #[cfg(any(test, feature = "testexport"))]
                 Msg::Validate(..) => 0,
             }

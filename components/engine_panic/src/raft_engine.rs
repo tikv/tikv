@@ -63,7 +63,7 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_region_state_with_index(
+    fn get_pending_region_state(
         &self,
         raft_group_id: u64,
         applied_index: u64,
@@ -164,17 +164,17 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn recover_from_raft_db(&self) -> Result<bool> {
+    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
         panic!()
     }
 
-    fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
         panic!()
     }
 
-    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, f: F) -> Result<()>
+    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, f: F) -> Result<()>
     where
-        F: FnMut(u64, &RegionLocalState),
+        F: FnMut(u64, &RegionSequenceNumberRelation),
     {
         panic!()
     }
@@ -259,6 +259,10 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
         panic!()
     }
 }

@@ -1297,7 +1297,7 @@ where
             // Set Tombstone state explicitly
             let mut kv_wb = engines.kv.write_batch();
             let mut raft_wb = engines.raft.log_batch(1024);
-            let save_states_to_raft_db = engines.raft.recover_from_raft_db().unwrap();
+            let save_states_to_raft_db = engines.raft.recover_from_raft_db().unwrap().is_some();
             // Raft log gc should be flushed before being destroyed, so last_compacted_idx
             // has to be the minimal index that may still have logs.
             let last_compacted_idx = self.last_compacted_idx;
@@ -1329,7 +1329,7 @@ where
                     // We may need to apply logs for source regions after restart.
                     // TODO: Add a test for it.
                     write_peer_state_to_raft(
-                        &engines.raft,
+                        engines,
                         &mut raft_wb,
                         Some(self.get_store().applied_index()),
                         &region,
@@ -1338,7 +1338,7 @@ where
                     )?;
                 } else {
                     write_peer_state_to_raft(
-                        &engines.raft,
+                        engines,
                         &mut raft_wb,
                         None,
                         &region,

@@ -314,7 +314,7 @@ where
         )?;
 
         Ok(PeerStorage {
-            save_states_to_raft_db: engines.raft.recover_from_raft_db().unwrap(),
+            save_states_to_raft_db: engines.raft.recover_from_raft_db().unwrap().is_some(),
             engines,
             peer_id,
             region: region.clone(),
@@ -608,7 +608,7 @@ where
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
             if self.save_states_to_raft_db {
                 write_peer_state_to_raft(
-                    &self.engines.raft,
+                    &self.engines,
                     raft_wb,
                     None,
                     r,
@@ -622,7 +622,7 @@ where
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
         if self.save_states_to_raft_db {
             write_peer_state_to_raft(
-                &self.engines.raft,
+                &self.engines,
                 raft_wb,
                 None,
                 &region,
@@ -1154,9 +1154,9 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
-pub fn write_peer_state_to_raft<E: RaftEngine>(
-    raft_engine: &E,
-    raft_wb: &mut E::LogBatch,
+pub fn write_peer_state_to_raft<EK: KvEngine, ER: RaftEngine>(
+    engines: &Engines<EK, ER>,
+    raft_wb: &mut ER::LogBatch,
     index: Option<u64>,
     region: &metapb::Region,
     state: PeerState,
@@ -1180,12 +1180,21 @@ pub fn write_peer_state_to_raft<E: RaftEngine>(
             .put_pending_region_state(region_id, index, &region_state)
             .unwrap();
     } else {
-        raft_engine
-            .scan_pending_region_state(region_id, u64::MAX, |index, _| {
-                raft_wb
-                    .delete_pending_region_state(region_id, index)
-                    .unwrap();
-            })
+        engines
+            .raft
+            .scan_seqno_relations(
+                region_id,
+                engines.kv.get_latest_sequence_number(),
+                |seqno, relation| {
+                    raft_wb.delete_seqno_relation(region_id, seqno).unwrap();
+                    raft_wb
+                        .delete_pending_region_state(
+                            region_id,
+                            relation.get_apply_state().get_applied_index(),
+                        )
+                        .unwrap();
+                },
+            )
             .unwrap();
         raft_wb.put_region_state(region_id, &region_state).unwrap();
     }

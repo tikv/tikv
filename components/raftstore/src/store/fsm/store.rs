@@ -9,7 +9,7 @@ use std::{
         Bound::{Excluded, Included, Unbounded},
     },
     mem,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, RangeInclusive},
     sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
@@ -24,7 +24,8 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
-    RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    RaftLogBatch, Range, Result as EngineTraitsResult, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
@@ -63,6 +64,7 @@ use tikv_util::{
 };
 use time::{self, Timespec};
 
+use super::apply::RecoverStatus;
 use crate::{
     bytes_capacity,
     coprocessor::{
@@ -81,7 +83,7 @@ use crate::{
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
             },
-            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
+            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter, ApplyTask,
             ApplyTaskRes,
         },
         local_metrics::RaftMetrics,
@@ -89,7 +91,7 @@ use crate::{
         metrics::*,
         peer_storage,
         transport::Transport,
-        util::{self, is_initial_msg, RegionReadProgressRegistry},
+        util::{self, gc_seqno_relations, is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
@@ -493,7 +495,7 @@ where
             .schedule(SeqnoRelationTask::MemtableSealed(seqno))
         {
             warn!(
-                "failed to schedule memtable seqno to seqno relation worker";
+                "failed to schedule memtable sealed seqno to seqno relation worker";
                 "err" => ?e,
             );
         }
@@ -507,6 +509,17 @@ where
                     "err" => ?e,
                 );
             }
+        }
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::MemtableFlushed(seqno))
+        {
+            warn!(
+                "failed to schedule memtable flushed seqno to seqno relation worker";
+                "err" => ?e,
+            );
         }
     }
 }
@@ -1165,6 +1178,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
     write_senders: WriteSenders<EK, ER>,
+    seqno_recover_range: Option<RangeInclusive<u64>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1176,8 +1190,38 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
         let kv_engine = self.engines.kv.clone();
-        // let raft_engine = self.engines.raft.clone();
+        let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
+
+        if let Some(seqno) = raft_engine.recover_from_raft_db().unwrap() {
+            let cf_seqnos: Vec<_> = DATA_CFS
+                .iter()
+                .map(|cf| {
+                    kv_engine
+                        .get_range_seqno_properties_cf(cf, b"", b"")
+                        .unwrap()
+                        .map_or(0, |prop| prop.largest_seqno)
+                })
+                .collect();
+            let min_cf_seqno = cf_seqnos.iter().copied().min().unwrap_or(0);
+            let max_cf_seqno = cf_seqnos.iter().copied().max().unwrap_or(0);
+            self.seqno_recover_range = Some(RangeInclusive::new(min_cf_seqno, max_cf_seqno));
+            let start_seqno = u64::max(seqno, min_cf_seqno);
+            let mut raft_wb = raft_engine.log_batch(0);
+            gc_seqno_relations(start_seqno, &raft_engine, &mut raft_wb).unwrap();
+            raft_engine.consume(&mut raft_wb, true).unwrap();
+            let mut kv_wb = kv_engine.write_batch();
+            raft_engine
+                .for_each_raft_group(&mut |region_id| {
+                    let region_state = raft_engine.get_region_state(region_id)?.unwrap();
+                    kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
+                    let apply_state = raft_engine.get_apply_state(region_id)?.unwrap();
+                    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
+                })
+                .unwrap();
+            kv_wb.write().unwrap();
+        }
+
         let mut total_count = 0;
         let mut tombstone_count = 0;
         let mut applying_count = 0;
@@ -1190,31 +1234,35 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
         let mut replication_state = self.global_replication_state.lock().unwrap();
-        let mut recover_peer = |region_id, local_state: RegionLocalState| {
-            let region = local_state.get_region();
-            total_count += 1;
-            match local_state.get_state() {
-                PeerState::Tombstone => {
-                    tombstone_count += 1;
-                }
-                PeerState::Applying => {
-                    applying_count += 1;
-                    applying_regions.push(region.clone());
-                }
-                PeerState::Merging => {
-                    merging_count += 1;
-                }
-                _ => {}
+        kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
             }
-            if let Some((tx, peer)) = box_try!(self.recover_peer_from_local_state(
-                region_id,
-                local_state.clone(),
-                &mut meta,
-                &mut kv_wb,
-                &mut raft_wb,
-                &mut replication_state,
-            )) {
-                region_peers.push((tx, peer));
+
+            total_count += 1;
+
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
+            let region = local_state.get_region();
+            if local_state.get_state() == PeerState::Tombstone {
+                tombstone_count += 1;
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
+                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                return Ok(true);
+            }
+            if local_state.get_state() == PeerState::Applying {
+                // in case of restart happen when we just write region state to Applying,
+                // but not write raft_local_state to raft rocksdb in time.
+                box_try!(peer_storage::recover_from_applying_state(
+                    &self.engines,
+                    &mut raft_wb,
+                    region_id
+                ));
+                applying_count += 1;
+                applying_regions.push(region.clone());
+                return Ok(true);
             }
 
             let (tx, mut peer) = box_try!(PeerFsm::create(
@@ -1244,23 +1292,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 StateRole::Follower,
             );
             Ok(true)
-        };
-        if self.should_recover_from_raftdb() {
-            // raft_engine.scan_region_state(|region_id, local_state| {
-            //     recover_peers(region_id, local_state)
-            // })?;
-        } else {
-            kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
-                let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
-                if suffix != keys::REGION_STATE_SUFFIX {
-                    return Ok(true);
-                }
-
-                let mut local_state = RegionLocalState::default();
-                local_state.merge_from_bytes(value)?;
-                recover_peer(region_id, local_state)
-            })?;
-        }
+        })?;
 
         if !kv_wb.is_empty() {
             kv_wb.write().unwrap();
@@ -1304,60 +1336,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         self.clear_stale_data(&meta)?;
 
         Ok(region_peers)
-    }
-
-    fn should_recover_from_raftdb(&self) -> bool {
-        false
-    }
-
-    fn recover_peer_from_local_state(
-        &self,
-        region_id: u64,
-        local_state: RegionLocalState,
-        meta: &mut StoreMeta,
-        kv_wb: &mut EK::WriteBatch,
-        raft_wb: &mut ER::LogBatch,
-        replication_state: &mut GlobalReplicationState,
-    ) -> Result<Option<SenderFsmPair<EK, ER>>> {
-        let store_id = self.store.get_id();
-        let region = local_state.get_region();
-        if local_state.get_state() == PeerState::Tombstone {
-            debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-            self.clear_stale_meta(kv_wb, raft_wb, &local_state);
-            return Ok(None);
-        }
-        if local_state.get_state() == PeerState::Applying {
-            // in case of restart happen when we just write region state to Applying,
-            // but not write raft_local_state to raft rocksdb in time.
-            peer_storage::recover_from_applying_state(&self.engines, raft_wb, region_id)?;
-            return Ok(None);
-        }
-
-        let (tx, mut peer) = PeerFsm::create(
-            store_id,
-            &self.cfg.value(),
-            self.region_scheduler.clone(),
-            self.raftlog_fetch_scheduler.clone(),
-            self.engines.clone(),
-            region,
-        )?;
-        peer.peer.init_replication_mode(replication_state);
-        if local_state.get_state() == PeerState::Merging {
-            info!("region is merging"; "region" => ?region, "store_id" => store_id);
-            peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
-        }
-        meta.region_ranges.insert(enc_end_key(region), region_id);
-        meta.regions.insert(region_id, region.clone());
-        meta.region_read_progress
-            .insert(region_id, peer.peer.read_progress.clone());
-        // No need to check duplicated here, because we use region id as the key
-        // in DB.
-        self.coprocessor_host.on_region_changed(
-            region,
-            RegionChangeEvent::Create,
-            StateRole::Follower,
-        );
-        Ok(Some((tx, peer)))
     }
 
     fn clear_stale_meta(
@@ -1523,6 +1501,7 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
+            seqno_recover_range: self.seqno_recover_range.clone(),
         }
     }
 }
@@ -1719,6 +1698,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
             write_senders: self.store_writers.senders(),
+            seqno_recover_range: None,
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1808,6 +1788,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
+        if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
+            self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
+        }
 
         let refresh_config_runner = RefreshConfigRunner::new(
             self.apply_router.router.clone(),
@@ -1870,6 +1853,90 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.purge_worker.stop();
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
+    }
+
+    fn replay_raft_logs_between_seqnos(
+        &mut self,
+        range: &RangeInclusive<u64>,
+        engines: &Engines<EK, ER>,
+    ) {
+        let mut recover_regions: BTreeMap<u64, HashMap<_, _>> = BTreeMap::new();
+        engines
+            .raft
+            .for_each_raft_group(&mut |region_id| {
+                if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
+                    assert!(
+                        relation.get_sequence_number() <= *range.start(),
+                        "relation {:?}, range {:?}",
+                        relation,
+                        range
+                    );
+
+                    let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap();
+                    let raft_state = engines.raft.get_raft_state(region_id).unwrap().unwrap();
+                    let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
+                    if !matches!(
+                        region_state.get_state(),
+                        PeerState::Applying | PeerState::Tombstone
+                    ) {
+                        let version = region_state.get_region().get_region_epoch().get_version();
+                        let regions = recover_regions
+                            .entry(version)
+                            .or_insert_with(HashMap::default);
+                        regions.insert(
+                            region_id,
+                            (
+                                raft_state,
+                                apply_state.applied_index,
+                                relation.get_apply_state().applied_index,
+                            ),
+                        );
+                    }
+                }
+                EngineTraitsResult::Ok(())
+            })
+            .unwrap();
+
+        while let Some((version, mut regions)) = recover_regions.pop_first() {
+            let mut regions_drainer = regions.drain();
+            while let Some((region_id, (raft_state, start, end))) = regions_drainer.next() {
+                let mut entries = vec![];
+                engines
+                    .raft
+                    .fetch_entries_to(region_id, start, end, None, &mut entries)
+                    .unwrap();
+                // TODO: Parallelize recovery.
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                self.apply_router.schedule_task(
+                    region_id,
+                    ApplyTask::recover(
+                        region_id,
+                        raft_state.get_hard_state().term,
+                        raft_state.get_hard_state().commit,
+                        raft_state.get_hard_state().term,
+                        entries,
+                        Box::new(move |status| {
+                            tx.send(status).unwrap();
+                        }),
+                    ),
+                );
+                let status = rx.recv().unwrap();
+                match status {
+                    RecoverStatus::VersionChanged {
+                        new_version,
+                        applied_index,
+                    } => {
+                        recover_regions.insert(version, regions_drainer.collect());
+                        let regions = recover_regions
+                            .entry(new_version)
+                            .or_insert_with(HashMap::default);
+                        regions.insert(region_id, (raft_state, applied_index + 1, end));
+                        break;
+                    }
+                    RecoverStatus::Finished => info!("region {} recover finished", region_id),
+                }
+            }
+        }
     }
 }
 

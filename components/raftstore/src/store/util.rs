@@ -14,6 +14,7 @@ use std::{
     u64,
 };
 
+use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
@@ -1351,6 +1352,32 @@ impl LatencyInspector {
     pub fn finish(self) {
         (self.cb)(self.id, self.duration);
     }
+}
+
+pub fn gc_seqno_relations<ER: RaftEngine>(
+    seqno: u64,
+    raft_engine: &ER,
+    wb: &mut ER::LogBatch,
+) -> Result<()> {
+    raft_engine.for_each_raft_group(&mut |region_id| {
+        raft_engine
+            .scan_seqno_relations(region_id, seqno + 1, |s, relation| {
+                wb.delete_seqno_relation(region_id, s).unwrap();
+                wb.put_apply_state(region_id, relation.get_apply_state())
+                    .unwrap();
+                let applied_index = relation.get_apply_state().get_applied_index();
+                if let Some(state) = raft_engine
+                    .get_pending_region_state(region_id, applied_index)
+                    .unwrap()
+                {
+                    wb.put_region_state(region_id, &state).unwrap();
+                    wb.delete_pending_region_state(region_id, applied_index)
+                        .unwrap();
+                }
+            })
+            .unwrap();
+        Ok(())
+    })
 }
 
 #[cfg(test)]

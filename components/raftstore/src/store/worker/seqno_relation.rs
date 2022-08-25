@@ -20,6 +20,7 @@ use super::metrics::*;
 use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
     fsm::{store::ApplyResNotifier, ApplyNotifier, ApplyRes, ExecResult, StoreMeta},
+    util::gc_seqno_relations,
 };
 
 const RAFT_WB_MAX_KEYS: usize = 256;
@@ -27,6 +28,7 @@ const RAFT_WB_MAX_KEYS: usize = 256;
 pub enum Task<S: Snapshot> {
     ApplyRes(Vec<ApplyRes<S>>),
     MemtableSealed(u64),
+    MemtableFlushed(u64),
 }
 
 impl<S: Snapshot> fmt::Display for Task<S> {
@@ -41,6 +43,10 @@ impl<S: Snapshot> fmt::Display for Task<S> {
                 .field("name", &"memtable_sealed")
                 .field("seqno", &seqno)
                 .finish(),
+            Task::MemtableFlushed(ref seqno) => de
+                .field("name", &"memtable_flushed")
+                .field("seqno", &seqno)
+                .finish(),
         }
     }
 }
@@ -49,7 +55,6 @@ struct SeqnoRelation {
     region_id: u64,
     seqno: SequenceNumber,
     apply_state: RaftApplyState,
-    // region_local_state: Option<RegionLocalState>,
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
@@ -124,6 +129,21 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         self.last_flushed_seqno = seqno;
         let sync_relations = std::mem::take(&mut self.inflight_seqno_relations);
         self.handle_sync_relations(sync_relations);
+    }
+
+    // GC relations
+    fn on_memtable_flushed(&mut self, seqno: u64) {
+        gc_seqno_relations(seqno, &self.raftdb, &mut self.wb).unwrap();
+        if !self.wb.is_empty() {
+            self.raftdb
+                .consume_and_shrink(
+                    &mut self.wb,
+                    true,
+                    RAFT_WB_SHRINK_SIZE,
+                    RAFT_WB_DEFAULT_SIZE,
+                )
+                .unwrap();
+        }
     }
 
     fn handle_sync_relations(&mut self, relations: HashMap<u64, SeqnoRelation>) {
@@ -304,6 +324,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
         match task {
             Task::ApplyRes(apply_res) => self.on_apply_res(apply_res),
             Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),
+            Task::MemtableFlushed(seqno) => self.on_memtable_flushed(seqno),
         }
     }
 }

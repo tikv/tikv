@@ -26,7 +26,7 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
-    fn get_region_state_with_index(
+    fn get_pending_region_state(
         &self,
         raft_group_id: u64,
         applied_index: u64,
@@ -399,38 +399,33 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn recover_from_raft_db(&self) -> Result<bool> {
-        let recover_from_raftdb = matches!(self
+    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
+        let seqno = self
             .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
-            .map(|v| u8::from_be_bytes(v.deref().try_into().unwrap())),
-            Some(val) if val == 1);
-        Ok(recover_from_raftdb)
+            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
+        Ok(seqno)
     }
 
-    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()> {
-        let recover_from_raft_db = if recover_from_raft_db { 1 } else { 0 };
-        self.put(
-            keys::RECOVER_FROM_RAFT_DB_KEY,
-            &u8::to_be_bytes(recover_from_raft_db),
-        )
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
+        self.put(keys::RECOVER_FROM_RAFT_DB_KEY, &u64::to_be_bytes(seqno))
     }
 
-    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, mut f: F) -> Result<()>
+    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(u64, &RegionLocalState),
+        F: FnMut(u64, &RegionSequenceNumberRelation),
     {
-        let start_key = keys::pending_region_state_key(raft_group_id, 0);
-        let end_key = keys::pending_region_state_key(raft_group_id, index);
+        let start_key = keys::sequence_number_relation_key(raft_group_id, 0);
+        let end_key = keys::sequence_number_relation_key(raft_group_id, seqno);
         self.scan(
             CF_DEFAULT,
             &start_key,
             &end_key,
             false, // fill_cache
             |key, value| {
-                let mut state = RegionLocalState::default();
-                state.merge_from_bytes(value)?;
-                let (_, index) = keys::decode_region_state_key_with_index(key).unwrap();
-                f(index, &state);
+                let mut relation = RegionSequenceNumberRelation::default();
+                relation.merge_from_bytes(value)?;
+                let (_, seqno) = keys::decode_sequence_number_relation_key(key).unwrap();
+                f(seqno, &relation);
                 Ok(true)
             },
         )?;
@@ -534,6 +529,10 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         self.delete(&keys::snapshot_apply_state_key(raft_group_id))
+    }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.delete(&keys::sequence_number_relation_key(raft_group_id, seqno))
     }
 }
 

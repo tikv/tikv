@@ -218,10 +218,18 @@ pub fn pending_region_state_key(region_id: u64, index: u64) -> [u8; 19] {
     key
 }
 
-pub fn decode_region_state_key_with_index(key: &[u8]) -> Result<(u64, u64)> {
-    let (region_id, _) = decode_region_meta_key(&key[..11])?;
-    let index = BigEndian::read_u64(&key[11..]);
-    Ok((region_id, index))
+pub fn decode_sequence_number_relation_key(key: &[u8]) -> Result<(u64, u64)> {
+    let suffix_idx = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>();
+    let expect_key_len = suffix_idx + mem::size_of::<u8>() + mem::size_of::<u64>();
+    if key.len() != expect_key_len
+        || !key.starts_with(REGION_RAFT_PREFIX_KEY)
+        || key[suffix_idx] != RAFT_LOG_SUFFIX
+    {
+        return Err(Error::InvalidRaftLogKey(key.to_owned()));
+    }
+    let region_id = BigEndian::read_u64(&key[REGION_RAFT_PREFIX_KEY.len()..suffix_idx]);
+    let seqno = BigEndian::read_u64(&key[suffix_idx + mem::size_of::<u8>()..]);
+    Ok((region_id, seqno))
 }
 
 pub fn validate_data_key(key: &[u8]) -> bool {

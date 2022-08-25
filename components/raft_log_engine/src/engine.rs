@@ -373,8 +373,8 @@ fn pending_region_local_state_key(applied_index: u64) -> Vec<u8> {
     key
 }
 
-fn parse_region_local_state_key(key: &[u8]) -> Option<u64> {
-    if &key[..1] != REGION_STATE_KEY {
+fn parse_raft_seqno_relation_key(key: &[u8]) -> Option<u64> {
+    if &key[..1] != SEQNO_RELATION_KEY {
         return None;
     }
     Some(u64::from_be_bytes(key[1..].try_into().unwrap()))
@@ -498,6 +498,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .delete(raft_group_id, SNAPSHOT_APPLY_STATE_KEY.to_vec());
         Ok(())
     }
+
+    fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        self.0.delete(raft_group_id, raft_seqno_relation_key(seqno));
+        Ok(())
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
@@ -507,7 +512,7 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_region_state_with_index(
+    fn get_pending_region_state(
         &self,
         raft_group_id: u64,
         applied_index: u64,
@@ -750,39 +755,37 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn recover_from_raft_db(&self) -> Result<bool> {
-        let recover_from_raft_db = matches!(self
+    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
+        let seqno = self
             .0
             .get(STORE_STATE_ID, RECOVER_FROM_RAFT_DB_KEY)
-            .map(|v| u8::from_be_bytes(v.try_into().unwrap())),
-            Some(val) if val == 1);
-        Ok(recover_from_raft_db)
+            .map(|v| u64::from_be_bytes(v.try_into().unwrap()));
+        Ok(seqno)
     }
 
-    fn put_recover_from_raft_db(&self, recover_from_raftdb: bool) -> Result<()> {
-        let recover_from_raftdb = if recover_from_raftdb { 1 } else { 0 };
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
         let mut batch = Self::LogBatch::default();
         batch.0.put(
             STORE_STATE_ID,
             RECOVER_FROM_RAFT_DB_KEY.to_vec(),
-            u8::to_be_bytes(recover_from_raftdb).to_vec(),
+            u64::to_be_bytes(seqno).to_vec(),
         );
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
 
-    fn scan_pending_region_state<F>(&self, raft_group_id: u64, index: u64, mut f: F) -> Result<()>
+    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(u64, &RegionLocalState),
+        F: FnMut(u64, &RegionSequenceNumberRelation),
     {
         self.0
             .scan_messages(
                 raft_group_id,
-                Some(REGION_STATE_KEY),
-                Some(&region_local_state_key(index)),
+                Some(SEQNO_RELATION_KEY),
+                Some(&raft_seqno_relation_key(seqno)),
                 true,
                 |key, value| {
-                    let index = parse_region_local_state_key(key).unwrap();
+                    let index = parse_raft_seqno_relation_key(key).unwrap();
                     f(index, &value);
                     false
                 },
