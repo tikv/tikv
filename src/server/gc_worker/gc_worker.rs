@@ -252,19 +252,33 @@ struct KeysInRegions<R: Iterator<Item = Region>> {
 }
 
 impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-    type Item = (Key, Region);
-    fn next(&mut self) -> Option<(Key, Region)> {
+    type Item = (Box<dyn Iterator<Item = Key>>, Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let region = self.regions.peek()?.clone();
+        let mut keys = Vec::new();
+
         loop {
-            let region = self.regions.peek()?;
-            let key = self.keys.peek()?.as_encoded().as_slice();
+            let key = self.keys.peek();
+            if key.is_none() {
+                if keys.is_empty() {
+                    return None;
+                }
+                break;
+            }
+            let key = key.unwrap().as_encoded().as_slice();
+
             if key < region.get_start_key() {
                 self.keys.next();
             } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                return self.keys.next().map(|key| (key, region.clone()));
+                keys.push(self.keys.next().unwrap());
             } else {
                 self.regions.next();
+                break;
             }
         }
+
+        Some((Box::new(keys.into_iter()), region))
     }
 }
 
@@ -277,11 +291,14 @@ fn get_keys_in_regions(
     store_id: u64,
     keys: Vec<Key>,
     region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
-) -> Result<Box<dyn Iterator<Item = (Key, Region)>>> {
+) -> Result<Box<dyn Iterator<Item = (Box<dyn Iterator<Item = Key>>, Region)>>> {
     assert!(!keys.is_empty());
 
     match region_or_provider {
-        Either::Left(region) => Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone())))),
+        Either::Left(region) => Ok(Box::new(KeysInRegions {
+            keys: keys.into_iter().peekable(),
+            regions: vec![region].into_iter().peekable(),
+        })),
         Either::Right(region_provider) => {
             if keys.len() >= 2 {
                 let start = keys.first().unwrap().as_encoded();
@@ -304,9 +321,11 @@ fn get_keys_in_regions(
                         key
                     ));
                 }
-                let region = region.unwrap();
 
-                Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone()))))
+                Ok(Box::new(KeysInRegions {
+                    keys: keys.into_iter().peekable(),
+                    regions: vec![region.unwrap()].into_iter().peekable(),
+                }))
             }
         }
     }
@@ -495,21 +514,99 @@ where
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut keys = get_keys_in_regions(store_id, keys, region_or_provider)?;
-        let mut next_gc_key = keys.next();
+        let mut iters = get_keys_in_regions(store_id, keys, region_or_provider)?.peekable();
 
-        if next_gc_key.is_none() {
+        // First item is fetched to initialize the reader and kv_engine
+        let first_item = iters.peek();
+        if first_item.is_none() {
             return Ok((handled_keys, wasted_keys));
         }
+        let (mut reader, mut kv_engine) = self.get_reader_and_kv_engine(
+            store_id,
+            count,
+            &first_item.as_ref().unwrap().1,
+            range_start_key.clone(),
+            range_end_key.clone(),
+        )?;
 
-        let region = next_gc_key.as_ref().unwrap().1.clone();
-        let mut current_region_id = region.id;
+        let mut first_iteration = true;
+        let mut txn = Self::new_txn();
+        let mut gc_info = GcInfo::default();
+        for (mut keys, ref region) in iters {
+            if !first_iteration {
+                (reader, kv_engine) = self.get_reader_and_kv_engine(
+                    store_id,
+                    count,
+                    region,
+                    range_start_key.clone(),
+                    range_end_key.clone(),
+                )?;
+            }
+            first_iteration = false;
 
-        let (mut reader, mut kv_engine) = {
-            let snapshot = self.get_snapshot(store_id, &region)?;
+            let mut next_gc_key = keys.next();
+            while let Some(ref key) = next_gc_key {
+                if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
+                    GC_KEY_FAILURES.inc();
+                    error!(?e; "GC meets failure"; "key" => %key,);
+                    // Switch to the next key if meets failure.
+                    gc_info.is_completed = true;
+                }
+
+                if gc_info.is_completed {
+                    if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                        debug!(
+                            "GC found plenty versions for a key";
+                            "key" => %key,
+                            "versions" => gc_info.found_versions,
+                        );
+                    }
+                    if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
+                        debug!(
+                            "GC deleted plenty versions for a key";
+                            "key" => %key,
+                            "versions" => gc_info.deleted_versions,
+                        );
+                    }
+
+                    if gc_info.found_versions > 0 {
+                        handled_keys += 1;
+                    } else {
+                        wasted_keys += 1;
+                    }
+                    next_gc_key = keys.next();
+                    gc_info = GcInfo::default();
+                } else {
+                    Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
+                    (reader, kv_engine) = self.get_reader_and_kv_engine(
+                        store_id,
+                        count,
+                        region,
+                        range_start_key.clone(),
+                        range_end_key.clone(),
+                    )?;
+                    txn = Self::new_txn();
+                }
+            }
+        }
+
+        Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
+        Ok((handled_keys, wasted_keys))
+    }
+
+    fn get_reader_and_kv_engine(
+        &self,
+        store_id: u64,
+        key_count: usize,
+        region: &Region,
+        range_start_key: Key,
+        range_end_key: Key,
+    ) -> Result<(MvccReader<E::Snap>, <E::Snap as Snapshot>::E)> {
+        let (mut reader, kv_engine) = {
+            let snapshot = self.get_snapshot(store_id, region)?;
             let kv_engine = snapshot.inner_engine();
 
-            if count <= 1 {
+            if key_count <= 1 {
                 (MvccReader::new(snapshot, None, false), kv_engine)
             } else {
                 // keys are closing to each other in one batch of gc keys, so do not use
@@ -520,73 +617,8 @@ where
                 )
             }
         };
-        reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
-
-        let mut txn = Self::new_txn();
-        let mut gc_info = GcInfo::default();
-        while let Some((ref key, ref region)) = next_gc_key {
-            if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
-                GC_KEY_FAILURES.inc();
-                error!(?e; "GC meets failure"; "key" => %key,);
-                // Switch to the next key if meets failure.
-                gc_info.is_completed = true;
-            }
-
-            if gc_info.is_completed {
-                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                    debug!(
-                        "GC found plenty versions for a key";
-                        "key" => %key,
-                        "versions" => gc_info.found_versions,
-                    );
-                }
-                if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                    debug!(
-                        "GC deleted plenty versions for a key";
-                        "key" => %key,
-                        "versions" => gc_info.deleted_versions,
-                    );
-                }
-
-                if current_region_id != region.id {
-                    current_region_id = region.id;
-
-                    (reader, kv_engine) = {
-                        let snapshot = self.get_snapshot(store_id, region)?;
-                        let kv_engine = snapshot.inner_engine();
-
-                        (
-                            MvccReader::new(snapshot, Some(ScanMode::Forward), false),
-                            kv_engine,
-                        )
-                    };
-                    reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
-                }
-
-                if gc_info.found_versions > 0 {
-                    handled_keys += 1;
-                } else {
-                    wasted_keys += 1;
-                }
-                next_gc_key = keys.next();
-                gc_info = GcInfo::default();
-            } else {
-                Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
-                (reader, kv_engine) = {
-                    let snapshot = self.get_snapshot(store_id, region)?;
-                    let kv_engine = snapshot.inner_engine();
-
-                    (
-                        MvccReader::new(snapshot, Some(ScanMode::Forward), false),
-                        kv_engine,
-                    )
-                };
-                reader.set_range(Some(range_start_key.clone()), Some(range_end_key.clone()));
-                txn = Self::new_txn();
-            }
-        }
-        Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
-        Ok((handled_keys, wasted_keys))
+        reader.set_range(Some(range_start_key), Some(range_end_key));
+        Ok((reader, kv_engine))
     }
 
     fn raw_gc_keys(
@@ -609,58 +641,72 @@ where
 
         let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut keys = get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?;
-        let mut next_gc_key = keys.next();
+        let mut iters =
+            get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?.peekable();
 
-        if next_gc_key.is_none() {
+        // First item is fetched to initialize the reader and kv_engine
+        let first_item = iters.peek();
+        if first_item.is_none() {
             return Ok((handled_keys, wasted_keys));
         }
+        let mut snapshot = self.get_snapshot(store_id, &first_item.as_ref().unwrap().1)?;
+        let mut kv_engine = snapshot.inner_engine();
 
-        let region = next_gc_key.as_ref().unwrap().1.clone();
-
-        let mut snapshot = self.get_snapshot(store_id, &region)?;
-        let kv_engine = snapshot.inner_engine();
-
+        let mut first_iteration = true;
         let mut gc_info = GcInfo::default();
-        while let Some((ref key, _)) = next_gc_key {
-            if let Err(e) = self.raw_gc_key(
-                safe_point,
-                key,
-                &range_start_key,
-                &range_end_key,
-                &mut raw_modifies,
-                &mut snapshot,
-                &mut gc_info,
-            ) {
-                GC_KEY_FAILURES.inc();
-                error!(?e; "Raw GC meets failure"; "key" => %key,);
-                // Switch to the next key if meets failure.
-                gc_info.is_completed = true;
+        for (mut keys, ref region) in iters {
+            if !first_iteration {
+                snapshot = self.get_snapshot(store_id, region)?;
+                kv_engine = snapshot.inner_engine();
             }
+            first_iteration = false;
 
-            if gc_info.is_completed {
-                if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                    debug!(
-                        "RawKV GC found plenty versions for a key";
-                        "key" => %key,
-                        "versions" => gc_info.found_versions,
-                    );
+            let mut next_gc_key = keys.next();
+            while let Some(ref key) = next_gc_key {
+                if let Err(e) = self.raw_gc_key(
+                    safe_point,
+                    key,
+                    &range_start_key,
+                    &range_end_key,
+                    &mut raw_modifies,
+                    &mut snapshot,
+                    &mut gc_info,
+                ) {
+                    GC_KEY_FAILURES.inc();
+                    error!(?e; "Raw GC meets failure"; "key" => %key,);
+                    // Switch to the next key if meets failure.
+                    gc_info.is_completed = true;
                 }
-                if gc_info.found_versions > 0 {
-                    handled_keys += 1;
+
+                if gc_info.is_completed {
+                    if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
+                        debug!(
+                            "RawKV GC found plenty versions for a key";
+                            "key" => %key,
+                            "versions" => gc_info.found_versions,
+                        );
+                    }
+                    if gc_info.found_versions > 0 {
+                        handled_keys += 1;
+                    } else {
+                        wasted_keys += 1;
+                    }
+
+                    gc_info.report_metrics(STAT_RAW_KEYMODE);
+
+                    next_gc_key = keys.next();
+                    gc_info = GcInfo::default();
                 } else {
-                    wasted_keys += 1;
+                    // Flush writeBatch to engine.
+                    Self::flush_raw_gc(
+                        raw_modifies,
+                        &self.limiter,
+                        &self.engine,
+                        kv_engine.clone(),
+                    )?;
+                    // After flush, reset raw_modifies.
+                    raw_modifies = MvccRaw::new();
                 }
-
-                gc_info.report_metrics(STAT_RAW_KEYMODE);
-
-                next_gc_key = keys.next();
-                gc_info = GcInfo::default();
-            } else {
-                // Flush writeBatch to engine.
-                Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, kv_engine.clone())?;
-                // After flush, reset raw_modifies.
-                raw_modifies = MvccRaw::new();
             }
         }
 
@@ -2421,5 +2467,105 @@ mod tests {
         // and the key in the range will be deleted.
         rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
         must_get_none(&engine, b"key", 30);
+    }
+
+    #[test]
+    fn test_keys_in_regions_iteration() {
+        fn init_region(start_key: &[u8], end_key: &[u8], region_id: u64) -> Region {
+            let start_key = Key::from_raw(start_key);
+            let end_key = Key::from_raw(end_key);
+            let mut region = Region::default();
+            region.set_start_key(start_key.as_encoded().clone());
+            region.set_end_key(end_key.as_encoded().clone());
+            region.id = region_id;
+            region
+        }
+
+        fn generate_keys(start: u64, end: u64) -> Peekable<IntoIter<Key>> {
+            (start..end)
+                .into_iter()
+                .map(|i| {
+                    let key = format!("k{:02}", i);
+                    Key::from_raw(key.as_bytes())
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .peekable()
+        }
+
+        fn assert_equal(
+            iter1: Box<dyn Iterator<Item = Key>>,
+            iter2: Box<dyn Iterator<Item = Key>>,
+        ) {
+            for (k1, k2) in iter1.zip(iter2) {
+                assert_eq!(k1, k2);
+            }
+        }
+
+        // k01 .. k07
+        let keys = generate_keys(1, 7);
+
+        // One region cover all keys
+        let regions = vec![init_region(b"k01", b"k07", 1)];
+        let mut keys_in_regions = KeysInRegions {
+            keys: keys.clone(),
+            regions: regions.into_iter().peekable(),
+        };
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert!(region.id == 1);
+        assert_equal(iter, Box::new(keys.clone()));
+
+        // More than one regions cover all keys
+        let regions = vec![
+            init_region(b"k01", b"k02", 1),
+            init_region(b"k02", b"k04", 2),
+            init_region(b"k04", b"k07", 3),
+        ];
+        let mut keys_in_regions = KeysInRegions {
+            keys: keys.clone(),
+            regions: regions.into_iter().peekable(),
+        };
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert_eq!(1, region.id);
+        assert_equal(iter, Box::new(generate_keys(1, 2)));
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert_eq!(2, region.id);
+        assert_equal(iter, Box::new(generate_keys(2, 4)));
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert_eq!(3, region.id);
+        assert_equal(iter, Box::new(generate_keys(4, 7)));
+        assert!(keys_in_regions.next().is_none());
+
+        // Cover partial keys
+        let regions = vec![
+            init_region(b"k00", b"k03", 1),
+            init_region(b"k05", b"k010", 2),
+        ];
+        let mut keys_in_regions = KeysInRegions {
+            keys: keys.clone(),
+            regions: regions.into_iter().peekable(),
+        };
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert_eq!(1, region.id);
+        assert_equal(iter, Box::new(generate_keys(1, 3)));
+        let (iter, region) = keys_in_regions.next().unwrap();
+        assert_eq!(2, region.id);
+        assert_equal(iter, Box::new(generate_keys(5, 7)));
+        assert!(keys_in_regions.next().is_none());
+
+        // No key
+        let regions = vec![init_region(b"k00", b"k03", 1)];
+        let mut keys_in_regions = KeysInRegions {
+            keys: Vec::new().into_iter().peekable(),
+            regions: regions.into_iter().peekable(),
+        };
+        assert!(keys_in_regions.next().is_none());
+
+        // No region
+        let mut keys_in_regions = KeysInRegions {
+            keys,
+            regions: Vec::new().into_iter().peekable(),
+        };
+        assert!(keys_in_regions.next().is_none());
     }
 }
