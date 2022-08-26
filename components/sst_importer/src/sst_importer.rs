@@ -324,10 +324,11 @@ impl SstImporter {
         }
 
         let length = meta.get_compress_length();
-        let mut op_offset = Some((offset, length));
-        if length == 0 {
-            op_offset = None;
-        }
+        let op_offset = if length == 0 {
+            None
+        } else {
+            Some((offset, length))
+        };
         self.download_file_from_external_storage(
             op_offset,
             // don't check file length after download file for now.

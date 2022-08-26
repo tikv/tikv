@@ -20,7 +20,7 @@ use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{DataFileGroup, DataFileInfo, FileType, MetadataV2, StreamBackupTaskInfo},
+    brpb::{DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata, StreamBackupTaskInfo},
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -695,15 +695,13 @@ impl TempFileKey {
 
     /// path_to_log_file specifies the path of record log for v2.
     /// ```text
-    /// v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
-    /// v2/${date}/${hour}/${store_id}/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
+    /// V1: v1/${date}/${hour}/${store_id}/t00000071/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
+    /// V2: v1/${date}/${hour}/${store_id}/434098800931373064-f0251bd5-1441-499a-8f53-adc0d1057a73.log
     /// ```
     /// For v2, we merged the small files (partition by table_id) into one file.
-    /// When do restore, add `--use-storage-v1` in commandline of BR to restore
-    /// v1 backup data.
     fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v2/{}/{}/{}/{:012}-{}.log",
+            "v1/{}/{}/{}/{:012}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some
             // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
@@ -716,15 +714,13 @@ impl TempFileKey {
 
     /// path_to_schema_file specifies the path of schema log for v2.
     /// ```text
-    /// v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
-    /// v2/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
+    /// V1: v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
+    /// V2: v1/${date}/${hour}/${store_id}/schema-meta/434055683656384515-cc3cb7a3-e03b-4434-ab6c-907656fddf67.log
     /// ```
     /// For v2, we merged the small files (partition by table_id) into one file.
-    /// When do restore, add `--use-storage-v1` in commandline of BR to restore
-    /// v1 backup data.
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v2/{}/{}/{}/schema-meta/{:012}-{}.log",
+            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
@@ -898,7 +894,7 @@ impl StreamTaskInfo {
     }
 
     /// Flush all template files and generate corresponding metadata.
-    pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfoV2> {
+    pub async fn generate_metadata(&self, store_id: u64) -> Result<MetadataInfo> {
         let w = self.flushing_files.read().await;
         let wm = self.flushing_meta_files.read().await;
         // Let's flush all files first...
@@ -916,7 +912,7 @@ impl StreamTaskInfo {
         .map(|r| r.map_err(Error::from))
         .fold(Ok(()), Result::and)?;
 
-        let mut metadata = MetadataInfoV2::with_capacity(w.len() + wm.len());
+        let mut metadata = MetadataInfo::with_capacity(w.len() + wm.len());
         metadata.set_store_id(store_id);
         // delay push files until log files are flushed
         Ok(metadata)
@@ -1003,7 +999,7 @@ impl StreamTaskInfo {
     async fn merge_and_flush_log_files_to(
         storage: Arc<dyn ExternalStorage>,
         files: &[(TempFileKey, Mutex<DataFile>, DataFileInfo)],
-        metadata: &mut MetadataInfoV2,
+        metadata: &mut MetadataInfo,
         is_meta: bool,
     ) -> Result<()> {
         // save locks for longer lifetime
@@ -1083,7 +1079,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
-    pub async fn flush_log(&self, metadata: &mut MetadataInfoV2) -> Result<()> {
+    pub async fn flush_log(&self, metadata: &mut MetadataInfo) -> Result<()> {
         let storage = self.storage.clone();
         self.merge_log(metadata, storage.clone(), &self.flushing_files, false)
             .await?;
@@ -1095,7 +1091,7 @@ impl StreamTaskInfo {
 
     async fn merge_log(
         &self,
-        metadata: &mut MetadataInfoV2,
+        metadata: &mut MetadataInfo,
         storage: Arc<dyn ExternalStorage>,
         files_lock: &RwLock<Vec<(TempFileKey, Mutex<DataFile>, DataFileInfo)>>,
         is_meta: bool,
@@ -1135,7 +1131,7 @@ impl StreamTaskInfo {
         Ok(())
     }
 
-    pub async fn flush_meta(&self, metadata_info: MetadataInfoV2) -> Result<()> {
+    pub async fn flush_meta(&self, metadata_info: MetadataInfo) -> Result<()> {
         if !metadata_info.file_groups.is_empty() {
             let meta_path = metadata_info.path_to_meta();
             let meta_buff = metadata_info.marshal_to()?;
@@ -1286,15 +1282,19 @@ struct DataFile {
 }
 
 #[derive(Debug)]
-pub struct MetadataInfoV2 {
+pub struct MetadataInfo {
+    // the field files is deprecated in v6.3.0
+    // pub files: Vec<DataFileInfo>,
     pub file_groups: Vec<DataFileGroup>,
     pub min_resolved_ts: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
+    // meta version is MetaVersion::V2
+    pub meta_version: MetaVersion,
 }
 
-impl MetadataInfoV2 {
+impl MetadataInfo {
     fn with_capacity(cap: usize) -> Self {
         Self {
             file_groups: Vec::with_capacity(cap),
@@ -1302,6 +1302,7 @@ impl MetadataInfoV2 {
             min_ts: None,
             max_ts: None,
             store_id: 0,
+            meta_version: MetaVersion::V2,
         }
     }
 
@@ -1322,7 +1323,7 @@ impl MetadataInfoV2 {
     }
 
     fn marshal_to(self) -> Result<Vec<u8>> {
-        let mut metadata = MetadataV2::new();
+        let mut metadata = Metadata::new();
         metadata.set_file_groups(self.file_groups.into());
         metadata.set_store_id(self.store_id as _);
         metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default());
@@ -1336,7 +1337,7 @@ impl MetadataInfoV2 {
 
     fn path_to_meta(&self) -> String {
         format!(
-            "v2/backupmeta/{:012}-{}.meta",
+            "v1/backupmeta/{:012}-{}.meta",
             self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
@@ -2278,7 +2279,7 @@ mod tests {
         let data_file = DataFile::new(file_path).await.unwrap();
         let info = DataFileInfo::new();
 
-        let mut meta = MetadataInfoV2::with_capacity(1);
+        let mut meta = MetadataInfo::with_capacity(1);
         let kv_event = build_kv_event(1, 1);
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
         let files = vec![(tmp_key, Mutex::new(data_file), info)];
