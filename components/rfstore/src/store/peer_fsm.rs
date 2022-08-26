@@ -1184,9 +1184,14 @@ impl<'a> PeerMsgHandler<'a> {
         let truncated_idx = self.peer.get_store().truncated_index();
         if to_truncate_idx > truncated_idx {
             let to_truncate_term = self.peer.get_store().term(to_truncate_idx).unwrap();
-            self.ctx
-                .raft_wb
-                .truncate_raft_log(region_id, to_truncate_idx, to_truncate_term);
+            // mem::take and mem::replace is a workaround for borrow checker.
+            let mut raft_wb = std::mem::take(&mut self.ctx.raft_wb);
+            self.peer.mut_store().truncate_raft_log(
+                &mut raft_wb,
+                to_truncate_idx,
+                to_truncate_term,
+            );
+            let _ = std::mem::replace(&mut self.ctx.raft_wb, raft_wb);
             info!(
                 "{} truncate raft logs to {}, term {}",
                 self.peer.tag(),

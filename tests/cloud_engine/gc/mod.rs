@@ -83,13 +83,13 @@ fn test_raft_log_gc() {
     let mut client = cluster.new_client();
 
     let region_id = client.get_region_id(&[]);
-    let before_stats = node_ids
+    let before_truncated_idxes = node_ids
         .iter()
         .map(|id| {
             cluster
                 .get_rfengine(*id)
-                .get_truncated_state(region_id)
-                .unwrap_or_default()
+                .get_region_stats(region_id)
+                .truncated_idx
         })
         .collect::<Vec<_>>();
 
@@ -105,22 +105,22 @@ fn test_raft_log_gc() {
     );
 
     // Wait for raftlog truncation.
-    let wait_truncated = |before_stats: Vec<(_, _)>| -> Vec<_> {
-        let mut curr_stats = vec![];
+    let wait_truncated = |before_truncated_idxes: Vec<_>| -> Vec<_> {
+        let mut curr_truncated_idxes = vec![];
         for i in 0..10 {
-            curr_stats = node_ids
+            curr_truncated_idxes = node_ids
                 .iter()
                 .map(|id| {
                     cluster
                         .get_rfengine(*id)
-                        .get_truncated_state(region_id)
-                        .unwrap()
+                        .get_region_stats(region_id)
+                        .truncated_idx
                 })
                 .collect::<Vec<_>>();
-            if curr_stats
+            if curr_truncated_idxes
                 .iter()
-                .zip(before_stats.iter())
-                .all(|(curr, before)| curr.0 > before.0)
+                .zip(before_truncated_idxes.iter())
+                .all(|(curr, before)| curr > before)
             {
                 break;
             }
@@ -129,9 +129,9 @@ fn test_raft_log_gc() {
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-        curr_stats
+        curr_truncated_idxes
     };
-    let curr_stats = wait_truncated(before_stats);
+    let curr_truncated_idxes = wait_truncated(before_truncated_idxes);
 
     // Trigger switching and flushing memtable.
     let flush_memtable = |cluster: &ServerCluster, node_ids: &[u16]| {
@@ -144,8 +144,7 @@ fn test_raft_log_gc() {
         header.set_region_id(ctx.get_region_id());
         header.set_peer(ctx.get_peer().clone());
         header.set_region_epoch(ctx.get_region_epoch().clone());
-        let rfengine = cluster.get_rfengine(node_ids[0]);
-        header.set_term(rfengine.get_truncated_state(region_id).unwrap().1);
+        header.set_term(6);
         req.set_header(header);
         let mut custom_builder = CustomBuilder::new();
         custom_builder.set_switch_mem_table(1);
@@ -173,17 +172,17 @@ fn test_raft_log_gc() {
     };
 
     let curr_shard_stats = flush_memtable(&cluster, &node_ids);
-    let curr_stats = wait_truncated(curr_stats);
+    let curr_truncated_idxes = wait_truncated(curr_truncated_idxes);
     std::thread::sleep(Duration::from_secs(1));
     // Flushing memtable will propose a ChangeSet request which won't write data to memtable,
     // so it can't trigger memtable flush. We shoud be able to truncate these logs.
     assert!(
-        curr_stats
+        curr_truncated_idxes
             .iter()
             .zip(curr_shard_stats.iter())
-            .any(|(truncated_stat, shard_stat)| truncated_stat.0 >= shard_stat.write_sequence),
+            .any(|(truncated_idx, shard_stat)| *truncated_idx >= shard_stat.write_sequence),
         "truncated_stat: {:?} shard_stats: {:?}",
-        curr_stats,
+        curr_truncated_idxes,
         curr_shard_stats
     );
 
@@ -200,22 +199,21 @@ fn test_raft_log_gc() {
     assert_eq!(
         cluster
             .get_rfengine(node_ids[0])
-            .get_truncated_state(region_id)
-            .unwrap()
-            .0,
-        curr_stats[0].0
+            .get_region_stats(region_id)
+            .truncated_idx,
+        curr_truncated_idxes[0]
     );
     // Wait for marking down peer.
     std::thread::sleep(Duration::from_secs(3));
-    let truncated_stat = cluster
+    let truncated_idx = cluster
         .get_rfengine(node_ids[0])
-        .get_truncated_state(region_id)
-        .unwrap();
+        .get_region_stats(region_id)
+        .truncated_idx;
     assert!(
-        truncated_stat.0 > curr_stats[0].0,
+        truncated_idx > curr_truncated_idxes[0],
         "{:?} {:?}",
-        truncated_stat,
-        curr_stats[0]
+        truncated_idx,
+        curr_truncated_idxes[0]
     );
     cluster.stop();
 }
@@ -238,20 +236,20 @@ fn test_raft_log_gc_size_limit() {
     let mut client = cluster.new_client();
     let region_id = client.get_region_id(&[]);
     std::thread::sleep(Duration::from_millis(300));
-    let prev_state = cluster
+    let prev_truncated_idx = cluster
         .get_rfengine(node_ids[0])
-        .get_truncated_state(region_id)
-        .unwrap();
+        .get_region_stats(region_id)
+        .truncated_idx;
     for i in 0..50 {
         client.put_kv(i * 20..(i + 1) * 20, gen_key, gen_val);
     }
     must_wait(
         || {
-            let curr_state = cluster
+            let curr_truncated_idx = cluster
                 .get_rfengine(node_ids[0])
-                .get_truncated_state(region_id)
-                .unwrap();
-            curr_state.0 > prev_state.0 && curr_state.0 > 40
+                .get_region_stats(region_id)
+                .truncated_idx;
+            curr_truncated_idx > prev_truncated_idx && curr_truncated_idx > 40
         },
         3,
         "raft log size limit doesn't take effect",

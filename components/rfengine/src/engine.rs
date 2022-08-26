@@ -159,20 +159,24 @@ impl RfEngine {
         for (&region_id, batch_data) in &wb.regions {
             let region_data = self.get_or_init_region_data(region_id);
             let mut region_data = region_data.write().unwrap();
+            let prev_truncated_idx = region_data.truncated_idx;
             let truncated = region_data.apply(batch_data);
             let truncated_index = if batch_data.truncated_idx == TRUNCATE_ALL_INDEX {
                 TRUNCATE_ALL_INDEX
             } else {
                 region_data.truncated_idx
             };
-            let truncated_term = region_data.truncated_term;
             drop(region_data);
-            if !truncated.is_empty() {
+            // It's possible a region truncated all logs before, and then appends logs, these logs
+            // may be removed by worker during compacting because the region doesn't truncate logs
+            // again to update its truncated_index.
+            // In rfstore, we always truncate logs before appending logs in such a case, so we
+            // don't handle it here.
+            if !truncated.is_empty() || prev_truncated_idx != truncated_index {
                 self.task_sender
                     .send(Task::Truncate {
                         region_id,
                         truncated_index,
-                        truncated_term,
                         truncated,
                     })
                     .unwrap();
@@ -214,14 +218,6 @@ impl RfEngine {
             .get(&region_id)
             .map(|data| data.read().unwrap().raft_logs.last_index())
             .and_then(|index| if index != 0 { Some(index) } else { None })
-    }
-
-    /// Returns (truncated_index, truncated_term).
-    pub fn get_truncated_state(&self, region_id: u64) -> Option<(u64, u64)> {
-        self.regions.get(&region_id).map(|data| {
-            let data = data.read().unwrap();
-            (data.truncated_idx, data.truncated_term)
-        })
     }
 
     pub fn get_state(&self, region_id: u64, key: &[u8]) -> Option<Bytes> {
@@ -441,10 +437,7 @@ pub(crate) fn maybe_create_recycle_dir(dir: &Path) -> Result<()> {
 #[derive(Clone, Default)]
 pub(crate) struct RegionData {
     pub(crate) region_id: u64,
-    /// `truncated_idx` is the max index that doesn't exists.
-    /// After truncating, the first index would be truncated_idx + 1.
     pub(crate) truncated_idx: u64,
-    pub(crate) truncated_term: u64,
     pub(crate) raft_logs: RaftLogs,
     pub(crate) states: BTreeMap<Bytes, Bytes>,
     pub(crate) dependents: HashSet<u64>,
@@ -477,10 +470,8 @@ impl RegionData {
             // Reset truncated_idx when apply truncate all command.
             truncated_blocks = self.raft_logs.truncate(TRUNCATE_ALL_INDEX);
             self.truncated_idx = 0;
-            self.truncated_term = 0;
         } else if self.truncated_idx < batch.truncated_idx {
             self.truncated_idx = batch.truncated_idx;
-            self.truncated_term = batch.truncated_term;
             truncated_blocks = self.raft_logs.truncate(self.truncated_idx);
         }
         for (key, val) in &batch.states {
@@ -596,6 +587,7 @@ mod tests {
         }
         engine.write(wb).unwrap();
 
+        let mut truncated_regions = vec![];
         for idx in 1..=1050_u64 {
             let mut wb = WriteBatch::new();
             for region_id in 1..=10_u64 {
@@ -606,7 +598,8 @@ mod tests {
                 let (key, val) = make_state_kv(1, idx);
                 wb.set_state(region_id, key.chunk(), val.chunk());
                 if idx % 100 == 0 && region_id != 1 {
-                    wb.truncate_raft_log(region_id, idx - 100, 1);
+                    truncated_regions.push((region_id, idx - 100));
+                    wb.truncate_raft_log(region_id, idx - 100);
                 }
             }
             engine.write(wb).unwrap();
@@ -644,6 +637,11 @@ mod tests {
 
         for _ in 0..2 {
             let engine = RfEngine::open(tmp_dir.path(), wal_size).unwrap();
+            let mut wb = WriteBatch::new();
+            for &(region_id, truncated_idx) in truncated_regions.iter() {
+                wb.truncate_raft_log(region_id, truncated_idx);
+            }
+            engine.apply(&wb);
             engine.iterate_all_states(false, |region_id, key, _| {
                 let old_region_data = old_entries_map.get(&region_id).unwrap();
                 assert!(old_region_data.get_state(key).is_some());
@@ -653,8 +651,6 @@ mod tests {
             for new_data_ref in engine.regions.iter() {
                 let new_data = new_data_ref.read().unwrap();
                 let old_data = old_entries_map.get(new_data_ref.key()).unwrap();
-                assert_eq!(old_data.truncated_idx, new_data.truncated_idx);
-                assert_eq!(old_data.truncated_term, new_data.truncated_term);
                 assert_eq!(
                     old_data.raft_logs.first_index(),
                     new_data.raft_logs.first_index()
@@ -754,7 +750,7 @@ mod tests {
         );
 
         region_batch = RegionBatch::new(1);
-        region_batch.truncate(5, 1);
+        region_batch.truncate(5);
         region_batch.set_state(b"k1", b"v1");
         region_batch.set_state(b"k2", b"v2");
         let truncated = region_data.apply(&region_batch);
@@ -782,17 +778,16 @@ mod tests {
         );
 
         region_batch = RegionBatch::new(1);
-        region_batch.truncate(5, 1);
+        region_batch.truncate(5);
         region_batch.set_state(b"k1", b"");
         assert!(region_data.apply(&region_batch).is_empty());
         assert!(region_data.get_state(b"k1").is_none());
         assert_eq!(region_data.get_state(b"k2"), Some(&b"v2".to_vec().into()));
 
         region_batch = RegionBatch::new(1);
-        region_batch.truncate(100, 10);
+        region_batch.truncate(100);
         assert!(region_data.apply(&region_batch).is_empty());
         assert_eq!(region_data.truncated_idx, 100);
-        assert_eq!(region_data.truncated_term, 10);
     }
 
     #[test]
@@ -1073,7 +1068,7 @@ mod tests {
             engine.write(wb).unwrap();
         }
         let mut wb = WriteBatch::new();
-        wb.truncate_raft_log(1, TRUNCATE_ALL_INDEX, 1);
+        wb.truncate_raft_log(1, TRUNCATE_ALL_INDEX);
         engine.write(wb).unwrap();
         // Trigger WAL rotation twice to compact older WALs.
         let mut wb = WriteBatch::new();

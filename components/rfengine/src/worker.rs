@@ -21,8 +21,8 @@ use crate::{log_batch::RaftLogBlock, write_batch::RegionBatch, *};
 pub(crate) struct Worker {
     dir: PathBuf,
     epoches: Vec<Epoch>,
-    // region_id -> (truncated_idx, truncated_term)
-    truncated: HashMap<u64, (u64, u64)>,
+    // region_id -> truncated_idx
+    truncated: HashMap<u64, u64>,
     writer: DirectWriter,
     task_rx: Receiver<Task>,
     all_states: HashMap<u64, BTreeMap<Bytes, Bytes>>,
@@ -87,15 +87,9 @@ impl Worker {
                 Task::Truncate {
                     region_id,
                     truncated_index,
-                    truncated_term,
                     truncated,
                 } => {
-                    self.handle_truncate_task(
-                        region_id,
-                        truncated_index,
-                        truncated_term,
-                        truncated,
-                    );
+                    self.handle_truncate_task(region_id, truncated_index, truncated);
                 }
                 Task::Close => return,
             }
@@ -158,10 +152,8 @@ impl Worker {
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
         it.iterate(|mut region_batch| {
-            if let Some((truncated_idx, truncated_term)) =
-                self.truncated.get(&region_batch.region_id)
-            {
-                region_batch.truncate(*truncated_idx, *truncated_term);
+            if let Some(truncated_idx) = self.truncated.get(&region_batch.region_id) {
+                region_batch.truncate(*truncated_idx);
             }
             batch.merge_region(region_batch);
         })?;
@@ -252,14 +244,12 @@ impl Worker {
         &mut self,
         region_id: u64,
         truncated_index: u64,
-        truncated_term: u64,
         truncated: Vec<RaftLogBlock>,
     ) {
         let timer = Instant::now_coarse();
         drop(truncated);
         ENGINE_TRUNCATE_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
-        self.truncated
-            .insert(region_id, (truncated_index, truncated_term));
+        self.truncated.insert(region_id, truncated_index);
         let mut removed_epoch_ids = HashSet::new();
         let mut remove_cnt = 0;
         let mut retain_cnt = 0;
@@ -437,7 +427,6 @@ pub(crate) enum Task {
     Truncate {
         region_id: u64,
         truncated_index: u64,
-        truncated_term: u64,
         truncated: Vec<RaftLogBlock>,
     },
     Close,

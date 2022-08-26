@@ -69,3 +69,32 @@ impl RaftState {
         self.commit = hs.get_commit();
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RaftTruncatedState {
+    pub(crate) truncated_index: u64,
+    pub(crate) truncated_index_term: u64,
+}
+
+impl Default for RaftTruncatedState {
+    fn default() -> Self {
+        Self {
+            truncated_index: RAFT_INIT_LOG_INDEX,
+            truncated_index_term: RAFT_INIT_LOG_TERM,
+        }
+    }
+}
+
+impl RaftTruncatedState {
+    pub(crate) fn marshal(&self) -> Bytes {
+        let mut buf = BytesMut::with_capacity(16);
+        buf.put_u64_le(self.truncated_index_term);
+        buf.put_u64_le(self.truncated_index);
+        buf.freeze()
+    }
+
+    pub(crate) fn unmarshal(&mut self, data: &[u8]) {
+        self.truncated_index_term = LittleEndian::read_u64(data);
+        self.truncated_index = LittleEndian::read_u64(&data[8..]);
+    }
+}

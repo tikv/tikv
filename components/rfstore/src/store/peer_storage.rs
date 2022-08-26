@@ -19,13 +19,13 @@ use raftstore::store::{util, util::conf_state_from_region};
 use rfengine;
 use tikv_util::{box_err, debug, info};
 
-use super::util::raft_state_key;
+use super::{util::raft_state_key, RAFT_TRUNCATED_STATE_KEY};
 use crate::{
     errors::*,
     store::{
         get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState,
-        RaftContext, RaftState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY,
-        REGION_META_KEY_PREFIX, TERM_KEY,
+        RaftContext, RaftState, RaftTruncatedState, RegionIDVer, StoreMeta, StoreMsg,
+        KV_ENGINE_META_KEY, REGION_META_KEY_PREFIX, TERM_KEY,
     },
 };
 
@@ -80,6 +80,7 @@ pub(crate) struct PeerStorage {
     region: metapb::Region,
     pub(crate) raft_state: RaftState,
     apply_state: RaftApplyState,
+    truncated_state: RaftTruncatedState,
     last_term: u64,
 
     pub(crate) snap_state: SnapState,
@@ -212,6 +213,7 @@ impl PeerStorage {
     ) -> Result<PeerStorage> {
         let raft_state = init_raft_state(&engines.raft, &region)?;
         let apply_state = init_apply_state(&engines.kv, &region);
+        let truncated_state = init_truncated_state(&engines.raft, &region);
         let mut shard_meta: Option<ShardMeta> = None;
         if apply_state.applied_index > 0 {
             let res = engines.raft.get_state(region.get_id(), KV_ENGINE_META_KEY);
@@ -236,6 +238,7 @@ impl PeerStorage {
             region,
             raft_state,
             apply_state,
+            truncated_state,
             last_term,
             snap_state: SnapState::Relax,
             initial_flushed,
@@ -249,7 +252,23 @@ impl PeerStorage {
         PeerTag::new(self.store_id, RegionIDVer::from_region(&self.region))
     }
 
-    pub(crate) fn clear_meta(&self, rwb: &mut rfengine::WriteBatch, truncate_logs: bool) {
+    pub(crate) fn truncate_raft_log(
+        &mut self,
+        wb: &mut rfengine::WriteBatch,
+        index: u64,
+        term: u64,
+    ) {
+        self.truncated_state.truncated_index = index;
+        self.truncated_state.truncated_index_term = term;
+        wb.truncate_raft_log(self.get_region_id(), index);
+        wb.set_state(
+            self.get_region_id(),
+            RAFT_TRUNCATED_STATE_KEY,
+            &self.truncated_state.marshal(),
+        );
+    }
+
+    pub(crate) fn clear_meta(&mut self, rwb: &mut rfengine::WriteBatch, truncate_logs: bool) {
         let region_id = self.region.get_id();
         self.engines
             .raft
@@ -259,11 +278,7 @@ impl PeerStorage {
             })
             .unwrap();
         if truncate_logs {
-            rwb.truncate_raft_log(
-                region_id,
-                rfengine::TRUNCATE_ALL_INDEX,
-                self.raft_state.term,
-            );
+            self.truncate_raft_log(rwb, rfengine::TRUNCATE_ALL_INDEX, self.raft_state.term);
         }
     }
 
@@ -317,20 +332,12 @@ impl PeerStorage {
 
     #[inline]
     pub fn truncated_index(&self) -> u64 {
-        self.engines
-            .raft
-            .get_truncated_state(self.get_region_id())
-            .map(|s| std::cmp::max(s.0, RAFT_INIT_LOG_INDEX))
-            .unwrap_or(RAFT_INIT_LOG_INDEX)
+        self.truncated_state.truncated_index
     }
 
     #[inline]
     pub fn truncated_term(&self) -> u64 {
-        self.engines
-            .raft
-            .get_truncated_state(self.get_region_id())
-            .map(|s| std::cmp::max(s.1, RAFT_INIT_LOG_TERM))
-            .unwrap_or(RAFT_INIT_LOG_TERM)
+        self.truncated_state.truncated_index_term
     }
 
     pub fn snapshot_term(&self) -> u64 {
@@ -513,8 +520,7 @@ impl PeerStorage {
         self.apply_state.applied_index_term = last_term;
         let shard_meta = ShardMeta::new(self.store_id, &change_set);
         write_engine_meta(&mut ctx.raft_wb, &shard_meta);
-        ctx.raft_wb
-            .truncate_raft_log(region.get_id(), last_index, last_term);
+        self.truncate_raft_log(&mut ctx.raft_wb, last_index, last_term);
         self.shard_meta = Some(shard_meta);
         self.region = region;
         self.snap_state = SnapState::Applying;
@@ -578,6 +584,16 @@ fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> Ra
         return RaftApplyState::new(RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM);
     }
     RaftApplyState::new(0, 0)
+}
+
+fn init_truncated_state(
+    raft_engine: &rfengine::RfEngine,
+    region: &metapb::Region,
+) -> RaftTruncatedState {
+    match load_raft_truncated_state(raft_engine, region.get_id()) {
+        Some(ts) if ts.truncated_index != rfengine::TRUNCATE_ALL_INDEX => ts,
+        _ => RaftTruncatedState::default(),
+    }
 }
 
 fn init_last_term(
@@ -678,6 +694,18 @@ pub fn load_last_peer_state(raft: &rfengine::RfEngine, region_id: u64) -> Option
         .map(|v| {
             let mut state = RegionLocalState::default();
             state.merge_from_bytes(&v).unwrap();
+            state
+        })
+}
+
+pub(crate) fn load_raft_truncated_state(
+    raft: &rfengine::RfEngine,
+    region_id: u64,
+) -> Option<RaftTruncatedState> {
+    raft.get_state(region_id, RAFT_TRUNCATED_STATE_KEY)
+        .map(|v| {
+            let mut state = RaftTruncatedState::default();
+            state.unmarshal(&v);
             state
         })
 }
