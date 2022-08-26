@@ -42,7 +42,10 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
     if lock_only_if_exists && !need_value {
-        return Err(ErrorInner::LockIfExistsFailed{key: key.into_raw()?}.into());
+        return Err(ErrorInner::LockIfExistsFailed {
+            key: key.into_raw()?,
+        }
+        .into());
     }
     // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
@@ -837,9 +840,20 @@ pub mod tests {
         // The key doesn't exist, no pessimistic lock is generated
         assert_eq!(must_succeed_return_value(&engine, k, k, 10, 10, true), None);
         must_no_lock(&engine, k);
-        
-        match must_err_impl(&engine, k, k, 10, false, 10, false, false, TimeStamp::zero(), true) {
-            MvccError(box ErrorInner::LockIfExistsFailed{key:_}) => (),
+
+        match must_err_impl(
+            &engine,
+            k,
+            k,
+            10,
+            false,
+            10,
+            false,
+            false,
+            TimeStamp::zero(),
+            true,
+        ) {
+            MvccError(box ErrorInner::LockIfExistsFailed { key: _ }) => (),
             e => panic!("unexpected error: {}", e),
         };
 

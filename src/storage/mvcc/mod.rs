@@ -162,9 +162,7 @@ pub enum ErrorInner {
         "Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, key:{}",
         log_wrappers::Value::key(.key)
     )]
-    LockIfExistsFailed {
-        key: Vec<u8>,
-    },
+    LockIfExistsFailed { key: Vec<u8> },
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
@@ -285,7 +283,7 @@ impl ErrorInner {
                 existing_commit_ts: *existing_commit_ts,
             }),
             ErrorInner::LockIfExistsFailed { key } => {
-                Some(ErrorInner::LockIfExistsFailed { key: key.clone(), })
+                Some(ErrorInner::LockIfExistsFailed { key: key.clone() })
             }
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
