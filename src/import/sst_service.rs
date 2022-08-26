@@ -127,7 +127,7 @@ where
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
         let (cb, future) = paired_future_callback();
-        if let Err(e) = router.send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default()) {
+        if let Err(e) = router.send_command(cmd, Callback::read(cb), RaftCmdExtraOpts::default()) {
             return Err(e.into());
         }
         let mut res = future.await.map_err(|_| {

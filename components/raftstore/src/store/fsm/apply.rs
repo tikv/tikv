@@ -5985,7 +5985,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -6054,7 +6054,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(2, observe_handle),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(
                         resp.response
                             .get_header()
@@ -6226,7 +6226,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
                 })),
@@ -6381,7 +6381,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(1, observe_handle),
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
                         resp.response.get_header().get_error().has_epoch_not_match(),
                         "{:?}",

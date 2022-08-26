@@ -57,6 +57,7 @@ use tikv_util::{
     worker::{ScheduleError, Scheduler},
     Either,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
@@ -92,7 +93,7 @@ use crate::{
             RegionTask, SplitCheckTask,
         },
         AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
         SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
@@ -608,10 +609,17 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    let propose_time = cmd.send_time.saturating_elapsed();
                     self.ctx
                         .raft_metrics
                         .propose_wait_time
-                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+                        .observe(duration_to_sec(propose_time) as f64);
+                    cmd.callback.tracker().map(|tracker| {
+                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                            t.metrics.read_index_propose_wait_nanos =
+                                propose_time.as_nanos() as u64;
+                        })
+                    });
 
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
@@ -625,8 +633,8 @@ where
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
-                            && !self.fsm.peer.disk_full_peers.majority())
-                            || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
+                        && !self.fsm.peer.disk_full_peers.majority())
+                        || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
@@ -692,7 +700,8 @@ where
             self.propose_pending_batch_raft_command();
         } else if self.fsm.batch_req_builder.has_proposed_cb
             && self.fsm.batch_req_builder.propose_checked.is_none()
-            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
+            &&
+        let Some(cmd) = self.fsm.batch_req_builder.request.take()
         {
             // We are delaying these requests to next loop. Try to fulfill their
             // proposed callback early.
@@ -999,10 +1008,9 @@ where
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
                     // the returned region is stale
                     || util::is_epoch_stale(
-                        region.get_region_epoch(),
-                        self.fsm.peer.region().get_region_epoch(),
-                    )
-                {
+                    region.get_region_epoch(),
+                    self.fsm.peer.region().get_region_epoch(),
+                ) {
                     // Stale message
                     return;
                 }
@@ -1205,7 +1213,7 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command_internal(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::read(Box::new(move |resp| {
                 // Return the error
                 if resp.response.get_header().has_error() {
                     cb.invoke_read(resp);
@@ -1357,9 +1365,9 @@ where
                 self.fsm.peer.raft_group.raft.election_timeout() * 2
                     - self.fsm.peer.raft_group.raft.election_elapsed,
             )
-        // When election timeout is triggered, leader_id is set to INVALID_ID.
-        // But learner(not promotable) is a exception here as it wouldn't tick
-        // election.
+            // When election timeout is triggered, leader_id is set to
+            // INVALID_ID. But learner(not promotable) is a
+            // exception here as it wouldn't tick election.
         } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
@@ -2200,7 +2208,7 @@ where
             cmd.mut_header().set_read_quorum(true);
             self.propose_raft_command_internal(
                 cmd,
-                Callback::Read(Box::new(|_| ())),
+                Callback::read(Box::new(|_| ())),
                 DiskFullOpt::AllowedOnAlmostFull,
             );
         }
@@ -2822,9 +2830,9 @@ where
 
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
-               enc_end_key(region) > snap_enc_start_key &&
-               // Same region can overlap, we will apply the latest version of snapshot.
-               region.get_id() != snap_region.get_id()
+                enc_end_key(region) > snap_enc_start_key &&
+                // Same region can overlap, we will apply the latest version of snapshot.
+                region.get_id() != snap_region.get_id()
             {
                 info!(
                     "pending region overlapped";
