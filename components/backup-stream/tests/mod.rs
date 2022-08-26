@@ -372,7 +372,7 @@ impl Suite {
                 let content = std::fs::read(entry.path()).unwrap();
                 let meta = parse_from_bytes::<Metadata>(content.as_ref()).unwrap();
                 for g in meta.file_groups.into_iter() {
-                    let path = g.path.split("/").last().unwrap();
+                    let path = g.path.split('/').last().unwrap();
                     for f in g.data_files_info.into_iter() {
                         let file_info = meta_map.get_mut(path);
                         if let Some(v) = file_info {
