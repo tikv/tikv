@@ -42,7 +42,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
     if lock_only_if_exists && !need_value {
-        return Err(ErrorInner::Other(box_err!("when acquire pessimistic lock, lock_only_if_exists is set, but return_value is not")).into());
+        return Err(ErrorInner::LockIfExistsFailed{key: key.into_raw()?}.into());
     }
     // Update max_ts for Insert operation to guarante linearizability and snapshot
     // isolation
@@ -863,7 +863,7 @@ pub mod tests {
         must_no_lock(&engine, k);
 
         match must_err_lock_only_if_exists(&engine, k, k, 10, 10) {
-            MvccError(box ErrorInner::Other(_)) => (),
+            MvccError(box ErrorInner::LockIfExistsFailed{key}) => (),
             e => panic!("unexpected error: {}", e),
         };
 
