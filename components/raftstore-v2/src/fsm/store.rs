@@ -34,6 +34,12 @@ where
     }
 }
 
+impl<E> Default for StoreMeta<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct StoreFsm {
     store: Store,
     receiver: Receiver<StoreMsg>,
