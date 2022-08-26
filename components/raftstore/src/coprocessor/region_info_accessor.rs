@@ -129,6 +129,10 @@ pub enum RegionInfoQuery {
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
     },
+    GetRegionByKey {
+        key: Vec<u8>,
+        callback: Callback<Option<Region>>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -151,6 +155,13 @@ impl Display for RegionInfoQuery {
                 &log_wrappers::Value::key(start_key),
                 &log_wrappers::Value::key(end_key)
             ),
+            RegionInfoQuery::GetRegionByKey { key, .. } => {
+                write!(
+                    f,
+                    "FindRegionByKey(key: {})",
+                    &log_wrappers::Value::key(key)
+                )
+            }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
@@ -451,6 +462,19 @@ impl RegionCollector {
         callback(&mut iter)
     }
 
+    pub fn handle_find_region_by_key(&self, key: Vec<u8>, callback: Callback<Option<Region>>) {
+        let key = RangeKey::from_start_key(key);
+        let mut region = None;
+        if let Some((_, region_id)) = self.region_ranges.range((Excluded(key), Unbounded)).next() {
+            region = self
+                .regions
+                .get(region_id)
+                .map(|region_info| region_info.region.clone());
+        }
+
+        callback(region);
+    }
+
     pub fn handle_find_region_by_id(&self, region_id: u64, callback: Callback<Option<RegionInfo>>) {
         callback(self.regions.get(&region_id).cloned());
     }
@@ -544,6 +568,9 @@ impl Runnable for RegionCollector {
                 callback,
             } => {
                 self.handle_get_regions_in_range(start_key, end_key, callback);
+            }
+            RegionInfoQuery::GetRegionByKey { key, callback } => {
+                self.handle_find_region_by_key(key, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -660,6 +687,10 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
+
+    fn find_region_by_key(&self, _key: &[u8]) -> Result<Option<Region>> {
+        unimplemented!()
+    }
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
@@ -705,6 +736,29 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 rx.recv().map_err(|e| {
                     box_err!(
                         "failed to receive get_regions_in_range result from region collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+
+    fn find_region_by_key(&self, key: &[u8]) -> Result<Option<Region>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetRegionByKey {
+            key: key.to_vec(),
+            callback: Box::new(move |region| {
+                if let Err(e) = tx.send(region) {
+                    warn!("failed to send get_regions_in_range result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive find_region_by_key result from region collector: {:?}",
                         e
                     )
                 })

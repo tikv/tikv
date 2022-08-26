@@ -295,11 +295,16 @@ fn get_keys_in_regions(
                 Ok(Box::new(KeysInRegions { keys, regions }))
             } else {
                 // We only have one key.
-                let region = seek_region(
-                    store_id,
-                    keys.first().unwrap().as_encoded(),
-                    region_provider,
-                )?;
+                let key = keys.first().unwrap().as_encoded();
+                let region = box_try!(region_provider.find_region_by_key(key));
+
+                if region.is_none() {
+                    return Err(box_err!(
+                        "The region that contains {:?} has not been found",
+                        key
+                    ));
+                }
+                let region = region.unwrap();
 
                 Ok(Box::new(keys.into_iter().map(move |k| (k, region.clone()))))
             }
@@ -307,7 +312,6 @@ fn get_keys_in_regions(
     }
 }
 
-// Ok(None) means no region has been found
 fn seek_region(
     store_id: u64,
     key: &[u8],
@@ -329,10 +333,7 @@ fn seek_region(
 
     match box_try!(rx.recv()) {
         Some(region) => Ok(region),
-        None => Err(box_err!(
-            "The region that contains {:?} has not been found",
-            key
-        )),
+        None => unreachable!(),
     }
 }
 
