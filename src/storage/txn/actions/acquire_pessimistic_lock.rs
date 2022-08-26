@@ -247,7 +247,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
     };
 
-    // when lock_only_if_exists is false, always accquire pessimitic lock,otherwise do it when val exists
+    // when lock_only_if_exists is false, always accquire pessimitic lock,otherwise
+    // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
     }
@@ -522,10 +523,7 @@ pub mod tests {
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
-    pub fn must_no_lock<E: Engine>(
-        engine: &E,
-        key: &[u8],
-    ) {
+    pub fn must_no_lock<E: Engine>(engine: &E, key: &[u8]) {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap();
