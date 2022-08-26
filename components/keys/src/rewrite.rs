@@ -5,7 +5,6 @@
 //! Key rewriting
 
 use std::ops::Bound::{self, *};
-use tikv_util::codec::bytes::{decode_bytes_in_place, encode_bytes};
 
 /// An error indicating the key cannot be rewritten because it does not start
 /// with the given prefix.

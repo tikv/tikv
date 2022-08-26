@@ -659,6 +659,7 @@ impl SstImporter {
             }
 
             let mut old_key = old_key.to_vec();
+            let ts = old_key[old_key.len()-8..].to_vec();
             decode_bytes_in_place(&mut old_key, false)?;
             if !old_key.starts_with(old_prefix) {
                 return Err(Error::WrongKeyPrefix {
@@ -671,6 +672,7 @@ impl SstImporter {
             user_key.truncate(user_key_prefix_len);
             user_key.extend_from_slice(&old_key[old_prefix.len()..]);
             data_key.extend(encode_bytes(&user_key));
+            data_key.extend(ts);
 
             let mut value = Cow::Borrowed(iter.value());
 
