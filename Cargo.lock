@@ -4213,6 +4213,7 @@ dependencies = [
  "test_util",
  "tikv_util",
  "time",
+ "tracker",
  "txn_types",
 ]
 

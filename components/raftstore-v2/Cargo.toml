@@ -49,6 +49,7 @@ smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
+tracker = { path = "../tracker" }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test", default-features = false }

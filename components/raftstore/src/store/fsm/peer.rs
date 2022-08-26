@@ -518,7 +518,7 @@ where
 
             let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.trackers().map(|t| t[0]))
+                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
                 .collect();
 
             let mut cb = Callback::write_ext(
@@ -533,7 +533,7 @@ where
                 committed_cb,
             );
 
-            if let Some(trackers) = cb.trackers_mut() {
+            if let Some(trackers) = cb.write_trackers_mut() {
                 *trackers = tokens;
             }
 
@@ -614,7 +614,7 @@ where
                         .raft_metrics
                         .propose_wait_time
                         .observe(duration_to_sec(propose_time) as f64);
-                    cmd.callback.tracker().map(|tracker| {
+                    cmd.callback.read_tracker().map(|tracker| {
                         GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
                                 propose_time.as_nanos() as u64;
@@ -700,8 +700,7 @@ where
             self.propose_pending_batch_raft_command();
         } else if self.fsm.batch_req_builder.has_proposed_cb
             && self.fsm.batch_req_builder.propose_checked.is_none()
-            &&
-        let Some(cmd) = self.fsm.batch_req_builder.request.take()
+            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
         {
             // We are delaying these requests to next loop. Try to fulfill their
             // proposed callback early.
@@ -4839,7 +4838,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });

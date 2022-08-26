@@ -51,7 +51,7 @@ impl SyncBenchRouter {
         let mut response = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
-            Callback::read(cb) => {
+            Callback::Read { cb, .. } => {
                 let snapshot = self.db.snapshot();
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {

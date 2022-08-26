@@ -214,7 +214,7 @@ pub trait ReadCallback: ErrorCallback {
     type Response;
 
     fn set_result(self, result: Self::Response);
-    fn tracker(&self) -> Option<&TrackerToken>;
+    fn read_tracker(&self) -> Option<&TrackerToken>;
 }
 
 pub trait WriteCallback: ErrorCallback {
@@ -222,8 +222,8 @@ pub trait WriteCallback: ErrorCallback {
 
     fn notify_proposed(&mut self);
     fn notify_committed(&mut self);
-    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
-    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
     fn set_result(self, result: Self::Response);
 }
 
@@ -240,7 +240,7 @@ impl<S: Snapshot> ReadCallback for Callback<S> {
         self.invoke_read(result);
     }
 
-    fn tracker(&self) -> Option<&TrackerToken> {
+    fn read_tracker(&self) -> Option<&TrackerToken> {
         let Callback::Read { tracker, .. } = self else { return None; };
         Some(tracker)
     }
@@ -260,13 +260,13 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
     }
 
     #[inline]
-    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
         let Callback::Write { trackers, .. } = self else { return None; };
         Some(trackers)
     }
 
     #[inline]
-    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
         let Callback::Write { trackers, .. } = self else { return None; };
         Some(trackers)
     }

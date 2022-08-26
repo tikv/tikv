@@ -529,7 +529,7 @@ where
                 .applied_batch
                 .cb_batch
                 .iter()
-                .flat_map(|(cb, _)| cb.trackers())
+                .flat_map(|(cb, _)| cb.write_trackers())
                 .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
                 .flatten()
                 .collect();
@@ -568,7 +568,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -3000,7 +3000,7 @@ impl<C: WriteCallback> Apply<C> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Some(trackers) = cb.cb.trackers_mut() {
+            if let Some(trackers) = cb.cb.write_trackers_mut() {
                 for tracker in trackers {
                     tracker.observe(now, &metrics.store_time, |t| {
                         t.metrics.write_instant = Some(now);
@@ -3770,7 +3770,7 @@ where
                     for tracker in apply
                         .cbs
                         .iter()
-                        .flat_map(|p| p.cb.trackers())
+                        .flat_map(|p| p.cb.write_trackers())
                         .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {

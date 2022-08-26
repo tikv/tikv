@@ -145,7 +145,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .trackers()
+                    .write_trackers()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -1654,7 +1654,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -3075,7 +3075,7 @@ where
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
         let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
-            cb.tracker().map(|tracker| {
+            cb.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos =
                         (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
