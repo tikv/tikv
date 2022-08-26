@@ -85,6 +85,7 @@ use crate::{
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
+        peer::FlashbackState,
         peer_storage,
         transport::Transport,
         util,
@@ -151,6 +152,8 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    /// flashaback state
+    pub flashback_state: Option<FlashbackState>,
 }
 
 impl StoreMeta {
@@ -168,6 +171,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            flashback_state: None,
         }
     }
 

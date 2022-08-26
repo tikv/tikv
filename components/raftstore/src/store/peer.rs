@@ -9,7 +9,6 @@ use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
-        mpsc::SyncSender,
     },
     time::{Duration, Instant},
     u64, usize,
@@ -18,7 +17,10 @@ use std::{
 use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
-use crossbeam::{atomic::AtomicCell, channel::TrySendError};
+use crossbeam::{
+    atomic::AtomicCell,
+    channel::{Sender, TrySendError},
+};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
@@ -709,10 +711,11 @@ pub enum UnsafeRecoveryState {
 // it is checked every time this peer applies a new entry or a snapshot,
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
-pub struct FlashbackState(SyncSender<bool>);
+#[derive(Clone, Debug)]
+pub struct FlashbackState(Sender<bool>);
 
 impl FlashbackState {
-    pub fn new(ch: SyncSender<bool>) -> Self {
+    pub fn new(ch: Sender<bool>) -> Self {
         FlashbackState(ch)
     }
 
@@ -2394,6 +2397,11 @@ where
                     if self.unsafe_recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
+                    }
+
+                    if self.flashback_state.is_some() {
+                        debug!("flashback finishes applying a snapshot");
+                        self.maybe_finish_flashback_wait_apply();
                     }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
@@ -4952,6 +4960,21 @@ where
                     );
                 }
                 self.unsafe_recovery_state = None;
+            }
+        }
+    }
+
+    pub fn maybe_finish_flashback_wait_apply(&mut self) {
+        if let Some(flashback_state) = &self.flashback_state {
+            if self.raft_group.raft.raft_log.applied == self.get_store().last_index() {
+                info!(
+                    "flashback finish wait apply";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "last_index" => self.get_store().last_index(),
+                    "applied_index" =>  self.raft_group.raft.raft_log.applied,
+                );
+                flashback_state.finish_wait_apply();
             }
         }
     }

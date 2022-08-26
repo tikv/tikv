@@ -3,9 +3,10 @@
 // #[PerformanceCriticalPath]
 #[cfg(any(test, feature = "testexport"))]
 use std::sync::Arc;
-use std::{borrow::Cow, fmt, sync::mpsc::SyncSender};
+use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
+use crossbeam::channel::Sender;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use kvproto::{
     import_sstpb::SstMeta,
@@ -439,7 +440,7 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    PrepareFlashback(SyncSender<bool>),
+    PrepareFlashback(Sender<bool>),
     FinishFlashback,
 }
 

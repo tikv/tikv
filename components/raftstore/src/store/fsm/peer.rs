@@ -11,13 +11,14 @@ use std::{
     },
     iter::{FromIterator, Iterator},
     mem,
-    sync::{mpsc::SyncSender, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
+use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -915,7 +916,7 @@ where
     }
 
     // set a flag to stop schedule and rw
-    fn on_prepare_flashback(&mut self, ch: SyncSender<bool>) {
+    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
             warn!(
                 "can not prepare the flashback, another flashback is executing in progress";
@@ -926,6 +927,18 @@ where
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+
+        // mark regions's reader as remove
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.flashback_state = self.fsm.peer.flashback_state.clone();
+        info!(
+            "mark regions's reader as remove";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        if let Some(d) = meta.readers.get_mut(&self.fsm.region_id()) {
+            d.mark_flashback_pending_ignore();
+        }
     }
 
     fn on_finish_flashback(&mut self) {
@@ -935,6 +948,18 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
+
+        // recover regions's reader
+        let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.flashback_state.take();
+        info!(
+            "mark regions's reader as recover";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        if let Some(d) = meta.readers.get_mut(&self.fsm.region_id()) {
+            d.mark_flashback_pending_recover();
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -2105,23 +2130,6 @@ where
         }
     }
 
-    fn maybe_finish_flashback_wait_apply(&mut self) {
-        if let Some(flashback_state) = &self.fsm.peer.flashback_state {
-            if self.fsm.peer.raft_group.raft.raft_log.applied
-                == self.fsm.peer.get_store().last_index()
-            {
-                info!(
-                    "flashback finish wait apply";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.fsm.peer.peer_id(),
-                    "last_index" => self.fsm.peer.get_store().last_index(),
-                    "applied_index" =>  self.fsm.peer.raft_group.raft.raft_log.applied,
-                );
-                flashback_state.finish_wait_apply();
-            }
-        }
-    }
-
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
@@ -2189,8 +2197,9 @@ where
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
         }
+        // TODO: combine recovery state and flashback state as a wait apply queue.
         if self.fsm.peer.flashback_state.is_some() {
-            self.maybe_finish_flashback_wait_apply();
+            self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
 

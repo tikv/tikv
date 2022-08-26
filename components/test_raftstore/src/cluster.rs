@@ -1411,6 +1411,41 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
+    pub fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
+        use crossbeam::channel::bounded;
+
+        let router = self.sim.rl().get_router(store_id).unwrap();
+        let (tx, rx) = bounded(1);
+
+        router
+        .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
+        .unwrap();
+        
+        match rx.recv() {
+            Ok(prepared) => {
+                if !prepared {
+                    panic!("prepare flashback failed")
+                }
+                info!(
+                    "flashback is prepared";
+                    "region_id" => region_id,
+                );
+            }
+            Err(recv_err) => {
+                panic!("failed to wait the flashback preparation result: {:?}", recv_err)
+            }
+        }
+            
+    }
+
+    pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
+        let router = self.sim.rl().get_router(store_id).unwrap();
+
+        router
+            .significant_send(region_id, SignificantMsg::FinishFlashback)
+            .unwrap();
+    }
+
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
         let mut try_cnt = 0;
         let split_count = self.pd_client.get_split_count();
