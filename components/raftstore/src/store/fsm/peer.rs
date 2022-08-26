@@ -1691,6 +1691,14 @@ where
                 .update_async_fetch_res(low, Some(res));
             if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
                 if meta.msg.get_index() == low {
+                    info!(
+                        "(this_pr) entry cache has been prefilled, ack now.";
+                        "low" => low,
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                    );
+                    PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM
+                        .observe(meta.receive_time.saturating_elapsed_secs());
                     self.fsm.peer.ack_transfer_leader_msg();
                 }
             }

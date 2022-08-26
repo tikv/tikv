@@ -612,6 +612,14 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
 
+    // The max task duration can be a few minutes.
+    pub static ref PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_prefill_entry_cache_duration_seconds",
+            "Bucketed histogram of prefilling entry cache duration.",
+            exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
+        ).unwrap();
+
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",

@@ -710,7 +710,7 @@ pub enum UnsafeRecoveryState {
 pub struct PreAckTransferLeaderMeta {
     // TODO(cosven): save index/term/... instead of a message object?
     pub msg: eraftpb::Message,
-    receive_time: TiInstant,
+    pub receive_time: TiInstant,
 }
 
 #[derive(Getters)]
@@ -4441,6 +4441,15 @@ where
                 );
                 low = self.last_compacted_idx
             }
+
+            info!(
+                "(this_pr) pre fill entry cache";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "leader_id" => self.leader_id(),
+                "low" => low,
+                "high" => high,
+            );
 
             // Fill entry cache.
             self.get_store()
