@@ -452,28 +452,6 @@ pub mod tests {
         )
     }
 
-    #[cfg(test)]
-    pub fn must_err_lock_only_if_exists<E: Engine>(
-        engine: &E,
-        key: &[u8],
-        pk: &[u8],
-        start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
-    ) -> MvccError {
-        must_err_impl(
-            engine,
-            key,
-            pk,
-            start_ts,
-            false,
-            for_update_ts,
-            false,
-            false,
-            TimeStamp::zero(),
-            true,
-        )
-    }
-
     fn must_err_impl<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -859,9 +837,9 @@ pub mod tests {
         // The key doesn't exist, no pessimistic lock is generated
         assert_eq!(must_succeed_return_value(&engine, k, k, 10, 10, true), None);
         must_no_lock(&engine, k);
-
-        match must_err_lock_only_if_exists(&engine, k, k, 10, 10) {
-            MvccError(box ErrorInner::LockIfExistsFailed{key}) => (),
+        
+        match must_err_impl(&engine, k, k, 10, false, 10, false, false, TimeStamp::zero(), true) {
+            MvccError(box ErrorInner::LockIfExistsFailed{key:_}) => (),
             e => panic!("unexpected error: {}", e),
         };
 
