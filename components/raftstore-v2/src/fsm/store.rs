@@ -34,7 +34,7 @@ where
     }
 }
 
-impl<E> Default for StoreMeta<E> {
+impl<E: KvEngine> Default for StoreMeta<E> {
     fn default() -> Self {
         Self::new()
     }
