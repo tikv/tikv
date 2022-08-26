@@ -59,10 +59,6 @@ use crate::{
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
 
-/// For V2, the length of the file merged from temp files shouldn't be large too
-/// much.
-const MERGED_FILE_SIZE_LIMIT: u64 = 128 * 1024 * 1024;
-
 #[derive(Clone, Debug)]
 pub enum TaskSelector {
     ByName(String),
@@ -421,13 +417,20 @@ impl RouterInner {
         &self,
         mut task: StreamTask,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
+        merged_file_size_limit: u64,
     ) -> Result<()> {
         let task_name = task.info.take_name();
 
         // register task info
         let prefix_path = self.prefix.join(&task_name);
-        let stream_task =
-            StreamTaskInfo::new(prefix_path, task, self.max_flush_interval, ranges.clone()).await?;
+        let stream_task = StreamTaskInfo::new(
+            prefix_path,
+            task,
+            self.max_flush_interval,
+            ranges.clone(),
+            merged_file_size_limit,
+        )
+        .await?;
         self.tasks
             .lock()
             .await
@@ -772,6 +775,8 @@ pub struct StreamTaskInfo {
     flush_fail_count: AtomicUsize,
     /// global checkpoint ts for this task.
     global_checkpoint_ts: AtomicU64,
+    /// The size limit of merged file per task.
+    merged_file_size_limit: u64,
 }
 
 impl Drop for StreamTaskInfo {
@@ -816,6 +821,7 @@ impl StreamTaskInfo {
         task: StreamTask,
         flush_interval: Duration,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
+        merged_file_size_limit: u64,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
@@ -838,6 +844,7 @@ impl StreamTaskInfo {
             flushing: AtomicBool::new(false),
             flush_fail_count: AtomicUsize::new(0),
             global_checkpoint_ts: AtomicU64::new(start_ts),
+            merged_file_size_limit,
         })
     }
 
@@ -1103,7 +1110,7 @@ impl StreamTaskInfo {
         // TODO: upload the merged file concurrently,
         // then collect merged_file_infos and push them into `metadata`.
         for (i, (_, _, info)) in files.iter().enumerate() {
-            if batch_size >= MERGED_FILE_SIZE_LIMIT {
+            if batch_size >= self.merged_file_size_limit {
                 Self::merge_and_flush_log_files_to(
                     storage.clone(),
                     &files[batch_begin_index..i],
@@ -1670,6 +1677,7 @@ mod tests {
                     utils::wrap_key(make_table_key(table_id, b"")),
                     utils::wrap_key(make_table_key(table_id + 1, b"")),
                 )],
+                0x100000,
             )
             .await
             .expect("failed to register task")
@@ -1805,7 +1813,7 @@ mod tests {
             "default",
             table_id,
             b"hello",
-            "world".repeat(1024 * 1024).as_bytes(),
+            "world".repeat(1024).as_bytes(),
         );
         events_builder.finish()
     }
@@ -1820,17 +1828,19 @@ mod tests {
             info: task_info,
             is_paused: false,
         };
+        let merged_file_size_limit = 0x10000;
         let task = StreamTaskInfo::new(
             tmp_dir.path().to_path_buf(),
             stream_task,
             Duration::from_secs(300),
             vec![(vec![], vec![])],
+            merged_file_size_limit,
         )
         .await
         .unwrap();
 
         // on_event
-        let region_count = (MERGED_FILE_SIZE_LIMIT) / (4 * 1024 * 1024); // 2 merged log files
+        let region_count = merged_file_size_limit / (4 * 1024); // 2 merged log files
         for i in 1..=region_count {
             let kv_events = mock_build_large_kv_events(i as _, i as _, i as _);
             task.on_events(kv_events).await.unwrap();
@@ -1992,6 +2002,7 @@ mod tests {
                     is_paused: false,
                 },
                 vec![],
+                0x100000,
             )
             .await
             .unwrap();
@@ -2186,6 +2197,7 @@ mod tests {
             stream_task,
             Duration::from_secs(300),
             vec![(vec![], vec![])],
+            0x100000,
         )
         .await
         .unwrap();

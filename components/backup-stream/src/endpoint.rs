@@ -615,7 +615,11 @@ where
                     })
                     .collect::<Vec<_>>();
                 range_router
-                    .register_task(task.clone(), ranges.clone())
+                    .register_task(
+                        task.clone(),
+                        ranges.clone(),
+                        self.config.merged_file_size_limit.0,
+                    )
                     .await?;
 
                 for (start_key, end_key) in ranges {
