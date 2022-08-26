@@ -891,7 +891,13 @@ pub mod tests {
         must_prewrite_delete(&engine, k, k, 60);
         must_commit(&engine, k, 60, 70);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, true), None);
+        must_no_lock(&engine, k);
+
         // Duplicated command
+        assert_eq!(
+            must_succeed_return_value(&engine, k, k, 75, 75, false),
+            Some(v.to_vec())
+        );
         must_pessimistic_locked(&engine, k, 75, 75);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 85, true), None);
         must_pessimistic_locked(&engine, k, 75, 85);
