@@ -571,6 +571,9 @@ impl PdConnector {
                 members = Some(resp);
             }
         }
+        if cluster_id == 0 {
+            return Err(box_err!("PD failed to get cluster id"));
+        }
 
         match members {
             Some(members) => {
@@ -609,7 +612,10 @@ impl PdConnector {
             .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
             .await;
         match response {
-            Ok(resp) => Ok((client, resp)),
+            Ok(resp) => {
+                check_resp_header(resp.get_header())?;
+                Ok((client, resp))
+            }
             Err(e) => Err(Error::Grpc(e)),
         }
     }
@@ -636,29 +642,23 @@ impl PdConnector {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
                         let header = r.get_header();
-                        // Try next follower endpoint if the cluster has not ready since this pr:
-                        // pd#5412.
-                        if let Err(e) = check_resp_header(header) {
-                            error!("connect pd failed";"endpoints" => ep, "error" => ?e);
-                        } else {
-                            let new_cluster_id = header.get_cluster_id();
-                            // it is new cluster if the new cluster id is zero.
-                            if cluster_id == 0 || new_cluster_id == cluster_id {
-                                // check whether the response have leader info, otherwise continue
-                                // to loop the rest members
-                                if r.has_leader() {
-                                    return Ok(r);
-                                }
-                            // Try next endpoint if PD server returns the
-                            // cluster id is zero without any error.
-                            } else if new_cluster_id == 0 {
-                                error!("{} connect success, but cluster id is not ready", ep);
-                            } else {
-                                panic!(
-                                    "{} no longer belongs to cluster {}, it is in {}",
-                                    ep, cluster_id, new_cluster_id
-                                );
+                        let new_cluster_id = header.get_cluster_id();
+                        // it is new cluster if the new cluster id is zero.
+                        if new_cluster_id == cluster_id {
+                            // check whether the response have leader info, otherwise continue
+                            // to loop the rest members
+                            if r.has_leader() {
+                                return Ok(r);
                             }
+                        // Try next endpoint if PD server returns the
+                        // cluster id is zero without any error.
+                        } else if new_cluster_id == 0 {
+                            error!("{} connect success, but cluster id is not ready", ep);
+                        } else {
+                            panic!(
+                                "{} no longer belongs to cluster {}, it is in {}",
+                                ep, cluster_id, new_cluster_id
+                            );
                         }
                     }
                     Err(e) => {
@@ -743,17 +743,18 @@ impl PdConnector {
                     info!("connected to PD member"; "endpoints" => ep);
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
-                Err(Error::Grpc(e)) => {
-                    if let RpcFailure(ref status) = e {
-                        if status.code() == RpcStatusCode::UNAVAILABLE
-                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
-                        {
-                            network_fail_num += 1;
+                Err(err) => {
+                    error!("PD server internal error"; "endpoints" => ep, "error" => ?err);
+                    if let Error::Grpc(e) = err {
+                        if let RpcFailure(ref status) = e {
+                            if status.code() == RpcStatusCode::UNAVAILABLE
+                                || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
+                            {
+                                network_fail_num += 1;
+                            }
                         }
                     }
-                    error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
-                _ => unreachable!(),
             }
         }
         let url_num = client_urls.len();
