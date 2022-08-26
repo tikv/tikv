@@ -571,7 +571,7 @@ impl PdConnector {
                 members = Some(resp);
             }
         }
-        if cluster_id == 0 {
+        if cluster_id == Some(0) {
             return Err(box_err!("PD failed to get cluster id"));
         }
 
