@@ -20,10 +20,10 @@ use backup_stream::{
     router::Router,
     Endpoint, Task,
 };
-use futures::{executor::block_on, Future, AsyncWriteExt};
+use futures::{executor::block_on, AsyncWriteExt, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{
-    brpb::{Local, StorageBackend, Metadata},
+    brpb::{Local, Metadata, StorageBackend},
     kvrpcpb::*,
     tikvpb::*,
 };
@@ -359,10 +359,7 @@ impl Suite {
         }
     }
 
-    fn load_metadata_for_write_records(
-        &self,
-        path: &Path,
-    ) -> HashMap<String, Vec<(usize, usize)>> {
+    fn load_metadata_for_write_records(&self, path: &Path) -> HashMap<String, Vec<(usize, usize)>> {
         let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
         for entry in WalkDir::new(path) {
             let entry = entry.unwrap();
@@ -379,9 +376,10 @@ impl Suite {
                     for f in g.data_files_info.into_iter() {
                         let file_info = meta_map.get_mut(path);
                         if let Some(v) = file_info {
-                            v.push((f.offset as usize, (f.offset+f.compress_length) as usize));
+                            v.push((f.offset as usize, (f.offset + f.compress_length) as usize));
                         } else {
-                            let v = vec![(f.offset as usize, (f.offset+f.compress_length) as usize)];
+                            let v =
+                                vec![(f.offset as usize, (f.offset + f.compress_length) as usize)];
                             meta_map.insert(String::from(path), v);
                         }
                     }
@@ -419,7 +417,7 @@ impl Suite {
                     decoder.flush().await.unwrap();
                     decoder.close().await.unwrap();
                     let content = decoder.into_inner();
-                    
+
                     let mut iter = EventIterator::new(content);
                     loop {
                         if !iter.valid() {
@@ -682,10 +680,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            ).await;
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -702,10 +702,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            ).await;
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -754,10 +756,12 @@ mod test {
                         .into_encoded()
                 })
                 .collect::<Vec<_>>();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                keys_encoded.iter().map(Vec::as_slice),
-            ).await;
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    keys_encoded.iter().map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
