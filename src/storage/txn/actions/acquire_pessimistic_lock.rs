@@ -896,7 +896,7 @@ pub mod tests {
         // Duplicated command
         assert_eq!(
             must_succeed_return_value(&engine, k, k, 75, 75, false),
-            Some(v.to_vec())
+            None
         );
         must_pessimistic_locked(&engine, k, 75, 75);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 85, true), None);
