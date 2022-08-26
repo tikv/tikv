@@ -44,7 +44,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     if lock_only_if_exists && !need_value {
         return Err(ErrorInner::LockIfExistsFailed{key: key.into_raw()?}.into());
     }
-    // Update max_ts for Insert operation to guarante linearizability and snapshot
+    // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
     if should_not_exist {
         txn.concurrency_manager.update_max_ts(for_update_ts);
@@ -247,7 +247,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
     };
 
-    // when lock_only_if_exists is false, always accquire pessimitic lock,otherwise
+    // when lock_only_if_exists is false, always accquire pessimitic lock, otherwise
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
