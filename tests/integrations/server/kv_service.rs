@@ -2265,7 +2265,7 @@ fn test_read_index_execution_tracking() {
     );
 
     let product = ProductTable::new();
-    init_with_data(&product, &vec![(1, Some("name:0"), 2)]);
+    init_with_data(&product, &[(1, Some("name:0"), 2)]);
     let mut coprocessor_request = DagSelect::from(&product).build();
     coprocessor_request.set_context(ctx.clone());
     coprocessor_request.set_start_ts(100);
