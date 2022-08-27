@@ -32,6 +32,7 @@ use raftstore::{
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
+use test_coprocessor::{init_with_data, DagSelect, ProductTable};
 use test_raftstore::*;
 use tikv::{
     config::QuotaConfig,
@@ -2241,6 +2242,45 @@ fn test_read_index_execution_tracking() {
         );
     };
 
+    // should perform lease read
+    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    lease_read_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
+    );
+
+    // should perform lease read
+    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    lease_read_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
+    );
+
+    let product = ProductTable::new();
+    init_with_data(&product, &vec![(1, Some("name:0"), 2)]);
+    let mut coprocessor_request = DagSelect::from(&product).build();
+    coprocessor_request.set_context(ctx.clone());
+    coprocessor_request.set_start_ts(100);
+
+    // should perform lease read
+    let resp = client.coprocessor(&coprocessor_request).unwrap();
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    lease_read_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
+    );
+
     let read_index_checker = |read_index_propose_wait_nanos,
                               read_index_confirm_wait_nanos,
                               read_pool_schedule_wait_nanos| {
@@ -2263,17 +2303,6 @@ fn test_read_index_execution_tracking() {
         );
     };
 
-    // should perform lease read
-    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
-
-    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
-
-    lease_read_checker(
-        scan_detail.get_read_index_propose_wait_nanos(),
-        scan_detail.get_read_index_confirm_wait_nanos(),
-        scan_detail.get_read_pool_schedule_wait_nanos(),
-    );
-
     fail::cfg("perform_read_index", "return()").unwrap();
 
     // should perform read index
@@ -2287,23 +2316,19 @@ fn test_read_index_execution_tracking() {
         scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
-    fail::remove("perform_read_index");
-
-    // should perform lease read
-    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+    // should perform read index
+    let resp = kv_batch_read(&client, ctx, vec![k1, k2], 100);
 
     let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
 
-    lease_read_checker(
+    read_index_checker(
         scan_detail.get_read_index_propose_wait_nanos(),
         scan_detail.get_read_index_confirm_wait_nanos(),
         scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
-    fail::cfg("perform_read_index", "return()").unwrap();
-
     // should perform read index
-    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+    let resp = client.coprocessor(&coprocessor_request).unwrap();
 
     let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
 

@@ -1364,9 +1364,9 @@ where
                 self.fsm.peer.raft_group.raft.election_timeout() * 2
                     - self.fsm.peer.raft_group.raft.election_elapsed,
             )
-        // When election timeout is triggered, leader_id is set to
-        // INVALID_ID. But learner(not promotable) is a
-        // exception here as it wouldn't tick election.
+        // When election timeout is triggered, leader_id is set to INVALID_ID.
+        // But learner(not promotable) is a exception here as it wouldn't tick
+        // election.
         } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
