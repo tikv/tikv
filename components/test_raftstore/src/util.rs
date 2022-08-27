@@ -40,6 +40,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
+use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
@@ -879,6 +880,19 @@ pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetR
     get_req.set_key(key);
     get_req.set_version(ts);
     client.kv_get(&get_req).unwrap()
+}
+
+pub fn kv_batch_read(
+    client: &TikvClient,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    ts: u64,
+) -> BatchGetResponse {
+    let mut batch_get_req = BatchGetRequest::default();
+    batch_get_req.set_context(ctx);
+    batch_get_req.set_keys(RepeatedField::from(keys));
+    batch_get_req.set_version(ts);
+    client.kv_batch_get(&batch_get_req).unwrap()
 }
 
 pub fn must_kv_prewrite_with(

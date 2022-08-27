@@ -2189,88 +2189,128 @@ fn test_pessimistic_lock_execution_tracking() {
 #[test]
 fn test_read_index_execution_tracking() {
     let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
-    let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
+    let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
+    let (k2, v2) = (b"k2".to_vec(), b"v2".to_vec());
 
     // write an entry
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.set_key(k.clone());
-    mutation.set_value(v);
-    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
-    must_kv_commit(&client, ctx.clone(), vec![k.clone()], 10, 30, 30);
+    let mut mutation1 = Mutation::default();
+    mutation1.set_op(Op::Put);
+    mutation1.set_key(k1.clone());
+    mutation1.set_value(v1);
+
+    let mut mutation2 = Mutation::default();
+    mutation2.set_op(Op::Put);
+    mutation2.set_key(k2.clone());
+    mutation2.set_value(v2);
+
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation1, mutation2],
+        k1.clone(),
+        10,
+    );
+    must_kv_commit(
+        &client,
+        ctx.clone(),
+        vec![k1.clone(), k2.clone()],
+        10,
+        30,
+        30,
+    );
+
+    let lease_read_checker = |read_index_propose_wait_nanos,
+                              read_index_confirm_wait_nanos,
+                              read_pool_schedule_wait_nanos| {
+        assert!(
+            read_index_propose_wait_nanos == 0,
+            "resp lease read propose wait time={:?}",
+            read_index_propose_wait_nanos
+        );
+
+        assert!(
+            read_index_confirm_wait_nanos == 0,
+            "resp lease read confirm wait time={:?}",
+            read_index_confirm_wait_nanos
+        );
+
+        assert!(
+            read_pool_schedule_wait_nanos > 0,
+            "resp read pool scheduling wait time={:?}",
+            read_pool_schedule_wait_nanos
+        );
+    };
+
+    let read_index_checker = |read_index_propose_wait_nanos,
+                              read_index_confirm_wait_nanos,
+                              read_pool_schedule_wait_nanos| {
+        assert!(
+            read_index_propose_wait_nanos > 0,
+            "resp lease read propose wait time={:?}",
+            read_index_propose_wait_nanos
+        );
+
+        assert!(
+            read_index_confirm_wait_nanos > 0,
+            "resp lease read confirm wait time={:?}",
+            read_index_confirm_wait_nanos
+        );
+
+        assert!(
+            read_pool_schedule_wait_nanos > 0,
+            "resp read pool scheduling wait time={:?}",
+            read_pool_schedule_wait_nanos
+        );
+    };
 
     // should perform lease read
-    let resp = kv_read(&client, ctx.clone(), k.clone(), 100);
+    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
 
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_propose_wait_nanos()
-            == 0,
-        "resp lease read propose wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_propose_wait_nanos()
-    );
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
 
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_confirm_wait_nanos()
-            == 0,
-        "resp lease read confirm wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_write_detail()
-            .get_pessimistic_lock_wait_nanos()
-    );
-
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_pool_schedule_wait_nanos()
-            > 0,
-        "resp read pool scheduling wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_write_detail()
-            .get_pessimistic_lock_wait_nanos()
+    lease_read_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
     fail::cfg("perform_read_index", "return()").unwrap();
 
     // should perform read index
-    let resp = kv_read(&client, ctx, k, 100);
+    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
 
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_propose_wait_nanos()
-            > 0,
-        "resp lease read propose wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_propose_wait_nanos()
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    read_index_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_index_confirm_wait_nanos()
-            > 0,
-        "resp lease read confirm wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_write_detail()
-            .get_pessimistic_lock_wait_nanos()
+    fail::remove("perform_read_index");
+
+    // should perform lease read
+    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    lease_read_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
-    assert!(
-        resp.get_exec_details_v2()
-            .get_scan_detail_v2()
-            .get_read_pool_schedule_wait_nanos()
-            > 0,
-        "resp read pool scheduling wait time={:?}",
-        resp.get_exec_details_v2()
-            .get_write_detail()
-            .get_pessimistic_lock_wait_nanos()
+    fail::cfg("perform_read_index", "return()").unwrap();
+
+    // should perform read index
+    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+
+    let scan_detail = resp.get_exec_details_v2().get_scan_detail_v2();
+
+    read_index_checker(
+        scan_detail.get_read_index_propose_wait_nanos(),
+        scan_detail.get_read_index_confirm_wait_nanos(),
+        scan_detail.get_read_pool_schedule_wait_nanos(),
     );
 
     fail::remove("perform_read_index");

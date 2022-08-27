@@ -1007,8 +1007,8 @@ where
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
                     // the returned region is stale
                     || util::is_epoch_stale(
-                    region.get_region_epoch(),
-                    self.fsm.peer.region().get_region_epoch(),
+                        region.get_region_epoch(),
+                        self.fsm.peer.region().get_region_epoch(),
                 ) {
                     // Stale message
                     return;
@@ -1364,9 +1364,9 @@ where
                 self.fsm.peer.raft_group.raft.election_timeout() * 2
                     - self.fsm.peer.raft_group.raft.election_elapsed,
             )
-            // When election timeout is triggered, leader_id is set to
-            // INVALID_ID. But learner(not promotable) is a
-            // exception here as it wouldn't tick election.
+        // When election timeout is triggered, leader_id is set to
+        // INVALID_ID. But learner(not promotable) is a
+        // exception here as it wouldn't tick election.
         } else if self.fsm.peer.raft_group.raft.promotable()
             && self.fsm.peer.leader_id() != raft::INVALID_ID
         {
@@ -2829,9 +2829,9 @@ where
 
         for region in &meta.pending_snapshot_regions {
             if enc_start_key(region) < snap_enc_end_key &&
-                enc_end_key(region) > snap_enc_start_key &&
-                // Same region can overlap, we will apply the latest version of snapshot.
-                region.get_id() != snap_region.get_id()
+               enc_end_key(region) > snap_enc_start_key &&
+               // Same region can overlap, we will apply the latest version of snapshot.
+               region.get_id() != snap_region.get_id()
             {
                 info!(
                     "pending region overlapped";
