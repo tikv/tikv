@@ -252,6 +252,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -493,7 +495,7 @@ pub mod tests {
         // Normal
         must_succeed(&engine, k, k, 1, 1);
         must_pessimistic_locked(&engine, k, 1, 1);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 1, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 1, DoPessimisticCheck);
         must_locked(&engine, k, 1);
         must_commit(&engine, k, 1, 2);
         must_unlocked(&engine, k);
@@ -516,7 +518,7 @@ pub mod tests {
         must_prewrite_lock_err(&engine, k, k, 8);
         must_err(&engine, k, k, 8, 8);
         must_succeed(&engine, k, k, 8, 9);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 8, 8, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 8, 8, DoPessimisticCheck);
         must_commit(&engine, k, 8, 10);
         must_unlocked(&engine, k);
 
@@ -525,16 +527,16 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 11, 11);
         must_cleanup(&engine, k, 11, 0);
         must_err(&engine, k, k, 11, 11);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, DoPessimisticCheck);
         must_prewrite_lock_err(&engine, k, k, 11);
         must_unlocked(&engine, k);
 
         must_succeed(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, DoPessimisticCheck);
         must_locked(&engine, k, 12);
         must_cleanup(&engine, k, 12, 0);
         must_err(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, DoPessimisticCheck);
         must_prewrite_lock_err(&engine, k, k, 12);
         must_unlocked(&engine, k);
 
@@ -543,9 +545,9 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 13, 13);
         must_succeed(&engine, k, k, 13, 13);
         must_pessimistic_locked(&engine, k, 13, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, DoPessimisticCheck);
         must_locked(&engine, k, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, DoPessimisticCheck);
         must_locked(&engine, k, 13);
         must_commit(&engine, k, 13, 14);
         must_unlocked(&engine, k);
@@ -556,7 +558,7 @@ pub mod tests {
         must_succeed(&engine, k, k, 15, 15);
         must_pessimistic_locked(&engine, k, 15, 15);
         must_get(&engine, k, 16, v);
-        must_pessimistic_prewrite_delete(&engine, k, k, 15, 15, true);
+        must_pessimistic_prewrite_delete(&engine, k, k, 15, 15, DoPessimisticCheck);
         must_get_err(&engine, k, 16);
         must_commit(&engine, k, 15, 17);
 
@@ -582,7 +584,7 @@ pub mod tests {
         // Acquire lock on a prewritten key should fail.
         must_succeed(&engine, k, k, 26, 26);
         must_pessimistic_locked(&engine, k, 26, 26);
-        must_pessimistic_prewrite_delete(&engine, k, k, 26, 26, true);
+        must_pessimistic_prewrite_delete(&engine, k, k, 26, 26, DoPessimisticCheck);
         must_locked(&engine, k, 26);
         must_err(&engine, k, k, 26, 26);
         must_locked(&engine, k, 26);
@@ -595,7 +597,7 @@ pub mod tests {
         must_unlocked(&engine, k);
         must_get_none(&engine, k, 28);
         // Pessimistic prewrite on a committed key should fail.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 26, 26, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 26, 26, DoPessimisticCheck);
         must_unlocked(&engine, k);
         must_get_none(&engine, k, 28);
         // Currently we cannot avoid this.
@@ -604,7 +606,7 @@ pub mod tests {
         must_unlocked(&engine, k);
 
         // Non pessimistic key in pessimistic transaction.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 30, 30, false);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 30, 30, SkipPessimisticCheck);
         must_locked(&engine, k, 30);
         must_commit(&engine, k, 30, 31);
         must_unlocked(&engine, k);
@@ -628,13 +630,13 @@ pub mod tests {
         must_pessimistic_locked(&engine, k, 35, 37);
 
         // Cannot prewrite when there is another transaction's pessimistic lock.
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 36, true);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 36, DoPessimisticCheck);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, DoPessimisticCheck);
         must_pessimistic_locked(&engine, k, 35, 37);
         // Cannot prewrite when there is another transaction's non-pessimistic lock.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 35, 37, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 35, 37, DoPessimisticCheck);
         must_locked(&engine, k, 35);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, true);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 36, 38, DoPessimisticCheck);
         must_locked(&engine, k, 35);
 
         // Commit pessimistic transaction's key but with smaller commit_ts than
@@ -648,7 +650,7 @@ pub mod tests {
         // Currently not checked, so prewrite will success.
         must_succeed(&engine, k, k, 40, 40);
         must_pessimistic_locked(&engine, k, 40, 40);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 40, 40, false);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 40, 40, SkipPessimisticCheck);
         must_locked(&engine, k, 40);
         must_commit(&engine, k, 40, 41);
         must_unlocked(&engine, k);
@@ -657,14 +659,14 @@ pub mod tests {
         // Currently not checked.
         must_succeed(&engine, k, k, 42, 45);
         must_pessimistic_locked(&engine, k, 42, 45);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 42, 43, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 42, 43, DoPessimisticCheck);
         must_locked(&engine, k, 42);
         must_commit(&engine, k, 42, 45);
         must_unlocked(&engine, k);
 
         must_succeed(&engine, k, k, 46, 47);
         must_pessimistic_locked(&engine, k, 46, 47);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 46, 48, DoPessimisticCheck);
         must_locked(&engine, k, 46);
         must_commit(&engine, k, 46, 50);
         must_unlocked(&engine, k);
@@ -674,7 +676,7 @@ pub mod tests {
         // Normally non-pessimistic keys in pessimistic transactions are used when we
         // are sure that there won't be conflicts. So this case is also not checked, and
         // prewrite will succeeed.
-        must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, false);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 47, 48, SkipPessimisticCheck);
         must_locked(&engine, k, 47);
         must_cleanup(&engine, k, 47, 0);
         must_unlocked(&engine, k);
@@ -682,7 +684,7 @@ pub mod tests {
         // The rollback of the primary key in a pessimistic transaction should be
         // protected from being collapsed.
         must_succeed(&engine, k, k, 49, 60);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 49, 60, DoPessimisticCheck);
         must_locked(&engine, k, 49);
         must_cleanup(&engine, k, 49, 0);
         must_get_rollback_protected(&engine, k, 49, true);
@@ -694,7 +696,7 @@ pub mod tests {
         // to another write records' commit ts. Now there is a commit record with
         // commit_ts = 50.
         must_succeed(&engine, k, k, 50, 61);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 50, 61, DoPessimisticCheck);
         must_locked(&engine, k, 50);
         must_cleanup(&engine, k, 50, 0);
         must_get_overlapped_rollback(&engine, k, 50, 46, WriteType::Put, Some(0));
@@ -704,7 +706,15 @@ pub mod tests {
             let for_update_ts = start_ts + 48;
             let commit_ts = start_ts + 50;
             must_succeed(&engine, k, k, *start_ts, for_update_ts);
-            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts, for_update_ts, true);
+            must_pessimistic_prewrite_put(
+                &engine,
+                k,
+                v,
+                k,
+                *start_ts,
+                for_update_ts,
+                DoPessimisticCheck,
+            );
             must_commit(&engine, k, *start_ts, commit_ts);
             must_get(&engine, k, commit_ts + 1, v);
         }
@@ -946,13 +956,13 @@ pub mod tests {
 
         // Put v1 @ start ts 1, commit ts 2
         must_succeed(&engine, k, k, 1, 1);
-        must_pessimistic_prewrite_put(&engine, k, v1, k, 1, 1, true);
+        must_pessimistic_prewrite_put(&engine, k, v1, k, 1, 1, DoPessimisticCheck);
         must_commit(&engine, k, 1, 2);
 
         let v2 = b"v2";
         // Put v2 @ start ts 10, commit ts 11
         must_succeed(&engine, k, k, 10, 10);
-        must_pessimistic_prewrite_put(&engine, k, v2, k, 10, 10, true);
+        must_pessimistic_prewrite_put(&engine, k, v2, k, 10, 10, DoPessimisticCheck);
         must_commit(&engine, k, 10, 11);
 
         // Lock @ start ts 9, for update ts 12, commit ts 13
@@ -1079,7 +1089,7 @@ pub mod tests {
 
         // T1: start_ts = 3, commit_ts = 5, put key:value
         must_succeed(&engine, key, key, 3, 3);
-        must_pessimistic_prewrite_put(&engine, key, value, key, 3, 3, true);
+        must_pessimistic_prewrite_put(&engine, key, value, key, 3, 3, DoPessimisticCheck);
         must_commit(&engine, key, 3, 5);
 
         // T2: start_ts = 15, acquire pessimistic lock on k, with should_not_exist flag
@@ -1114,7 +1124,7 @@ pub mod tests {
         // T3: start_ts = 8, commit_ts = max_ts + 1 = 16, prewrite a DELETE operation on
         // k
         must_succeed(&engine, key, key, 8, 8);
-        must_pessimistic_prewrite_delete(&engine, key, key, 8, 8, true);
+        must_pessimistic_prewrite_delete(&engine, key, key, 8, 8, DoPessimisticCheck);
         must_commit(&engine, key, 8, cm.max_ts().into_inner() + 1);
 
         // T1: start_ts = 10, repeatedly acquire pessimistic lock on k, with

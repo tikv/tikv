@@ -121,8 +121,10 @@ where
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
             store.set_address(cfg.addr.clone());
+            store.set_peer_address(cfg.addr.clone());
         } else {
-            store.set_address(cfg.advertise_addr.clone())
+            store.set_address(cfg.advertise_addr.clone());
+            store.set_peer_address(cfg.advertise_addr.clone());
         }
         if cfg.advertise_status_addr.is_empty() {
             store.set_status_address(cfg.status_addr.clone());
