@@ -22,8 +22,8 @@ use super::{
 ///
 /// It can be either an owned node or a reference node.
 ///
-/// When node comes from a column reference, it is a reference node (both value and field_type
-/// are references).
+/// When node comes from a column reference, it is a reference node (both value
+/// and field_type are references).
 ///
 /// When nodes comes from an evaluated result, it is an owned node.
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     pub fn as_ref(&self) -> &VectorValue {
         match self {
             RpnStackNodeVectorValue::Generated { physical_value, .. } => physical_value,
-            RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
+            RpnStackNodeVectorValue::Ref { physical_value, .. } => physical_value,
         }
     }
 
@@ -64,17 +64,20 @@ impl<'a> RpnStackNodeVectorValue<'a> {
     }
 }
 
-/// A type for each node in the RPN evaluation stack. It can be one of a scalar value node or a
-/// vector value node. The vector value node can be either an owned vector value or a reference.
+/// A type for each node in the RPN evaluation stack. It can be one of a scalar
+/// value node or a vector value node. The vector value node can be either an
+/// owned vector value or a reference.
 #[derive(Debug)]
 pub enum RpnStackNode<'a> {
-    /// Represents a scalar value. Comes from a constant node in expression list.
+    /// Represents a scalar value. Comes from a constant node in expression
+    /// list.
     Scalar {
         value: &'a ScalarValue,
         field_type: &'a FieldType,
     },
 
-    /// Represents a vector value. Comes from a column reference or evaluated result.
+    /// Represents a vector value. Comes from a column reference or evaluated
+    /// result.
     Vector {
         value: RpnStackNodeVectorValue<'a>,
         field_type: &'a FieldType,
@@ -123,7 +126,8 @@ impl<'a> RpnStackNode<'a> {
 
     /// Gets a reference of the element by logical index.
     ///
-    /// If this is a `Scalar` variant, the returned reference will be the same for any index.
+    /// If this is a `Scalar` variant, the returned reference will be the same
+    /// for any index.
     ///
     /// # Panics
     ///
@@ -145,13 +149,15 @@ impl<'a> RpnStackNode<'a> {
 impl RpnExpression {
     /// Evaluates the expression into a vector.
     ///
-    /// If referred columns are not decoded, they will be decoded according to the given schema.
+    /// If referred columns are not decoded, they will be decoded according to
+    /// the given schema.
     ///
     /// # Panics
     ///
     /// Panics if the expression is not valid.
     ///
-    /// Panics when referenced column does not have equal length as specified in `rows`.
+    /// Panics when referenced column does not have equal length as specified in
+    /// `rows`.
     pub fn eval<'a>(
         &'a self,
         ctx: &mut EvalContext,
@@ -160,9 +166,10 @@ impl RpnExpression {
         input_logical_rows: &'a [usize],
         output_rows: usize,
     ) -> Result<RpnStackNode<'a>> {
-        // We iterate two times. The first time we decode all referred columns. The second time
-        // we evaluate. This is to make Rust's borrow checker happy because there will be
-        // mutable reference during the first iteration and we can't keep these references.
+        // We iterate two times. The first time we decode all referred columns. The
+        // second time we evaluate. This is to make Rust's borrow checker happy
+        // because there will be mutable reference during the first iteration
+        // and we can't keep these references.
         self.ensure_columns_decoded(ctx, schema, input_physical_columns, input_logical_rows)?;
         self.eval_decoded(
             ctx,
@@ -194,11 +201,13 @@ impl RpnExpression {
         Ok(())
     }
 
-    /// Evaluates the expression into a stack node. The input columns must be already decoded.
+    /// Evaluates the expression into a stack node. The input columns must be
+    /// already decoded.
     ///
-    /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
-    /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
-    /// it will panic if referred columns are not decoded.
+    /// It differs from `eval` in that `eval_decoded` needn't receive a mutable
+    /// reference to `LazyBatchColumnVec`. However, since `eval_decoded`
+    /// doesn't decode columns, it will panic if referred columns are not
+    /// decoded.
     ///
     /// # Panics
     ///
@@ -206,7 +215,8 @@ impl RpnExpression {
     ///
     /// Panics if referred columns are not decoded.
     ///
-    /// Panics when referenced column does not have equal length as specified in `rows`.
+    /// Panics when referenced column does not have equal length as specified in
+    /// `rows`.
     pub fn eval_decoded<'a>(
         &'a self,
         ctx: &mut EvalContext,
@@ -400,7 +410,8 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
     }
 
-    /// Single column node but row numbers in `eval()` does not match column length, should panic.
+    /// Single column node but row numbers in `eval()` does not match column
+    /// length, should panic.
     #[test]
     fn test_eval_single_column_node_mismatch_rows() {
         let (columns, logical_rows, schema) = new_single_column_node_fixture();
@@ -414,7 +425,7 @@ mod tests {
             // smaller row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
 
         let mut c = columns;
         let exp = RpnExpressionBuilder::new_for_test()
@@ -425,7 +436,7 @@ mod tests {
             // larger row number
             let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Single function call node (i.e. nullary function)
@@ -725,8 +736,8 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
-    /// Binary function (arguments are both raw columns). The same column is referred multiple times
-    /// and it should be Ok.
+    /// Binary function (arguments are both raw columns). The same column is
+    /// referred multiple times and it should be Ok.
     #[test]
     fn test_eval_binary_function_raw_column() {
         /// foo(v1, v2) performs v1 * v2.
@@ -919,7 +930,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Irregular RPN expression (contains unused node). Should panic.
@@ -943,7 +954,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Eval type does not match. Should panic.
@@ -965,7 +976,7 @@ mod tests {
         let hooked_eval = panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
         });
-        assert!(hooked_eval.is_err());
+        hooked_eval.unwrap_err();
     }
 
     /// Parse from an expression tree then evaluate.
@@ -1235,14 +1246,15 @@ mod tests {
 
         profiler::start("./bench_eval_plus_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1262,7 +1274,7 @@ mod tests {
             .push_column_ref_for_test(0)
             .push_column_ref_for_test(0)
             .push_fn_call_for_test(
-                compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                compare_fn_meta::<BasicComparer<Int, CmpOpLe>>(),
                 2,
                 FieldTypeTp::LongLong,
             )
@@ -1272,14 +1284,15 @@ mod tests {
 
         profiler::start("./eval_compare_1024_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(1024),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(1024),
+                )
+                .unwrap();
         });
         profiler::stop();
     }
@@ -1299,7 +1312,7 @@ mod tests {
             .push_column_ref_for_test(0)
             .push_column_ref_for_test(0)
             .push_fn_call_for_test(
-                compare_fn_meta::<BasicComparer<Int, CmpOpLE>>(),
+                compare_fn_meta::<BasicComparer<Int, CmpOpLe>>(),
                 2,
                 FieldTypeTp::LongLong,
             )
@@ -1309,14 +1322,15 @@ mod tests {
 
         profiler::start("./bench_eval_compare_5_rows.profile");
         b.iter(|| {
-            let result = black_box(&exp).eval(
-                black_box(&mut ctx),
-                black_box(schema),
-                black_box(&mut columns),
-                black_box(&logical_rows),
-                black_box(5),
-            );
-            assert!(result.is_ok());
+            black_box(&exp)
+                .eval(
+                    black_box(&mut ctx),
+                    black_box(schema),
+                    black_box(&mut columns),
+                    black_box(&logical_rows),
+                    black_box(5),
+                )
+                .unwrap();
         });
         profiler::stop();
     }

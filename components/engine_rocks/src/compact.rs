@@ -2,10 +2,10 @@
 
 use std::cmp;
 
-use engine_traits::{CFNamesExt, CompactExt, Result};
+use engine_traits::{CfNamesExt, CompactExt, Result};
 use rocksdb::{CompactOptions, CompactionOptions, DBCompressionType};
 
-use crate::{engine::RocksEngine, util};
+use crate::{engine::RocksEngine, r2e, util};
 
 impl CompactExt for RocksEngine {
     type CompactedEvent = crate::compact_listener::RocksCompactedEvent;
@@ -130,23 +130,17 @@ impl CompactExt for RocksEngine {
         opts.set_max_subcompactions(max_subcompactions as i32);
         opts.set_output_file_size_limit(output_file_size_limit);
 
-        db.compact_files_cf(handle, &opts, &files, output_level)?;
-        Ok(())
+        db.compact_files_cf(handle, &opts, &files, output_level)
+            .map_err(r2e)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use engine_traits::CompactExt;
-    use rocksdb::{ColumnFamilyOptions, Writable};
+    use engine_traits::{CfNamesExt, CfOptionsExt, CompactExt, MiscExt, SyncMutable};
     use tempfile::Builder;
 
-    use crate::{
-        raw_util::{new_engine, CFOptions},
-        Compat,
-    };
+    use crate::{util, RocksCfOptions, RocksDbOptions};
 
     #[test]
     fn test_compact_files_in_range() {
@@ -155,29 +149,24 @@ mod tests {
             .tempdir()
             .unwrap();
 
-        let mut cf_opts = ColumnFamilyOptions::new();
+        let mut cf_opts = RocksCfOptions::default();
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = vec![
-            CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("test", cf_opts),
-        ];
-        let db = new_engine(
+        let cfs_opts = vec![("default", cf_opts.clone()), ("test", cf_opts)];
+        let db = util::new_engine_opt(
             temp_dir.path().to_str().unwrap(),
-            None,
-            &["default", "test"],
-            Some(cfs_opts),
+            RocksDbOptions::default(),
+            cfs_opts,
         )
         .unwrap();
-        let db = Arc::new(db);
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
             for i in 0..5 {
-                db.put_cf(cf, &[i], &[i]).unwrap();
-                db.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
-                db.flush_cf(cf, true).unwrap();
+                db.put_cf(cf_name, &[i], &[i]).unwrap();
+                db.put_cf(cf_name, &[i + 1], &[i + 1]).unwrap();
+                db.flush_cf(cf_name, true).unwrap();
             }
-            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf = util::get_cf_handle(db.as_inner(), cf_name).unwrap();
+            let cf_meta = db.as_inner().get_column_family_meta_data(cf);
             let cf_levels = cf_meta.get_levels();
             assert_eq!(cf_levels.first().unwrap().get_files().len(), 5);
         }
@@ -187,13 +176,12 @@ mod tests {
         // # After
         // Level-0: [4-5]
         // Level-1: [0-4]
-        db.c()
-            .compact_files_in_range(None, Some(&[4]), Some(1))
+        db.compact_files_in_range(None, Some(&[4]), Some(1))
             .unwrap();
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf = util::get_cf_handle(db.as_inner(), cf_name).unwrap();
+            let cf_meta = db.as_inner().get_column_family_meta_data(cf);
             let cf_levels = cf_meta.get_levels();
             let level_0 = cf_levels[0].get_files();
             assert_eq!(level_0.len(), 1);
@@ -211,14 +199,13 @@ mod tests {
         // # After
         // Level-0: [4-5]
         // Level-N: [0-4]
-        db.c()
-            .compact_files_in_range(Some(&[2]), Some(&[4]), None)
+        db.compact_files_in_range(Some(&[2]), Some(&[4]), None)
             .unwrap();
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_opts = db.get_options_cf(cf);
-            let cf_meta = db.get_column_family_meta_data(cf);
+            let cf = util::get_cf_handle(db.as_inner(), cf_name).unwrap();
+            let cf_opts = db.get_options_cf(cf_name).unwrap();
+            let cf_meta = db.as_inner().get_column_family_meta_data(cf);
             let cf_levels = cf_meta.get_levels();
             let level_0 = cf_levels[0].get_files();
             assert_eq!(level_0.len(), 1);
@@ -228,27 +215,6 @@ mod tests {
             assert_eq!(level_n.len(), 1);
             assert_eq!(level_n[0].get_smallestkey(), &[0]);
             assert_eq!(level_n[0].get_largestkey(), &[4]);
-        }
-
-        for cf_name in db.cf_names() {
-            let mut files = vec![];
-            let cf = db.cf_handle(cf_name).unwrap();
-            let cf_meta = db.get_column_family_meta_data(cf);
-            let cf_levels = cf_meta.get_levels();
-
-            for level in cf_levels.into_iter().rev() {
-                files.extend(level.get_files().iter().map(|f| f.get_name()));
-            }
-
-            assert_eq!(files.len(), 2);
-            db.c()
-                .compact_files_cf(cf_name, files.clone(), Some(3), 0, true)
-                .unwrap();
-
-            let cf_meta = db.get_column_family_meta_data(cf);
-            let cf_levels = cf_meta.get_levels();
-            assert_eq!(cf_levels[0].get_files().len(), 1);
-            assert_eq!(cf_levels[3].get_files().len(), 1);
         }
     }
 }

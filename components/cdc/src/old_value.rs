@@ -104,8 +104,8 @@ impl OldValueCache {
     }
 }
 
-/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek and retrieve it with
-/// `query_ts` from `snapshot`.
+/// Fetch old value for `key`. If it can't be found in `old_value_cache`, seek
+/// and retrieve it with `query_ts` from `snapshot`.
 pub fn get_old_value<S: EngineSnapshot>(
     snapshot: &S,
     key: Key,
@@ -171,9 +171,10 @@ pub fn new_old_value_cursor<S: EngineSnapshot>(snapshot: &S, cf: &'static str) -
 
 /// Gets the latest value to the key with an older or equal version.
 ///
-/// The key passed in should be a key with a timestamp. This function will returns
-/// the latest value of the entry if the user key is the same to the given key and
-/// the timestamp is older than or equal to the timestamp in the given key.
+/// The key passed in should be a key with a timestamp. This function will
+/// returns the latest value of the entry if the user key is the same to the
+/// given key and the timestamp is older than or equal to the timestamp in the
+/// given key.
 ///
 /// `load_from_cf_data` indicates how to get value from `CF_DEFAULT`.
 pub fn near_seek_old_value<S: EngineSnapshot>(
@@ -292,6 +293,7 @@ mod tests {
 
     use engine_rocks::{ReadPerfInstant, RocksEngine};
     use engine_traits::{KvEngine, MiscExt};
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use tikv::{
         config::DbConfig,
         storage::{kv::TestEngineBuilder, txn::tests::*},
@@ -414,7 +416,7 @@ mod tests {
         must_commit(&engine, k, 7, 9);
 
         must_acquire_pessimistic_lock(&engine, k, k, 8, 10);
-        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, true);
+        must_pessimistic_prewrite_put(&engine, k, b"v5", k, 8, 10, DoPessimisticCheck);
         must_get_eq(&kv_engine, &key, 10, Some(b"v4".to_vec()));
         must_commit(&engine, k, 8, 11);
     }

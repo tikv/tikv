@@ -26,14 +26,14 @@ lazy_static! {
         "tikv_raftstore_apply_perf_context_time_duration_secs",
         "Bucketed histogram of request wait time duration.",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_raftstore_store_perf_context_time_duration_secs",
         "Bucketed histogram of request wait time duration.",
         &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
     pub static ref STORAGE_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(

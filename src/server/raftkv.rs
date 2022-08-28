@@ -8,10 +8,11 @@ use std::{
     mem,
     num::NonZeroU64,
     result,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
@@ -128,9 +129,7 @@ fn on_write_result<S>(mut write_resp: WriteResponse) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    if let Err(e) = check_raft_cmd_response(&mut write_resp.response) {
-        return Err(e);
-    }
+    check_raft_cmd_response(&mut write_resp.response)?;
     let resps = write_resp.response.take_responses();
     Ok(CmdRes::Resp(resps.into()))
 }
@@ -139,9 +138,7 @@ fn on_read_result<S>(mut read_resp: ReadResponse<S>) -> Result<CmdRes<S>>
 where
     S: Snapshot,
 {
-    if let Err(e) = check_raft_cmd_response(&mut read_resp.response) {
-        return Err(e);
-    }
+    check_raft_cmd_response(&mut read_resp.response)?;
     let resps = read_resp.response.take_responses();
     if let Some(mut snapshot) = read_resp.snapshot {
         snapshot.term = NonZeroU64::new(read_resp.response.get_header().get_current_term());
@@ -162,6 +159,7 @@ where
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -170,11 +168,12 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
             txn_extra_scheduler: None,
+            region_leaders,
         }
     }
 
@@ -201,7 +200,7 @@ where
         req: Request,
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
-        let mut header = self.new_request_header(&*ctx.pb_ctx);
+        let mut header = self.new_request_header(ctx.pb_ctx);
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
             let mut data = [0u8; 8];
             (&mut data[..])
@@ -355,6 +354,14 @@ where
             }
         }
         write_modifies(&self.engine, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(RaftServerError::NotLeader(region_id, None).into()),
+        }
     }
 
     fn async_write(
@@ -514,7 +521,8 @@ impl Coprocessor for ReplicaReadLockChecker {}
 impl ReadIndexObserver for ReplicaReadLockChecker {
     fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
         // Only check and return result if the current peer is a leader.
-        // If it's not a leader, the read index request will be redirected to the leader later.
+        // If it's not a leader, the read index request will be redirected to the leader
+        // later.
         if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
             return;
         }
@@ -574,7 +582,8 @@ mod tests {
 
     use super::*;
 
-    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read index.
+    // This test ensures `ReplicaReadLockChecker` won't change UUID context of read
+    // index.
     #[test]
     fn test_replica_read_lock_checker_for_single_uuid() {
         let cm = ConcurrencyManager::new(1.into());

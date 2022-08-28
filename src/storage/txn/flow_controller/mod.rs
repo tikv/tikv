@@ -13,7 +13,7 @@ pub enum FlowController {
 }
 
 macro_rules! flow_controller_fn {
-    ($fn_name: ident, $region_id: ident, $type: ident) => {
+    ($fn_name:ident, $region_id:ident, $type:ident) => {
         pub fn $fn_name(&self, $region_id: u64) -> $type {
             match self {
                 FlowController::Singleton(ref controller) => controller.$fn_name($region_id),
@@ -21,7 +21,7 @@ macro_rules! flow_controller_fn {
             }
         }
     };
-    ($fn_name: ident, $region_id: ident, $bytes: ident, $type: ident) => {
+    ($fn_name:ident, $region_id:ident, $bytes:ident, $type:ident) => {
         pub fn $fn_name(&self, $region_id: u64, $bytes: usize) -> $type {
             match self {
                 FlowController::Singleton(ref controller) => {

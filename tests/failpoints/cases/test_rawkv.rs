@@ -19,7 +19,8 @@ struct TestSuite {
 impl TestSuite {
     pub fn new(count: usize, api_version: ApiVersion) -> Self {
         let mut cluster = new_server_cluster_with_api_ver(1, count, api_version);
-        // Disable background renew by setting `renew_interval` to 0, to make timestamp allocation predictable.
+        // Disable background renew by setting `renew_interval` to 0, to make timestamp
+        // allocation predictable.
         configure_for_causal_ts(&mut cluster, "0s", 100);
         configure_for_merge(&mut cluster);
         cluster.run();
@@ -200,7 +201,8 @@ fn test_region_merge() {
     // Disable CausalObserver::flush_timestamp to produce causality issue.
     fail::cfg(FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP, "return").unwrap();
 
-    // Transfer leaders: region 1 -> store 1, region 3 -> store 2, region 5 -> store 3.
+    // Transfer leaders: region 1 -> store 1, region 3 -> store 2, region 5 -> store
+    // 3.
     suite.must_transfer_leader(&region1, 1);
     suite.must_transfer_leader(&region3, 2);
     suite.must_transfer_leader(&region5, 3);

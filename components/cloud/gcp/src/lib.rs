@@ -4,4 +4,4 @@
 extern crate slog_global;
 
 mod gcs;
-pub use gcs::{Config, GCSStorage};
+pub use gcs::{Config, GcsStorage};

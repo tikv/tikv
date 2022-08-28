@@ -26,8 +26,8 @@ pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorI
 
 type HandleIndicesVec = SmallVec<[usize; 2]>;
 
-// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can omit the type
-// when calling `check_supported`.
+// We assign a dummy type `Box<dyn Storage<Statistics = ()>>` so that we can
+// omit the type when calling `check_supported`.
 impl BatchTableScanExecutor<Box<dyn Storage<Statistics = ()>>> {
     /// Checks whether this executor can be used.
     #[inline]
@@ -80,8 +80,9 @@ impl<S: Storage> BatchTableScanExecutor<S> {
                 column_id_index.insert(ci.get_column_id(), index);
             }
 
-            // Note: if two PK handles are given, we will only preserve the *last* one. Also if two
-            // columns with the same column id are given, we will only preserve the *last* one.
+            // Note: if two PK handles are given, we will only preserve the
+            // *last* one. Also if two columns with the same column
+            // id are given, we will only preserve the *last* one.
         }
 
         let no_common_handle = primary_column_ids.is_empty();
@@ -142,30 +143,32 @@ impl<S: Storage> BatchExecutor for BatchTableScanExecutor<S> {
 }
 
 struct TableScanExecutorImpl {
-    /// Note: Although called `EvalContext`, it is some kind of execution context instead.
+    /// Note: Although called `EvalContext`, it is some kind of execution
+    /// context instead.
     // TODO: Rename EvalContext to ExecContext.
     context: EvalContext,
 
-    /// The schema of the output. All of the output come from specific columns in the underlying
-    /// storage.
+    /// The schema of the output. All of the output come from specific columns
+    /// in the underlying storage.
     schema: Vec<FieldType>,
 
-    /// The default value of corresponding columns in the schema. When column data is missing,
-    /// the default value will be used to fill the output.
+    /// The default value of corresponding columns in the schema. When column
+    /// data is missing, the default value will be used to fill the output.
     columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
     column_id_index: HashMap<i64, usize>,
 
-    /// Vec of indices in output row to put the handle. The indices must be sorted in the vec.
+    /// Vec of indices in output row to put the handle. The indices must be
+    /// sorted in the vec.
     handle_indices: HandleIndicesVec,
 
     /// Vec of Primary key column's IDs.
     primary_column_ids: Vec<i64>,
 
-    /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
-    /// It is a struct level field in order to prevent repeated memory allocations since its length
-    /// is fixed for each `next_batch` call.
+    /// A vector of flags indicating whether corresponding column is filled in
+    /// `next_batch`. It is a struct level field in order to prevent repeated
+    /// memory allocations since its length is fixed for each `next_batch` call.
     is_column_filled: Vec<bool>,
 }
 
@@ -193,8 +196,8 @@ impl TableScanExecutorImpl {
             remaining = &remaining[1..];
             let column_id = box_try!(remaining.read_var_i64());
             let (val, new_remaining) = datum::split_datum(remaining, false)?;
-            // Note: The produced columns may be not in the same length if there is error due
-            // to corrupted data. It will be handled in `ScanExecutor`.
+            // Note: The produced columns may be not in the same length if there is error
+            // due to corrupted data. It will be handled in `ScanExecutor`.
             let some_index = self.column_id_index.get(&column_id);
             if let Some(index) = some_index {
                 let index = *index;
@@ -246,7 +249,8 @@ impl TableScanExecutorImpl {
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
             } else {
-                // This column is missing. It will be filled with default values later.
+                // This column is missing. It will be filled with default values
+                // later.
             }
         }
         Ok(())
@@ -264,13 +268,14 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         &mut self.context
     }
 
-    /// Constructs empty columns, with PK in decoded format and the rest in raw format.
+    /// Constructs empty columns, with PK in decoded format and the rest in raw
+    /// format.
     fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
-        // If there are any PK columns, for each of them, fill non-PK columns before it and push the
-        // PK column.
+        // If there are any PK columns, for each of them, fill non-PK columns before it
+        // and push the PK column.
         // For example, consider:
         //                  non-pk non-pk non-pk pk non-pk non-pk pk pk non-pk non-pk
         // handle_indices:                       ^3               ^6 ^7
@@ -309,9 +314,10 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             last_index = *handle_index + 1;
         }
 
-        // Then fill remaining columns after the last handle column. If there are no PK columns,
-        // the previous loop will be skipped and this loop will be run on 0..columns_len.
-        // For the example above, this loop will push: [non-pk, non-pk]
+        // Then fill remaining columns after the last handle column. If there are no PK
+        // columns, the previous loop will be skipped and this loop will be run
+        // on 0..columns_len. For the example above, this loop will push:
+        // [non-pk, non-pk]
         for i in last_index..columns_len {
             if Some(i) == physical_table_id_column_idx {
                 columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
@@ -352,8 +358,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             let handle = table::decode_int_handle(key)?;
 
             for handle_index in &self.handle_indices {
-                // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
-                // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
+                // TODO: We should avoid calling `push_int` repeatedly. Instead we should
+                // specialize a `&mut Vec` first. However it is hard to program
+                // due to lifetime restriction.
                 if !self.is_column_filled[*handle_index] {
                     columns[*handle_index].mut_decoded().push_int(Some(handle));
                     decoded_columns += 1;
@@ -361,14 +368,16 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                 }
             }
         } else if !self.primary_column_ids.is_empty() {
-            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values of the columns from the common handle.
+            // Otherwise, if `primary_column_ids` is not empty, we try to extract the values
+            // of the columns from the common handle.
             let mut handle = table::decode_common_handle(key)?;
             for primary_id in self.primary_column_ids.iter() {
                 let index = self.column_id_index.get(primary_id);
                 let (datum, remain) = datum::split_datum(handle, false)?;
                 handle = remain;
 
-                // If the column info of the corresponding primary column id is missing, we ignore this slice of the datum.
+                // If the column info of the corresponding primary column id is missing, we
+                // ignore this slice of the datum.
                 if let Some(&index) = index {
                     if !self.is_column_filled[index] {
                         columns[index].mut_raw().push(datum);
@@ -390,8 +399,8 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
             self.is_column_filled[*idx] = true;
         }
 
-        // Some fields may be missing in the row, we push corresponding default value to make all
-        // columns in same length.
+        // Some fields may be missing in the row, we push corresponding default value to
+        // make all columns in same length.
         for i in 0..columns_len {
             if !self.is_column_filled[i] {
                 // Missing fields must not be a primary key, so it must be
@@ -585,7 +594,8 @@ mod tests {
                 .collect()
         }
 
-        /// Returns whole table's ranges which include point range and non-point range.
+        /// Returns whole table's ranges which include point range and non-point
+        /// range.
         fn mixed_ranges_for_whole_table(&self) -> Vec<KeyRange> {
             vec![
                 self.table_range(i64::MIN, 3),
@@ -743,9 +753,9 @@ mod tests {
             vec![0, 1],
             vec![0, 2],
             vec![1, 2],
-            //PK is the last column in schema
+            // PK is the last column in schema
             vec![2, 1, 0],
-            //PK is the first column in schema
+            // PK is the first column in schema
             vec![0, 1, 2],
             // PK is in the middle of the schema
             vec![1, 0, 2],
@@ -802,7 +812,8 @@ mod tests {
 
         executor.collect_exec_stats(&mut s);
 
-        // Collected statistics remain unchanged because of no newly generated delta statistics.
+        // Collected statistics remain unchanged because of no newly generated delta
+        // statistics.
         assert_eq!(s.scanned_rows_per_range.len(), 2);
         assert_eq!(s.scanned_rows_per_range[0], 3);
         assert_eq!(s.scanned_rows_per_range[1], 0);
@@ -811,7 +822,8 @@ mod tests {
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
-        // Reset collected statistics so that now we will only collect statistics in this round.
+        // Reset collected statistics so that now we will only collect statistics in
+        // this round.
         s.clear();
         executor.next_batch(10);
         executor.collect_exec_stats(&mut s);
@@ -907,7 +919,8 @@ mod tests {
 
         let store = FixtureStorage::from(kv);
 
-        // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
+        // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an
+        // error.
         for corrupted_row_index in 2..=4 {
             let mut executor = BatchTableScanExecutor::new(
                 store.clone(),
@@ -926,7 +939,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
@@ -1013,8 +1026,8 @@ mod tests {
         let store = FixtureStorage::new(kv.into_iter().collect());
 
         // Case 1: row 0 + row 1 + row 2
-        // We should get row 0 and error because no further rows should be scanned when there is
-        // an error.
+        // We should get row 0 and error because no further rows should be scanned when
+        // there is an error.
         {
             let mut executor = BatchTableScanExecutor::new(
                 store.clone(),
@@ -1033,7 +1046,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1052,8 +1065,8 @@ mod tests {
         }
 
         // Case 1b: row 0 + row 1 + row 2
-        // We should get row 0 and error because no further rows should be scanned when there is
-        // an error. With EXTRA_PHYSICAL_TABLE_ID_COL
+        // We should get row 0 and error because no further rows should be scanned when
+        // there is an error. With EXTRA_PHYSICAL_TABLE_ID_COL
         {
             let mut columns_info = columns_info.clone();
             columns_info.push({
@@ -1081,7 +1094,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1123,7 +1136,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(1);
-            assert!(result.is_drained.is_ok());
+            result.is_drained.unwrap();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_decoded());
@@ -1141,7 +1154,7 @@ mod tests {
             );
 
             let result = executor.next_batch(1);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
@@ -1162,7 +1175,7 @@ mod tests {
             .unwrap();
 
             let result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
@@ -1183,7 +1196,7 @@ mod tests {
             .unwrap();
 
             let mut result = executor.next_batch(10);
-            assert!(result.is_drained.is_ok());
+            result.is_drained.unwrap();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_decoded());
@@ -1217,7 +1230,7 @@ mod tests {
             .unwrap();
 
             let result = executor.next_batch(10);
-            assert!(result.is_drained.is_err());
+            result.is_drained.unwrap_err();
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 0);
         }
@@ -1228,8 +1241,8 @@ mod tests {
 
         // This test makes a pk column with id = 1 and non-pk columns with id
         // in 10 to 10 + columns_is_pk.len().
-        // PK columns will be set to column 1 and others will be set to column 10 + i, where i is
-        // the index of each column.
+        // PK columns will be set to column 1 and others will be set to column 10 + i,
+        // where i is the index of each column.
 
         let mut columns_info = Vec::new();
         for (i, is_pk) in columns_is_pk.iter().enumerate() {
@@ -1378,7 +1391,8 @@ mod tests {
         assert_eq!(result.is_drained.unwrap(), true);
         assert_eq!(result.logical_rows.len(), 1);
 
-        // We expect we fill the primary column with the value embedded in the common handle.
+        // We expect we fill the primary column with the value embedded in the common
+        // handle.
         for i in 0..result.physical_columns.columns_len() {
             result.physical_columns[i]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])
@@ -1563,7 +1577,8 @@ mod tests {
             result.physical_columns.columns_len(),
             columns.len() - missed_columns_info.len()
         );
-        // We expect we fill the primary column with the value embedded in the common handle.
+        // We expect we fill the primary column with the value embedded in the common
+        // handle.
         for i in 0..result.physical_columns.columns_len() {
             result.physical_columns[i]
                 .ensure_all_decoded_for_test(&mut EvalContext::default(), &schema[i])

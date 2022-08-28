@@ -102,7 +102,7 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
-            FieldTypeTp::JSON => {
+            FieldTypeTp::Json => {
                 self.write_u8(datum::JSON_FLAG)?;
                 // Copy datum payload as it is
                 self.write_bytes(src)?;
@@ -123,15 +123,17 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
 
 impl<T: BufferWriter> V1CompatibleEncoder for T {}
 
-/// These tests mainly focus on transfer the v2 encoding to v1-compatible encoding.
+/// These tests mainly focus on transfer the v2 encoding to v1-compatible
+/// encoding.
 ///
 /// The test path is:
-/// 1. Encode value using v2
-/// 2. Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to v1-compatible
-/// 3. Use `RawDatumDecoder` decode the encoded bytes, check the result.
+/// - Encode value using v2
+/// - Use `V1CompatibleEncoder` to transfer the encoded bytes from v2 to
+///   v1-compatible
+/// - Use `RawDatumDecoder` decode the encoded bytes, check the result.
 ///
-/// Note: a value encoded using v2 then transfer to v1-compatible encoding, is not always equals the
-/// encoded-bytes using v1 directly.
+/// Note: a value encoded using v2 then transfer to v1-compatible encoding, is
+/// not always equals the encoded-bytes using v1 directly.
 #[cfg(test)]
 mod tests {
     use std::{f64, i16, i32, i64, i8, u16, u32, u64, u8};
@@ -286,7 +288,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for value in cases {
-            let col = Column::new(1, value.clone()).with_tp(FieldTypeTp::JSON);
+            let col = Column::new(1, value.clone()).with_tp(FieldTypeTp::Json);
             let buf = encode_to_v1_compatible(&mut ctx, &col);
             let got: Json = buf.decode(col.ft(), &mut ctx).unwrap().unwrap();
             assert_eq!(value, got);

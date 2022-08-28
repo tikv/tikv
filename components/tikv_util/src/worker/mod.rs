@@ -1,18 +1,15 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-/*!
-
-`Worker` provides a mechanism to run tasks asynchronously (i.e. in the background) with some
-additional features, for example, ticks.
-
-A worker contains:
-
-- A runner (which should implement the `Runnable` trait): to run tasks one by one or in batch.
-- A scheduler: to send tasks to the runner, returns immediately.
-
-Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
-
-*/
+//! `Worker` provides a mechanism to run tasks asynchronously (i.e. in the
+//! background) with some additional features, for example, ticks.
+//!
+//! A worker contains:
+//!
+//! - A runner (which should implement the `Runnable` trait): to run tasks one
+//!   by one or in batch.
+//! - A scheduler: to send tasks to the runner, returns immediately.
+//!
+//! Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 
 mod future;
 mod metrics;
@@ -137,7 +134,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         lazy_worker.start(BatchRunner { ch: tx });
-        assert!(rx.recv_timeout(Duration::from_secs(3)).is_ok());
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         worker.stop();
         drop(rx);

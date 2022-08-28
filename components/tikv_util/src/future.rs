@@ -17,8 +17,8 @@ use futures::{
 
 use crate::callback::must_call;
 
-/// Generates a paired future and callback so that when callback is being called, its result
-/// is automatically passed as a future result.
+/// Generates a paired future and callback so that when callback is being
+/// called, its result is automatically passed as a future result.
 pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, futures_oneshot::Receiver<T>)
 where
     T: Send + 'static,
@@ -52,8 +52,9 @@ where
     (callback, future)
 }
 
-/// Create a stream proxy with buffer representing the remote stream. The returned task
-/// will receive messages from the remote stream as much as possible.
+/// Create a stream proxy with buffer representing the remote stream. The
+/// returned task will receive messages from the remote stream as much as
+/// possible.
 pub fn create_stream_with_buffer<T, S>(
     s: S,
     size: usize,
@@ -146,7 +147,7 @@ impl PollAtWake {
         };
 
         let waker = task::waker_ref(arc_self);
-        let cx = &mut Context::from_waker(&*waker);
+        let cx = &mut Context::from_waker(&waker);
         loop {
             match fut.as_mut().poll(cx) {
                 // Likely pending
@@ -165,7 +166,8 @@ impl PollAtWake {
                 Ok(_) => return,
                 Err(s) => {
                     if s == NOTIFIED {
-                        // Only this thread can change the state from NOTIFIED, so it has to succeed.
+                        // Only this thread can change the state from NOTIFIED, so it has to
+                        // succeed.
                         match arc_self.state.compare_exchange(
                             NOTIFIED,
                             POLLING,

@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::PathBuf;
+use std::{marker::PhantomData, path::PathBuf};
 
 use engine_traits::{
-    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SeekKey,
+    CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, RefIterable, Result,
     SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
 };
 
@@ -24,29 +24,33 @@ impl SstReader for PanicSstReader {
     fn verify_checksum(&self) -> Result<()> {
         panic!()
     }
-    fn iter(&self) -> Self::Iterator {
+}
+
+impl RefIterable for PanicSstReader {
+    type Iterator<'a> = PanicSstReaderIterator<'a>;
+
+    fn iter(&self, opts: IterOptions) -> Result<Self::Iterator<'_>> {
         panic!()
     }
 }
 
-impl Iterable for PanicSstReader {
-    type Iterator = PanicSstReaderIterator;
-
-    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
-    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        panic!()
-    }
+pub struct PanicSstReaderIterator<'a> {
+    _phantom: PhantomData<&'a ()>,
 }
 
-pub struct PanicSstReaderIterator;
-
-impl Iterator for PanicSstReaderIterator {
-    fn seek(&mut self, key: SeekKey<'_>) -> Result<bool> {
+impl Iterator for PanicSstReaderIterator<'_> {
+    fn seek(&mut self, key: &[u8]) -> Result<bool> {
         panic!()
     }
-    fn seek_for_prev(&mut self, key: SeekKey<'_>) -> Result<bool> {
+    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_first(&mut self) -> Result<bool> {
+        panic!()
+    }
+
+    fn seek_to_last(&mut self) -> Result<bool> {
         panic!()
     }
 

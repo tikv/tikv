@@ -2,40 +2,50 @@
 
 // #[PerformanceCriticalPath]
 
-//! This module contains TiKV's transaction layer. It lowers high-level, transactional
-//! commands to low-level (raw key-value) interactions with persistent storage.
+//! This module contains TiKV's transaction layer. It lowers high-level,
+//! transactional commands to low-level (raw key-value) interactions with
+//! persistent storage.
 //!
-//! This module is further split into layers: [`txn`](txn) lowers transactional commands to
-//! key-value operations on an MVCC abstraction. [`mvcc`](mvcc) is our MVCC implementation.
-//! [`kv`](kv) is an abstraction layer over persistent storage.
+//! This module is further split into layers: [`txn`](txn) lowers transactional
+//! commands to key-value operations on an MVCC abstraction. [`mvcc`](mvcc) is
+//! our MVCC implementation. [`kv`](kv) is an abstraction layer over persistent
+//! storage.
 //!
-//! Other responsibilities of this module are managing latches (see [`latch`](txn::latch)), deadlock
-//! and wait handling (see [`lock_manager`](lock_manager)), sche
-//! duling command execution (see
-//! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and versioned APIs (in
-//! the [`Storage`](Storage) struct).
+//! Other responsibilities of this module are managing latches (see
+//! [`latch`](txn::latch)), deadlock and wait handling (see
+//! [`lock_manager`](lock_manager)), sche duling command execution (see
+//! [`txn::scheduler`](txn::scheduler)), and handling commands from the raw and
+//! versioned APIs (in the [`Storage`](Storage) struct).
 //!
 //! For more information about TiKV's transactions, see the [sig-txn docs](https://github.com/tikv/sig-transaction/tree/master/doc).
 //!
 //! Some important types are:
 //!
-//! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over underlying storage,
-//! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in the MVCC
-//!   implementation,
-//! * the commands in the [`commands`](txn::commands) module, which are how each command is implemented,
-//! * the [`Storage`](Storage) struct, which is the primary entry point for this module.
+//! * the [`Engine`](kv::Engine) trait and related traits, which abstracts over
+//!   underlying storage,
+//! * the [`MvccTxn`](mvcc::txn::MvccTxn) struct, which is the primary object in
+//!   the MVCC implementation,
+//! * the commands in the [`commands`](txn::commands) module, which are how each
+//!   command is implemented,
+//! * the [`Storage`](Storage) struct, which is the primary entry point for this
+//!   module.
 //!
 //! Related code:
 //!
-//! * the [`kv`](crate::server::service::kv) module, which is the interface for TiKV's APIs,
-//! * the [`lock_manager](crate::server::lock_manager), which takes part in lock and deadlock
-//!   management,
-//! * [`gc_worker`](crate::server::gc_worker), which drives garbage collection of old values,
-//! * the [`txn_types](::txn_types) crate, some important types for this module's interface,
-//! * the [`kvproto`](::kvproto) crate, which defines TiKV's protobuf API and includes some
-//!   documentation of the commands implemented here,
-//! * the [`test_storage`](::test_storage) crate, integration tests for this module,
-//! * the [`engine_traits`](::engine_traits) crate, more detail of the engine abstraction.
+//! * the [`kv`](crate::server::service::kv) module, which is the interface for
+//!   TiKV's APIs,
+//! * the [`lock_manager](crate::server::lock_manager), which takes part in lock
+//!   and deadlock management,
+//! * [`gc_worker`](crate::server::gc_worker), which drives garbage collection
+//!   of old values,
+//! * the [`txn_types](::txn_types) crate, some important types for this
+//!   module's interface,
+//! * the [`kvproto`](::kvproto) crate, which defines TiKV's protobuf API and
+//!   includes some documentation of the commands implemented here,
+//! * the [`test_storage`](::test_storage) crate, integration tests for this
+//!   module,
+//! * the [`engine_traits`](::engine_traits) crate, more detail of the engine
+//!   abstraction.
 
 pub mod config;
 pub mod config_manager;
@@ -77,6 +87,7 @@ use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::SnapshotExt;
 use tikv_util::{
+    deadline::Deadline,
     quota_limiter::QuotaLimiter,
     time::{duration_to_ms, Instant, ThreadReadId},
 };
@@ -119,27 +130,31 @@ use crate::{
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
-/// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a given [`Engine`].
-/// An [`Engine`] provides low level KV functionality. [`Engine`] has multiple implementations.
-/// When a TiKV server is running, a [`RaftKv`](crate::server::raftkv::RaftKv) will be the
-/// underlying [`Engine`] of [`Storage`]. The other two types of engines are for test purpose.
+/// [`Storage`](Storage) implements transactional KV APIs and raw KV APIs on a
+/// given [`Engine`]. An [`Engine`] provides low level KV functionality.
+/// [`Engine`] has multiple implementations. When a TiKV server is running, a
+/// [`RaftKv`](crate::server::raftkv::RaftKv) will be the underlying [`Engine`]
+/// of [`Storage`]. The other two types of engines are for test purpose.
 ///
-///[`Storage`] is reference counted and cloning [`Storage`] will just increase the reference counter.
-/// Storage resources (i.e. threads, engine) will be released when all references are dropped.
+/// [`Storage`] is reference counted and cloning [`Storage`] will just increase
+/// the reference counter. Storage resources (i.e. threads, engine) will be
+/// released when all references are dropped.
 ///
-/// Notice that read and write methods may not be performed over full data in most cases, i.e. when
-/// underlying engine is [`RaftKv`](crate::server::raftkv::RaftKv),
-/// which limits data access in the range of a single region
-/// according to specified `ctx` parameter. However,
-/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) is the only exception.
-/// It's always performed on the whole TiKV.
+/// Notice that read and write methods may not be performed over full data in
+/// most cases, i.e. when underlying engine is
+/// [`RaftKv`](crate::server::raftkv::RaftKv), which limits data access in the
+/// range of a single region according to specified `ctx` parameter. However,
+/// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::
+/// UnsafeDestroyRange) is the only exception. It's always performed on the
+/// whole TiKV.
 ///
-/// Operations of [`Storage`](Storage) can be divided into two types: MVCC operations and raw operations.
-/// MVCC operations uses MVCC keys, which usually consist of several physical keys in different
-/// CFs. In default CF and write CF, the key will be memcomparable-encoded and append the timestamp
-/// to it, so that multiple versions can be saved at the same time.
-/// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
-/// encoding and appending timestamp.
+/// Operations of [`Storage`](Storage) can be divided into two types: MVCC
+/// operations and raw operations. MVCC operations uses MVCC keys, which usually
+/// consist of several physical keys in different CFs. In default CF and write
+/// CF, the key will be memcomparable-encoded and append the timestamp to it, so
+/// that multiple versions can be saved at the same time. Raw operations use raw
+/// keys, which are saved directly to the engine without memcomparable- encoding
+/// and appending timestamp.
 pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
@@ -214,7 +229,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
 }
 
 macro_rules! check_key_size {
-    ($key_iter: expr, $max_key_size: expr, $callback: ident) => {
+    ($key_iter:expr, $max_key_size:expr, $callback:ident) => {
         for k in $key_iter {
             let key_size = k.len();
             if key_size > $max_key_size {
@@ -332,7 +347,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         unsafe { with_tls_engine(f) }
     }
 
-    /// Check the given raw kv CF name. If the given cf is empty, CF_DEFAULT will be returned.
+    /// Check the given raw kv CF name. If the given cf is empty, CF_DEFAULT
+    /// will be returned.
     // TODO: refactor to use `Api` parameter.
     fn rawkv_cf(cf: &str, api_version: ApiVersion) -> Result<CfName> {
         match api_version {
@@ -360,8 +376,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
     /// Check if key range is valid
     ///
-    /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is the lower bound.
-    /// - If `reverse` is false, `end_key` is greater than `start_key`. `end_key` is the upper bound.
+    /// - If `reverse` is true, `end_key` is less than `start_key`. `end_key` is
+    ///   the lower bound.
+    /// - If `reverse` is false, `end_key` is greater than `start_key`.
+    ///   `end_key` is the upper bound.
     fn check_key_ranges(ranges: &[KeyRange], reverse: bool) -> bool {
         let ranges_len = ranges.len();
         for i in 0..ranges_len {
@@ -415,7 +433,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ///   * Request of V2 with legal prefix.
     /// See the following for detail:
     ///   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    ///   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+    ///     enum APIVersion.
     // TODO: refactor to use `Api` parameter.
     fn check_api_version(
         storage_api_version: ApiVersion,
@@ -431,7 +450,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             (ApiVersion::V2, ApiVersion::V1) if Self::is_txn_command(cmd) => {
                 // For compatibility, accept TiDB request only.
                 for key in keys {
-                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::TiDB {
+                    if ApiV2::parse_key_mode(key.as_ref()) != KeyMode::Tidb {
                         return Err(ErrorInner::invalid_key_mode(
                             cmd,
                             storage_api_version,
@@ -495,7 +514,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         range.0.as_ref().map(AsRef::as_ref),
                         range.1.as_ref().map(AsRef::as_ref),
                     );
-                    if ApiV2::parse_range_mode(range) != KeyMode::TiDB {
+                    if ApiV2::parse_range_mode(range) != KeyMode::Tidb {
                         return Err(ErrorInner::invalid_key_range_mode(
                             cmd,
                             storage_api_version,
@@ -569,7 +588,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let api_version = self.api_version;
 
         let quota_limiter = self.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
 
         let res = self.read_pool.spawn_handle(
             async move {
@@ -696,9 +715,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    /// Get values of a set of keys with separate context from a snapshot, return a list of `Result`s.
+    /// Get values of a set of keys with separate context from a snapshot,
+    /// return a list of `Result`s.
     ///
-    /// Only writes that are committed before their respective `start_ts` are visible.
+    /// Only writes that are committed before their respective `start_ts` are
+    /// visible.
     pub fn batch_get_command<P: 'static + ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)>>(
         &self,
         requests: Vec<GetRequest>,
@@ -713,15 +734,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
 
-        // The resource tags of these batched requests are not the same, and it is quite expensive
-        // to distinguish them, so we can find random one of them as a representative.
+        // The resource tags of these batched requests are not the same, and it is quite
+        // expensive to distinguish them, so we can find random one of them as a
+        // representative.
         let rand_index = rand::thread_rng().gen_range(0, requests.len());
         let rand_ctx = requests[rand_index].get_context();
         let rand_key = requests[rand_index].get_key().to_vec();
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(rand_ctx, vec![(rand_key.clone(), rand_key)]);
-        // Unset the TLS tracker because the future below does not belong to any specific request
+        // Unset the TLS tracker because the future below does not belong to any
+        // specific request
         clear_tls_tracker_token();
         let res = self.read_pool.spawn_handle(
             async move {
@@ -737,8 +760,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for ((mut req, id), tracker) in requests.into_iter().zip(ids).zip(trackers) {
                     set_tls_tracker_token(tracker);
                     let mut ctx = req.take_context();
+                    let source = ctx.take_request_source();
                     let region_id = ctx.get_region_id();
                     let peer = ctx.get_peer();
+
                     let key = Key::from_raw(req.get_key());
                     tls_collect_query(
                         region_id,
@@ -775,7 +800,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             snap_ctx
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, source);
                             continue;
                         }
                     };
@@ -791,6 +816,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         access_locks,
                         region_id,
                         id,
+                        source,
                         tracker,
                     ));
                 }
@@ -806,6 +832,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         access_locks,
                         region_id,
                         id,
+                        source,
                         tracker,
                     ) = req_snap;
                     let snap_res = snap.await;
@@ -836,6 +863,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         v.map_err(|e| Error::from(txn::Error::from(e)))
                                             .map(|v| (v, stat)),
                                         begin_instant,
+                                        source,
                                     );
                                 }
                                 Err(e) => {
@@ -843,12 +871,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                         id,
                                         Err(Error::from(txn::Error::from(e))),
                                         begin_instant,
+                                        source,
                                     );
                                 }
                             }
                         }),
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, source);
                         }
                     }
                 }
@@ -892,7 +921,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let concurrency_manager = self.concurrency_manager.clone();
         let api_version = self.api_version;
         let quota_limiter = self.quota_limiter.clone();
-        let mut sample = quota_limiter.new_sample();
+        let mut sample = quota_limiter.new_sample(true);
         let res = self.read_pool.spawn_handle(
             async move {
                 let stage_scheduled_ts = Instant::now();
@@ -1038,9 +1067,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the snapshot.
-    /// If `reverse_scan` is true, it scans [`end_key`, `start_key`) in descending order.
-    /// If `end_key` is `None`, it means the upper bound or the lower bound if reverse scan is unbounded.
+    /// Scan keys in [`start_key`, `end_key`) up to `limit` keys from the
+    /// snapshot. If `reverse_scan` is true, it scans [`end_key`,
+    /// `start_key`) in descending order. If `end_key` is `None`, it means
+    /// the upper bound or the lower bound if reverse scan is unbounded.
     ///
     /// Only writes committed before `start_ts` are visible.
     pub fn scan(
@@ -1264,15 +1294,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .inc();
 
                 // Do not check_api_version in scan_lock, to be compatible with TiDB gc-worker,
-                // which resolves locks on regions, and boundary of regions will be out of range of TiDB keys.
+                // which resolves locks on regions, and boundary of regions will be out of range
+                // of TiDB keys.
 
                 let command_duration = tikv_util::time::Instant::now();
 
                 concurrency_manager.update_max_ts(max_ts);
                 let begin_instant = Instant::now();
-                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's not
-                // a good idea to return an error to the client, making the GC fail. A better
-                // approach is to wait for these locks to be unlocked.
+                // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
+                // not a good idea to return an error to the client, making the GC fail. A
+                // better approach is to wait for these locks to be unlocked.
                 concurrency_manager.read_range_check(
                     start_key.as_ref(),
                     end_key.as_ref(),
@@ -1358,7 +1389,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    // The entry point of the storage scheduler. Not only transaction commands need to access keys serially.
+    // The entry point of the storage scheduler. Not only transaction commands need
+    // to access keys serially.
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
@@ -1415,13 +1447,38 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Ok(())
     }
 
+    // Schedule raw modify commands, which reuse the scheduler worker pool.
+    // TODO: separate the txn and raw commands if needed in the future.
+    fn sched_raw_command<T>(&self, tag: CommandKind, future: T) -> Result<()>
+    where
+        T: Future + Send + 'static,
+    {
+        SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
+        self.sched
+            .get_sched_pool(CommandPri::Normal)
+            .pool
+            .spawn(future)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+    }
+
+    fn get_deadline(ctx: &Context) -> Deadline {
+        let execution_duration_limit = if ctx.max_execution_duration_ms == 0 {
+            crate::storage::txn::scheduler::DEFAULT_EXECUTION_DURATION_LIMIT
+        } else {
+            ::std::time::Duration::from_millis(ctx.max_execution_duration_ms)
+        };
+        Deadline::from_now(execution_duration_limit)
+    }
+
     /// Delete all keys in the range [`start_key`, `end_key`).
     ///
-    /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
-    /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
-    /// still be replicated via Raft. This is used to notify that the data will be deleted by
-    /// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::UnsafeDestroyRange) soon.
+    /// All keys in the range will be deleted permanently regardless of their
+    /// timestamps. This means that deleted keys will not be retrievable by
+    /// specifying an older timestamp. If `notify_only` is set, the data will
+    /// not be immediately deleted, but the operation will still be replicated
+    /// via Raft. This is used to notify that the data will be deleted by
+    /// [`unsafe_destroy_range`](crate::server::gc_worker::GcTask::
+    /// UnsafeDestroyRange) soon.
     pub fn delete_range(
         &self,
         ctx: Context,
@@ -1496,7 +1553,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1549,8 +1607,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let priority_tag = get_priority_tag(priority);
         let api_version = self.api_version;
 
-        // The resource tags of these batched requests are not the same, and it is quite expensive
-        // to distinguish them, so we can find random one of them as a representative.
+        // The resource tags of these batched requests are not the same, and it is quite
+        // expensive to distinguish them, so we can find random one of them as a
+        // representative.
         let rand_index = rand::thread_rng().gen_range(0, gets.len());
         let rand_ctx = gets[rand_index].get_context();
         let rand_key = gets[rand_index].get_key().to_vec();
@@ -1584,9 +1643,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for (mut req, id) in gets.into_iter().zip(ids) {
                     let ctx = req.take_context();
                     let key = F::encode_raw_key_owned(req.take_key(), None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
-                    // Don't place in loop of `snaps`, otherwise `snap.wait` may run in another thread,
-                    // and cause the `thread-local` statistics unstable for test.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split. Don't place in loop of `snaps`, otherwise `snap.wait` may run
+                    // in another thread, and cause the `thread-local` statistics unstable for test.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -1606,7 +1665,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 }
                 Self::with_tls_engine(|engine| engine.release_snapshot());
                 let begin_instant = Instant::now();
-                for (id, key, ctx, mut req, snap) in snaps {
+                for (id, key, mut ctx, mut req, snap) in snaps {
                     let cf = req.take_cf();
                     match snap.await {
                         Ok(snapshot) => {
@@ -1621,6 +1680,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                             .raw_get_key_value(cf, &key, &mut stats)
                                             .map_err(Error::from),
                                         begin_instant,
+                                        ctx.take_request_source(),
                                     );
                                     tls_collect_read_flow(
                                         ctx.get_region_id(),
@@ -1631,12 +1691,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                     );
                                 }
                                 Err(e) => {
-                                    consumer.consume(id, Err(e), begin_instant);
+                                    consumer.consume(
+                                        id,
+                                        Err(e),
+                                        begin_instant,
+                                        ctx.take_request_source(),
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            consumer.consume(id, Err(e), begin_instant);
+                            consumer.consume(id, Err(e), begin_instant, ctx.take_request_source());
                         }
                     }
                 }
@@ -1776,27 +1841,51 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         if !F::IS_TTL_ENABLED && ttl != 0 {
             return Err(Error::from(ErrorInner::TtlNotEnabled));
         }
+        let deadline = Self::get_deadline(&ctx);
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let engine = self.engine.clone();
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
+            let raw_value = RawValue {
+                user_value: value,
+                expire_ts: ttl_to_expire_ts(ttl),
+                is_delete: false,
+            };
+            let m = Modify::Put(
+                cf,
+                F::encode_raw_key_owned(key, None),
+                F::encode_raw_value_owned(raw_value),
+            );
 
-        let raw_value = RawValue {
-            user_value: value,
-            expire_ts: ttl_to_expire_ts(ttl),
-            is_delete: false,
-        };
-        let m = Modify::Put(
-            Self::rawkv_cf(&cf, self.api_version)?,
-            F::encode_raw_key_owned(key, None),
-            F::encode_raw_value_owned(raw_value),
-        );
+            let mut batch = WriteData::from_modifies(vec![m]);
+            batch.set_allowed_on_disk_almost_full();
+            let (cb, f) = tikv_util::future::paired_future_callback();
+            let async_ret =
+                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
+            let v: Result<()> = match async_ret {
+                Err(e) => Err(Error::from(e)),
+                Ok(_) => f.await.unwrap(),
+            };
+            callback(v);
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
+        })
+    }
 
-        let mut batch = WriteData::from_modifies(vec![m]);
-        batch.set_allowed_on_disk_almost_full();
-
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
+    fn check_ttl_valid(key_cnt: usize, ttls: &Vec<u64>) -> Result<()> {
+        if !F::IS_TTL_ENABLED {
+            if ttls.iter().any(|&x| x != 0) {
+                return Err(Error::from(ErrorInner::TtlNotEnabled));
+            }
+        } else if ttls.len() != key_cnt {
+            return Err(Error::from(ErrorInner::TtlLenNotEqualsToPairs));
+        }
         Ok(())
     }
 
@@ -1804,16 +1893,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         cf: CfName,
         pairs: Vec<KvPair>,
         ttls: Vec<u64>,
-    ) -> Result<Vec<Modify>> {
-        if !F::IS_TTL_ENABLED {
-            if ttls.iter().any(|&x| x != 0) {
-                return Err(Error::from(ErrorInner::TtlNotEnabled));
-            }
-        } else if ttls.len() != pairs.len() {
-            return Err(Error::from(ErrorInner::TtlLenNotEqualsToPairs));
-        }
-
-        let modifies = pairs
+    ) -> Vec<Modify> {
+        pairs
             .into_iter()
             .zip(ttls)
             .map(|((k, v), ttl)| {
@@ -1828,8 +1909,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     F::encode_raw_value_owned(raw_value),
                 )
             })
-            .collect();
-        Ok(modifies)
+            .collect()
     }
 
     /// Write some keys to the storage in a batch.
@@ -1841,10 +1921,11 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         ttls: Vec<u64>,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_batch_put;
         Self::check_api_version(
             self.api_version,
             ctx.api_version,
-            CommandKind::raw_batch_put,
+            CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
 
@@ -1855,18 +1936,32 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             self.max_key_size,
             callback
         );
+        Self::check_ttl_valid(pairs.len(), &ttls)?;
 
-        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls)?;
-        let mut batch = WriteData::from_modifies(modifies);
-        batch.set_allowed_on_disk_almost_full();
-
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
-        Ok(())
+        let engine = self.engine.clone();
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
+            let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls);
+            let mut batch = WriteData::from_modifies(modifies);
+            batch.set_allowed_on_disk_almost_full();
+            let (cb, f) = tikv_util::future::paired_future_callback();
+            let async_ret =
+                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
+            let v: Result<()> = match async_ret {
+                Err(e) => Err(Error::from(e)),
+                Ok(_) => f.await.unwrap(),
+            };
+            callback(v);
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
+        })
     }
 
     fn raw_delete_request_to_modify(cf: CfName, key: Vec<u8>) -> Modify {
@@ -1878,7 +1973,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     /// Delete a raw key from the storage.
-    /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
+    /// In API V2, data is "logical" deleted, to enable CDC of delete
+    /// operations.
     pub fn raw_delete(
         &self,
         ctx: Context,
@@ -1886,31 +1982,41 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_delete,
-            [&key],
-        )?;
+        const CMD: CommandKind = CommandKind::raw_delete;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
-
-        let m = Self::raw_delete_request_to_modify(Self::rawkv_cf(&cf, self.api_version)?, key);
-        let mut batch = WriteData::from_modifies(vec![m]);
-        batch.set_allowed_on_disk_almost_full();
-
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
-        Ok(())
+        let cf = Self::rawkv_cf(&cf, self.api_version)?;
+        let engine = self.engine.clone();
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
+            let m = Self::raw_delete_request_to_modify(cf, key);
+            let mut batch = WriteData::from_modifies(vec![m]);
+            batch.set_allowed_on_disk_almost_full();
+            let (cb, f) = tikv_util::future::paired_future_callback();
+            let async_ret =
+                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
+            let v: Result<()> = match async_ret {
+                Err(e) => Err(Error::from(e)),
+                Ok(_) => f.await.unwrap(),
+            };
+            callback(v);
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
+        })
     }
 
     /// Delete all raw keys in [`start_key`, `end_key`).
-    /// Note that in API V2, data is still "physical" deleted, as "logical" delete for a range will be quite expensive.
-    /// Notification of range delete operations will be through a special channel (unimplemented yet).
+    /// Note that in API V2, data is still "physical" deleted, as "logical"
+    /// delete for a range will be quite expensive. Notification of range delete
+    /// operations will be through a special channel (unimplemented yet).
     pub fn raw_delete_range(
         &self,
         ctx: Context,
@@ -1919,35 +2025,50 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::raw_delete_range;
         check_key_size!([&start_key, &end_key], self.max_key_size, callback);
         Self::check_api_version_ranges(
             self.api_version,
             ctx.api_version,
-            CommandKind::raw_delete_range,
+            CMD,
             [(Some(&start_key), Some(&end_key))],
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let start_key = F::encode_raw_key_owned(start_key, None);
-        let end_key = F::encode_raw_key_owned(end_key, None);
+        let engine = self.engine.clone();
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
+            let start_key = F::encode_raw_key_owned(start_key, None);
+            let end_key = F::encode_raw_key_owned(end_key, None);
 
-        let mut batch =
-            WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
-        batch.set_allowed_on_disk_almost_full();
+            let mut batch =
+                WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]);
+            batch.set_allowed_on_disk_almost_full();
 
-        // TODO: special notification channel for API V2.
-
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
-        Ok(())
+            // TODO: special notification channel for API V2.
+            let (cb, f) = tikv_util::future::paired_future_callback();
+            let async_ret =
+                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
+            let v: Result<()> = match async_ret {
+                Err(e) => Err(Error::from(e)),
+                Ok(_) => f.await.unwrap(),
+            };
+            callback(v);
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
+        })
     }
 
     /// Delete some raw keys in a batch.
-    /// In API V2, data is "logical" deleted, to enable CDC of delete operations.
+    /// In API V2, data is "logical" deleted, to enable CDC of delete
+    /// operations.
     pub fn raw_batch_delete(
         &self,
         ctx: Context,
@@ -1955,42 +2076,52 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        Self::check_api_version(
-            self.api_version,
-            ctx.api_version,
-            CommandKind::raw_batch_delete,
-            &keys,
-        )?;
+        const CMD: CommandKind = CommandKind::raw_batch_delete;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
-
-        let modifies = keys
-            .into_iter()
-            .map(|k| Self::raw_delete_request_to_modify(cf, k))
-            .collect();
-        let mut batch = WriteData::from_modifies(modifies);
-        batch.set_allowed_on_disk_almost_full();
-
-        self.engine.async_write(
-            &ctx,
-            batch,
-            Box::new(|res| callback(res.map_err(Error::from))),
-        )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
-        Ok(())
+        let engine = self.engine.clone();
+        let deadline = Self::get_deadline(&ctx);
+        self.sched_raw_command(CMD, async move {
+            if let Err(e) = deadline.check() {
+                return callback(Err(Error::from(e)));
+            }
+            let command_duration = tikv_util::time::Instant::now();
+            let modifies = keys
+                .into_iter()
+                .map(|k| Self::raw_delete_request_to_modify(cf, k))
+                .collect();
+            let mut batch = WriteData::from_modifies(modifies);
+            batch.set_allowed_on_disk_almost_full();
+            let (cb, f) = tikv_util::future::paired_future_callback();
+            let async_ret =
+                engine.async_write(&ctx, batch, Box::new(|res| cb(res.map_err(Error::from))));
+            let v: Result<()> = match async_ret {
+                Err(e) => Err(Error::from(e)),
+                Ok(_) => f.await.unwrap(),
+            };
+            callback(v);
+            KV_COMMAND_COUNTER_VEC_STATIC.get(CMD).inc();
+            SCHED_STAGE_COUNTER_VEC.get(CMD).write_finish.inc();
+            SCHED_HISTOGRAM_VEC_STATIC
+                .get(CMD)
+                .observe(command_duration.saturating_elapsed().as_secs_f64());
+        })
     }
 
     /// Scan raw keys in a range.
     ///
-    /// If `reverse_scan` is false, the range is [`start_key`, `end_key`); otherwise, the range is
-    /// [`end_key`, `start_key`) and it scans from `start_key` and goes backwards. If `end_key` is `None`, it
-    /// means unbounded.
+    /// If `reverse_scan` is false, the range is [`start_key`, `end_key`);
+    /// otherwise, the range is [`end_key`, `start_key`) and it scans from
+    /// `start_key` and goes backwards. If `end_key` is `None`, it means
+    /// unbounded.
     ///
     /// This function scans at most `limit` keys.
     ///
     /// If `key_only` is true, the value
-    /// corresponding to the key will not be read out. Only scanned keys will be returned.
+    /// corresponding to the key will not be read out. Only scanned keys will be
+    /// returned.
     pub fn raw_scan(
         &self,
         ctx: Context,
@@ -2036,7 +2167,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let start_key = F::encode_raw_key_owned(start_key, None);
                     let end_key = end_key.map(|k| F::encode_raw_key_owned(k, None));
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -2312,7 +2444,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let mut stats = Statistics::default();
                     let key = F::encode_raw_key_owned(key, None);
-                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for region split.
+                    // Keys pass to `tls_collect_query` should be encoded, to get correct keys for
+                    // region split.
                     tls_collect_query(
                         ctx.get_region_id(),
                         ctx.get_peer(),
@@ -2396,7 +2529,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         )?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
-        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls)?;
+        Self::check_ttl_valid(pairs.len(), &ttls)?;
+        let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls);
         let cmd = RawAtomicStore::new(cf, modifies, ctx);
         self.sched_txn_command(cmd, callback)
     }
@@ -2428,9 +2562,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         &self,
         ctx: Context,
         algorithm: ChecksumAlgorithm,
-        ranges: Vec<KeyRange>,
+        mut ranges: Vec<KeyRange>,
     ) -> impl Future<Output = Result<(u64, u64, u64)>> {
-        // TODO: Modify this method in another PR for backup & restore feature of Api V2.
         const CMD: CommandKind = CommandKind::raw_checksum;
         let priority = ctx.get_priority();
         let priority_tag = get_priority_tag(priority);
@@ -2462,6 +2595,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         .iter()
                         .map(|range| (Some(range.get_start_key()), Some(range.get_end_key()))),
                 )?;
+                for range in ranges.iter_mut() {
+                    let start_key = F::encode_raw_key_owned(range.take_start_key(), None);
+                    let end_key = F::encode_raw_key_owned(range.take_end_key(), None);
+                    range.set_start_key(start_key.into_encoded());
+                    range.set_end_key(end_key.into_encoded());
+                }
 
                 let command_duration = tikv_util::time::Instant::now();
                 let snap_ctx = SnapContext {
@@ -2711,16 +2850,12 @@ impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
         self.snapshot.get_cf_opt(opts, cf, key)
     }
 
-    fn iter(&self, iter_opt: engine_traits::IterOptions) -> tikv_kv::Result<Self::Iter> {
-        self.snapshot.iter(iter_opt)
-    }
-
-    fn iter_cf(
+    fn iter(
         &self,
         cf: CfName,
         iter_opt: engine_traits::IterOptions,
     ) -> tikv_kv::Result<Self::Iter> {
-        self.snapshot.iter_cf(cf, iter_opt)
+        self.snapshot.iter(cf, iter_opt)
     }
 
     fn ext(&self) -> Self::Ext<'_> {
@@ -2849,7 +2984,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 }
 
 pub trait ResponseBatchConsumer<ConsumeResponse: Sized>: Send {
-    fn consume(&self, id: u64, res: Result<ConsumeResponse>, begin: Instant);
+    fn consume(
+        &self,
+        id: u64,
+        res: Result<ConsumeResponse>,
+        begin: Instant,
+        request_source: String,
+    );
 }
 
 pub mod test_util {
@@ -3033,6 +3174,7 @@ pub mod test_util {
             id: u64,
             res: Result<(Option<Vec<u8>>, Statistics)>,
             _: tikv_util::time::Instant,
+            _source: String,
         ) {
             self.data.lock().unwrap().push(GetResult {
                 id,
@@ -3042,7 +3184,13 @@ pub mod test_util {
     }
 
     impl ResponseBatchConsumer<Option<Vec<u8>>> for GetConsumer {
-        fn consume(&self, id: u64, res: Result<Option<Vec<u8>>>, _: tikv_util::time::Instant) {
+        fn consume(
+            &self,
+            id: u64,
+            res: Result<Option<Vec<u8>>>,
+            _: tikv_util::time::Instant,
+            _source: String,
+        ) {
             self.data.lock().unwrap().push(GetResult { id, res });
         }
     }
@@ -3075,12 +3223,11 @@ mod tests {
 
     use api_version::{test_kv_format_impl, ApiV2};
     use collections::HashMap;
-    use engine_rocks::raw_util::CFOptions;
-    use engine_traits::{raw_ttl::ttl_current_ts, ALL_CFS, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{raw_ttl::ttl_current_ts, CF_LOCK, CF_RAFT, CF_WRITE};
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op};
+    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*};
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType};
@@ -3091,7 +3238,7 @@ mod tests {
         *,
     };
     use crate::{
-        config::TitanDBConfig,
+        config::TitanDbConfig,
         coprocessor::checksum_crc64_xor,
         storage::{
             config::BlockCacheConfig,
@@ -3206,7 +3353,10 @@ mod tests {
     #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
-        let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
+        let engine = TestEngineBuilder::new()
+            .cfs([CF_DEFAULT, "foo"])
+            .build()
+            .unwrap();
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
             .build()
             .unwrap();
@@ -3604,7 +3754,7 @@ mod tests {
     #[test]
     fn test_scan_with_key_only() {
         let db_config = crate::config::DbConfig {
-            titan: TitanDBConfig {
+            titan: TitanDbConfig {
                 enabled: true,
                 ..Default::default()
             },
@@ -3612,27 +3762,25 @@ mod tests {
         };
         let engine = {
             let path = "".to_owned();
-            let cfs = ALL_CFS.to_vec();
             let cfg_rocksdb = db_config;
             let cache = BlockCacheConfig::default().build_shared_cache();
             let cfs_opts = vec![
-                CFOptions::new(
+                (
                     CF_DEFAULT,
                     cfg_rocksdb
                         .defaultcf
                         .build_opt(&cache, None, ApiVersion::V1),
                 ),
-                CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
-                CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(
                 &path,
-                &cfs,
-                Some(cfs_opts),
+                None,
+                cfs_opts,
                 cache.is_some(),
-                None, /*io_rate_limiter*/
-                None, /* CFOptions */
+                None, // io_rate_limiter
             )
         }
         .unwrap();
@@ -4539,6 +4687,7 @@ mod tests {
         let mut checksum: u64 = 0;
         let mut total_kvs: u64 = 0;
         let mut total_bytes: u64 = 0;
+        let mut is_first = true;
         // Write key-value pairs one by one
         for &(ref key, ref value) in &test_data {
             storage
@@ -4551,13 +4700,18 @@ mod tests {
                     expect_ok_callback(tx.clone(), 0),
                 )
                 .unwrap();
-            total_kvs += 1;
-            total_bytes += (key.len() + value.len()) as u64;
-            checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            // start key is set to b"r\0a\0", if raw_checksum does not encode the key,
+            // first key will be included in checksum. This is for testing issue #12950.
+            if !is_first {
+                total_kvs += 1;
+                total_bytes += (key.len() + value.len()) as u64;
+                checksum = checksum_crc64_xor(checksum, digest.clone(), key, value);
+            }
+            is_first = false;
             rx.recv().unwrap();
         }
         let mut range = KeyRange::default();
-        range.set_start_key(b"r\0a".to_vec());
+        range.set_start_key(b"r\0a\0".to_vec());
         range.set_end_key(b"r\0z".to_vec());
         assert_eq!(
             (checksum, total_kvs, total_bytes),
@@ -4567,7 +4721,8 @@ mod tests {
 
     #[test]
     fn test_raw_v2_multi_versions() {
-        // Test update on the same key to verify multi-versions implementation of RawKV V2.
+        // Test update on the same key to verify multi-versions implementation of RawKV
+        // V2.
         let test_data = vec![Some(b"v1"), Some(b"v2"), None, Some(b"v3")];
         let k = b"r\0k".to_vec();
 
@@ -5470,7 +5625,8 @@ mod tests {
             false
         );
 
-        // if end_key is omitted, the next start_key is used instead. so, false is returned.
+        // if end_key is omitted, the next start_key is used instead. so, false is
+        // returned.
         let ranges = make_ranges(vec![
             (b"c".to_vec(), vec![]),
             (b"b".to_vec(), vec![]),
@@ -6354,8 +6510,8 @@ mod tests {
             },
         );
 
-        // We should be able to resolve all locks for transaction ts=100 when there are this
-        // many locks.
+        // We should be able to resolve all locks for transaction ts=100 when there are
+        // this many locks.
         let scanned_locks_coll = vec![
             1,
             RESOLVE_LOCK_BATCH_SIZE,
@@ -6577,7 +6733,8 @@ mod tests {
             )
         };
 
-        // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
+        // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will
+        // remains 100.
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
@@ -6586,8 +6743,8 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // `advise_ttl` = 110, which is greater than current ttl. The lock's ttl will be updated to
-        // 110.
+        // `advise_ttl` = 110, which is greater than current ttl. The lock's ttl will be
+        // updated to 110.
         storage
             .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
@@ -6652,8 +6809,8 @@ mod tests {
 
         assert_eq!(cm.max_ts(), ts(9, 1));
 
-        // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
-        // back.
+        // No lock and no commit info. If specified rollback_if_not_exist, the key will
+        // be rolled back.
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -7042,8 +7199,14 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(key.clone(), val.clone()), true),
-                        (Mutation::make_put(key2.clone(), val2.clone()), false),
+                        (
+                            Mutation::make_put(key.clone(), val.clone()),
+                            DoPessimisticCheck,
+                        ),
+                        (
+                            Mutation::make_put(key2.clone(), val2.clone()),
+                            SkipPessimisticCheck,
+                        ),
                     ],
                     key.to_raw().unwrap(),
                     10.into(),
@@ -7687,7 +7850,7 @@ mod tests {
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved or committed locks.
         ctx.set_resolved_locks(vec![10]);
-        assert!(block_on(storage.get(ctx.clone(), Key::from_raw(b"key"), 100.into())).is_ok());
+        block_on(storage.get(ctx.clone(), Key::from_raw(b"key"), 100.into())).unwrap();
         ctx.take_resolved_locks();
 
         // Test batch_get
@@ -7702,7 +7865,7 @@ mod tests {
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved locks.
         ctx.set_resolved_locks(vec![10]);
-        assert!(batch_get(ctx.clone()).is_ok());
+        batch_get(ctx.clone()).unwrap();
         ctx.take_resolved_locks();
 
         // Test scan
@@ -7713,13 +7876,13 @@ mod tests {
             extract_key_error(&scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"a"), None, false).is_ok());
+        scan(ctx.clone(), Key::from_raw(b"a"), None, false).unwrap();
         ctx.take_resolved_locks();
         let key_error =
             extract_key_error(&scan(ctx.clone(), Key::from_raw(b"\xff"), None, true).unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         ctx.set_resolved_locks(vec![10]);
-        assert!(scan(ctx.clone(), Key::from_raw(b"\xff"), None, false).is_ok());
+        scan(ctx.clone(), Key::from_raw(b"\xff"), None, false).unwrap();
         ctx.take_resolved_locks();
         // Ignore memory locks in resolved or committed locks.
 
@@ -7745,14 +7908,14 @@ mod tests {
             consumer.take_data()
         };
         let res = batch_get_command(req2.clone());
-        assert!(res[0].is_ok());
+        res[0].as_ref().unwrap();
         let key_error = extract_key_error(res[1].as_ref().unwrap_err());
         assert_eq!(key_error.get_locked().get_key(), b"key");
         // Ignore memory locks in resolved or committed locks.
         req2.mut_context().set_resolved_locks(vec![10]);
         let res = batch_get_command(req2.clone());
-        assert!(res[0].is_ok());
-        assert!(res[1].is_ok());
+        res[0].as_ref().unwrap();
+        res[1].as_ref().unwrap();
         req2.mut_context().take_resolved_locks();
     }
 
@@ -7902,8 +8065,14 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(Key::from_raw(b"d"), b"v".to_vec()), true),
-                        (Mutation::make_put(Key::from_raw(b"e"), b"v".to_vec()), true),
+                        (
+                            Mutation::make_put(Key::from_raw(b"d"), b"v".to_vec()),
+                            DoPessimisticCheck,
+                        ),
+                        (
+                            Mutation::make_put(Key::from_raw(b"e"), b"v".to_vec()),
+                            DoPessimisticCheck,
+                        ),
                     ],
                     b"d".to_vec(),
                     200.into(),
@@ -7927,9 +8096,9 @@ mod tests {
     }
 
     // This is one of the series of tests to test overlapped timestamps.
-    // Overlapped ts means there is a rollback record and a commit record with the same ts.
-    // In this test we check that if rollback happens before commit, then they should not have overlapped ts,
-    // which is an expected property.
+    // Overlapped ts means there is a rollback record and a commit record with the
+    // same ts. In this test we check that if rollback happens before commit, then
+    // they should not have overlapped ts, which is an expected property.
     #[test]
     fn test_overlapped_ts_rollback_before_prewrite() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -7995,7 +8164,10 @@ mod tests {
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(key2.clone(), value2.clone()), true)],
+                    vec![(
+                        Mutation::make_put(key2.clone(), value2.clone()),
+                        DoPessimisticCheck,
+                    )],
                     k2.to_vec(),
                     10.into(),
                     0,
@@ -8040,8 +8212,11 @@ mod tests {
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
                     vec![
-                        (Mutation::make_put(key1.clone(), value1), true),
-                        (Mutation::make_put(key2.clone(), value2), false),
+                        (Mutation::make_put(key1.clone(), value1), DoPessimisticCheck),
+                        (
+                            Mutation::make_put(key2.clone(), value2),
+                            SkipPessimisticCheck,
+                        ),
                     ],
                     k1.to_vec(),
                     1.into(),
@@ -8082,8 +8257,9 @@ mod tests {
             .unwrap();
         assert!(rx.recv().unwrap() > 10);
     }
-    // this test shows that the scheduler take `response_policy` in `WriteResult` serious,
-    // ie. call the callback at expected stage when writing to the engine
+    // this test shows that the scheduler take `response_policy` in `WriteResult`
+    // serious, ie. call the callback at expected stage when writing to the
+    // engine
     #[test]
     fn test_scheduler_response_policy() {
         struct Case<T: 'static + StorageCallbackType + Send> {
@@ -8247,8 +8423,8 @@ mod tests {
             .unwrap();
         let (tx, rx) = channel();
 
-        // Pessimistically lock k1, k2, k3, k4, after the pessimistic retry k2 is no longer needed
-        // and the pessimistic lock on k2 is left.
+        // Pessimistically lock k1, k2, k3, k4, after the pessimistic retry k2 is no
+        // longer needed and the pessimistic lock on k2 is left.
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(
@@ -8277,23 +8453,23 @@ mod tests {
                     vec![
                         (
                             Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec()),
-                            true,
+                            DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k3"), b"v2".to_vec()),
-                            true,
+                            DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k4"), b"v4".to_vec()),
-                            true,
+                            DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k5"), b"v5".to_vec()),
-                            true,
+                            DoPessimisticCheck,
                         ),
                         (
                             Mutation::make_put(Key::from_raw(b"k6"), b"v6".to_vec()),
-                            true,
+                            DoPessimisticCheck,
                         ),
                     ],
                     b"k1".to_vec(),
@@ -8320,7 +8496,8 @@ mod tests {
         rx.recv().unwrap();
 
         // Pessimistically rollback the k2 lock.
-        // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is pessimistic type.
+        // Non lite lock resolve on k1 and k2, there should no errors as lock on k2 is
+        // pessimistic type.
         must_rollback(&storage.engine, b"k2", 10, false);
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
@@ -8457,7 +8634,8 @@ mod tests {
     // Test check_api_version.
     // See the following for detail:
     //   * rfc: https://github.com/tikv/rfcs/blob/master/text/0069-api-v2.md.
-    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto, enum APIVersion.
+    //   * proto: https://github.com/pingcap/kvproto/blob/master/proto/kvrpcpb.proto,
+    //     enum APIVersion.
     #[test]
     fn test_check_api_version() {
         use error_code::storage::*;
@@ -8587,7 +8765,7 @@ mod tests {
                 assert!(res.is_err(), "case {}", i);
                 assert_eq!(res.unwrap_err().error_code(), err, "case {}", i);
             } else {
-                assert!(res.is_ok(), "case {}", i);
+                assert!(res.is_ok(), "case {} {:?}", i, res);
             }
         }
     }
@@ -8643,7 +8821,7 @@ mod tests {
                 assert!(res.is_err());
                 assert_eq!(res.unwrap_err().error_code(), err);
             } else {
-                assert!(res.is_ok());
+                res.unwrap();
             }
         };
 
@@ -8839,7 +9017,8 @@ mod tests {
         }
 
         let (tx, rx) = channel();
-        // The written in-memory pessimistic lock should be visible, so the new lock request should fail.
+        // The written in-memory pessimistic lock should be visible, so the new lock
+        // request should fail.
         storage
             .sched_txn_command(
                 new_acquire_pessimistic_lock_command(
@@ -8854,14 +9033,18 @@ mod tests {
                 }),
             )
             .unwrap();
-        // DummyLockManager just drops the callback, so it will fail to receive anything.
-        assert!(rx.recv().is_err());
+        // DummyLockManager just drops the callback, so it will fail to receive
+        // anything.
+        rx.recv().unwrap_err();
 
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(k1.clone(), b"v".to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(k1.clone(), b"v".to_vec()),
+                        DoPessimisticCheck,
+                    )],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
@@ -8879,7 +9062,7 @@ mod tests {
                 }),
             )
             .unwrap();
-        assert!(rx.recv().unwrap().is_ok());
+        rx.recv().unwrap().unwrap();
         // After prewrite, the memory lock should be removed.
         {
             let pessimistic_locks = txn_ext.pessimistic_locks.read();
@@ -8911,14 +9094,15 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
-        // When disabling in-memory pessimistic lock, the lock map should remain unchanged.
+        // When disabling in-memory pessimistic lock, the lock map should remain
+        // unchanged.
         assert!(txn_ext.pessimistic_locks.read().is_empty());
 
         let (tx, rx) = channel();
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(k1, b"v".to_vec()), true)],
+                    vec![(Mutation::make_put(k1, b"v".to_vec()), DoPessimisticCheck)],
                     b"k1".to_vec(),
                     10.into(),
                     3000,
@@ -8937,6 +9121,6 @@ mod tests {
             )
             .unwrap();
         // Prewrite still succeeds
-        assert!(rx.recv().unwrap().is_ok());
+        rx.recv().unwrap().unwrap();
     }
 }

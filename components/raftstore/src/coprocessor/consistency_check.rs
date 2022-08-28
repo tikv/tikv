@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use engine_traits::{KvEngine, Snapshot, CF_RAFT};
+use engine_traits::{KvEngine, Snapshot, ALL_CFS, CF_RAFT};
 use kvproto::metapb::Region;
 
 use crate::{
@@ -60,13 +60,11 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Raw<E> {
 fn compute_hash_on_raw<S: Snapshot>(region: &Region, snap: &S) -> Result<u32> {
     let region_id = region.get_id();
     let mut digest = crc32fast::Hasher::new();
-    let mut cf_names = snap.cf_names();
-    cf_names.sort_unstable();
 
     let start_key = keys::enc_start_key(region);
     let end_key = keys::enc_end_key(region);
-    for cf in cf_names {
-        snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
+    for cf in ALL_CFS {
+        snap.scan(cf, &start_key, &end_key, false, |k, v| {
             digest.update(k);
             digest.update(v);
             Ok(true)

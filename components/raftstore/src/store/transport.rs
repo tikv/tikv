@@ -6,8 +6,9 @@ use std::sync::mpsc;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
 use kvproto::raft_serverpb::RaftMessage;
-use tikv_util::error;
+use tikv_util::{error, warn};
 
+use super::worker::{FetchedLogs, LogFetchedNotifier};
 use crate::{
     store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, SignificantMsg, StoreMsg},
     DiscardReason, Error, Result,
@@ -90,7 +91,13 @@ where
             .force_send(region_id, PeerMsg::SignificantMsg(msg))
         {
             // TODO: panic here once we can detect system is shutting down reliably.
-            error!("failed to send significant msg"; "msg" => ?msg);
+
+            // Avoid printing error log if it's not a severe problem failing to send it.
+            if msg.is_send_failure_ignorable() {
+                warn!("failed to send significant msg"; "msg" => ?msg);
+            } else {
+                error!("failed to send significant msg"; "msg" => ?msg);
+            }
             return Err(Error::RegionNotFound(region_id));
         }
 
@@ -163,5 +170,13 @@ where
             Ok(()) => Ok(()),
             Err(mpsc::SendError(_)) => Err(Error::Transport(DiscardReason::Disconnected)),
         }
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> LogFetchedNotifier for RaftRouter<EK, ER> {
+    #[inline]
+    fn notify(&self, region_id: u64, fetched: FetchedLogs) {
+        // Ignore region not found as it may be removed.
+        let _ = self.significant_send(region_id, SignificantMsg::RaftlogFetched(fetched));
     }
 }

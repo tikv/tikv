@@ -3,8 +3,7 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_rocks::{raw::Writable, Compat};
-use engine_traits::{Iterable, Peekable, RaftEngineReadOnly, SyncMutable, CF_RAFT};
+use engine_traits::{CfNamesExt, Iterable, Peekable, RaftEngineReadOnly, SyncMutable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
@@ -49,8 +48,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let mut existing_kvs = vec![];
     for cf in engine_2.cf_names() {
         engine_2
-            .c()
-            .scan_cf(cf, b"", &[0xFF], false, |k, v| {
+            .scan(cf, b"", &[0xFF], false, |k, v| {
                 existing_kvs.push((k.to_vec(), v.to_vec()));
                 Ok(true)
             })
@@ -134,7 +132,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_3.c().get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+    let state: RegionLocalState = engine_3.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // Force add some dirty data.
@@ -245,14 +243,12 @@ fn test_server_stale_meta() {
 
     let engine_3 = cluster.get_engine(3);
     let mut state: RegionLocalState = engine_3
-        .c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(1))
         .unwrap()
         .unwrap();
     state.set_state(PeerState::Tombstone);
 
     engine_3
-        .c()
         .put_msg_cf(CF_RAFT, &keys::region_state_key(1), &state)
         .unwrap();
     cluster.clear_send_filters();
@@ -267,9 +263,9 @@ fn test_server_stale_meta() {
 
 /// Tests a tombstone peer won't trigger wrong gc message.
 ///
-/// An uninitialized peer's peer list is empty. If a message from a healthy peer passes
-/// all the other checks accidentally, it may trigger a tombstone message which will
-/// make the healthy peer destroy all its data.
+/// An uninitialized peer's peer list is empty. If a message from a healthy peer
+/// passes all the other checks accidentally, it may trigger a tombstone message
+/// which will make the healthy peer destroy all its data.
 #[test]
 fn test_safe_tombstone_gc() {
     let mut cluster = new_node_cluster(0, 5);
@@ -316,7 +312,7 @@ fn test_safe_tombstone_gc() {
     let mut state: Option<RegionLocalState> = None;
     let timer = Instant::now();
     while timer.saturating_elapsed() < Duration::from_secs(5) {
-        state = cluster.get_engine(4).c().get_msg_cf(CF_RAFT, &key).unwrap();
+        state = cluster.get_engine(4).get_msg_cf(CF_RAFT, &key).unwrap();
         if state.is_some() {
             break;
         }

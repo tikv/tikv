@@ -1,24 +1,31 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::fmt::{self, Debug, Formatter};
+
 use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
+    metapb::{self, Region},
+    raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
-    eraftpb::{Entry, Snapshot},
-    GetEntriesContext, RaftState,
+    eraftpb::{ConfState, Entry, HardState, Snapshot},
+    GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
-use slog::Logger;
+use raftstore::store::{
+    util::{self, find_peer},
+    EntryStorage, RaftlogFetchTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
+use slog::{o, Logger};
+use tikv_util::{box_err, worker::Scheduler};
 
-use crate::Result;
+use crate::{Error, Result};
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
 
     let mut state = RegionLocalState::default();
     state.set_region(region);
+    state.set_tablet_index(RAFT_INIT_LOG_INDEX);
     wb.put_region_state(region_id, &state)?;
 
     let mut apply_state = RaftApplyState::default();
@@ -41,26 +48,170 @@ pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Resul
 }
 
 /// A storage for raft.
+///
+/// It's similar to `PeerStorage` in v1.
 pub struct Storage<ER> {
-    engine: ER,
+    entry_storage: EntryStorage<ER>,
+    peer: metapb::Peer,
+    region_state: RegionLocalState,
     logger: Logger,
 }
 
+impl<ER> Debug for Storage<ER> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Storage of [region {}] {}",
+            self.region().get_id(),
+            self.peer.get_id()
+        )
+    }
+}
+
 impl<ER> Storage<ER> {
-    pub fn new(engine: ER, logger: Logger) -> Storage<ER> {
-        Storage { engine, logger }
+    #[inline]
+    pub fn entry_storage(&self) -> &EntryStorage<ER> {
+        &self.entry_storage
     }
 
-    pub fn applied_index(&self) -> u64 {
-        unimplemented!()
+    #[inline]
+    pub fn entry_storage_mut(&mut self) -> &mut EntryStorage<ER> {
+        &mut self.entry_storage
+    }
+
+    #[inline]
+    pub fn region_state(&self) -> &RegionLocalState {
+        &self.region_state
+    }
+
+    #[inline]
+    pub fn region(&self) -> &metapb::Region {
+        self.region_state.get_region()
+    }
+
+    #[inline]
+    pub fn peer(&self) -> &metapb::Peer {
+        &self.peer
+    }
+
+    #[inline]
+    pub fn logger(&self) -> &Logger {
+        &self.logger
+    }
+}
+
+impl<ER: RaftEngine> Storage<ER> {
+    /// Creates a new storage.
+    ///
+    /// All metadata should be initialized before calling this method. If the
+    /// region is destroyed, `None` will be returned.
+    pub fn new(
+        region_id: u64,
+        store_id: u64,
+        engine: ER,
+        log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        logger: &Logger,
+    ) -> Result<Option<Storage<ER>>> {
+        let region_state: RegionLocalState = match engine.get_region_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!(
+                    "failed to get region state for region {}: {:?}",
+                    region_id,
+                    res
+                ));
+            }
+        };
+
+        if region_state.get_state() == PeerState::Tombstone {
+            return Ok(None);
+        }
+
+        let peer = find_peer(region_state.get_region(), store_id);
+        let peer = match peer {
+            Some(p) if p.get_id() != INVALID_ID => p,
+            _ => {
+                return Err(box_err!("no valid peer found in {:?}", region_state));
+            }
+        };
+
+        let logger = logger.new(o!("region_id" => region_id, "peer_id" => peer.get_id()));
+
+        let raft_state = match engine.get_raft_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!("failed to get raft state: {:?}", res));
+            }
+        };
+
+        let apply_state = match engine.get_apply_state(region_id) {
+            Ok(Some(s)) => s,
+            res => {
+                return Err(box_err!("failed to get apply state: {:?}", res));
+            }
+        };
+
+        let region = region_state.get_region();
+
+        let entry_storage = EntryStorage::new(
+            peer.get_id(),
+            engine,
+            raft_state,
+            apply_state,
+            region,
+            log_fetch_scheduler,
+        )?;
+
+        Ok(Some(Storage {
+            entry_storage,
+            peer: peer.clone(),
+            region_state,
+            logger,
+        }))
+    }
+
+    #[inline]
+    pub fn raft_state(&self) -> &RaftLocalState {
+        self.entry_storage.raft_state()
+    }
+
+    #[inline]
+    pub fn apply_state(&self) -> &RaftApplyState {
+        self.entry_storage.apply_state()
+    }
+
+    #[inline]
+    pub fn is_initialized(&self) -> bool {
+        self.region_state.get_tablet_index() != 0
     }
 }
 
 impl<ER: RaftEngine> raft::Storage for Storage<ER> {
     fn initial_state(&self) -> raft::Result<RaftState> {
-        unimplemented!()
+        let hard_state = self.raft_state().get_hard_state().clone();
+        // We will persist hard state no matter if it's initialized or not in
+        // v2, So hard state may not be empty. But when it becomes initialized,
+        // commit must be changed.
+        assert_eq!(
+            hard_state.commit == 0,
+            !self.is_initialized(),
+            "region state doesn't match raft state {:?} vs {:?}",
+            self.region_state(),
+            self.raft_state()
+        );
+
+        if hard_state.commit == 0 {
+            // If it's uninitialized, return empty state as we consider every
+            // states are empty at the very beginning.
+            return Ok(RaftState::new(hard_state, ConfState::default()));
+        }
+        Ok(RaftState::new(
+            hard_state,
+            util::conf_state_from_region(self.region()),
+        ))
     }
 
+    #[inline]
     fn entries(
         &self,
         low: u64,
@@ -68,19 +219,23 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
         max_size: impl Into<Option<u64>>,
         context: GetEntriesContext,
     ) -> raft::Result<Vec<Entry>> {
-        unimplemented!()
+        self.entry_storage
+            .entries(low, high, max_size.into().unwrap_or(u64::MAX), context)
     }
 
+    #[inline]
     fn term(&self, idx: u64) -> raft::Result<u64> {
-        unimplemented!()
+        self.entry_storage.term(idx)
     }
 
+    #[inline]
     fn first_index(&self) -> raft::Result<u64> {
-        unimplemented!()
+        Ok(self.entry_storage.first_index())
     }
 
+    #[inline]
     fn last_index(&self) -> raft::Result<u64> {
-        unimplemented!()
+        Ok(self.entry_storage.last_index())
     }
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
@@ -120,6 +275,7 @@ mod tests {
         let local_state = raft_engine.get_region_state(4).unwrap().unwrap();
         assert_eq!(local_state.get_state(), PeerState::Normal);
         assert_eq!(*local_state.get_region(), region);
+        assert_eq!(local_state.get_tablet_index(), RAFT_INIT_LOG_INDEX);
 
         let raft_state = raft_engine.get_raft_state(4).unwrap().unwrap();
         assert_eq!(raft_state.get_last_index(), RAFT_INIT_LOG_INDEX);

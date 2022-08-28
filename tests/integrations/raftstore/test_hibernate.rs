@@ -231,8 +231,9 @@ fn test_transfer_leader_delay() {
     panic!("failed to request after 3 seconds");
 }
 
-/// If a learner is isolated before split and then catch up logs by snapshot, then the
-/// range for split learner will be missing on the node until leader is waken.
+/// If a learner is isolated before split and then catch up logs by snapshot,
+/// then the range for split learner will be missing on the node until leader is
+/// waken.
 #[test]
 fn test_split_delay() {
     let mut cluster = new_server_cluster(0, 4);
@@ -354,9 +355,9 @@ fn test_inconsistent_configuration() {
     assert_eq!(cluster.leader_of_region(1), Some(new_peer(3, 3)));
 }
 
-/// Negotiating hibernation is implemented after 5.0.0, for older version binaries,
-/// negotiating can cause connection reset due to new enum type. The test ensures
-/// negotiation won't happen until cluster is upgraded.
+/// Negotiating hibernation is implemented after 5.0.0, for older version
+/// binaries, negotiating can cause connection reset due to new enum type. The
+/// test ensures negotiation won't happen until cluster is upgraded.
 #[test]
 fn test_hibernate_feature_gate() {
     let mut cluster = new_node_cluster(0, 3);
@@ -405,7 +406,8 @@ fn test_hibernate_feature_gate() {
     assert!(!awakened.load(Ordering::SeqCst));
 }
 
-/// Tests when leader is demoted in a hibernated region, the region can recover automatically.
+/// Tests when leader is demoted in a hibernated region, the region can recover
+/// automatically.
 #[test]
 fn test_leader_demoted_when_hibernated() {
     let mut cluster = new_node_cluster(0, 4);
@@ -489,10 +491,11 @@ fn test_leader_demoted_when_hibernated() {
     }
 
     cluster.clear_send_filters();
-    // If there is no leader in the region, the cluster can't write two kvs successfully.
-    // The first one is possible to succeed if it's committed with the conf change at the
-    // same time, but the second one can't be committed or accepted because conf change
-    // should be applied and the leader should be demoted as learner.
+    // If there is no leader in the region, the cluster can't write two kvs
+    // successfully. The first one is possible to succeed if it's committed with
+    // the conf change at the same time, but the second one can't be committed
+    // or accepted because conf change should be applied and the leader should
+    // be demoted as learner.
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k2", b"v2");
 }

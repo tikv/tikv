@@ -39,8 +39,8 @@ where
     }
 }
 
-/// A bencher that will use batch hash aggregation executor to bench the giving aggregate
-/// expression.
+/// A bencher that will use batch hash aggregation executor to bench the giving
+/// aggregate expression.
 pub struct BatchBencher;
 
 impl<M> HashAggrBencher<M> for BatchBencher

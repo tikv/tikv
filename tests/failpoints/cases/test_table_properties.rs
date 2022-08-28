@@ -1,13 +1,18 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use engine_traits::CF_DEFAULT;
+use engine_rocks::RocksEngine;
+use engine_traits::{MiscExt, CF_DEFAULT};
 use kvproto::kvrpcpb::{Context, *};
+use tempfile::TempDir;
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
-        compaction_filter::{GC_COMPACTION_FILTER_PERFORM, GC_COMPACTION_FILTER_SKIP},
-        TestGCRunner,
+        compaction_filter::{
+            test_utils::rocksdb_level_files, GC_COMPACTION_FILTER_PERFORM,
+            GC_COMPACTION_FILTER_SKIP,
+        },
+        TestGcRunner, STAT_RAW_KEYMODE,
     },
     storage::{
         kv::{Modify, TestEngineBuilder, WriteData},
@@ -27,21 +32,129 @@ fn test_check_need_gc() {
     let mut cfg = DbConfig::default();
     cfg.defaultcf.disable_auto_compactions = true;
     cfg.defaultcf.dynamic_level_bytes = false;
-
-    let engine = TestEngineBuilder::new()
+    let dir = tempfile::TempDir::new().unwrap();
+    let builder = TestEngineBuilder::new().path(dir.path());
+    let engine = builder
         .api_version(ApiVersion::V2)
         .build_with_cfg(&cfg)
         .unwrap();
     let raw_engine = engine.get_rocksdb();
-    let mut gc_runner = TestGCRunner::new(0);
+    let mut gc_runner = TestGcRunner::new(0);
 
+    do_write(&engine, false, 5);
+
+    // Check init value
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+
+    // TEST 1: If ratio_threshold < 1.0 || context.is_bottommost_level() is true,
+    // check_need_gc return true, call dofilter
+    gc_runner
+        .safe_point(TimeStamp::max().into_inner())
+        .gc_raw(&raw_engine);
+
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        1
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+
+    // TEST 2: props.num_versions as f64 > props.num_rows as f64 * ratio_threshold
+    // return true.
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    do_gc(&raw_engine, 2, &mut gc_runner, &dir);
+
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    // Now props.num_versions = 3 , props.num_rows = 1
+    // set ratio_threshold = 4.0, let (props.num_versions as f64 > props.num_rows as
+    // f64 * ratio_threshold) return false
+    gc_runner.ratio_threshold = Option::Some(2.0);
+
+    // is_bottommost_level = false
+    do_gc(&raw_engine, 1, &mut gc_runner, &dir);
+
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        3
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+
+    // TEST 3: props.num_deletes as f64 > props.num_puts as f64 * ratio_threshold
+    // return true.
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    do_gc(&raw_engine, 2, &mut gc_runner, &dir);
+
+    do_write(&engine, false, 5);
+    do_write(&engine, true, 25);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    // Now props.num_versions = 3 , props.num_rows = 1
+    // set ratio_threshold = 4.0, let (props.num_versions as f64 > props.num_rows as
+    // f64 * ratio_threshold) return false
+    gc_runner.ratio_threshold = Option::Some(30.0);
+
+    // is_bottommost_level = false
+    do_gc(&raw_engine, 1, &mut gc_runner, &dir);
+
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        5
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+}
+
+fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
+    make_data(engine, is_delete, op_nums);
+}
+
+fn make_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
     let user_key = b"r\0aaaaaaaaaaa";
 
-    let test_raws = vec![
-        (user_key, 100, false),
-        (user_key, 90, false),
-        (user_key, 70, false),
-    ];
+    let mut test_raws = vec![];
+    let start_mvcc = 70;
+
+    let mut i = 0;
+    while i < op_nums {
+        test_raws.push((user_key, start_mvcc + i, is_delete));
+        i += 1;
+    }
 
     let modifies = test_raws
         .into_iter()
@@ -49,7 +162,7 @@ fn test_check_need_gc() {
             (
                 make_key(key, ts),
                 ApiV2::encode_raw_value(RawValue {
-                    user_value: &[0; 10][..],
+                    user_value: &[0; 1024][..],
                     expire_ts: Some(TimeStamp::max().into_inner()),
                     is_delete,
                 }),
@@ -62,18 +175,93 @@ fn test_check_need_gc() {
         api_version: ApiVersion::V2,
         ..Default::default()
     };
+
     let batch = WriteData::from_modifies(modifies);
-
     engine.write(&ctx, batch).unwrap();
+}
 
-    // Check init value
-    assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 0);
-    assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 0);
+fn do_gc(
+    raw_engine: &RocksEngine,
+    target_level: usize,
+    gc_runner: &mut TestGcRunner<'_>,
+    dir: &TempDir,
+) {
+    let gc_safepoint = TimeStamp::max().into_inner();
+    let level_files = rocksdb_level_files(raw_engine, CF_DEFAULT);
+    let l0_file = dir.path().join(&level_files[0][0]);
+    let files = &[l0_file.to_str().unwrap().to_owned()];
+    gc_runner.target_level = Some(target_level);
+    gc_runner
+        .safe_point(gc_safepoint)
+        .gc_on_files_raw(raw_engine, files);
+}
 
-    // The mvcc ts > gc safepoint,
+#[test]
+fn test_skip_gc_by_check() {
+    let mut cfg = DbConfig::default();
+    cfg.defaultcf.disable_auto_compactions = true;
+    cfg.defaultcf.dynamic_level_bytes = false;
+    cfg.defaultcf.num_levels = 7;
+    let dir = tempfile::TempDir::new().unwrap();
+    let builder = TestEngineBuilder::new().path(dir.path());
+    let engine = builder
+        .api_version(ApiVersion::V2)
+        .build_with_cfg(&cfg)
+        .unwrap();
+    let raw_engine = engine.get_rocksdb();
+    let mut gc_runner = TestGcRunner::new(0);
+
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    // The min_mvcc_ts ts > gc safepoint, check_need_gc return false, don't call
+    // dofilter
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
-        .gc_raw(&raw_engine);
-    assert_eq!(GC_COMPACTION_FILTER_PERFORM.get(), 1);
-    assert_eq!(GC_COMPACTION_FILTER_SKIP.get(), 1);
+        .gc_raw(&raw_engine); //====================================================================
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        1
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        1
+    );
+
+    // TEST 2:When is_bottommost_level = false,
+    // write data to level2
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    do_gc(&raw_engine, 2, &mut gc_runner, &dir);
+
+    do_write(&engine, false, 5);
+    engine.get_rocksdb().flush_cfs(true).unwrap();
+
+    // Now props.num_versions = 3 , props.num_rows = 1
+    // set ratio_threshold = 5.0, let (props.num_versions as f64 > props.num_rows as
+    // f64 * ratio_threshold) return false
+    gc_runner.ratio_threshold = Option::Some(6.0);
+
+    // is_bottommost_level = false
+    do_gc(&raw_engine, 1, &mut gc_runner, &dir); //========================================
+
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        3
+    );
+
+    // The check_need_gc return false, GC_COMPACTION_FILTER_SKIP will add 1.
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        2
+    );
 }

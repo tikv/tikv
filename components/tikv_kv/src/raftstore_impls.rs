@@ -85,18 +85,11 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
+    fn iter(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
-            "injected error for iter"
-        )));
-        Ok(RegionSnapshot::iter(self, iter_opt))
-    }
-
-    fn iter_cf(&self, cf: CfName, iter_opt: IterOptions) -> kv::Result<Self::Iter> {
-        fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
-        RegionSnapshot::iter_cf(self, cf, iter_opt).map_err(kv::Error::from)
+        RegionSnapshot::iter(self, cf, iter_opt).map_err(kv::Error::from)
     }
 
     #[inline]

@@ -5,6 +5,7 @@
 
 use std::{
     mem,
+    ops::Index,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -28,8 +29,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn write_senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>>;
-    fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize>;
+    fn write_senders(&self) -> &WriteSenders<EK, ER>;
     fn config(&self) -> &Config;
     fn raft_metrics(&self) -> &RaftMetrics;
 }
@@ -39,12 +39,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn write_senders(&self) -> &Vec<Sender<WriteMsg<EK, ER>>> {
+    fn write_senders(&self) -> &WriteSenders<EK, ER> {
         &self.write_senders
-    }
-
-    fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize> {
-        &self.io_reschedule_concurrent_count
     }
 
     fn config(&self) -> &Config {
@@ -90,7 +86,8 @@ where
         }
     }
 
-    /// Send write msg to write worker or push into inner buffer and wait for rescheduling.
+    /// Send write msg to write worker or push into inner buffer and wait for
+    /// rescheduling.
     pub fn send_write_msg<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -105,9 +102,9 @@ where
         }
     }
 
-    /// If there is some msgs need to be rescheduled, check the new persisted number and
-    /// sending these msgs to a new write worker if persisted number is greater than
-    /// `self.last_unpersisted`.
+    /// If there is some msgs need to be rescheduled, check the new persisted
+    /// number and sending these msgs to a new write worker if persisted
+    /// number is greater than `self.last_unpersisted`.
     pub fn check_new_persisted<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -117,8 +114,10 @@ where
             return;
         }
         // The peer must be destroyed after all previous write tasks have been finished.
-        // So do not worry about a destroyed peer being counted in `io_reschedule_concurrent_count`.
-        ctx.io_reschedule_concurrent_count()
+        // So do not worry about a destroyed peer being counted in
+        // `io_reschedule_concurrent_count`.
+        ctx.write_senders()
+            .io_reschedule_concurrent_count
             .fetch_sub(1, Ordering::SeqCst);
 
         STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.dec();
@@ -144,10 +143,12 @@ where
         }
     }
 
-    /// Check if write task can be sent to write worker or pushed into `self.pending_write_msgs`.
+    /// Check if write task can be sent to write worker or pushed into
+    /// `self.pending_write_msgs`.
     ///
-    /// Returns false if the task should be pushed into `self.pending_write_msgs`.
-    /// true means the task should be sent to the write worker.
+    /// Returns false if the task should be pushed into
+    /// `self.pending_write_msgs`. true means the task should be sent to the
+    /// write worker.
     fn should_send<C: WriteRouterContext<EK, ER>>(
         &mut self,
         ctx: &mut C,
@@ -180,7 +181,8 @@ where
         }
         if self.next_writer_id.is_none() {
             // The hot write peers should not be rescheduled entirely.
-            // So it will not be rescheduled if the random id is the same as the original one.
+            // So it will not be rescheduled if the random id is the same as the original
+            // one.
             let new_id = rand::random::<usize>() % ctx.config().store_io_pool_size;
             if new_id == self.writer_id {
                 // Reset the time
@@ -191,10 +193,12 @@ where
         }
         // This peer should be rescheduled.
         // Try to add 1 to `io_reschedule_concurrent_count`.
-        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the concurrent count
-        // of rescheduling peer fsm because rescheduling will introduce performance penalty.
+        // The `cfg.io_reschedule_concurrent_max_count` is used for controlling the
+        // concurrent count of rescheduling peer fsm because rescheduling will
+        // introduce performance penalty.
         let success = ctx
-            .io_reschedule_concurrent_count()
+            .write_senders()
+            .io_reschedule_concurrent_count
             .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |c| {
                 if c < ctx.config().io_reschedule_concurrent_max_count {
                     Some(c + 1)
@@ -205,7 +209,8 @@ where
             .is_ok();
         if success {
             STORE_IO_RESCHEDULE_PEER_TOTAL_GAUGE.inc();
-            // Rescheduling succeeds. The task should be pushed into `self.pending_write_msgs`.
+            // Rescheduling succeeds. The task should be pushed into
+            // `self.pending_write_msgs`.
             self.last_unpersisted = last_unpersisted;
             info!("starts io reschedule"; "tag" => &self.tag);
             false
@@ -238,6 +243,37 @@ where
     }
 }
 
+/// Senders for asynchronous writes. There can be multiple senders, generally
+/// you should use `WriteRouter` to decide which sender to be used.
+#[derive(Clone)]
+pub struct WriteSenders<EK: KvEngine, ER: RaftEngine> {
+    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    io_reschedule_concurrent_count: Arc<AtomicUsize>,
+}
+
+impl<EK: KvEngine, ER: RaftEngine> WriteSenders<EK, ER> {
+    pub fn new(write_senders: Vec<Sender<WriteMsg<EK, ER>>>) -> Self {
+        WriteSenders {
+            write_senders,
+            io_reschedule_concurrent_count: Arc::default(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.write_senders.is_empty()
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> Index<usize> for WriteSenders<EK, ER> {
+    type Output = Sender<WriteMsg<EK, ER>>;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Sender<WriteMsg<EK, ER>> {
+        &self.write_senders[index]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -250,8 +286,7 @@ mod tests {
 
     struct TestWriteRouter {
         receivers: Vec<Receiver<WriteMsg<KvTestEngine, KvTestEngine>>>,
-        senders: Vec<Sender<WriteMsg<KvTestEngine, KvTestEngine>>>,
-        io_reschedule_concurrent_count: Arc<AtomicUsize>,
+        senders: WriteSenders<KvTestEngine, KvTestEngine>,
         config: Config,
         raft_metrics: RaftMetrics,
     }
@@ -266,8 +301,7 @@ mod tests {
             }
             Self {
                 receivers,
-                senders,
-                io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+                senders: WriteSenders::new(senders),
                 config,
                 raft_metrics: RaftMetrics::new(true),
             }
@@ -286,7 +320,10 @@ mod tests {
         }
 
         fn must_same_reschedule_count(&self, count: usize) {
-            let cnt = self.io_reschedule_concurrent_count.load(Ordering::Relaxed);
+            let cnt = self
+                .senders
+                .io_reschedule_concurrent_count
+                .load(Ordering::Relaxed);
             if cnt != count {
                 panic!("reschedule count not same, {} != {}", cnt, count);
             }
@@ -294,12 +331,8 @@ mod tests {
     }
 
     impl WriteRouterContext<KvTestEngine, KvTestEngine> for TestWriteRouter {
-        fn write_senders(&self) -> &Vec<Sender<WriteMsg<KvTestEngine, KvTestEngine>>> {
+        fn write_senders(&self) -> &WriteSenders<KvTestEngine, KvTestEngine> {
             &self.senders
-        }
-
-        fn io_reschedule_concurrent_count(&self) -> &Arc<AtomicUsize> {
-            &self.io_reschedule_concurrent_count
         }
 
         fn config(&self) -> &Config {
@@ -400,7 +433,9 @@ mod tests {
         t.must_same_reschedule_count(0);
 
         thread::sleep(Duration::from_millis(10));
-        t.io_reschedule_concurrent_count.store(4, Ordering::Relaxed);
+        t.senders
+            .io_reschedule_concurrent_count
+            .store(4, Ordering::Relaxed);
         // Should retry reschedule next time because the limitation of concurrent count.
         // However it's possible that it will not scheduled due to random
         // so using loop here.
@@ -421,7 +456,9 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
 
-        t.io_reschedule_concurrent_count.store(3, Ordering::Relaxed);
+        t.senders
+            .io_reschedule_concurrent_count
+            .store(3, Ordering::Relaxed);
         thread::sleep(Duration::from_millis(RETRY_SCHEDULE_MILLISECONS + 2));
         // Should reschedule now
         r.send_write_msg(&mut t, Some(40), WriteMsg::Shutdown);

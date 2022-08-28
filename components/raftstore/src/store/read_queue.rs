@@ -4,7 +4,6 @@
 use std::{cmp, collections::VecDeque, mem, u64, usize};
 
 use collections::HashMap;
-use engine_traits::Snapshot;
 use kvproto::{
     kvrpcpb::LockInfo,
     raft_cmdpb::{self, RaftCmdRequest},
@@ -21,19 +20,17 @@ use tikv_util::{
 use time::Timespec;
 use uuid::Uuid;
 
+use super::msg::ErrorCallback;
 use crate::{
-    store::{fsm::apply, metrics::*, Callback, Config},
+    store::{fsm::apply, metrics::*, Config},
     Result,
 };
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
-pub struct ReadIndexRequest<S>
-where
-    S: Snapshot,
-{
+pub struct ReadIndexRequest<C> {
     pub id: Uuid,
-    cmds: MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, C, Option<u64>)>,
     pub propose_time: Timespec,
     pub read_index: Option<u64>,
     pub addition_request: Option<Box<raft_cmdpb::ReadIndexRequest>>,
@@ -44,24 +41,16 @@ where
     cmds_heap_size: usize,
 }
 
-impl<S> ReadIndexRequest<S>
-where
-    S: Snapshot,
-{
-    const CMD_SIZE: usize = mem::size_of::<(RaftCmdRequest, Callback<S>, Option<u64>)>();
+impl<C> ReadIndexRequest<C> {
+    const CMD_SIZE: usize = mem::size_of::<(RaftCmdRequest, C, Option<u64>)>();
 
-    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<S>, read_index: u64) {
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: C, read_index: u64) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds_heap_size += req.heap_size();
         self.cmds.push((req, cb, Some(read_index)));
     }
 
-    pub fn with_command(
-        id: Uuid,
-        req: RaftCmdRequest,
-        cb: Callback<S>,
-        propose_time: Timespec,
-    ) -> Self {
+    pub fn with_command(id: Uuid, req: RaftCmdRequest, cb: C, propose_time: Timespec) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
 
         // Ignore heap allocations for `Callback`.
@@ -81,31 +70,25 @@ where
         }
     }
 
-    pub fn cmds(&self) -> &[(RaftCmdRequest, Callback<S>, Option<u64>)] {
-        &*self.cmds
+    pub fn cmds(&self) -> &[(RaftCmdRequest, C, Option<u64>)] {
+        &self.cmds
     }
 
-    pub fn take_cmds(&mut self) -> MustConsumeVec<(RaftCmdRequest, Callback<S>, Option<u64>)> {
+    pub fn take_cmds(&mut self) -> MustConsumeVec<(RaftCmdRequest, C, Option<u64>)> {
         self.cmds_heap_size = 0;
         self.cmds.take()
     }
 }
 
-impl<S> Drop for ReadIndexRequest<S>
-where
-    S: Snapshot,
-{
+impl<C> Drop for ReadIndexRequest<C> {
     fn drop(&mut self) {
         let dur = (monotonic_raw_now() - self.propose_time).to_std().unwrap();
         RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
     }
 }
 
-pub struct ReadIndexQueue<S>
-where
-    S: Snapshot,
-{
-    reads: VecDeque<ReadIndexRequest<S>>,
+pub struct ReadIndexQueue<C> {
+    reads: VecDeque<ReadIndexRequest<C>>,
     ready_cnt: usize,
     // How many requests are handled.
     handled_cnt: usize,
@@ -115,11 +98,8 @@ where
     retry_countdown: usize,
 }
 
-impl<S> Default for ReadIndexQueue<S>
-where
-    S: Snapshot,
-{
-    fn default() -> ReadIndexQueue<S> {
+impl<C> Default for ReadIndexQueue<C> {
+    fn default() -> ReadIndexQueue<C> {
         ReadIndexQueue {
             reads: VecDeque::new(),
             ready_cnt: 0,
@@ -130,10 +110,7 @@ where
     }
 }
 
-impl<S> ReadIndexQueue<S>
-where
-    S: Snapshot,
-{
+impl<C: ErrorCallback> ReadIndexQueue<C> {
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
     /// 1. more than an election timeout elapsed from the last request push;
@@ -162,8 +139,9 @@ where
         self.ready_cnt != self.reads.len()
     }
 
-    /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
-    /// notify the request's callback that the region is removed.
+    /// Clear all commands in the queue. if `notify_removed` contains an
+    /// `region_id`, notify the request's callback that the region is
+    /// removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
         let mut removed = 0;
         for mut read in self.reads.drain(..) {
@@ -195,7 +173,7 @@ where
         self.contexts.clear();
     }
 
-    pub fn push_back(&mut self, mut read: ReadIndexRequest<S>, is_leader: bool) {
+    pub fn push_back(&mut self, mut read: ReadIndexRequest<C>, is_leader: bool) {
         if !is_leader {
             read.in_contexts = true;
             let offset = self.handled_cnt + self.reads.len();
@@ -205,15 +183,15 @@ where
         self.retry_countdown = usize::MAX;
     }
 
-    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<S>> {
+    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest<C>> {
         self.reads.back_mut()
     }
 
-    pub fn back(&self) -> Option<&ReadIndexRequest<S>> {
+    pub fn back(&self) -> Option<&ReadIndexRequest<C>> {
         self.reads.back()
     }
 
-    pub fn last_ready(&self) -> Option<&ReadIndexRequest<S>> {
+    pub fn last_ready(&self) -> Option<&ReadIndexRequest<C>> {
         if self.ready_cnt > 0 {
             return Some(&self.reads[self.ready_cnt - 1]);
         }
@@ -332,7 +310,7 @@ where
         }
     }
 
-    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<S>> {
+    pub fn pop_front(&mut self) -> Option<ReadIndexRequest<C>> {
         if self.ready_cnt == 0 {
             return None;
         }
@@ -349,8 +327,9 @@ where
         Some(res)
     }
 
-    /// Raft could have not been ready to handle the poped task. So put it back into the queue.
-    pub fn push_front(&mut self, read: ReadIndexRequest<S>) {
+    /// Raft could have not been ready to handle the poped task. So put it back
+    /// into the queue.
+    pub fn push_front(&mut self, read: ReadIndexRequest<C>) {
         debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
@@ -442,10 +421,7 @@ mod memtrace {
 
     use super::*;
 
-    impl<S> HeapSize for ReadIndexRequest<S>
-    where
-        S: Snapshot,
-    {
+    impl<C> HeapSize for ReadIndexRequest<C> {
         fn heap_size(&self) -> usize {
             let mut size = self.cmds_heap_size + Self::CMD_SIZE * self.cmds.capacity();
             if let Some(ref add) = self.addition_request {
@@ -455,13 +431,10 @@ mod memtrace {
         }
     }
 
-    impl<S> HeapSize for ReadIndexQueue<S>
-    where
-        S: Snapshot,
-    {
+    impl<C> HeapSize for ReadIndexQueue<C> {
         #[inline]
         fn heap_size(&self) -> usize {
-            let mut size = self.reads.capacity() * mem::size_of::<ReadIndexRequest<S>>()
+            let mut size = self.reads.capacity() * mem::size_of::<ReadIndexRequest<C>>()
                 // For one Uuid and one usize.
                 + 24 * self.contexts.len();
             for read in &self.reads {
@@ -491,7 +464,8 @@ mod read_index_ctx_tests {
             }
         );
 
-        // Old version TiKV should be able to parse context without lock checking fields.
+        // Old version TiKV should be able to parse context without lock checking
+        // fields.
         let bytes = ctx.to_bytes();
         assert_eq!(bytes, id.as_bytes());
     }
@@ -519,10 +493,11 @@ mod tests {
     use engine_test::kv::KvTestSnapshot;
 
     use super::*;
+    use crate::store::Callback;
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
             handled_cnt: 125,
             ..Default::default()
         };
@@ -581,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_become_leader_then_become_follower() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
             handled_cnt: 100,
             ..Default::default()
         };
@@ -625,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_retake_leadership() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
             handled_cnt: 100,
             ..Default::default()
         };
@@ -640,7 +615,8 @@ mod tests {
         );
         queue.push_back(req, true);
 
-        // Advance on leader, but the peer is not ready to handle it (e.g. it's in merging).
+        // Advance on leader, but the peer is not ready to handle it (e.g. it's in
+        // merging).
         queue.advance_leader_reads("", vec![(id, None, 10)]);
 
         // The leader steps down to follower, clear uncommitted reads.
@@ -666,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_advance_replica_reads_out_of_order() {
-        let mut queue = ReadIndexQueue::<KvTestSnapshot> {
+        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
             handled_cnt: 100,
             ..Default::default()
         };

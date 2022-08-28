@@ -71,7 +71,8 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 /// otherwise the executor's states may be disrupted.
 ///
 /// This means the future must only use async functions.
-// FIXME: get rid of this function, so that futures_executor::block_on is sufficient.
+// FIXME: get rid of this function, so that futures_executor::block_on is
+// sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
     // we need a Tokio runtime, Tokio futures require Tokio executor.
     Builder::new_current_thread()
@@ -90,8 +91,8 @@ pub trait RetryError {
 
 /// Retries a future execution.
 ///
-/// This method implements truncated exponential back-off retry strategies outlined in
-/// <https://docs.aws.amazon.com/general/latest/gr/api-retries.html> and
+/// This method implements truncated exponential back-off retry strategies
+/// outlined in <https://docs.aws.amazon.com/general/latest/gr/api-retries.html> and
 /// <https://cloud.google.com/storage/docs/exponential-backoff>
 /// Since rusoto does not have transparent auto-retry
 /// (<https://github.com/rusoto/rusoto/issues/234>), we need to implement this manually.

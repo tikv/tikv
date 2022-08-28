@@ -21,9 +21,9 @@ impl Logger for RocksdbLogger {
 }
 
 #[derive(Default)]
-pub struct RaftDBLogger;
+pub struct RaftDbLogger;
 
-impl Logger for RaftDBLogger {
+impl Logger for RaftDbLogger {
     fn logv(&self, log_level: InfoLogLevel, log: &str) {
         match log_level {
             InfoLogLevel::Header => info!(#"raftdb_log_header", "{}", log),

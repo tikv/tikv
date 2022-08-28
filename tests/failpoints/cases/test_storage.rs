@@ -12,13 +12,14 @@ use std::{
 
 use api_version::KvFormat;
 use collections::HashMap;
+use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
 use futures::executor::block_on;
 use grpcio::*;
 use kvproto::{
     kvrpcpb::{
         self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, RawPutRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -265,7 +266,7 @@ fn test_scale_scheduler_pool() {
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            kv_engine,
+            Arc::new(DummyFactory::new(Some(kv_engine), "".to_string())),
             cfg.storage.block_cache.shared,
             scheduler,
             flow_controller,
@@ -323,7 +324,7 @@ fn test_scale_scheduler_pool() {
     scale_pool(1);
     fail::cfg(snapshot_fp, "1*pause").unwrap();
     // propose one prewrite to block the only worker
-    assert!(do_prewrite(b"k1", b"v1").is_err());
+    do_prewrite(b"k1", b"v1").unwrap_err();
 
     scale_pool(2);
 
@@ -397,7 +398,10 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::PrewritePessimistic::new(
-                vec![(Mutation::make_put(key.clone(), val.clone()), true)],
+                vec![(
+                    Mutation::make_put(key.clone(), val.clone()),
+                    DoPessimisticCheck,
+                )],
                 key.to_raw().unwrap(),
                 10.into(),
                 3000,
@@ -478,8 +482,9 @@ fn test_pipelined_pessimistic_lock() {
     fail::remove(scheduler_async_write_finish_fp);
     delete_pessimistic_lock(&storage, key.clone(), 50, 50);
 
-    // The proposed callback, which is responsible for returning response, is not guaranteed to be
-    // invoked. In this case it should still be continued properly.
+    // The proposed callback, which is responsible for returning response, is not
+    // guaranteed to be invoked. In this case it should still be continued
+    // properly.
     fail::cfg(before_pipelined_write_finish_fp, "return()").unwrap();
     storage
         .sched_txn_command(
@@ -569,7 +574,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
-                        true,
+                        DoPessimisticCheck,
                     )],
                     b"k1".to_vec(),
                     10.into(),
@@ -703,7 +708,11 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                        need_lock,
+                        if need_lock {
+                            DoPessimisticCheck
+                        } else {
+                            SkipPessimisticCheck
+                        },
                     )],
                     key.to_vec(),
                     start_ts,
@@ -1034,7 +1043,10 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(Key::from_raw(key), value.to_vec()),
+                        DoPessimisticCheck,
+                    )],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -1309,7 +1321,7 @@ fn test_resolve_lock_deadline() {
             }),
         )
         .unwrap();
-    assert!(rx.recv().unwrap().is_ok());
+    rx.recv().unwrap().unwrap();
 
     // Resolve lock, this needs two rounds, two process_read and two process_write.
     // So it needs more than 400ms. It will exceed the deadline.
@@ -1335,10 +1347,11 @@ fn test_resolve_lock_deadline() {
 
 /// Checks if concurrent transaction works correctly during shutdown.
 ///
-/// During shutdown, all pending writes will fail with error so its latch will be released.
-/// Then other writes in the latch queue will be continued to be processed, which can break
-/// the correctness of latch: underlying command result is always determined, it should be
-/// either always success written or never be written.
+/// During shutdown, all pending writes will fail with error so its latch will
+/// be released. Then other writes in the latch queue will be continued to be
+/// processed, which can break the correctness of latch: underlying command
+/// result is always determined, it should be either always success written or
+/// never be written.
 #[test]
 fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     let (mut cluster, mut client, mut ctx) = must_new_cluster_and_kv_client_mul(3);
@@ -1406,7 +1419,8 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
     client = TikvClient::new(channel);
 
-    // The first request is commit, the second is rollback, the first one should succeed.
+    // The first request is commit, the second is rollback, the first one should
+    // succeed.
     ts += 1;
     let get_version = ts;
     let mut get_req = GetRequest::default();
@@ -1420,4 +1434,37 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
         get_resp
     );
     assert_eq!(get_resp.value, v);
+}
+
+#[test]
+fn test_raw_put_deadline() {
+    let deadline_fp = "deadline_check_fail";
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = b"k3".to_vec();
+    put_req.value = b"v3".to_vec();
+    fail::cfg(deadline_fp, "return()").unwrap();
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    fail::remove(deadline_fp);
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(!put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
