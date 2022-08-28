@@ -1,11 +1,3 @@
-/*
- * @Descripttion: 
- * @Author: HuSharp
- * @Date: 2022-08-26 17:59:33
- * @LastEditTime: 2022-08-26 18:26:48
- * @@Email: ihusharp@gmail.com
- */
-// Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use test_raftstore::*;
 #[test]
 fn test_flahsback_for_parameters() {
