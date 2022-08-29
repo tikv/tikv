@@ -675,6 +675,7 @@ impl<K: PrewriteKind> Prewriter<K> {
             // If an error (KeyIsLocked or WriteConflict) occurs before, these lock guards
             // are dropped along with `txn` automatically.
             let lock_guards = txn.take_guards();
+            let cache_updates = mem::take(&mut txn.cache_updates);
             let mut to_be_write = WriteData::new(txn.into_modifies(), extra);
             to_be_write.set_disk_full_opt(self.ctx.get_disk_full_opt());
 
@@ -686,6 +687,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
+                cache_updates,
             }
         } else {
             // Skip write stage if some keys are locked.
@@ -704,6 +706,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 lock_info: None,
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
+                cache_updates: txn.cache_updates,
             }
         };
 
@@ -836,6 +839,9 @@ pub fn one_pc_commit_ts(
         if !released_locks.is_empty() {
             released_locks.wake_up(lock_manager);
         }
+        for update in &mut txn.cache_updates {
+            update.commit_ts = final_min_commit_ts;
+        }
         final_min_commit_ts
     } else {
         assert!(txn.locks_for_1pc.is_empty());
@@ -869,6 +875,7 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
     for (key, lock, _) in std::mem::take(&mut txn.locks_for_1pc) {
         txn.put_lock(key, &lock);
     }
+    txn.cache_updates.clear();
 }
 
 #[cfg(test)]

@@ -73,7 +73,7 @@ use std::{
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use futures::prelude::*;
+use futures::{future::Either, prelude::*};
 use kvproto::{
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
@@ -85,6 +85,7 @@ use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
+use row_cache::ROW_CACHE;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
     deadline::Deadline,
@@ -576,6 +577,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        // =============
+
+        if start_ts.is_max() {
+            if let Some(row) = ROW_CACHE.get(&key) {
+                return Either::Left(async move { Ok((Some(row.value), Default::default())) });
+            }
+        }
+
+        // =============
+
         let stage_begin_ts = Instant::now();
         const CMD: CommandKind = CommandKind::get;
         let priority = ctx.get_priority();
@@ -709,10 +720,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             priority,
             thread_rng().next_u64(),
         );
-        async move {
+        Either::Right(async move {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
-        }
+        })
     }
 
     /// Get values of a set of keys with separate context from a snapshot,

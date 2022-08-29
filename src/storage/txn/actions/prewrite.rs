@@ -20,7 +20,7 @@ use crate::storage::{
         },
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
-    txn::{actions::check_data_constraint::check_data_constraint, LockInfo},
+    txn::{actions::check_data_constraint::check_data_constraint, commands::CacheUpdate, LockInfo},
     Snapshot,
 };
 
@@ -421,6 +421,15 @@ impl<'a> PrewriteMutation<'a> {
             self.min_commit_ts,
         );
 
+        if try_one_pc {
+            if let Some(LockType::Put) | Some(LockType::Delete) = self.lock_type {
+                txn.cache_updates.push(CacheUpdate {
+                    key: self.key.clone(),
+                    commit_ts: TimeStamp::zero(),
+                    value: self.value.clone().unwrap_or(vec![]),
+                });
+            }
+        }
         if let Some(value) = self.value {
             if is_short_value(&value) {
                 // If the value is short, embed it in Lock.

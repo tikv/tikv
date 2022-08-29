@@ -8,7 +8,7 @@ use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::kv::Modify;
+use crate::storage::{kv::Modify, txn::commands::CacheUpdate};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -71,6 +71,7 @@ pub struct MvccTxn {
     // reading requests should be able to read the locks from the engine.
     // So these guards can be released after finishing writing.
     pub(crate) guards: Vec<KeyHandleGuard>,
+    pub(crate) cache_updates: Vec<CacheUpdate>,
 }
 
 impl MvccTxn {
@@ -84,6 +85,7 @@ impl MvccTxn {
             locks_for_1pc: Vec::new(),
             concurrency_manager,
             guards: vec![],
+            cache_updates: vec![],
         }
     }
 

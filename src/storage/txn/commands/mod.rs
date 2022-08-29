@@ -379,6 +379,13 @@ pub struct WriteResult {
     pub lock_info: Option<WriteResultLockInfo>,
     pub lock_guards: Vec<KeyHandleGuard>,
     pub response_policy: ResponsePolicy,
+    pub cache_updates: Vec<CacheUpdate>,
+}
+
+pub struct CacheUpdate {
+    pub key: Key,
+    pub commit_ts: TimeStamp,
+    pub value: Vec<u8>,
 }
 
 pub struct WriteResultLockInfo {

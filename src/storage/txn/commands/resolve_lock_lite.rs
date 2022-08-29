@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::mem;
+
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
@@ -63,7 +65,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             });
         }
         released_locks.wake_up(context.lock_mgr);
-
+        let cache_updates = mem::take(&mut txn.cache_updates);
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
         Ok(WriteResult {
@@ -74,6 +76,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             lock_info: None,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            cache_updates,
         })
     }
 }

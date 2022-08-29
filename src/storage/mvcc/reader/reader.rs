@@ -50,6 +50,10 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         }
     }
 
+    pub fn snapshot(&self) -> &S {
+        &self.reader.snapshot
+    }
+
     #[inline(always)]
     pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
         self.reader.get_txn_commit_record(key, self.start_ts)
@@ -117,7 +121,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
 }
 
 pub struct MvccReader<S: EngineSnapshot> {
-    snapshot: S,
+    pub snapshot: S,
     pub statistics: Statistics,
     // cursors are used for speeding up scans.
     data_cursor: Option<Cursor<S::Iter>>,

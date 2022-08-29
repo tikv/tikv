@@ -137,6 +137,7 @@ rand = "0.7.3"
 regex = "1.3"
 resource_metering = { path = "components/resource_metering" }
 rev_lines = "0.2.1"
+row_cache = { path = "components/row_cache" }
 seahash = "4.1.0"
 security = { path = "components/security", default-features = false }
 semver = "0.11"
@@ -250,6 +251,7 @@ members = [
   "components/raftstore-v2",
   "components/resolved_ts",
   "components/resource_metering",
+  "components/row_cache",
   "components/server",
   "components/server",
   "components/sst_importer",
