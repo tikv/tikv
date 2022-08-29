@@ -10,7 +10,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::{TrySendError, Receiver};
+use crossbeam::channel::{Receiver, TrySendError};
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
@@ -1411,7 +1411,6 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-
     pub fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) -> Receiver<bool> {
         use crossbeam::channel::bounded;
 
@@ -1419,10 +1418,10 @@ impl<T: Simulator> Cluster<T> {
         let (tx, rx) = bounded(1);
 
         router
-        .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
-        .unwrap();
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
+            .unwrap();
 
-        rx  
+        rx
     }
 
     pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {

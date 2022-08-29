@@ -916,10 +916,11 @@ where
     }
 
     // Call msg PrepareFlashback to stop the scheduling and RW tasks.
-    // Once called, it will wait for the channel's notification in FlashbackState to finish.
-    // We place a flag in the request, which is checked when the pre_propose_raft_command is called.
-    // Stopping tasks is done by applying the flashback-only command in this way,
-    // But for RW local reads which need to be considered, we add a flag in readers to ignore local read.
+    // Once called, it will wait for the channel's notification in FlashbackState to
+    // finish. We place a flag in the request, which is checked when the
+    // pre_propose_raft_command is called. Stopping tasks is done by applying
+    // the flashback-only command in this way, But for RW local reads which need
+    // to be considered, we add a flag in readers to ignore local read.
     fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
             warn!(

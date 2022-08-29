@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{time::Duration};
+use std::time::Duration;
 
 use engine_traits::CF_DEFAULT;
 use test_raftstore::*;
@@ -17,7 +17,7 @@ fn test_flahsback_for_parameters() {
     let region = cluster.get_region(b"k1");
     cluster.call_prepare_flashback(region.get_id(), 1);
     sleep_ms(100);
-    
+
     assert!(
         cluster.store_metas[&1]
             .lock()
@@ -30,7 +30,7 @@ fn test_flahsback_for_parameters() {
 
     cluster.call_finish_flashback(region.get_id(), 1);
     sleep_ms(100);
-    
+
     assert!(
         !cluster.store_metas[&1]
             .lock()
@@ -68,7 +68,8 @@ fn test_flahsback_for_write() {
         false,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    req.mut_header().set_flags(WriteBatchFlags::FLASHBACK.bits());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
     let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error());
 
@@ -108,7 +109,8 @@ fn test_flahsback_for_read() {
         false,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    req.mut_header().set_flags(WriteBatchFlags::FLASHBACK.bits());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
     let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error());
 
@@ -116,9 +118,7 @@ fn test_flahsback_for_read() {
     let reqs = vec![new_get_cf_cmd(CF_DEFAULT, b"k1")];
     let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
     assert!(!resp.get_header().has_error());
-
 }
-
 
 #[test]
 fn test_flashback_for_schedule() {
@@ -141,13 +141,15 @@ fn test_flashback_for_schedule() {
 
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
-    let mut transfer_leader = new_admin_request(
-        region.get_id(), 
-        &region.take_region_epoch(), 
-        admin_req);
+    let mut transfer_leader =
+        new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
     transfer_leader.mut_header().set_peer(new_peer(1, 1));
-    transfer_leader.mut_header().set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command_on_leader(transfer_leader, Duration::from_secs(5)).unwrap();
+    transfer_leader
+        .mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster
+        .call_command_on_leader(transfer_leader, Duration::from_secs(5))
+        .unwrap();
     assert!(!resp.get_header().has_error());
 
     cluster.call_finish_flashback(region.get_id(), 1);
@@ -160,7 +162,6 @@ fn test_flahsback_for_status_cmd_as_region_detail() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
-
 
     cluster.call_prepare_flashback(1, 1);
     sleep_ms(1000);
