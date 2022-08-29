@@ -467,7 +467,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 )?
             };
             let exec_duration = start.saturating_elapsed();
-
+            if chunk.has_rows_data() {
+                sample.add_read_bytes(chunk.get_rows_data().len());
+            }
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC

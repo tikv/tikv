@@ -13,9 +13,15 @@ use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    time::{duration_to_sec, Instant},
 };
 
-use crate::{batch::StoreContext, raft::Peer, PeerMsg, PeerTick, Result};
+use crate::{
+    batch::StoreContext,
+    raft::Peer,
+    router::{PeerMsg, PeerTick},
+    Result,
+};
 
 pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);
 
@@ -62,9 +68,9 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>) -> usize {
+    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>, batch_size: usize) -> usize {
         let l = peer_msg_buf.len();
-        for i in l..peer_msg_buf.capacity() {
+        for i in l..batch_size {
             match self.receiver.try_recv() {
                 Ok(msg) => peer_msg_buf.push(msg),
                 Err(e) => {
@@ -75,7 +81,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
                 }
             }
         }
-        peer_msg_buf.capacity() - l
+        batch_size - l
     }
 }
 
@@ -167,6 +173,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         self.schedule_tick(PeerTick::Raft);
     }
 
+    #[inline]
+    fn on_receive_command(&self, send_time: Instant) {
+        self.store_ctx
+            .raft_metrics
+            .propose_wait_time
+            .observe(duration_to_sec(send_time.saturating_elapsed()) as f64);
+    }
+
     fn on_tick(&mut self, tick: PeerTick) {
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
@@ -187,8 +201,15 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(_) => unimplemented!(),
-                PeerMsg::RaftQuery(_) => unimplemented!(),
-                PeerMsg::RaftCommand(_) => unimplemented!(),
+                PeerMsg::RaftQuery(cmd) => {
+                    self.on_receive_command(cmd.send_time);
+                    self.on_query(cmd.request, cmd.ch)
+                }
+                PeerMsg::RaftCommand(cmd) => {
+                    self.on_receive_command(cmd.send_time);
+                    // self.on_command(cmd.cmd.request, cmd.ch)
+                    unimplemented!()
+                }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => unimplemented!(),
                 PeerMsg::Start => self.on_start(),

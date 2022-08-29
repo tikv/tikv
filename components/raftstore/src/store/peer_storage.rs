@@ -33,10 +33,7 @@ use tikv_util::{
     box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
 };
 
-use super::{
-    entry_storage::last_index, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
-    SnapshotStatistics,
-};
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
@@ -147,14 +144,14 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-    // if we recv append log when applying snapshot, last_index in raft_local_state
-    // will larger than snapshot_index. since raft_local_state is written to
-    // raft engine, and raft write_batch is written after kv write_batch,
-    // raft_local_state may wrong if restart happen between the two write. so we
-    // copy raft_local_state to kv engine (snapshot_raft_state), and set
-    // snapshot_raft_state.last_index = snapshot_index. after restart, we need
-    // check last_index.
-    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+    // since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch. raft_local_state may wrong
+    // if restart happen between the two write. so we copy raft_local_state to
+    // kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.hard_state.commit = snapshot_index. after restart, we
+    // need check commit.
+    if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
+    {
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
@@ -827,6 +824,7 @@ where
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
             status,
+            peer_id: self.peer_id,
         };
 
         // Don't schedule the snapshot to region worker.
