@@ -38,7 +38,6 @@ use crate::{
     coprocessor::CoprocessorHost,
     store::{
         self, check_abort,
-        config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
@@ -751,7 +750,7 @@ where
                 if let Some(Task::Apply {
                     region_id,
                     status,
-                    peed_id,
+                    peer_id,
                 }) = self.pending_applies.pop_front()
                 {
                     is_first = false;
@@ -866,7 +865,7 @@ where
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
-        if self.clean_stale_tick >= STALE_PEER_CHECK_TICK {
+        if self.clean_stale_tick >= self.clean_stale_tick_max {
             self.ctx.clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
@@ -907,8 +906,11 @@ mod tests {
             ObserverContext,
         },
         store::{
-            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
-            worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
+            config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
+            peer_storage::JOB_STATUS_PENDING,
+            snap::tests::get_test_db_for_regions,
+            worker::RegionRunner,
+            CasualMessage, SnapKey, SnapManager,
         },
     };
 
@@ -1006,6 +1008,8 @@ mod tests {
             engine.kv.clone(),
             mgr,
             0,
+            PENDING_APPLY_CHECK_INTERVAL,
+            STALE_PEER_CHECK_TICK,
             false,
             2,
             CoprocessorHost::<KvTestEngine>::default(),
