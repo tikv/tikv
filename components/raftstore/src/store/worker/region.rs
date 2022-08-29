@@ -412,8 +412,15 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
-        self.coprocessor_host
-            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
+        match self
+            .coprocessor_host
+            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
+        {
+            Ok(_) => (),
+            Err(e) => {
+                return Err(box_err!("post apply snapshot error {:?}", e));
+            }
+        };
 
         let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
@@ -1410,7 +1417,7 @@ mod tests {
             peer_id: u64,
             key: &crate::store::SnapKey,
             snapshot: Option<&crate::store::Snapshot>,
-        ) {
+        ) -> std::result::Result<(), crate::coprocessor::error::Error> {
             let code = snapshot.unwrap().total_size().unwrap()
                 + key.term
                 + key.region_id
@@ -1419,6 +1426,7 @@ mod tests {
             self.post_apply_count.fetch_add(1, Ordering::SeqCst);
             self.post_apply_hash
                 .fetch_add(code as usize, Ordering::SeqCst);
+            Ok(())
         }
 
         fn should_pre_apply_snapshot(&self) -> bool {

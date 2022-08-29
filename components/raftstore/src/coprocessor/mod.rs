@@ -21,7 +21,7 @@ use raft::{eraftpb, StateRole};
 pub mod config;
 mod consistency_check;
 pub mod dispatcher;
-mod error;
+pub mod error;
 mod metrics;
 pub mod region_info_accessor;
 mod split_check;
@@ -201,7 +201,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _: u64,
         _: &crate::store::SnapKey,
         _snapshot: Option<&crate::store::Snapshot>,
-    ) {
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// We call pre_apply_snapshot only when one of the observer returns true.
