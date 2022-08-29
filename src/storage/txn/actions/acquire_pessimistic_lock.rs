@@ -861,7 +861,7 @@ pub mod tests {
         // Put the value, writecf: k_20_put_v
         must_prewrite_put(&engine, k, v, k, 10);
         must_commit(&engine, k, 10, 20);
-        // pessimistic lock generated
+        // Pessimistic lock generated
         assert_eq!(
             must_succeed_return_value(&engine, k, k, 25, 25, true),
             Some(v.to_vec())
