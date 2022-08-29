@@ -21,6 +21,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+<<<<<<< HEAD
 use crate::store::fsm::GenSnapTask;
 use crate::store::util;
 use crate::store::ProposalContext;
@@ -32,6 +33,16 @@ use tikv_util::worker::Scheduler;
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+=======
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use crate::{
+    store::{
+        async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
+        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+    },
+    Error, Result,
+};
+>>>>>>> 741594664... raftstore: fix checking for snapshot last index (#13088)
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -359,6 +370,7 @@ pub fn recover_from_applying_state(
         None => RaftLocalState::default(),
     };
 
+<<<<<<< HEAD
     // if we recv append log when applying snapshot, last_index in raft_local_state will
     // larger than snapshot_index. since raft_local_state is written to raft engine, and
     // raft write_batch is written after kv write_batch, raft_local_state may wrong if
@@ -367,6 +379,21 @@ pub fn recover_from_applying_state(
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
         raft_wb.put_msg(&raft_state_key, &snapshot_raft_state)?;
+=======
+    // since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch. raft_local_state may wrong
+    // if restart happen between the two write. so we copy raft_local_state to
+    // kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.hard_state.commit = snapshot_index. after restart, we
+    // need check commit.
+    if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
+    {
+        // There is a gap between existing raft logs and snapshot. Clean them up.
+        engines
+            .raft
+            .clean(region_id, 0 /* first_index */, &raft_state, raft_wb)?;
+        raft_wb.put_raft_state(region_id, &snapshot_raft_state)?;
+>>>>>>> 741594664... raftstore: fix checking for snapshot last index (#13088)
     }
     Ok(())
 }
