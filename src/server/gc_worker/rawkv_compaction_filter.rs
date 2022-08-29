@@ -39,7 +39,7 @@ use crate::{
 // necessary because after compaction filter is enabled, it's impossible to
 // fallback to ealier version which modifications of GC are distributed to other
 // replicas by Raft.
-const COMPACTION_FILTER_RAWKV_GC_FEATURE: Feature = Feature::require(5, 0, 0);
+const COMPACTION_FILTER_RAWKV_GC_FEATURE: Feature = Feature::require(6, 1, 0);
 
 pub struct RawCompactionFilterFactory;
 
