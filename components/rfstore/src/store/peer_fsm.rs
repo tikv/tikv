@@ -1000,7 +1000,13 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         let change = result.unwrap();
-        if change.shard_ver != self.region().get_region_epoch().get_version() {
+        if change.shard_ver
+            != self
+                .peer
+                .get_preprocessed_region()
+                .get_region_epoch()
+                .get_version()
+        {
             error!("change set version not match change {:?}", &change; "region" => tag);
             return;
         }

@@ -1548,7 +1548,7 @@ impl Peer {
         }
     }
 
-    fn get_preprocessed_region(&self) -> &Region {
+    pub(crate) fn get_preprocessed_region(&self) -> &Region {
         self.preprocessed_region.as_ref().unwrap_or(self.region())
     }
 
