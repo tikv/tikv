@@ -430,8 +430,7 @@ impl Engine {
         // We must ensure there are enough ids for remote compactor to use, so we need to allocate
         // more ids than needed.
         let mut old_ids_num = 0usize;
-        for cf in 0..NUM_CFS {
-            let bot_ids = &req.multi_cf_bottoms[cf];
+        for bot_ids in req.multi_cf_bottoms.iter() {
             old_ids_num += bot_ids.len();
         }
         old_ids_num += req.tops.len() + req.bottoms.len();
