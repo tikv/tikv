@@ -10,7 +10,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::TrySendError;
+use crossbeam::channel::{TrySendError, Receiver};
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
@@ -1411,7 +1411,8 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
+
+    pub fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) -> Receiver<bool> {
         use crossbeam::channel::bounded;
 
         let router = self.sim.rl().get_router(store_id).unwrap();
@@ -1420,22 +1421,8 @@ impl<T: Simulator> Cluster<T> {
         router
         .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
         .unwrap();
-        
-        match rx.recv() {
-            Ok(prepared) => {
-                if !prepared {
-                    panic!("prepare flashback failed")
-                }
-                info!(
-                    "flashback is prepared";
-                    "region_id" => region_id,
-                );
-            }
-            Err(recv_err) => {
-                panic!("failed to wait the flashback preparation result: {:?}", recv_err)
-            }
-        }
-            
+
+        rx  
     }
 
     pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {

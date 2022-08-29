@@ -720,7 +720,10 @@ impl FlashbackState {
     }
 
     pub fn finish_wait_apply(&self) {
-        self.0.send(true).unwrap();
+        match self.0.send(true) {
+            Ok(_) => (),
+            Err(e) => error!("fail to notify flashback state"; "err" => ?e),
+        }
     }
 }
 

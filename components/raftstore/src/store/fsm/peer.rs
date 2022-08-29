@@ -934,7 +934,6 @@ where
 
         // mark regions's local reader as removed from the flashback state.
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.flashback_state = self.fsm.peer.flashback_state.clone();
         info!(
             "mark regions's reader as removing from the flashback state";
             "region_id" => self.region_id(),
@@ -955,7 +954,6 @@ where
 
         // recover regions's local reader from the flashback state.
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        meta.flashback_state.take();
         info!(
             "mark regions' reader as recovering from the flashback state";
             "region_id" => self.region_id(),
