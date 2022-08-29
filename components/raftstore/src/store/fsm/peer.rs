@@ -915,7 +915,11 @@ where
         syncer.report_for_self(self_report);
     }
 
-    // set a flag to stop schedule and rw
+    // Call msg PrepareFlashback to stop the scheduling and RW tasks.
+    // Once called, it will wait for the channel's notification in FlashbackState to finish.
+    // We place a flag in the request, which is checked when the pre_propose_raft_command is called.
+    // Stopping tasks is done by applying the flashback-only command in this way,
+    // But for RW local reads which need to be considered, we add a flag in readers to ignore local read.
     fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
             warn!(
@@ -928,11 +932,11 @@ where
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
 
-        // mark regions's reader as remove
+        // mark regions's local reader as removed from the flashback state.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.flashback_state = self.fsm.peer.flashback_state.clone();
         info!(
-            "mark regions's reader as remove";
+            "mark regions's reader as removing from the flashback state";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
@@ -949,11 +953,11 @@ where
         );
         self.fsm.peer.flashback_state.take();
 
-        // recover regions's reader
+        // recover regions's local reader from the flashback state.
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.flashback_state.take();
         info!(
-            "mark regions's reader as recover";
+            "mark regions' reader as recovering from the flashback state";
             "region_id" => self.region_id(),
             "peer_id" => self.fsm.peer_id(),
         );
@@ -4761,8 +4765,24 @@ where
             return Ok(Some(resp));
         }
 
-        // Check whether the store has the right peer to handle the request.
         let region_id = self.region_id();
+        // When in the flashback state, we should not allow any other request to be
+        // proposed.
+        if self.fsm.peer.flashback_state.is_some() {
+            info!(
+                "cannot propose any other request when in flashback state";
+                "region_id" => region_id,
+                "peer_id" => self.fsm.peer.peer_id(),
+            );
+            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
+            if !flags.contains(WriteBatchFlags::FLASHBACK) {
+                return Err(box_err!(
+                    "cannot propose non-flashback request when in flashback state"
+                ));
+            }
+        }
+
+        // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 

@@ -252,9 +252,14 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
+        let mut flags = 0;
         if txn_extra.one_pc {
-            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+            flags |= WriteBatchFlags::ONE_PC.bits();
         }
+        if txn_extra.flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
