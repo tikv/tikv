@@ -448,9 +448,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
             let (drained, record_len) = {
-                // let _guard = sample.observe_cpu();
-                self.internal_handle_request(false, batch_size, &mut chunk, &mut warnings, &mut ctx)
-                    .await?
+                let (cpu_time, res) = sample
+                    .observe_cpu_async(self.internal_handle_request(
+                        false,
+                        batch_size,
+                        &mut chunk,
+                        &mut warnings,
+                        &mut ctx,
+                    ))
+                    .await;
+                sample.add_cpu_time(cpu_time);
+                res?
             };
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
