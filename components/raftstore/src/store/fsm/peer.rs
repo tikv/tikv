@@ -52,7 +52,7 @@ use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -613,7 +613,7 @@ where
                     self.ctx
                         .raft_metrics
                         .propose_wait_time
-                        .observe(duration_to_sec(propose_time) as f64);
+                        .observe(propose_time.as_secs_f64());
                     cmd.callback.read_tracker().map(|tracker| {
                         GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
                             t.metrics.read_index_propose_wait_nanos =
