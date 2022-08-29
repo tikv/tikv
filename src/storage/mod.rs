@@ -3232,11 +3232,12 @@ mod tests {
     };
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
-    use txn_types::{Mutation, PessimisticLock, WriteType};
+    use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
+        txn::commands::FLASHBACK_BATCH_SIZE,
         *,
     };
     use crate::{
@@ -4438,6 +4439,15 @@ mod tests {
                 11,
                 12,
             ),
+            // Non-short value
+            (
+                Mutation::Put(
+                    (Key::from_raw(b"k"), vec![b'v'; SHORT_VALUE_MAX_LEN + 1]),
+                    Assertion::None,
+                ),
+                13,
+                14,
+            ),
         ];
         let (tx, rx) = channel();
         // Prewrite and commit.
@@ -4471,13 +4481,13 @@ mod tests {
             if let Mutation::Put(..) = write.0 {
                 expect_value(
                     value.unwrap(),
-                    block_on(storage.get(Context::default(), key.clone(), 12.into()))
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
                         .unwrap()
                         .0,
                 );
             } else {
                 expect_none(
-                    block_on(storage.get(Context::default(), key, 12.into()))
+                    block_on(storage.get(Context::default(), key, commit_ts))
                         .unwrap()
                         .0,
                 );
@@ -4488,6 +4498,7 @@ mod tests {
             let write = &writes[idx];
             let key = write.0.key();
             let start_ts = write.1.into();
+            let commit_ts = write.2.into();
             storage
                 .sched_txn_command(
                     commands::FlashbackToVersionReadPhase::new(
@@ -4503,7 +4514,7 @@ mod tests {
             rx.recv().unwrap();
             if idx == 0 || matches!(writes[idx - 1].0, Mutation::Delete(..)) {
                 expect_none(
-                    block_on(storage.get(Context::default(), key.clone(), 12.into()))
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
                         .unwrap()
                         .0,
                 );
@@ -4511,7 +4522,7 @@ mod tests {
                 let (_, old_value) = writes[idx - 1].0.clone().into_key_value();
                 expect_value(
                     old_value.unwrap(),
-                    block_on(storage.get(Context::default(), key.clone(), 12.into()))
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
                         .unwrap()
                         .0,
                 );
@@ -4611,6 +4622,106 @@ mod tests {
             block_on(storage.get(Context::default(), Key::from_raw(b"k"), 3.into()))
                 .unwrap()
                 .0,
+        );
+    }
+
+    #[test]
+    fn test_flashback_to_version_in_multi_batch() {
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        // Add (FLASHBACK_BATCH_SIZE * 2) lock records.
+        for i in 1..=FLASHBACK_BATCH_SIZE * 2 {
+            let start_ts = (i as u64).into();
+            let key = Key::from_raw(format!("k{}", i).as_bytes());
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![Mutation::make_put(
+                            key.clone(),
+                            format!("v@{}", i).as_bytes().to_vec(),
+                        )],
+                        key.to_raw().unwrap(),
+                        start_ts,
+                    ),
+                    expect_ok_callback(tx.clone(), i as i32),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            expect_error(
+                |e| match e {
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::KeyIsLocked { .. },
+                    ))))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                },
+                block_on(storage.get(Context::default(), key, start_ts)),
+            );
+        }
+        // Add (FLASHBACK_BATCH_SIZE * 2) write records.
+        for i in FLASHBACK_BATCH_SIZE * 2 + 1..=FLASHBACK_BATCH_SIZE * 4 {
+            let start_ts = (i as u64).into();
+            let commit_ts = ((i + 1) as u64).into();
+            let key = Key::from_raw(format!("k{}", i).as_bytes());
+            let value = format!("v@{}", i).as_bytes().to_vec();
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![Mutation::make_put(key.clone(), value.clone())],
+                        key.to_raw().unwrap(),
+                        start_ts,
+                    ),
+                    expect_ok_callback(tx.clone(), i as i32),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![key.clone()],
+                        start_ts,
+                        commit_ts,
+                        Context::default(),
+                    ),
+                    expect_value_callback(tx.clone(), i as i32, TxnStatus::committed(commit_ts)),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            expect_value(
+                value,
+                block_on(storage.get(Context::default(), key, commit_ts))
+                    .unwrap()
+                    .0,
+            );
+        }
+        // Flashback all records.
+        storage
+            .sched_txn_command(
+                commands::FlashbackToVersionReadPhase::new(
+                    TimeStamp::zero(),
+                    None,
+                    Some(Key::from_raw(b"k")),
+                    Some(Key::from_raw(b"k")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k1"), 1.into()))
+                .unwrap()
+                .0,
+        );
+        expect_none(
+            block_on(storage.get(
+                Context::default(),
+                Key::from_raw(format!("k{}", FLASHBACK_BATCH_SIZE * 4).as_bytes()),
+                ((FLASHBACK_BATCH_SIZE * 4 + 1) as u64).into(),
+            ))
+            .unwrap()
+            .0,
         );
     }
 

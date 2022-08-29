@@ -58,8 +58,6 @@ impl CommandExt for FlashbackToVersion {
     }
 }
 
-pub const FLASHBACK_BATCH_SIZE: usize = 256;
-
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, _snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);

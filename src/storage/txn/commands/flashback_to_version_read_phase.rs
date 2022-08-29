@@ -8,7 +8,6 @@ use crate::storage::{
     txn::{
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
-            FLASHBACK_BATCH_SIZE,
         },
         sched_pool::tls_collect_keyread_histogram_vec,
         Result,
@@ -39,6 +38,8 @@ impl CommandExt for FlashbackToVersionReadPhase {
         0
     }
 }
+
+pub const FLASHBACK_BATCH_SIZE: usize = 256;
 
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
@@ -73,6 +74,9 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             );
             statistics.add(&reader.statistics);
             (key_writes, has_remain_writes) = key_writes_result?;
+        } else if self.next_write_key.is_some() && key_locks.len() >= FLASHBACK_BATCH_SIZE {
+            // The batch is full, we need to read the writes in the next batch later.
+            has_remain_writes = true;
         }
         tls_collect_keyread_histogram_vec(
             self.tag().get_str(),
@@ -87,8 +91,12 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             } else {
                 None
             };
-            let next_write_key = if has_remain_writes {
+            let next_write_key = if has_remain_writes && !key_writes.is_empty() {
                 key_writes.last().map(|(key, _)| key.clone())
+            } else if has_remain_writes && key_writes.is_empty() {
+                // We haven't read any write yet, so we need to read the writes in the next
+                // batch later.
+                self.next_write_key
             } else {
                 None
             };
