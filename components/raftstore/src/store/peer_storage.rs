@@ -464,6 +464,7 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
+<<<<<<< HEAD
     // if we recv append log when applying snapshot, last_index in raft_local_state will
     // larger than snapshot_index. since raft_local_state is written to raft engine, and
     // raft write_batch is written after kv write_batch, raft_local_state may wrong if
@@ -471,6 +472,16 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
     // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
     // after restart, we need check last_index.
     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+=======
+    // since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch. raft_local_state may wrong
+    // if restart happen between the two write. so we copy raft_local_state to
+    // kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.hard_state.commit = snapshot_index. after restart, we
+    // need check commit.
+    if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
+    {
+>>>>>>> 741594664... raftstore: fix checking for snapshot last index (#13088)
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
