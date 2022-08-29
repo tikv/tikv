@@ -15,7 +15,7 @@ use crate::{debug, metrics::TRACK_REGION, utils};
 #[derive(Clone, Default, Debug)]
 pub struct SubscriptionTracer(Arc<DashMap<u64, RegionSubscription>>);
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SubscriptionState {
     /// When it is newly added (maybe after split or leader transfered from
     /// other store), without any flush.

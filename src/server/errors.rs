@@ -6,7 +6,7 @@ use engine_traits::Error as EngineTraitError;
 use futures::channel::oneshot::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
-use openssl::error::ErrorStack as OpenSSLError;
+use openssl::error::ErrorStack as OpenSslError;
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
 use raftstore::Error as RaftServerError;
@@ -65,7 +65,7 @@ pub enum Error {
     Http(#[from] HttpError),
 
     #[error("{0:?}")]
-    OpenSSL(#[from] OpenSSLError),
+    OpenSsl(#[from] OpenSslError),
 }
 
 pub type Result<T> = result::Result<T, Error>;

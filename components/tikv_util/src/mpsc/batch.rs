@@ -391,7 +391,7 @@ mod tests {
         }
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -404,7 +404,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..4 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 5);
@@ -442,7 +442,7 @@ mod tests {
         polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
-        assert!(tx.send(0).is_ok());
+        tx.send(0).unwrap();
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 0);
 
@@ -455,7 +455,7 @@ mod tests {
 
         // Auto notify with more sendings.
         for _ in 0..16 {
-            assert!(tx.send(0).is_ok());
+            tx.send(0).unwrap();
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);
@@ -489,7 +489,7 @@ mod tests {
             let mut future_slot = self.future.lock().unwrap();
             if let Some(mut future) = future_slot.take() {
                 let waker = task::waker_ref(&task);
-                let cx = &mut Context::from_waker(&*waker);
+                let cx = &mut Context::from_waker(&waker);
                 match future.as_mut().poll(cx) {
                     Poll::Pending => {
                         *future_slot = Some(future);

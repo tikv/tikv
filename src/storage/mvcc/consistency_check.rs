@@ -567,7 +567,7 @@ mod tests {
 
         let mut count = 0;
         for key_and_mvcc in scan_mvcc(b"z", &[], 30) {
-            assert!(key_and_mvcc.is_ok());
+            key_and_mvcc.unwrap();
             count += 1;
         }
         assert_eq!(count, 7);

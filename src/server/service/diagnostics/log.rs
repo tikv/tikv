@@ -41,12 +41,12 @@ pub enum Error {
     InvalidRequest(String),
     ParseError(String),
     SearchError(String),
-    IOError(std::io::Error),
+    IoError(std::io::Error),
 }
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error::IOError(err)
+        Error::IoError(err)
     }
 }
 
@@ -481,7 +481,6 @@ mod tests {
         ];
         for (input, time, level, content) in cs.into_iter() {
             let result = parse(input);
-            assert!(result.is_ok(), "expected OK, but got: {:?}", result);
             let timestamp = timestamp(time);
             let log = result.unwrap();
             assert_eq!(log.0, content);

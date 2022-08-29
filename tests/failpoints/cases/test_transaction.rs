@@ -12,7 +12,10 @@ use std::{
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest},
+    kvrpcpb::{
+        self as pb, AssertionLevel, Context, Op, PessimisticLockRequest, PrewriteRequest,
+        PrewriteRequestPessimisticAction::*,
+    },
     tikvpb::TikvClient,
 };
 use raftstore::store::{util::new_peer, LocksStatus};
@@ -53,10 +56,10 @@ fn test_txn_failpoints() {
     let (k2, v2) = (b"k2", b"v2");
     must_acquire_pessimistic_lock(&engine, k, k, 30, 30);
     fail::cfg("pessimistic_prewrite", "return()").unwrap();
-    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, true);
+    must_pessimistic_prewrite_put_err(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
     must_prewrite_put(&engine, k2, v2, k2, 31);
     fail::remove("pessimistic_prewrite");
-    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, true);
+    must_pessimistic_prewrite_put(&engine, k, v1, k, 30, 30, DoPessimisticCheck);
     must_commit(&engine, k, 30, 40);
     must_commit(&engine, k2, 31, 41);
     must_get(&engine, k, 50, v1);
@@ -323,10 +326,8 @@ fn test_max_commit_ts_error() {
         )
         .unwrap();
     thread::sleep(Duration::from_millis(200));
-    assert!(
-        cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
-            .is_err()
-    );
+    cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
+        .unwrap_err();
     cm.update_max_ts(200.into());
 
     let res = prewrite_rx.recv().unwrap().unwrap();
@@ -334,7 +335,7 @@ fn test_max_commit_ts_error() {
     assert!(res.one_pc_commit_ts.is_zero());
 
     // There should not be any memory lock left.
-    assert!(cm.read_range_check(None, None, |_, _| Err(())).is_ok());
+    cm.read_range_check(None, None, |_, _| Err(())).unwrap();
 
     // Two locks should be written, the second one does not async commit.
     let l1 = must_locked(&storage.get_engine(), b"k1", 10);
@@ -566,13 +567,11 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+        .unwrap();
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();

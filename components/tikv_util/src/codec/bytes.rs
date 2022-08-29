@@ -448,8 +448,8 @@ mod tests {
         ];
 
         for mut x in invalid_bytes {
-            assert!(decode_bytes(&mut x.as_slice(), false).is_err());
-            assert!(decode_bytes_in_place(&mut x, false).is_err());
+            decode_bytes(&mut x.as_slice(), false).unwrap_err();
+            decode_bytes_in_place(&mut x, false).unwrap_err();
         }
     }
 

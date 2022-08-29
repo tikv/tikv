@@ -316,7 +316,7 @@ impl Column {
             }
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
-            FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
+            FieldTypeTp::Json => Datum::Json(self.get_json(idx)?),
             FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
             FieldTypeTp::Bit => Datum::Bytes(self.get_bytes(idx).to_vec()),
             FieldTypeTp::Set => {
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_column_json() {
-        let fields: Vec<FieldType> = vec![FieldTypeTp::JSON.into()];
+        let fields: Vec<FieldType> = vec![FieldTypeTp::Json.into()];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
 
         let data = vec![Datum::Null, Datum::Json(json)];

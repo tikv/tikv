@@ -284,8 +284,8 @@ pub fn lpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = str::from_utf8(&*arg)?;
-    let pad = str::from_utf8(&*pad)?;
+    let input = str::from_utf8(arg)?;
+    let pad = str::from_utf8(pad)?;
     let input_len = input.chars().count();
     let pad_len = pad.chars().count();
 
@@ -350,8 +350,8 @@ pub fn rpad_utf8(
     pad: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let input = str::from_utf8(&*arg)?;
-    let pad = str::from_utf8(&*pad)?;
+    let input = str::from_utf8(arg)?;
+    let pad = str::from_utf8(pad)?;
     let input_len = input.chars().count();
     let pad_len = pad.chars().count();
 
@@ -451,7 +451,7 @@ pub fn left_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<BytesG
     if *rhs <= 0 {
         return Ok(writer.write_ref(Some(b"")));
     }
-    let s = str::from_utf8(&*lhs)?;
+    let s = str::from_utf8(lhs)?;
 
     let rhs = *rhs as usize;
     let len = s.chars().count();
@@ -516,8 +516,8 @@ pub fn insert_utf8(
     newstr_utf8: BytesRef,
     writer: BytesWriter,
 ) -> Result<BytesGuard> {
-    let s = str::from_utf8(&*s_utf8)?;
-    let newstr = str::from_utf8(&*newstr_utf8)?;
+    let s = str::from_utf8(s_utf8)?;
+    let newstr = str::from_utf8(newstr_utf8)?;
     let pos = *pos;
     let len = *len;
     let upos: usize = pos as usize;
@@ -543,7 +543,7 @@ pub fn right_utf8(lhs: BytesRef, rhs: &Int, writer: BytesWriter) -> Result<Bytes
         return Ok(writer.write_ref(Some(b"")));
     }
 
-    let s = str::from_utf8(&*lhs)?;
+    let s = str::from_utf8(lhs)?;
 
     let rhs = *rhs as usize;
     let len = s.chars().count();
@@ -4074,7 +4074,7 @@ mod tests {
             .push_param(args.1)
             .push_param(args.2)
             .evaluate(ScalarFuncSig::Trim3Args);
-        assert!(got.is_err());
+        got.unwrap_err();
 
         let invalid_utf8_cases = vec![
             (
@@ -4164,7 +4164,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<i64>(ScalarFuncSig::CharLengthUtf8);
-            assert!(output.is_err());
+            output.unwrap_err();
         }
     }
 

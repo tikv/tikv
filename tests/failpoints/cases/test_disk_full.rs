@@ -67,7 +67,7 @@ fn ensure_disk_usage_is_reported<T: Simulator>(
     let peer = new_peer(store_id, peer_id);
     let key = region.get_start_key();
     let ch = async_read_on_peer(cluster, peer, region.clone(), key, true, true);
-    assert!(ch.recv_timeout(Duration::from_secs(1)).is_ok());
+    ch.recv_timeout(Duration::from_secs(1)).unwrap();
 }
 
 fn test_disk_full_leader_behaviors(usage: DiskUsage) {

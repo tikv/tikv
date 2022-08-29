@@ -76,17 +76,17 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
 }
 
 /// Invoke handle request for a DAG handler.
-pub struct DAGHandleBencher<F: FnMut() -> Box<dyn RequestHandler>> {
+pub struct DagHandleBencher<F: FnMut() -> Box<dyn RequestHandler>> {
     handler_builder: F,
 }
 
-impl<F: FnMut() -> Box<dyn RequestHandler>> DAGHandleBencher<F> {
+impl<F: FnMut() -> Box<dyn RequestHandler>> DagHandleBencher<F> {
     pub fn new(handler_builder: F) -> Self {
         Self { handler_builder }
     }
 }
 
-impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
+impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DagHandleBencher<F> {
     fn bench<M>(&mut self, b: &mut criterion::Bencher<'_, M>)
     where
         M: Measurement,
@@ -94,7 +94,7 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
         b.iter_batched_ref(
             &mut self.handler_builder,
             |handler| {
-                profiler::start("./DAGHandleBencher.profile");
+                profiler::start("./DagHandleBencher.profile");
                 black_box(block_on(handler.handle_request()).unwrap());
                 profiler::stop();
             },

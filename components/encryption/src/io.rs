@@ -694,9 +694,8 @@ mod tests {
             buf: &mut [u8],
         ) -> Poll<IoResult<usize>> {
             let len = min(self.read_maxsize_once, buf.len());
-            let r = self.cursor.read(&mut buf[..len]);
-            assert!(r.is_ok());
-            Poll::Ready(IoResult::Ok(r.unwrap()))
+            let r = self.cursor.read(&mut buf[..len]).unwrap();
+            Poll::Ready(IoResult::Ok(r))
         }
     }
 
@@ -727,11 +726,10 @@ mod tests {
             let mut encrypt_read_len = 0;
 
             loop {
-                let s = encrypt_reader
+                let read_len = encrypt_reader
                     .read(&mut encrypt_text[encrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }
@@ -757,11 +755,10 @@ mod tests {
             .unwrap();
 
             loop {
-                let s = decrypt_reader
+                let read_len = decrypt_reader
                     .read(&mut decrypt_text[decrypt_read_len..])
-                    .await;
-                assert!(s.is_ok());
-                let read_len = s.unwrap();
+                    .await
+                    .unwrap();
                 if read_len == 0 {
                     break;
                 }

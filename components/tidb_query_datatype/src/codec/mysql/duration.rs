@@ -81,7 +81,7 @@ fn check_nanos_part(nanos: u32) -> Result<u32> {
 
 #[inline]
 fn check_nanos(nanos: i64) -> Result<i64> {
-    if nanos < -MAX_NANOS || nanos > MAX_NANOS {
+    if !(-MAX_NANOS..=MAX_NANOS).contains(&nanos) {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)

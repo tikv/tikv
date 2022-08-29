@@ -59,7 +59,7 @@ fn test_wait_for_apply_index() {
         .async_command_on_node(3, request, cb)
         .unwrap();
     // Must timeout here
-    assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove("on_apply_write_cmd");
 
     // After write cmd applied, the follower read will be executed.
@@ -794,7 +794,7 @@ fn test_read_index_lock_checking_on_false_leader() {
     // peer 1. But the lease of peer 1 has expired and it cannot get majority of
     // heartbeat. So, we cannot get the result here.
     let resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
-    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
 
     // Now, restore the network partition. Peer 1 should now become follower and
     // drop its pending read index request. Peer 2 cannot get the result now.
@@ -805,7 +805,7 @@ fn test_read_index_lock_checking_on_false_leader() {
     );
     cluster.sim.wl().add_recv_filter(2, recv_filter);
     cluster.clear_send_filters();
-    assert!(resp.recv_timeout(Duration::from_millis(300)).is_err());
+    resp.recv_timeout(Duration::from_millis(300)).unwrap_err();
 
     // After cleaning all filters, peer 2 will retry and will get error.
     cluster.sim.wl().clear_recv_filters(2);

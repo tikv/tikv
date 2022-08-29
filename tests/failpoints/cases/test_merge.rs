@@ -12,7 +12,7 @@ use std::{
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::*,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     tikvpb::TikvClient,
 };
@@ -1335,22 +1335,20 @@ fn test_merge_with_concurrent_pessimistic_locking() {
 
     let snapshot = cluster.must_get_snapshot_of_region(left.id);
     let txn_ext = snapshot.txn_ext.unwrap();
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(
-                Key::from_raw(b"k0"),
-                PessimisticLock {
-                    primary: b"k0".to_vec().into_boxed_slice(),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 20.into(),
-                    min_commit_ts: 30.into(),
-                },
-            )])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(
+            Key::from_raw(b"k0"),
+            PessimisticLock {
+                primary: b"k0".to_vec().into_boxed_slice(),
+                start_ts: 10.into(),
+                ttl: 3000,
+                for_update_ts: 20.into(),
+                min_commit_ts: 30.into(),
+            },
+        )])
+        .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
     let env = Arc::new(Environment::new(1));
@@ -1436,16 +1434,14 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![
-                (Key::from_raw(b"k0"), lock.clone()),
-                (Key::from_raw(b"k1"), lock),
-            ])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![
+            (Key::from_raw(b"k0"), lock.clone()),
+            (Key::from_raw(b"k1"), lock),
+        ])
+        .unwrap();
 
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -1454,7 +1450,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let mut req = PrewriteRequest::default();
     req.set_context(cluster.get_ctx(b"k0"));
     req.set_mutations(vec![mutation].into());
-    req.set_is_pessimistic_lock(vec![true]);
+    req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     req.set_start_version(10);
     req.set_for_update_ts(40);
     req.set_primary_lock(b"k0".to_vec());
@@ -1517,13 +1513,11 @@ fn test_retry_pending_prepare_merge_fail() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"k1"), l1)])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"k1"), l1)])
+        .unwrap();
 
     // Pause apply and write some data to the left region
     fail::cfg("on_handle_apply", "pause").unwrap();
@@ -1532,7 +1526,7 @@ fn test_retry_pending_prepare_merge_fail() {
 
     let rx = cluster.async_put(b"k1", b"v11").unwrap();
     propose_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    rx.recv_timeout(Duration::from_millis(200)).unwrap_err();
 
     // Then, start merging. PrepareMerge should become pending because applied_index
     // is smaller than proposed_index.
@@ -1593,13 +1587,11 @@ fn test_merge_pessimistic_locks_propose_fail() {
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
     };
-    assert!(
-        txn_ext
-            .pessimistic_locks
-            .write()
-            .insert(vec![(Key::from_raw(b"k1"), lock)])
-            .is_ok()
-    );
+    txn_ext
+        .pessimistic_locks
+        .write()
+        .insert(vec![(Key::from_raw(b"k1"), lock)])
+        .unwrap();
 
     fail::cfg("raft_propose", "pause").unwrap();
 

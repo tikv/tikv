@@ -32,7 +32,7 @@ pub type PluginGetPluginInfoSignature = extern "C" fn() -> PluginInfo;
 /// [`declare_plugin!(...)`](declare_plugin) and will be used by TiKV when a
 /// plugin is loaded to determine whether there are compilation mismatches.
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BuildInfo {
     /// Version of the [`coprocessor_plugin_api`](crate) crate that was used to
     /// compile this plugin.
@@ -55,7 +55,7 @@ impl BuildInfo {
 
 /// Information about the plugin, like its name and version.
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginInfo {
     /// The name of the plugin.
     pub name: &'static str,

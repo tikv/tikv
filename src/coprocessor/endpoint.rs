@@ -887,7 +887,7 @@ mod tests {
             None,
             PerfLevel::EnableCount,
         );
-        assert!(block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).is_err());
+        block_on(copr.handle_unary_request(outdated_req_ctx, handler_builder)).unwrap_err();
     }
 
     #[test]
@@ -1038,7 +1038,7 @@ mod tests {
 
         // verify
         for _ in 2..5 {
-            assert!(rx.recv().unwrap().is_err());
+            rx.recv().unwrap().unwrap_err();
         }
         for i in 0..2 {
             let resp = rx.recv().unwrap().unwrap();

@@ -1589,7 +1589,7 @@ mod tests {
         // SHOULD_CLIP_TO_ZERO
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IN_INSERT_STMT)));
         let r = (-12345_i64).to_uint(&mut ctx, FieldTypeTp::LongLong);
-        assert!(r.is_err());
+        r.unwrap_err();
 
         // SHOULD_CLIP_TO_ZERO | OVERFLOW_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
@@ -1928,11 +1928,11 @@ mod tests {
         // test overflow
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
 
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
 
         // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
@@ -1965,20 +1965,17 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: Result<f64> = b"".to_vec().convert(&mut ctx);
-        assert!(val.is_ok());
         assert_eq!(val.unwrap(), 0.0);
         assert_eq!(ctx.warnings.warnings.len(), 1);
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         let val: Result<f64> = b"1.1a".to_vec().convert(&mut ctx);
-        assert!(val.is_ok());
         assert_eq!(val.unwrap(), 1.1);
         assert_eq!(ctx.warnings.warnings.len(), 1);
 
         // IGNORE_TRUNCATE
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IGNORE_TRUNCATE)));
         let val: Result<f64> = b"1.2a".to_vec().convert(&mut ctx);
-        assert!(val.is_ok());
         assert_eq!(val.unwrap(), 1.2);
         assert_eq!(ctx.warnings.warnings.len(), 0);
     }
@@ -2356,9 +2353,7 @@ mod tests {
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
-            let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft);
-            assert!(nd.is_ok());
-            let nd = nd.unwrap();
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
