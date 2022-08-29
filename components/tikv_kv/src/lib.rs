@@ -67,7 +67,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
@@ -156,14 +156,8 @@ impl From<Modify> for raft_cmdpb::Request {
 impl From<raft_cmdpb::Request> for Modify {
     fn from(mut req: raft_cmdpb::Request) -> Modify {
         let name_to_cf = |name: &str| -> Option<CfName> {
-            engine_traits::name_to_cf(name).or_else(|| {
-                for c in TEST_ENGINE_CFS {
-                    if name == *c {
-                        return Some(c);
-                    }
-                }
-                None
-            })
+            engine_traits::name_to_cf(name)
+                .or_else(|| TEST_ENGINE_CFS.iter().copied().find(|c| name == *c))
         };
 
         match req.get_cmd_type() {
@@ -277,6 +271,11 @@ pub trait Engine: Send + Clone + 'static {
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+
+    /// Precheck request which has write with it's context.
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        Ok(())
+    }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
 
@@ -947,7 +946,7 @@ pub mod tests {
         }};
     }
 
-    #[derive(PartialEq, Eq, Clone, Copy)]
+    #[derive(PartialEq, Clone, Copy)]
     enum SeekMode {
         Normal,
         Reverse,

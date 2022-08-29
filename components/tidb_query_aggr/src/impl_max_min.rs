@@ -937,7 +937,7 @@ mod tests {
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
-        assert_eq!(aggr_result[0].to_int_vec(), &(*expected_res));
+        assert_eq!(aggr_result[0].to_int_vec(), expected_res);
     }
 
     #[test]

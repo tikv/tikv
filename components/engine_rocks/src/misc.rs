@@ -127,13 +127,17 @@ impl RocksEngine {
 }
 
 impl MiscExt for RocksEngine {
-    fn flush(&self, sync: bool) -> Result<()> {
-        self.as_inner().flush(sync).map_err(r2e)
+    fn flush_cfs(&self, wait: bool) -> Result<()> {
+        let mut handles = vec![];
+        for cf in self.cf_names() {
+            handles.push(util::get_cf_handle(self.as_inner(), cf)?);
+        }
+        self.as_inner().flush_cfs(&handles, wait).map_err(r2e)
     }
 
-    fn flush_cf(&self, cf: &str, sync: bool) -> Result<()> {
+    fn flush_cf(&self, cf: &str, wait: bool) -> Result<()> {
         let handle = util::get_cf_handle(self.as_inner(), cf)?;
-        self.as_inner().flush_cf(handle, sync).map_err(r2e)
+        self.as_inner().flush_cf(handle, wait).map_err(r2e)
     }
 
     fn delete_ranges_cf(
@@ -400,10 +404,7 @@ mod tests {
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
-            kvs_left = kvs_left
-                .into_iter()
-                .filter(|k| k.0 < r.start_key || k.0 >= r.end_key)
-                .collect();
+            kvs_left.retain(|k| k.0 < r.start_key || k.0 >= r.end_key);
         }
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }

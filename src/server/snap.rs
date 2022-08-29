@@ -186,7 +186,7 @@ pub fn send_snap(
         match recv_result {
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
-                mgr.delete_snapshot(&key, &*chunks.snap, true);
+                mgr.delete_snapshot(&key, &chunks.snap, true);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
@@ -292,7 +292,7 @@ fn recv_snap<R: RaftStoreRouter<impl KvEngine> + 'static>(
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
             fail_point!("receiving_snapshot_net_error", |_| {
-                return Err(box_err!("{} failed to receive snapshot", context_key));
+                Err(box_err!("{} failed to receive snapshot", context_key))
             });
             let mut chunk = item?;
             let data = chunk.take_data();

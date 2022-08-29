@@ -24,7 +24,7 @@ use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::*,
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     metapb::{self, RegionEpoch},
     pdpb::{
         ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
@@ -131,10 +131,10 @@ pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region
 }
 
 lazy_static! {
-    static ref TEST_CONFIG: TiKvConfig = {
+    static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TiKvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
@@ -144,13 +144,13 @@ lazy_static! {
     };
 }
 
-pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
+pub fn new_tikv_config(cluster_id: u64) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg
 }
 
-pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TiKvConfig {
+pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> TikvConfig {
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg.storage.set_api_version(api_ver);
@@ -894,7 +894,7 @@ pub fn must_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -931,7 +931,7 @@ pub fn try_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.is_pessimistic_lock = vec![true; muts.len()];
+        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;

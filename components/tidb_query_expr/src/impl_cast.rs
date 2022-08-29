@@ -1189,7 +1189,7 @@ fn cast_string_as_time(
         let val = String::from_utf8_lossy(val);
         Time::parse(
             ctx,
-            &*val,
+            &val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
             // Enable round
@@ -2425,7 +2425,7 @@ mod tests {
                 assert!(output.is_ok(), "input: {:?}", input);
                 assert_eq!(output.unwrap().unwrap(), exp, "input={:?}", input);
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }
@@ -3661,7 +3661,7 @@ mod tests {
                     input
                 );
             } else {
-                assert!(output.is_err());
+                output.unwrap_err();
             }
         }
     }

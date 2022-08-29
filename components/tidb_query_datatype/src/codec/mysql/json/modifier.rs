@@ -87,7 +87,7 @@ impl<'a> BinaryModifier<'a> {
             return Ok(());
         }
         let parent_node = &result[0];
-        match &*last_leg {
+        match last_leg {
             PathLeg::Index(_) => {
                 // Record the parent node value offset, as it's actually relative to `old`
                 self.to_be_modified_ptr = parent_node.as_ptr();
@@ -167,7 +167,7 @@ impl<'a> BinaryModifier<'a> {
             return Ok(());
         }
         let parent_node = &result[0];
-        match &*last_leg {
+        match last_leg {
             PathLeg::Index(remove_idx) => {
                 if parent_node.get_type() == JsonType::Array {
                     self.to_be_modified_ptr = parent_node.as_ptr();

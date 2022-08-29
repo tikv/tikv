@@ -301,7 +301,7 @@ fn test_gc_bypass_raft() {
     }
 
     let gc_sched = cluster.sim.rl().get_gc_worker(1).scheduler();
-    assert!(sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).is_ok());
+    sync_gc(&gc_sched, 0, b"k1".to_vec(), b"k2".to_vec(), 200.into()).unwrap();
 
     for &start_ts in &[10, 20, 30] {
         let commit_ts = start_ts + 5;

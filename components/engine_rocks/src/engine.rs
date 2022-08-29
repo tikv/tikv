@@ -250,7 +250,7 @@ mod tests {
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
         assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        engine.get_value_cf("foo", b"k1").unwrap_err();
         assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 

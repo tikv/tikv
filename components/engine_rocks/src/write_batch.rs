@@ -100,7 +100,7 @@ impl RocksWriteBatchVec {
 }
 
 impl engine_traits::WriteBatch for RocksWriteBatchVec {
-    fn write_opt(&self, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<()> {
         // Indiscriminately increase the priority because RocksDB merges write
         // batches with different IO types.
         let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
