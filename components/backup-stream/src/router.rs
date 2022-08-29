@@ -1297,8 +1297,6 @@ pub struct MetadataInfo {
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
-    // meta version is MetaVersion::V2
-    pub meta_version: MetaVersion,
 }
 
 impl MetadataInfo {
@@ -1309,7 +1307,6 @@ impl MetadataInfo {
             min_ts: None,
             max_ts: None,
             store_id: 0,
-            meta_version: MetaVersion::V2,
         }
     }
 
@@ -1336,6 +1333,7 @@ impl MetadataInfo {
         metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default());
         metadata.set_min_ts(self.min_ts.unwrap_or(0));
         metadata.set_max_ts(self.max_ts.unwrap_or(0));
+        metadata.set_meta_version(MetaVersion::V2);
 
         metadata
             .write_to_bytes()
