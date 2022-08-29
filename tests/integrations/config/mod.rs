@@ -292,7 +292,7 @@ fn test_serde_custom_tikv_config() {
         info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
-        rate_limiter_mode: DBRateLimiterMode::ReadOnly,
+        rate_limiter_mode: DBRateLimiterMode::AllIo,
         rate_limiter_auto_tuned: false,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),

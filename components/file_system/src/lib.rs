@@ -223,17 +223,6 @@ impl std::ops::Sub for IoBytes {
     }
 }
 
-impl std::ops::Add for IoBytes {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self::Output {
-        Self {
-            read: self.read.saturating_add(other.read),
-            write: self.write.saturating_add(other.write),
-        }
-    }
-}
-
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Copy, EnumCount)]
 pub enum IoPriority {
