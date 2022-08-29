@@ -5476,6 +5476,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
+    type Response = ReadResponse<EK::Snapshot>;
+
     fn get_tablet(&mut self) -> &EK {
         &self.engines.kv
     }
