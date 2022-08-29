@@ -4376,7 +4376,7 @@ where
             });
         }
 
-        fail_point!("raft_propose");
+        fail_point!("raft_propose", |_| Ok(Either::Right(0)));
         let propose_index = self.next_proposal_index();
         self.raft_group.propose(ctx.to_vec(), data)?;
         if self.next_proposal_index() == propose_index {
