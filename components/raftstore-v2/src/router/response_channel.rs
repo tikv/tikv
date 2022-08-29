@@ -36,6 +36,7 @@ use raftstore::store::{
 };
 use smallvec::SmallVec;
 use tikv_util::memory::HeapSize;
+use tracker::TrackerToken;
 
 /// A struct allows to watch and notify specific events.
 ///
@@ -285,11 +286,11 @@ impl WriteCallback for CmdResChannel {
         self.core.notify_event(Self::COMMITTED_EVENT);
     }
 
-    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
         None
     }
 
-    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
         None
     }
 
@@ -409,6 +410,10 @@ impl ReadCallback for QueryResChannel {
             ManuallyDrop::drop(&mut self.core);
         }
         mem::forget(self);
+    }
+
+    fn read_tracker(&self) -> Option<&TrackerToken> {
+        None
     }
 }
 
