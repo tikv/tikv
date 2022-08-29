@@ -2193,7 +2193,7 @@ fn test_read_index_execution_tracking() {
     let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
     let (k2, v2) = (b"k2".to_vec(), b"v2".to_vec());
 
-    // write an entry
+    // write entries
     let mut mutation1 = Mutation::default();
     mutation1.set_op(Op::Put);
     mutation1.set_key(k1.clone());
