@@ -429,7 +429,13 @@ impl Engine {
     pub(crate) fn set_alloc_ids_for_request(&self, req: &mut CompactionRequest, total_size: u64) {
         // We must ensure there are enough ids for remote compactor to use, so we need to allocate
         // more ids than needed.
-        let id_cnt = (total_size as usize / req.max_table_size) * 2 + 16;
+        let mut old_ids_num = 0usize;
+        for cf in 0..NUM_CFS {
+            let bot_ids = &req.multi_cf_bottoms[cf];
+            old_ids_num += bot_ids.len();
+        }
+        old_ids_num += req.tops.len() + req.bottoms.len();
+        let id_cnt = (total_size as usize / req.max_table_size) * 2 + 16 + old_ids_num;
         info!("alloc id count {} for total size {}", id_cnt, total_size);
         let ids = self.id_allocator.alloc_id(id_cnt);
         req.file_ids = ids;
@@ -649,6 +655,14 @@ pub(crate) fn compact_l0(
         );
         let mut helper = CompactL0Helper::new(cf, req);
         loop {
+            if id_idx >= req.file_ids.len() {
+                panic!(
+                    "index out of bounds: the len is {} but the index is {}, req {:?}",
+                    req.file_ids.len(),
+                    id_idx,
+                    req
+                );
+            }
             let id = req.file_ids[id_idx];
             let (tbl_create, data) = helper.build_one(&mut iter, id)?;
             if data.is_empty() {
@@ -876,6 +890,14 @@ pub(crate) fn compact_tables(
     let (tx, rx) = tikv_util::mpsc::bounded(req.file_ids.len());
     let mut reach_end = false;
     while iter.valid() && !reach_end {
+        if id_idx >= req.file_ids.len() {
+            panic!(
+                "index out of bounds: the len is {} but the index is {}, req {:?}",
+                req.file_ids.len(),
+                id_idx,
+                req
+            );
+        }
         let id = req.file_ids[id_idx];
         builder.reset(id);
         last_key.clear();
