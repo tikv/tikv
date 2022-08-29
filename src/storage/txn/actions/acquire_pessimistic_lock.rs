@@ -42,7 +42,12 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts).into()
     ));
     if lock_only_if_exists && !need_value {
+        error!(
+            "When accquires a pessimistic lock, Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts:{}, key:{}",
+            reader.start_ts, key
+        );
         return Err(ErrorInner::LockIfExistsFailed {
+            start_ts: reader.start_ts,
             key: key.into_raw()?,
         }
         .into());
@@ -853,7 +858,10 @@ pub mod tests {
             TimeStamp::zero(),
             true,
         ) {
-            MvccError(box ErrorInner::LockIfExistsFailed { key: _ }) => (),
+            MvccError(box ErrorInner::LockIfExistsFailed {
+                start_ts: _,
+                key: _,
+            }) => (),
             e => panic!("unexpected error: {}", e),
         };
 
