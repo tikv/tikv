@@ -86,9 +86,11 @@ impl ServerCluster {
         );
         server.run();
         let store_id = server.get_store_id();
-        let addr = node_addr(node_id);
-        let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
-        self.channels.insert(store_id, channel);
+        if !self.channels.contains_key(&store_id) {
+            let addr = node_addr(node_id);
+            let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
+            self.channels.insert(store_id, channel);
+        }
         self.servers.insert(node_id, server);
     }
 
@@ -116,8 +118,6 @@ impl ServerCluster {
     }
     pub fn stop_node(&mut self, node_id: u16) {
         if let Some(node) = self.servers.remove(&node_id) {
-            let store_id = node.get_store_id();
-            self.channels.remove(&store_id);
             node.stop();
         }
     }
