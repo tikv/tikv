@@ -1676,7 +1676,7 @@ where
     fn on_raft_log_fetched(&mut self, context: GetEntriesContext, res: Box<RaftlogFetchResult>) {
         let low = res.low;
         // if the peer is not the leader anymore or being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader() || self.fsm.peer.pending_remove {
+        if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         }
@@ -1685,22 +1685,31 @@ where
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
         } else {
-            self.fsm
-                .peer
-                .mut_store()
-                .update_async_fetch_res(low, Some(res));
+            // If this peer is in 'pre ack transfer leader' status, check if
+            // the needed entry cache is filled.
             if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
+                self.fsm
+                    .peer
+                    .raft_group
+                    .mut_store()
+                    .update_async_fetch_res(low, Some(res));
+                // TODO(cosven): cache may be not filled. Need to know how entry cache is
+                // stored.
                 if meta.msg.get_index() == low {
+                    let elapsed = meta.receive_time.saturating_elapsed_secs();
                     info!(
                         "(this_pr) entry cache has been prefilled, ack now.";
                         "low" => low,
                         "region_id" => self.region_id(),
                         "peer_id" => self.fsm.peer_id(),
+                        "elapsed" => ?elapsed,
                     );
-                    PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM
-                        .observe(meta.receive_time.saturating_elapsed_secs());
+                    PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
                     self.fsm.peer.ack_transfer_leader_msg();
+                    self.fsm.peer.pre_ack_transfer_leader_meta = None;
                 }
+            } else if !self.fsm.peer.is_leader() {
+                self.fsm.peer.mut_store().clean_async_fetch_res(low);
             }
         }
         self.fsm.peer.raft_group.on_entries_fetched(context);
@@ -3057,6 +3066,11 @@ where
         } else {
             // TODO(cosven): check disk usage in pre_ack.
             if self.fsm.peer.pre_ack_transfer_leader_msg(msg.clone()) {
+                info!(
+                    "(this_pr) ack just after pre_ack";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
                 // TODO(cosven): rename execute_transfer_leader to ack_transfer_leader_msg.
                 self.fsm.peer.execute_transfer_leader(
                     self.ctx,

@@ -4413,6 +4413,11 @@ where
 
         // When min_matched index is not 0, entry cache should cover it.
         if min_matched == 0 {
+            warn!(
+                "(this_pr) min_matched is 0";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
             true
         } else {
             let store = self.get_store();
@@ -4426,11 +4431,6 @@ where
                 high = first_index;
             }
 
-            self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
-                msg,
-                receive_time: TiInstant::now(),
-            });
-
             // TODO(cosven): no need to use two vars.
             let mut low = min_matched;
             if min_matched < self.last_compacted_idx {
@@ -4442,19 +4442,46 @@ where
                 low = self.last_compacted_idx
             }
 
-            info!(
-                "(this_pr) pre fill entry cache";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "leader_id" => self.leader_id(),
-                "low" => low,
-                "high" => high,
-            );
-
-            // Fill entry cache.
-            self.get_store()
-                .entries(low, high, u64::MAX, GetEntriesContext::empty(true))
-                .is_ok()
+            if low >= high {
+                info!(
+                    "(this_pr) need not to fill entry cache";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                true
+            } else {
+                // Fill entry cache.
+                if self
+                    .get_store()
+                    .entries(low, high, u64::MAX, GetEntriesContext::empty(true))
+                    .is_err()
+                {
+                    info!(
+                        "(this_pr) pre fill entry cache";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "leader_id" => self.leader_id(),
+                        "low" => low,
+                        "high" => high,
+                    );
+                    self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
+                        msg,
+                        receive_time: TiInstant::now(),
+                    });
+                    false
+                } else {
+                    // TODO(cosven): remove this log.
+                    info!(
+                        "(this_pr) cache is filled unexpectedly";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "leader_id" => self.leader_id(),
+                        "low" => low,
+                        "high" => high,
+                    );
+                    true
+                }
+            }
         }
     }
 
