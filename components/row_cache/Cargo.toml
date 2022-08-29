@@ -1,0 +1,10 @@
+[package]
+name = "row_cache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dashmap = "5.3.4"
+fxhash = "0.2.1"
+moka = "0.9.3"
+txn_types = { path = "../txn_types" }
