@@ -43,7 +43,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     ));
     if lock_only_if_exists && !need_value {
         error!(
-            "When accquires a pessimistic lock, Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts:{}, key:{}",
+            "When acquires a pessimistic lock, Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts:{}, key:{}",
             reader.start_ts, key
         );
         return Err(ErrorInner::LockIfExistsFailed {
@@ -255,7 +255,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
         min_commit_ts,
     };
 
-    // when lock_only_if_exists is false, always accquire pessimitic lock, otherwise
+    // When lock_only_if_exists is false, always accquire pessimitic lock, otherwise
     // do it when val exists
     if !lock_only_if_exists || val.is_some() {
         txn.put_pessimistic_lock(key, lock);
@@ -507,13 +507,6 @@ pub mod tests {
         assert_eq!(lock.ts, start_ts.into());
         assert_eq!(lock.for_update_ts, for_update_ts.into());
         assert_eq!(lock.lock_type, LockType::Pessimistic);
-    }
-
-    pub fn must_no_lock<E: Engine>(engine: &E, key: &[u8]) {
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut reader = MvccReader::new(snapshot, None, true);
-        let lock = reader.load_lock(&Key::from_raw(key)).unwrap();
-        assert_eq!(lock.is_none(), true);
     }
 
     #[test]
@@ -844,7 +837,7 @@ pub mod tests {
 
         // The key doesn't exist, no pessimistic lock is generated
         assert_eq!(must_succeed_return_value(&engine, k, k, 10, 10, true), None);
-        must_no_lock(&engine, k);
+        must_unlocked(&engine, k);
 
         match must_err_impl(
             &engine,
@@ -899,7 +892,7 @@ pub mod tests {
         must_prewrite_delete(&engine, k, k, 60);
         must_commit(&engine, k, 60, 70);
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 75, true), None);
-        must_no_lock(&engine, k);
+        must_unlocked(&engine, k);
 
         // Duplicated command
         assert_eq!(
@@ -910,7 +903,7 @@ pub mod tests {
         assert_eq!(must_succeed_return_value(&engine, k, k, 75, 85, true), None);
         must_pessimistic_locked(&engine, k, 75, 85);
         pessimistic_rollback::tests::must_success(&engine, k, 75, 85);
-        must_no_lock(&engine, k);
+        must_unlocked(&engine, k);
     }
 
     #[test]
