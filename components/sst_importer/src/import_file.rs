@@ -18,6 +18,7 @@ use file_system::{get_io_rate_limiter, sync_dir, File, OpenOptions};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use uuid::{Builder as UuidBuilder, Uuid};
+use keys::{data_end_key, data_key};
 
 use crate::{metrics::*, Error, Result};
 
@@ -336,7 +337,7 @@ impl ImportDir {
                     let sst_reader = RocksSstReader::open_with_env(path_str, Some(env))?;
 
                     for &(start, end) in TIDB_RANGES_COMPLEMENT {
-                        let opt = iter_option(start, end, false);
+                        let opt = iter_option(&data_key(start), &data_end_key(end), false);
                         let mut iter = sst_reader.iter(opt)?;
                         if iter.seek(start)? {
                             error!(
