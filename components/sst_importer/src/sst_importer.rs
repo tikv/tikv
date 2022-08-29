@@ -701,7 +701,6 @@ impl SstImporter {
                 }
             }
 
-            info!("rewrite key"; "key" => log_wrappers::Value::key(&data_key));
             sst_writer.put(&data_key, &value)?;
             iter.next()?;
             if first_key.is_none() {
