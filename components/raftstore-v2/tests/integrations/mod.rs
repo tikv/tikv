@@ -43,8 +43,8 @@ use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 
-mod test_status;
 mod test_read;
+mod test_status;
 
 struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
 

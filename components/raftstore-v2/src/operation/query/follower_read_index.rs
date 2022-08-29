@@ -35,7 +35,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
-        if !self.is_leader() && self.leader_id() == INVALID_ID {
+        if self.leader_id() == INVALID_ID {
             poll_ctx
                 .raft_metrics
                 .invalid_proposal
