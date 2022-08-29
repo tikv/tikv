@@ -465,11 +465,24 @@ impl RegionCollector {
     pub fn handle_find_region_by_key(&self, key: Vec<u8>, callback: Callback<Option<Region>>) {
         let key = RangeKey::from_start_key(key);
         let mut region = None;
-        if let Some((_, region_id)) = self.region_ranges.range((Excluded(key), Unbounded)).next() {
+        if let Some((_, region_id)) = self
+            .region_ranges
+            .range((Excluded(key.clone()), Unbounded))
+            .next()
+        {
             region = self
                 .regions
                 .get(region_id)
-                .map(|region_info| region_info.region.clone());
+                .map(|region_info| region_info.region.clone())
+                .and_then(|region| {
+                    if RangeKey::from_start_key(region.get_start_key().to_vec()) <= key
+                        && key < RangeKey::from_end_key(region.get_end_key().to_vec())
+                    {
+                        Some(region)
+                    } else {
+                        None
+                    }
+                });
         }
 
         callback(region);
@@ -787,31 +800,45 @@ impl Clone for MockRegionInfoProvider {
             self.0
                 .lock()
                 .unwrap()
-                .clone()
-                .into_iter()
-                .map(|region_info| region_info.region)
+                .iter()
+                .map(|region_info| region_info.region.clone())
                 .collect_vec(),
         )
     }
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .clone()
-            .into_iter()
-            .map(|region_info| region_info.region)
-            .collect_vec())
+    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+        let mut regions = Vec::new();
+        let (tx, rx) = mpsc::channel();
+        let end_key = RangeKey::from_end_key(end_key.to_vec());
+
+        self.seek_region(
+            start_key,
+            Box::new(move |iter| {
+                for region_info in iter {
+                    if RangeKey::from_start_key(region_info.region.get_start_key().to_vec())
+                        > end_key
+                    {
+                        break;
+                    }
+                    tx.send(region_info.region.clone()).unwrap();
+                }
+            }),
+        )?;
+
+        for region in rx {
+            regions.push(region);
+        }
+
+        Ok(regions)
     }
 
     fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
         let region_infos = self.0.lock().unwrap();
         let mut iter = region_infos.iter().filter(|&region_info| {
-            RangeKey::from_start_key(region_info.region.get_start_key().to_vec())
-                <= RangeKey::from_start_key(from.to_vec())
+            RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+                > RangeKey::from_start_key(from.to_vec())
         });
         callback(&mut iter);
         Ok(())
@@ -820,6 +847,8 @@ impl RegionInfoProvider for MockRegionInfoProvider {
 
 #[cfg(test)]
 mod tests {
+    use txn_types::Key;
+
     use super::*;
 
     fn new_region_collector() -> RegionCollector {
@@ -1375,5 +1404,62 @@ mod tests {
                 (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
         );
+    }
+
+    #[test]
+    fn test_mock_region_info_provider() {
+        fn init_region(start_key: &[u8], end_key: &[u8], region_id: u64) -> Region {
+            let start_key = Key::from_encoded(start_key.to_vec());
+            let end_key = Key::from_encoded(end_key.to_vec());
+            let mut region = Region::default();
+            region.set_start_key(start_key.as_encoded().clone());
+            region.set_end_key(end_key.as_encoded().clone());
+            region.id = region_id;
+            region
+        }
+
+        let regions = vec![
+            init_region(b"k01", b"k03", 1),
+            init_region(b"k05", b"k10", 2),
+            init_region(b"k10", b"k15", 3),
+        ];
+
+        let provider = MockRegionInfoProvider::new(regions);
+
+        // Test ranges covering all regions
+        let regions = provider.get_regions_in_range(b"k01", b"k15").unwrap();
+        assert!(regions.len() == 3);
+        assert!(regions[0].id == 1);
+        assert!(regions[1].id == 2);
+        assert!(regions[2].id == 3);
+
+        // Test ranges covering partial regions
+        let regions = provider.get_regions_in_range(b"k04", b"k10").unwrap();
+        assert!(regions.len() == 2);
+        assert!(regions[0].id == 2);
+        assert!(regions[1].id == 3);
+
+        // Test seek for all regions
+        provider
+            .seek_region(
+                b"k02",
+                Box::new(|iter| {
+                    assert!(iter.next().unwrap().region.id == 1);
+                    assert!(iter.next().unwrap().region.id == 2);
+                    assert!(iter.next().unwrap().region.id == 3);
+                }),
+            )
+            .unwrap();
+
+        // Test seek for partial regions
+        provider
+            .seek_region(
+                b"k04",
+                Box::new(|iter| {
+                    assert!(iter.next().unwrap().region.id == 2);
+                    assert!(iter.next().unwrap().region.id == 3);
+                }),
+            )
+            .unwrap();
     }
 }
