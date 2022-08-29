@@ -295,7 +295,7 @@ where
                 SignificantMsg::CaptureChange {
                     cmd,
                     region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::Read(Box::new(|snapshot| {
+                    callback: Callback::read(Box::new(|snapshot| {
                         if snapshot.response.get_header().has_error() {
                             callback(Err(Error::RaftRequest(
                                 snapshot.response.get_header().get_error().clone(),
@@ -383,7 +383,6 @@ where
         let mut stats = StatisticsSummary::default();
         let start = Instant::now();
         loop {
-            #[cfg(feature = "failpoints")]
             fail::fail_point!("scan_and_async_send", |msg| Err(Error::Other(box_err!(
                 "{:?}", msg
             ))));
@@ -392,9 +391,16 @@ where
             //       we only need to record the disk throughput of this.
             let (stat, disk_read) =
                 utils::with_record_read_throughput(|| event_loader.fill_entries());
+            // We must use the size of entry batch here to check whether we have progress.
+            // Or we may exit too early if there are only records:
+            // - can be inlined to `write` CF (hence it won't be written to default CF)
+            // - are prewritten. (hence it will only contains `Prewrite` records).
+            // In this condition, ALL records generate no ApplyEvent(only lock change),
+            // and we would exit after the first run of loop :(
+            let no_progress = event_loader.entry_batch.is_empty();
             let stat = stat?;
             self.with_resolver(region, |r| event_loader.emit_entries_to(&mut events, r))?;
-            if events.is_empty() {
+            if no_progress {
                 metrics::INITIAL_SCAN_DURATION.observe(start.saturating_elapsed_secs());
                 return Ok(stats.stat);
             }

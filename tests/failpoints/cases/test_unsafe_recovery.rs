@@ -114,11 +114,9 @@ fn test_unsafe_recovery_execution_result_report() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region2.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
@@ -303,11 +301,9 @@ fn test_unsafe_recovery_demotion_reentrancy() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region.get_id(), nodes[0], vec![nodes[1], nodes[2]]);
@@ -408,11 +404,9 @@ fn test_unsafe_recovery_create_destroy_reentrancy() {
             true,
         );
         // marjority is lost, can't propose command successfully.
-        assert!(
-            cluster
-                .call_command_on_leader(req, Duration::from_millis(10))
-                .is_err()
-        );
+        cluster
+            .call_command_on_leader(req, Duration::from_millis(10))
+            .unwrap_err();
     }
 
     cluster.must_enter_force_leader(region2.get_id(), nodes[0], vec![nodes[1], nodes[2]]);

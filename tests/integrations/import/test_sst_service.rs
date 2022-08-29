@@ -5,7 +5,7 @@ use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
-use tikv::config::TiKvConfig;
+use tikv::config::TikvConfig;
 
 use super::util::*;
 
@@ -84,7 +84,7 @@ fn test_write_and_ingest_with_tde() {
 
 #[test]
 fn test_ingest_sst() {
-    let mut cfg = TiKvConfig::default();
+    let mut cfg = TikvConfig::default();
     cfg.server.grpc_concurrency = 1;
     let (_cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
 

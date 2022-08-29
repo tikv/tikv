@@ -489,7 +489,7 @@ mod tests {
             let mut future_slot = self.future.lock().unwrap();
             if let Some(mut future) = future_slot.take() {
                 let waker = task::waker_ref(&task);
-                let cx = &mut Context::from_waker(&*waker);
+                let cx = &mut Context::from_waker(&waker);
                 match future.as_mut().poll(cx) {
                     Poll::Pending => {
                         *future_slot = Some(future);

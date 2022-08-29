@@ -314,9 +314,9 @@ impl FilterFactory for PartitionFilterFactory {
                 node_ids: self.s2.clone(),
             })];
         }
-        return vec![Box::new(PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        })];
+        })]
     }
 }
 

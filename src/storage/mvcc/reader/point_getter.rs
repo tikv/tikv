@@ -389,7 +389,7 @@ impl<S: Snapshot> PointGetter<S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::ReadPerfInstant;
-    use kvproto::kvrpcpb::{Assertion, AssertionLevel};
+    use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
     use txn_types::SHORT_VALUE_MAX_LEN;
 
     use super::*;
@@ -465,7 +465,7 @@ mod tests {
     }
 
     fn must_get_err<S: Snapshot>(point_getter: &mut PointGetter<S>, key: &[u8]) {
-        assert!(point_getter.get(&Key::from_raw(key)).is_err());
+        point_getter.get(&Key::from_raw(key)).unwrap_err();
     }
 
     fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
@@ -929,7 +929,7 @@ mod tests {
         //
         // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
         must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
-        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, true);
+        must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, DoPessimisticCheck);
         let mut getter = new_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
     }
@@ -1017,7 +1017,7 @@ mod tests {
             key,
             &None,
             80.into(),
-            false,
+            SkipPessimisticCheck,
             100,
             80.into(),
             1,
@@ -1152,15 +1152,15 @@ mod tests {
             (b"k9", None),
         ];
 
-        for (k, v) in &expected_results {
+        for (k, v) in expected_results.iter().copied() {
             let mut single_getter = new_point_getter(&engine, 40.into());
-            let value = single_getter.get(&Key::from_raw(*k)).unwrap();
+            let value = single_getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
 
         let mut getter = new_point_getter(&engine, 40.into());
-        for (k, v) in &expected_results {
-            let value = getter.get(&Key::from_raw(*k)).unwrap();
+        for (k, v) in expected_results {
+            let value = getter.get(&Key::from_raw(k)).unwrap();
             assert_eq!(value, v.map(|v| v.to_vec()));
         }
     }

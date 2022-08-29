@@ -6,9 +6,9 @@ use super::*;
 use crate::codec::data_type::{BytesGuard, BytesWriter};
 
 #[derive(Debug)]
-pub struct EncodingGBK;
+pub struct EncodingGbk;
 
-impl Encoding for EncodingGBK {
+impl Encoding for EncodingGbk {
     #[inline]
     fn decode(data: BytesRef<'_>) -> Result<Bytes> {
         match GBK.decode_without_bom_handling_and_without_replacement(data) {

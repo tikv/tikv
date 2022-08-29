@@ -438,7 +438,7 @@ mod tests {
                 Real::new(1.0).ok().as_ref()
             );
         });
-        assert!(result.is_err());
+        result.unwrap_err();
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
@@ -448,7 +448,7 @@ mod tests {
                 Some(&[1u8] as BytesRef<'_>)
             );
         });
-        assert!(result.is_err());
+        result.unwrap_err();
 
         // Push result to Real VectorValue should success.
         let mut target = vec![VectorValue::with_capacity(0, EvalType::Real)];
@@ -479,13 +479,13 @@ mod tests {
             let mut target: Vec<VectorValue> = Vec::new();
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        assert!(result.is_err());
+        result.unwrap_err();
 
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let mut target: Vec<VectorValue> = vec![VectorValue::with_capacity(0, EvalType::Int)];
             let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

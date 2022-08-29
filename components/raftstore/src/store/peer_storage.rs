@@ -33,10 +33,7 @@ use tikv_util::{
     box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
 };
 
-use super::{
-    entry_storage::last_index, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
-    SnapshotStatistics,
-};
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
@@ -147,14 +144,14 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-    // if we recv append log when applying snapshot, last_index in raft_local_state
-    // will larger than snapshot_index. since raft_local_state is written to
-    // raft engine, and raft write_batch is written after kv write_batch,
-    // raft_local_state may wrong if restart happen between the two write. so we
-    // copy raft_local_state to kv engine (snapshot_raft_state), and set
-    // snapshot_raft_state.last_index = snapshot_index. after restart, we need
-    // check last_index.
-    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+    // since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch. raft_local_state may wrong
+    // if restart happen between the two write. so we copy raft_local_state to
+    // kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.hard_state.commit = snapshot_index. after restart, we
+    // need check commit.
+    if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
+    {
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
@@ -827,6 +824,7 @@ where
         let task = RegionTask::Apply {
             region_id: self.get_region_id(),
             status,
+            peer_id: self.peer_id,
         };
 
         // Don't schedule the snapshot to region worker.
@@ -1160,7 +1158,9 @@ pub mod tests {
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
-            worker::{RaftlogFetchRunner, RegionRunner, RegionTask},
+            worker::{
+                FetchedLogs, LogFetchedNotifier, RaftlogFetchRunner, RegionRunner, RegionTask,
+            },
         },
     };
 
@@ -1383,35 +1383,20 @@ pub mod tests {
         }
     }
 
-    use crate::{
-        store::{SignificantMsg, SignificantRouter},
-        Result as RaftStoreResult,
-    };
-
-    pub struct TestRouter<EK: KvEngine> {
-        ch: SyncSender<SignificantMsg<EK::Snapshot>>,
+    pub struct TestRouter {
+        ch: SyncSender<FetchedLogs>,
     }
 
-    impl<EK: KvEngine> TestRouter<EK> {
-        pub fn new() -> (Self, Receiver<SignificantMsg<EK::Snapshot>>) {
+    impl TestRouter {
+        pub fn new() -> (Self, Receiver<FetchedLogs>) {
             let (tx, rx) = sync_channel(1);
             (Self { ch: tx }, rx)
         }
     }
 
-    impl<EK> SignificantRouter<EK> for TestRouter<EK>
-    where
-        EK: KvEngine,
-    {
-        /// Sends a significant message. We should guarantee that the message
-        /// can't be dropped.
-        fn significant_send(
-            &self,
-            _: u64,
-            msg: SignificantMsg<EK::Snapshot>,
-        ) -> RaftStoreResult<()> {
-            self.ch.send(msg).unwrap();
-            Ok(())
+    impl LogFetchedNotifier for TestRouter {
+        fn notify(&self, _region_id: u64, fetched_logs: FetchedLogs) {
+            self.ch.send(fetched_logs).unwrap();
         }
     }
 
@@ -1486,24 +1471,16 @@ pub mod tests {
             let raftlog_fetch_scheduler = raftlog_fetch_worker.scheduler();
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
-            raftlog_fetch_worker.start(RaftlogFetchRunner::<KvTestEngine, RaftTestEngine, _>::new(
-                router,
-                store.engines.raft.clone(),
-            ));
+            raftlog_fetch_worker.start(RaftlogFetchRunner::new(router, store.engines.raft.clone()));
             store.compact_entry_cache(5);
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
             )) {
                 let res = rx.recv().unwrap();
-                match res {
-                    SignificantMsg::RaftlogFetched { res, context } => {
-                        store.update_async_fetch_res(lo, Some(res));
-                        count += 1;
-                        e = store.entries(lo, hi, maxsize, context);
-                    }
-                    _ => unreachable!(),
-                };
+                store.update_async_fetch_res(lo, Some(res.logs));
+                count += 1;
+                e = store.entries(lo, hi, maxsize, res.context);
             }
             if e != wentries {
                 panic!("#{}: expect entries {:?}, got {:?}", i, wentries, e);
@@ -1818,7 +1795,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start(runner);
-        assert!(s1.snapshot(0, 0).is_err());
+        s1.snapshot(0, 0).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
 
@@ -1909,7 +1886,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]
@@ -1959,7 +1936,7 @@ pub mod tests {
             JOB_STATUS_FAILED,
         ))));
         let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[test]

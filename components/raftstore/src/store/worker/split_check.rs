@@ -105,7 +105,7 @@ where
                     iter.key().to_vec(),
                     pos,
                     iter.value().len(),
-                    *cf,
+                    cf,
                 ));
             }
             iters.push((*cf, iter));

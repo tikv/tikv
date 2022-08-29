@@ -24,7 +24,7 @@ const DEFAULT_REFILL_PERIOD: Duration = Duration::from_millis(50);
 const DEFAULT_REFILLS_PER_SEC: usize = (1.0 / DEFAULT_REFILL_PERIOD.as_secs_f32()) as usize;
 const MAX_WAIT_DURATION_PER_REQUEST: Duration = Duration::from_millis(500);
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum IoRateLimitMode {
     WriteOnly,
     ReadOnly,
@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for IoRateLimitMode {
             where
                 E: Error,
             {
-                let p = match IoRateLimitMode::from_str(&*value.trim().to_lowercase()) {
+                let p = match IoRateLimitMode::from_str(&value.trim().to_lowercase()) {
                     Ok(p) => p,
                     _ => {
                         return Err(E::invalid_value(

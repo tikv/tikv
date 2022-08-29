@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::PathBuf, rc::Rc, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use engine_traits::{
-    Error, ExternalSstFileInfo, IterOptions, Iterable, Iterator, Result, SstCompressionType,
+    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
     SstExt, SstMetaInfo, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
 use fail::fail_point;
@@ -22,11 +22,8 @@ impl SstExt for RocksEngine {
     type SstWriterBuilder = RocksSstWriterBuilder;
 }
 
-// FIXME: like in RocksEngineIterator and elsewhere, here we are using
-// Rc to avoid putting references in an associated type, which
-// requires generic associated types.
 pub struct RocksSstReader {
-    inner: Rc<SstFileReader>,
+    inner: SstFileReader,
 }
 
 impl RocksSstReader {
@@ -50,8 +47,7 @@ impl RocksSstReader {
         }
         let mut reader = SstFileReader::new(cf_options);
         reader.open(path).map_err(r2e)?;
-        let inner = Rc::new(reader);
-        Ok(RocksSstReader { inner })
+        Ok(RocksSstReader { inner: reader })
     }
 
     pub fn compression_name(&self) -> String {
@@ -71,33 +67,26 @@ impl SstReader for RocksSstReader {
         self.inner.verify_checksum().map_err(r2e)?;
         Ok(())
     }
-    fn iter(&self) -> Self::Iterator {
-        RocksSstIterator(SstFileReader::iter_rc(self.inner.clone()))
-    }
 }
 
-impl Iterable for RocksSstReader {
-    type Iterator = RocksSstIterator;
+impl RefIterable for RocksSstReader {
+    type Iterator<'a> = RocksSstIterator<'a>;
 
-    /// Cf is ignored as there is only one cf in sst.
-    fn iterator_opt(&self, _cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    #[inline]
+    fn iter(&self, opts: IterOptions) -> Result<Self::Iterator<'_>> {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
-        Ok(RocksSstIterator(SstFileReader::iter_opt_rc(
-            self.inner.clone(),
-            opt,
-        )))
+        Ok(RocksSstIterator(SstFileReader::iter_opt(&self.inner, opt)))
     }
 }
 
-// FIXME: See comment on RocksSstReader for why this contains Rc
-pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
+pub struct RocksSstIterator<'a>(DBIterator<&'a SstFileReader>);
 
-// TODO(5kbpers): Temporarily force to add `Send` here, add a method for
-// creating DBIterator<Arc<SstFileReader>> in rust-rocksdb later.
-unsafe impl Send for RocksSstIterator {}
+// It's OK to send the iterator around.
+// TODO: remove this when using tirocks.
+unsafe impl Send for RocksSstIterator<'_> {}
 
-impl Iterator for RocksSstIterator {
+impl Iterator for RocksSstIterator<'_> {
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
         self.0.seek(rocksdb::SeekKey::Key(key)).map_err(r2e)
     }

@@ -1589,7 +1589,7 @@ mod tests {
         // SHOULD_CLIP_TO_ZERO
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::IN_INSERT_STMT)));
         let r = (-12345_i64).to_uint(&mut ctx, FieldTypeTp::LongLong);
-        assert!(r.is_err());
+        r.unwrap_err();
 
         // SHOULD_CLIP_TO_ZERO | OVERFLOW_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(
@@ -1928,11 +1928,11 @@ mod tests {
         // test overflow
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
 
         let mut ctx = EvalContext::default();
         let val: Result<f64> = f64::NEG_INFINITY.to_string().as_bytes().convert(&mut ctx);
-        assert!(val.is_err());
+        val.unwrap_err();
 
         // TRUNCATE_AS_WARNING
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));

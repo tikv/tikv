@@ -1636,9 +1636,9 @@ fn test_prepare_merge_with_5_nodes_snapshot() {
     pd_client.add_peer(left.get_id(), new_peer(5, 16));
 
     // Make sure there will be no admin entries after min_matched.
-    for (k, v) in &[(b"k11", b"v11"), (b"k12", b"v12")] {
-        cluster.must_put(*k, *v);
-        must_get_equal(&cluster.get_engine(4), *k, *v);
+    for (k, v) in [(b"k11", b"v11"), (b"k12", b"v12")] {
+        cluster.must_put(k, v);
+        must_get_equal(&cluster.get_engine(4), k, v);
     }
     cluster.add_send_filter(IsolationFilterFactory::new(4));
     // So index of peer 4 becomes min_matched.

@@ -302,8 +302,8 @@ fn test_batch_id_in_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let (split_key1, split_key2) = (b"k22", b"k44");
     let keys = vec![b"k11", b"k33", b"k55"];
-    let _ = keys.iter().map(|key| {
-        cluster.must_put(*key, b"v1");
+    let _ = keys.iter().map(|&key| {
+        cluster.must_put(key, b"v1");
     });
 
     let region = pd_client.get_region(keys[0]).unwrap();
@@ -526,7 +526,7 @@ fn test_read_index_stale_in_suspect_lease() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx

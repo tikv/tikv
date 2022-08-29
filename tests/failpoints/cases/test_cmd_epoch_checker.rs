@@ -101,7 +101,7 @@ fn test_reject_proposal_during_region_split() {
 
     // Try to split region.
     let (split_tx, split_rx) = mpsc::channel();
-    let cb = Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
         split_tx.send(resp.response).unwrap()
     }));
     let r = cluster.get_region(b"");
@@ -111,12 +111,12 @@ fn test_reject_proposal_during_region_split() {
         .unwrap_err();
 
     // Try to put a key.
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
     let mut receivers = vec![];
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k1");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -179,7 +179,7 @@ fn test_reject_proposal_during_region_merge() {
     fail::cfg(prepare_merge_fp, "pause").unwrap();
     // Try to merge region.
     let (merge_tx, merge_rx) = mpsc::channel();
-    let cb = Callback::Read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
         merge_tx.send(resp.response).unwrap()
     }));
     let source = cluster.get_region(b"");
@@ -190,12 +190,12 @@ fn test_reject_proposal_during_region_merge() {
         .unwrap_err();
 
     // Try to put a key on the source region.
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
     let mut receivers = vec![];
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -231,7 +231,7 @@ fn test_reject_proposal_during_region_merge() {
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -248,7 +248,7 @@ fn test_reject_proposal_during_region_merge() {
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -314,11 +314,11 @@ fn test_reject_proposal_during_rollback_region_merge() {
 
     // Write request is rejected because the source region is merging.
     // It's not handled by epoch checker now.
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"a");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -367,11 +367,11 @@ fn test_reject_proposal_during_leader_transfer() {
     sleep_ms(100);
     assert_ne!(cluster.leader_of_region(r).unwrap(), new_peer(2, 2));
 
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
     for i in 0..2 {
         if i == 1 {
             // Test another path of calling proposed callback.
-            fail::cfg(propose_batch_raft_command_fp, "2*return").unwrap();
+            fail::cfg(force_delay_propose_batch_raft_command_fp, "2*return").unwrap();
         }
         let write_req = make_write_req(&mut cluster, b"k");
         let (cb, cb_receivers) = make_cb(&write_req);
@@ -485,8 +485,8 @@ fn test_propose_before_transfer_leader() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k", b"v");
 
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
-    fail::cfg(propose_batch_raft_command_fp, "return").unwrap();
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
+    fail::cfg(force_delay_propose_batch_raft_command_fp, "return").unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k1");
     let (cb, cb_receivers) = make_cb(&write_req);
@@ -514,8 +514,8 @@ fn test_propose_before_split_and_merge() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k", b"v");
 
-    let propose_batch_raft_command_fp = "propose_batch_raft_command";
-    fail::cfg(propose_batch_raft_command_fp, "return").unwrap();
+    let force_delay_propose_batch_raft_command_fp = "force_delay_propose_batch_raft_command";
+    fail::cfg(force_delay_propose_batch_raft_command_fp, "return").unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k1");
     let (cb, cb_receivers) = make_cb(&write_req);

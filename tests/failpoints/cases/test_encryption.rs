@@ -23,7 +23,7 @@ fn test_file_dict_file_record_corrupted() {
     fail::remove("file_dict_log_append_incomplete");
     file_dict_file.insert("info2", &info2).unwrap();
     // Intermediate record damage is not allowed.
-    assert!(file_dict_file.recovery().is_err());
+    file_dict_file.recovery().unwrap_err();
 
     let mut file_dict_file = FileDictionaryFile::new(
         tempdir.path(),

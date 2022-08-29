@@ -2,7 +2,7 @@
 
 use super::range::Range;
 
-#[derive(PartialEq, Eq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum IterStatus {
     /// All ranges are consumed.
     Drained,

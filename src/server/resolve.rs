@@ -270,7 +270,7 @@ mod tests {
     fn test_resolve_store_state_tombstone() {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
-        assert!(runner.get_address(0).is_err());
+        runner.get_address(0).unwrap_err();
     }
 
     #[test]

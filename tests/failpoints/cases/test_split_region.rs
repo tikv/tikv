@@ -13,7 +13,9 @@ use collections::HashMap;
 use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{Mutation, Op, PessimisticLockRequest, PrewriteRequest},
+    kvrpcpb::{
+        Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
+    },
     metapb::Region,
     raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
@@ -131,7 +133,7 @@ fn test_split_lost_request_vote() {
     assert_eq!(range.1, b"k2");
 
     // Make sure the message has sent to peer 3.
-    let _sent = after_sent_rx
+    after_sent_rx
         .recv_timeout(Duration::from_millis(100))
         .unwrap();
 
@@ -966,7 +968,7 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     let mut req = PrewriteRequest::default();
     req.set_context(cluster.get_ctx(b"a"));
     req.set_mutations(vec![mutation].into());
-    req.set_is_pessimistic_lock(vec![true]);
+    req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     req.set_start_version(10);
     req.set_for_update_ts(commit_ts + 20);
     req.set_primary_lock(b"a".to_vec());

@@ -445,7 +445,7 @@ pub struct Snapshot {
     mgr: SnapManagerCore,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 enum CheckPolicy {
     ErrAllowed,
     ErrNotAllowed,
@@ -1771,8 +1771,6 @@ impl SnapManagerCore {
         let tmp_file_paths = cf_file.tmp_file_paths();
         let file_paths = cf_file.file_paths();
         for (i, tmp_file_path) in tmp_file_paths.iter().enumerate() {
-            file_system::rename(&tmp_file_path, &file_paths[i])?;
-
             let mgr = self.encryption_key_manager.as_ref();
             if let Some(mgr) = &mgr {
                 let src = &tmp_file_path;
@@ -1786,7 +1784,15 @@ impl SnapManagerCore {
                     }
                     return Err(e.into());
                 }
-                mgr.delete_file(src)?;
+                let r = file_system::rename(src, dst);
+                let del_file = if r.is_ok() { src } else { dst };
+                if let Err(e) = mgr.delete_file(del_file) {
+                    warn!("fail to remove encryption metadata during 'rename_tmp_cf_file_for_send'";
+                          "err" => ?e);
+                }
+                r?;
+            } else {
+                file_system::rename(&tmp_file_path, &file_paths[i])?;
             }
             let file = Path::new(&file_paths[i]);
             let (checksum, size) = calc_checksum_and_size(file, mgr)?;
@@ -2516,7 +2522,7 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2563,11 +2569,11 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        assert!(s5.apply(options).is_err());
+        s5.apply(options).unwrap_err();
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta,).is_err());
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).is_err());
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta).unwrap_err();
+        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
     }
 
     #[test]
@@ -2607,7 +2613,7 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snapshot::new_for_sending(dir.path(), &key, &mgr_core,).is_err());
+        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
@@ -2637,11 +2643,9 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core,).is_err());
-        assert!(
-            Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta(),)
-                .is_err()
-        );
+        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
+        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_data.take_meta())
+            .unwrap_err();
     }
 
     #[test]
@@ -2663,7 +2667,7 @@ pub mod tests {
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
         mgr = SnapManager::new(path2);
-        assert!(mgr.init().is_err());
+        mgr.init().unwrap_err();
     }
 
     #[test]

@@ -144,7 +144,7 @@ struct SlabEntry {
 
 pub const INVALID_TRACKER_TOKEN: TrackerToken = TrackerToken(u64::MAX);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct TrackerToken(u64);
 
 impl TrackerToken {
@@ -179,6 +179,12 @@ impl fmt::Debug for TrackerToken {
             .field("seq", &self.seq())
             .field("key", &self.key())
             .finish()
+    }
+}
+
+impl Default for TrackerToken {
+    fn default() -> Self {
+        INVALID_TRACKER_TOKEN
     }
 }
 

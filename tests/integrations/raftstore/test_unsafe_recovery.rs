@@ -19,11 +19,9 @@ fn confirm_quorum_is_lost<T: Simulator>(cluster: &mut Cluster<T>, region: &metap
         true,
     );
     // marjority is lost, can't propose command successfully.
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
 }
 
 #[test]
@@ -854,11 +852,9 @@ fn test_force_leader_with_uncommitted_conf_change() {
         find_peer(&region, 2).unwrap().clone(),
     );
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
 
     // wait election timeout
     std::thread::sleep(Duration::from_millis(
@@ -973,11 +969,9 @@ fn test_force_leader_on_wrong_leader() {
         find_peer(&region, 3).unwrap().clone(),
     );
     let req = new_admin_request(region.get_id(), region.get_region_epoch(), cmd);
-    assert!(
-        cluster
-            .call_command_on_leader(req, Duration::from_millis(10))
-            .is_err()
-    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
     cluster.exit_force_leader(region.get_id(), 2);
 
     // peer on node2 still doesn't have the latest committed log.

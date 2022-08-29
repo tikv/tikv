@@ -506,7 +506,7 @@ pub type Limiter = async_speed_limit::Limiter<CoarseClock>;
 pub type Consume = async_speed_limit::limiter::Consume<CoarseClock, ()>;
 
 /// ReadId to judge whether the read requests come from the same GRPC stream.
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct ThreadReadId {
     sequence: u64,
     pub create_time: Timespec,

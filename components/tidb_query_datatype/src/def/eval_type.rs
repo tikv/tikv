@@ -33,7 +33,7 @@ impl EvalType {
             EvalType::Bytes => crate::FieldTypeTp::String,
             EvalType::DateTime => crate::FieldTypeTp::DateTime,
             EvalType::Duration => crate::FieldTypeTp::Duration,
-            EvalType::Json => crate::FieldTypeTp::JSON,
+            EvalType::Json => crate::FieldTypeTp::Json,
             EvalType::Enum => crate::FieldTypeTp::Enum,
             EvalType::Set => crate::FieldTypeTp::Set,
         }
@@ -66,7 +66,7 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Date
             | crate::FieldTypeTp::DateTime => EvalType::DateTime,
             crate::FieldTypeTp::Duration => EvalType::Duration,
-            crate::FieldTypeTp::JSON => EvalType::Json,
+            crate::FieldTypeTp::Json => EvalType::Json,
             crate::FieldTypeTp::VarChar
             | crate::FieldTypeTp::TinyBlob
             | crate::FieldTypeTp::MediumBlob
@@ -115,7 +115,7 @@ mod tests {
             (NewDate, None),
             (VarChar, Some(EvalType::Bytes)),
             (Bit, Some(EvalType::Int)),
-            (JSON, Some(EvalType::Json)),
+            (Json, Some(EvalType::Json)),
             (NewDecimal, Some(EvalType::Decimal)),
             (Enum, Some(EvalType::Enum)),
             (Set, None),
@@ -137,7 +137,7 @@ mod tests {
             if let Some(etype) = etype {
                 assert_eq!(ftt.unwrap(), etype);
             } else {
-                assert!(ftt.is_err());
+                ftt.unwrap_err();
             }
         }
     }

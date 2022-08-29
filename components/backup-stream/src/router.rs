@@ -76,8 +76,8 @@ impl TaskSelector {
     pub fn reference(&self) -> TaskSelectorRef<'_> {
         match self {
             TaskSelector::ByName(s) => TaskSelectorRef::ByName(s),
-            TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(&*k),
-            TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(&*s, &*e),
+            TaskSelector::ByKey(k) => TaskSelectorRef::ByKey(k),
+            TaskSelector::ByRange(s, e) => TaskSelectorRef::ByRange(s, e),
             TaskSelector::All => TaskSelectorRef::All,
         }
     }
@@ -99,9 +99,9 @@ impl<'a> TaskSelectorRef<'a> {
     ) -> bool {
         match self {
             TaskSelectorRef::ByName(name) => task_name == name,
-            TaskSelectorRef::ByKey(k) => task_range.any(|(s, e)| utils::is_in_range(k, (&*s, &*e))),
+            TaskSelectorRef::ByKey(k) => task_range.any(|(s, e)| utils::is_in_range(k, (s, e))),
             TaskSelectorRef::ByRange(x1, y1) => {
-                task_range.any(|(x2, y2)| utils::is_overlapping((x1, y1), (&*x2, &*y2)))
+                task_range.any(|(x2, y2)| utils::is_overlapping((x1, y1), (x2, y2)))
             }
             TaskSelectorRef::All => true,
         }
@@ -652,15 +652,14 @@ impl TempFileKey {
     }
 
     fn get_file_type(&self) -> FileType {
-        let file_type = match self.cmd_type {
+        match self.cmd_type {
             CmdType::Put => FileType::Put,
             CmdType::Delete => FileType::Delete,
             _ => {
                 warn!("error cmdtype"; "cmdtype" => ?self.cmd_type);
                 panic!("error CmdType");
             }
-        };
-        file_type
+        }
     }
 
     /// The full name of the file owns the key.
@@ -689,20 +688,6 @@ impl TempFileKey {
         use chrono::prelude::*;
         let millis = TimeStamp::physical(ts.into());
         let dt = Utc.timestamp_millis(millis as _);
-
-        #[cfg(feature = "failpoints")]
-        {
-            fail::fail_point!("stream_format_date_time", |s| {
-                return dt
-                    .format(&s.unwrap_or_else(|| "%Y%m".to_owned()))
-                    .to_string();
-            });
-            match t {
-                FormatType::Date => dt.format("%Y%m%d").to_string(),
-                FormatType::Hour => dt.format("%H").to_string(),
-            }
-        }
-        #[cfg(not(feature = "failpoints"))]
         match t {
             FormatType::Date => dt.format("%Y%m%d"),
             FormatType::Hour => dt.format("%H"),
@@ -1787,9 +1772,7 @@ mod tests {
             reader: UnpinReader,
             content_length: u64,
         ) -> io::Result<()> {
-            if let Err(e) = (self.error_on_write)() {
-                return Err(e);
-            }
+            (self.error_on_write)()?;
             self.inner.write(name, reader, content_length).await
         }
 
