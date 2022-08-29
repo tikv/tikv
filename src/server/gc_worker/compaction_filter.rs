@@ -806,7 +806,7 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
-                feature_gate_version: "5.0.0".to_string()
+                feature_gate_version: "5.0.0".to_string(),
             }
         }
     }
@@ -829,7 +829,9 @@ pub mod test_utils {
             };
             let feature_gate = {
                 let feature_gate = FeatureGate::default();
-                feature_gate.set_version(self.feature_gate_version.as_str()).unwrap();
+                feature_gate
+                    .set_version(self.feature_gate_version.as_str())
+                    .unwrap();
                 feature_gate
             };
 

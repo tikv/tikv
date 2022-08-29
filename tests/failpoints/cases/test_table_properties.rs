@@ -40,7 +40,7 @@ fn test_check_need_gc() {
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.feature_gate_version="6.1.0".to_string();
+    gc_runner.feature_gate_version = "6.1.0".to_string();
 
     do_write(&engine, false, 5);
 
@@ -211,7 +211,7 @@ fn test_skip_gc_by_check() {
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.feature_gate_version="6.1.0".to_string();
+    gc_runner.feature_gate_version = "6.1.0".to_string();
 
     do_write(&engine, false, 5);
     engine.get_rocksdb().flush_cfs(true).unwrap();
@@ -220,7 +220,7 @@ fn test_skip_gc_by_check() {
     // dofilter
     gc_runner
         .safe_point(TimeStamp::new(1).into_inner())
-        .gc_raw(&raw_engine); //====================================================================
+        .gc_raw(&raw_engine);
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_RAW_KEYMODE])
@@ -250,7 +250,7 @@ fn test_skip_gc_by_check() {
     gc_runner.ratio_threshold = Option::Some(6.0);
 
     // is_bottommost_level = false
-    do_gc(&raw_engine, 1, &mut gc_runner, &dir); //========================================
+    do_gc(&raw_engine, 1, &mut gc_runner, &dir);
 
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM

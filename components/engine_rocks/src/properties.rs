@@ -495,7 +495,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                         match raw_value.expire_ts {
                             None => {}
                             Some(expire_ts) => {
-                                if expire_ts!=0 {
+                                if expire_ts != 0 {
                                     self.props.min_ttl_ts =
                                         cmp::min(self.props.min_ttl_ts, TimeStamp::from(expire_ts));
                                 }
