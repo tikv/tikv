@@ -76,8 +76,8 @@ impl<S: Store> Storage for TikvStorage<S> {
             if key.is_err() {
                 error!("key is not valid"; "key" => log_wrappers::Value::key(k.as_encoded()));
                 unimplemented!("key is not valid");
-            }  else {
-                (key.unwrap(),v)
+            } else {
+                (key.unwrap(), v)
             }
         }))
     }

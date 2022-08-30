@@ -5,9 +5,8 @@ use std::{fmt::Debug, marker::PhantomData};
 use api_version::{api_v2::KeyspaceId, KvFormat};
 use log_wrappers::hex;
 
+use super::{range::*, ranges_iter::*, OwnedKvPair, Storage};
 use crate::error::StorageError;
-
-use super::{OwnedKvPair, range::*, ranges_iter::*, Storage};
 
 const KEY_BUFFER_CAPACITY: usize = 64;
 
@@ -316,9 +315,8 @@ impl<T: Storage, F: KvFormat> RangesScanner<T, F> {
 mod tests {
     use api_version::ApiV1;
 
-    use crate::storage::{IntervalRange, PointRange, Range, test_fixture::FixtureStorage};
-
     use super::*;
+    use crate::storage::{test_fixture::FixtureStorage, IntervalRange, PointRange, Range};
 
     fn create_storage() -> FixtureStorage {
         let data: &[(&'static [u8], &'static [u8])] = &[
