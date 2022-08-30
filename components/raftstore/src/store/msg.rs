@@ -38,72 +38,6 @@ use crate::store::{
     SnapKey,
 };
 
-pub trait ReadResponseTrait: Default {
-    type Response;
-    type Snapshot;
-
-    fn set_term(&mut self, _term: u64) {
-        unimplemented!()
-    }
-
-    fn set_response(&mut self, response: Self::Response);
-
-    fn set_responses(&mut self, _response: RepeatedField<Response>) {
-        unimplemented!()
-    }
-
-    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<Self::Snapshot>> {
-        unimplemented!()
-    }
-
-    fn set_snapshot(&mut self, _snapshot: RegionSnapshot<Self::Snapshot>) {
-        unimplemented!()
-    }
-
-    fn set_txn_extra_op(&mut self, _txn_extra_op: TxnExtraOp) {
-        unimplemented!()
-    }
-
-    fn set_error(&mut self, error: RaftCmdResponse);
-}
-
-impl<S: Snapshot> ReadResponseTrait for ReadResponse<S> {
-    type Response = RaftCmdResponse;
-    type Snapshot = S;
-
-    fn set_term(&mut self, term: u64) {
-        if term == 0 {
-            return;
-        }
-
-        self.response.mut_header().set_current_term(term);
-    }
-
-    fn set_response(&mut self, response: Self::Response) {
-        self.response = response;
-    }
-
-    fn set_responses(&mut self, response: RepeatedField<Response>) {
-        self.response.set_responses(response);
-    }
-
-    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<Self::Snapshot>> {
-        self.snapshot.as_mut()
-    }
-
-    fn set_snapshot(&mut self, snapshot: RegionSnapshot<Self::Snapshot>) {
-        self.snapshot = Some(snapshot);
-    }
-
-    fn set_txn_extra_op(&mut self, txn_extra_op: TxnExtraOp) {
-        self.txn_extra_op = txn_extra_op;
-    }
-
-    fn set_error(&mut self, error: RaftCmdResponse) {
-        self.response = error;
-    }
-}
-
 #[derive(Debug)]
 pub struct ReadResponse<S: Snapshot> {
     pub response: RaftCmdResponse,
@@ -282,7 +216,7 @@ where
 }
 
 pub trait ReadCallback: ErrorCallback {
-    type Response: ReadResponseTrait;
+    type Response;
 
     fn set_result(self, result: Self::Response);
 }
