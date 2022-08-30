@@ -43,7 +43,7 @@ use tikv_util::{
 };
 use time::Timespec;
 
-use crate::{fsm::StoreMeta, tablet::CachedTablet};
+use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet};
 
 #[derive(Clone)]
 pub struct LocalReader<C, E, D, S>
@@ -70,13 +70,16 @@ where
         }
     }
 
-    fn try_get_snapshot(&self, req: RaftCmdRequest) -> Result<RegionSnapshot<E::Snapshot>> {
+    fn try_get_snapshot(
+        &self,
+        req: RaftCmdRequest,
+    ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
         match self.local_reader.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
                     let snapshot_ts = monotonic_raw_now();
                     if !delegate.is_in_leader_lease(snapshot_ts) {
-                        unimplemented!()
+                        return Ok(None);
                     }
 
                     let region = Arc::clone(&delegate.region);
@@ -84,40 +87,50 @@ where
 
                     // Try renew lease in advance
                     delegate.maybe_renew_lease_advance(self.local_reader.router(), snapshot_ts);
-                    Ok(snap)
+                    Ok(Some(snap))
                 }
                 RequestPolicy::StaleRead => {
                     let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                        unimplemented!()
-                    }
+                    delegate.check_stale_read_safe::<E>(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
                     let snap = delegate.get_region_snapshot(None, region, &mut None);
 
-                    if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                        unimplemented!()
-                    }
+                    delegate.check_stale_read_safe::<E>(read_ts)?;
 
                     // TLS_LOCAL_READ_METRICS.with(|m|
                     // m.borrow_mut().local_executed_stale_read_requests.inc());
-
-                    Ok(snap)
+                    Ok(Some(snap))
                 }
                 _ => unreachable!(),
             },
             Ok(None) => unimplemented!(),
-            Err(e) => unimplemented!(),
+            Err(e) => {
+                let mut response = cmd_resp::new_error(e);
+                if let Some(delegate) = self
+                    .local_reader
+                    .delegates
+                    .get(&req.get_header().get_region_id())
+                {
+                    cmd_resp::bind_term(&mut response, delegate.term);
+                }
+                Err(response)
+            }
         }
     }
 
-    pub async fn snapshot(&self, req: RaftCmdRequest) -> RegionSnapshot<E::Snapshot> {
+    pub async fn snapshot(
+        &self,
+        req: RaftCmdRequest,
+    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         loop {
-            if let Ok(snap) = self.try_get_snapshot(req.clone()) {
-                return snap;
+            if let Some(snap) = self.try_get_snapshot(req.clone())? {
+                return Ok(snap);
             }
 
             // try to renew the lease
+            let (msg, sub) = PeerMsg::raft_query(req.clone());
+            unimplemented!();
         }
     }
 }
