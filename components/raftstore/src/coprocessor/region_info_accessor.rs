@@ -475,9 +475,7 @@ impl RegionCollector {
                 .get(region_id)
                 .map(|region_info| region_info.region.clone())
                 .and_then(|region| {
-                    if RangeKey::from_start_key(region.get_start_key().to_vec()) <= key
-                        && key < RangeKey::from_end_key(region.get_end_key().to_vec())
-                    {
+                    if RangeKey::from_start_key(region.get_start_key().to_vec()) <= key {
                         Some(region)
                     } else {
                         None
