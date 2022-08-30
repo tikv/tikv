@@ -28,7 +28,10 @@ use security::SecurityManager;
 use serde_json::json;
 use tikv::{
     config::{ConfigController, TikvConfig},
-    server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+    server::{
+        debug::{BottommostLevelCompaction, Debugger, RegionInfo},
+        gc_worker::WriteCompactionFilterFactory,
+    },
 };
 use tikv_util::escape;
 
@@ -70,9 +73,12 @@ pub fn new_debug_executor(
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.set_env(env.clone());
     kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
-    let kv_cfs_opts = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
+        &cache,
+        None,
+        cfg.storage.api_version(),
+        WriteCompactionFilterFactory::new(0, 0, None),
+    );
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
     let mut kv_db = match new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts) {

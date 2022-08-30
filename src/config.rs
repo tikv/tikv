@@ -790,6 +790,7 @@ impl WriteCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
+        write_compaction_filter: WriteCompactionFilterFactory,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
@@ -812,6 +813,7 @@ impl WriteCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
 <<<<<<< HEAD
+<<<<<<< HEAD
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
@@ -820,6 +822,14 @@ impl WriteCfConfig {
             .unwrap();
         cf_opts.set_titan_cf_options(&self.titan.build_opts());
 =======
+=======
+        cf_opts
+            .set_compaction_filter_factory(
+                "write_compaction_filter_factory",
+                write_compaction_filter,
+            )
+            .unwrap();
+>>>>>>> bd28806d5 (*: rebase and rework writecompactionfilter factory to address comments)
         cf_opts.set_titandb_options(&self.titan.build_opts());
 >>>>>>> 8ccd66b2e (src: GC in compaction filter support to multi-rocksdb)
         cf_opts
@@ -1207,6 +1217,7 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        write_compaction_filter_factory: WriteCompactionFilterFactory,
     ) -> Vec<(&'static str, RocksCfOptions)> {
         vec![
             (
@@ -1217,26 +1228,15 @@ impl DbConfig {
             (CF_LOCK, self.lockcf.build_opt(cache)),
             (
                 CF_WRITE,
-                self.writecf.build_opt(cache, region_info_accessor),
+                self.writecf.build_opt(
+                    cache,
+                    region_info_accessor,
+                    write_compaction_filter_factory,
+                ),
             ),
             // TODO: remove CF_RAFT.
             (CF_RAFT, self.raftcf.build_opt(cache)),
         ]
-    }
-
-    pub fn set_write_compaction_filter_factory(
-        db: RocksEngine,
-        cfs_opts: Vec<(&'static str, RocksCfOptions)>,
-    ) {
-        if let Some(x) = cfs_opts.iter().find(|x| x.0 == CF_WRITE) {
-            let mut write_cf_opts = x.1.clone();
-            write_cf_opts
-                .set_compaction_filter_factory(
-                    "write_compaction_filter_factory",
-                    WriteCompactionFilterFactory::new(db),
-                )
-                .unwrap();
-        }
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
@@ -4526,6 +4526,7 @@ mod tests {
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
+                WriteCompactionFilterFactory::new(0, 0, None),
             ),
             true,
             None,

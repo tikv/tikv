@@ -19,7 +19,10 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use super::engine_factory_v2::KvEngineFactoryV2;
-use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::{
+    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
+    server::gc_worker::WriteCompactionFilterFactory,
+};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -134,6 +137,7 @@ impl KvEngineFactory {
         tablet_path: &Path,
         region_id: u64,
         suffix: u64,
+        write_compaction_filter_factory: WriteCompactionFilterFactory,
     ) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
@@ -152,12 +156,13 @@ impl KvEngineFactory {
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
+            write_compaction_filter_factory,
         );
 
         let kv_engine = engine_rocks::util::new_engine_opt(
             tablet_path.to_str().unwrap(),
             kv_db_opts,
-            kv_cfs_opts.clone(),
+            kv_cfs_opts,
         );
         let mut kv_engine = match kv_engine {
             Ok(e) => e,
@@ -168,8 +173,6 @@ impl KvEngineFactory {
         };
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
-        // RocksEngine is there now, we can set its write compaction filter factory
-        DbConfig::set_write_compaction_filter_factory(kv_engine.clone(), kv_cfs_opts);
 
         Ok(kv_engine)
     }
@@ -189,11 +192,11 @@ impl KvEngineFactory {
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }
-        let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
-            &self.inner.block_cache,
-            self.inner.region_info_accessor.as_ref(),
-            self.inner.api_version,
-        );
+        // let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
+        //    &self.inner.block_cache,
+        //    self.inner.region_info_accessor.as_ref(),
+        //    self.inner.api_version,
+        //);
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
         //   tablet_path.to_str().unwrap(),
@@ -225,7 +228,12 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(&root_path, 0, 0)?;
+        let tablet = self.create_tablet(
+            &root_path,
+            0,
+            0,
+            WriteCompactionFilterFactory::new(0, 0, None),
+        )?;
         let mut root_db = self.inner.root_db.lock().unwrap();
         root_db.replace(tablet.clone());
         Ok(tablet)

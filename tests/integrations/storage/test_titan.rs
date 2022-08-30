@@ -21,6 +21,7 @@ use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
     config::TikvConfig,
+    server::gc_worker::WriteCompactionFilterFactory,
     storage::{mvcc::ScannerBuilder, txn::Scanner},
 };
 use tikv_util::{
@@ -160,9 +161,12 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
     let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts = cfg
-        .rocksdb
-        .build_cf_opts(&cache, None, cfg.storage.api_version());
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(
+        &cache,
+        None,
+        cfg.storage.api_version(),
+        WriteCompactionFilterFactory::new(0, 0, None),
+    );
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(

@@ -6,15 +6,17 @@ use std::{
 };
 
 use causal_ts::tests::DummyRawTsTracker;
-use engine_traits::CfName;
+use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
 use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
-use crate::config::DbConfig;
 
-use crate::storage::{
-    config::BlockCacheConfig,
-    kv::{Result, RocksEngine},
+use crate::{
+    server::gc_worker::WriteCompactionFilterFactory,
+    storage::{
+        config::BlockCacheConfig,
+        kv::{Result, RocksEngine},
+    },
 };
 
 // Duplicated from rocksdb_engine
@@ -97,11 +99,19 @@ impl TestEngineBuilder {
             cache_opt.capacity = Some(ReadableSize::kb(0));
         }
         let cache = cache_opt.build_shared_cache();
-        let cfs_opts = cfg_rocksdb.build_cf_opts(&cache, None, api_version);
-        let mut engine =
-            RocksEngine::new(&path, None, cfs_opts.clone(), cache.is_some(), self.io_rate_limiter)?;
-
-        DbConfig::set_write_compaction_filter_factory(engine.get_rocksdb(), cfs_opts);
+        let cfs_opts = cfg_rocksdb.build_cf_opts(
+            &cache,
+            None,
+            api_version,
+            WriteCompactionFilterFactory::new(0, 0, None),
+        );
+        let mut engine = RocksEngine::new(
+            &path,
+            None,
+            cfs_opts.clone(),
+            cache.is_some(),
+            self.io_rate_limiter,
+        )?;
         if let ApiVersion::V2 = api_version {
             Self::register_causal_observer(&mut engine);
         }

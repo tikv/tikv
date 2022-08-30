@@ -3421,6 +3421,7 @@ mod tests {
     use crate::{
         config::TitanDbConfig,
         coprocessor::checksum_crc64_xor,
+        server::gc_worker::WriteCompactionFilterFactory,
         storage::{
             config::BlockCacheConfig,
             kv::{
@@ -3954,7 +3955,14 @@ mod tests {
                         .build_opt(&cache, None, ApiVersion::V1),
                 ),
                 (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
-                (CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache, None)),
+                (
+                    CF_WRITE,
+                    cfg_rocksdb.writecf.build_opt(
+                        &cache,
+                        None,
+                        WriteCompactionFilterFactory::new(0, 0, None),
+                    ),
+                ),
                 (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
             ];
             RocksEngine::new(

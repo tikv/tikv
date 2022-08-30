@@ -21,7 +21,8 @@ use engine_rocks::{
     RocksEngine, RocksMvccProperties, RocksWriteBatchVec,
 };
 use engine_traits::{
-    KvEngine, MiscExt, Mutable, MvccProperties, WriteBatch, WriteBatchExt, WriteOptions,
+    KvEngine, MiscExt, Mutable, MvccProperties, OpenOptions, TabletFactory, WriteBatch,
+    WriteBatchExt, WriteOptions,
 };
 use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
@@ -34,7 +35,10 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
+    server::{
+        engine_factory_v2::KvEngineFactoryV2,
+        gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
+    },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
 
@@ -198,12 +202,35 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
 }
 
 pub struct WriteCompactionFilterFactory {
-    db: RocksEngine,
+    region_id: u64,
+    suffix: u64,
+    tablet_factory: Option<KvEngineFactoryV2>,
 }
 
 impl WriteCompactionFilterFactory {
-    pub fn new(db: RocksEngine) -> Self {
-        Self { db }
+    pub fn new(region_id: u64, suffix: u64, tablet_factory: Option<KvEngineFactoryV2>) -> Self {
+        Self {
+            region_id,
+            suffix,
+            tablet_factory,
+        }
+    }
+
+    pub fn get_rocksdb(&self) -> Option<RocksEngine> {
+        return match &(*self).tablet_factory {
+            Some(factory) => Some(
+                factory
+                    .open_tablet(self.region_id, Some(self.suffix), OpenOptions::default())
+                    .unwrap(),
+            ),
+            None => {
+                let gc_context_option = GC_CONTEXT.lock().unwrap();
+                match *gc_context_option {
+                    Some(ref ctx) => Some(ctx.db.clone()),
+                    None => None,
+                }
+            }
+        };
     }
 }
 
@@ -212,6 +239,13 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
+        let db = match self.get_rocksdb() {
+            Some(rocksdb) => rocksdb,
+            None => {
+                return std::ptr::null_mut();
+            }
+        };
+
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
             Some(ref ctx) => ctx,
@@ -244,7 +278,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if self.db.is_stalled_or_stopped() {
+        if db.is_stalled_or_stopped() {
             debug!("skip gc in compaction filter because the DB is stalled");
             return std::ptr::null_mut();
         }
@@ -273,7 +307,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         );
 
         let filter = WriteCompactionFilter::new(
-            self.db.clone(),
+            db.clone(),
             safe_point,
             context,
             gc_scheduler,
