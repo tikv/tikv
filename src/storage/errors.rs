@@ -19,6 +19,7 @@ use crate::storage::{
     txn::{self, Error as TxnError, ErrorInner as TxnErrorInner},
     CommandKind, Result,
 };
+use engine_traits::Error as EngineError;
 
 #[derive(Debug, Error)]
 /// Detailed errors for storage operations. This enum also unifies code for
@@ -253,7 +254,26 @@ pub fn extract_region_error<T>(res: &Result<T>) -> Option<errorpb::Error> {
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
-        Err(Error(box ErrorInner::SchedTooBusy)) => {
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                                                                             box MvccErrorInner::Kv(KvError(box KvErrorInner::Other(ref e))),
+                                                                         )))))) => {
+            e.downcast_ref::<EngineError>().and_then(|e| {
+                match e {
+                    EngineError::NotInRange {key, region_id,start,end}=> {
+                        let mut err = errorpb::Error::default();
+                        let mut not_in_region = errorpb::KeyNotInRegion::default();
+                        not_in_region.set_key(key.to_vec());
+                        not_in_region.set_region_id(*region_id);
+                        not_in_region.set_start_key(start.to_vec());
+                        not_in_region.set_end_key(end.to_vec());
+                        err.set_key_not_in_region(not_in_region);
+                        Some(err)
+                    },
+                    _ => None,
+                }
+            })
+        }
+            Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
