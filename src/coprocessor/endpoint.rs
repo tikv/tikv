@@ -501,9 +501,16 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let res = match result_of_future {
                 Err(e) => make_error_response(e).into(),
-                Ok(handle_fut) => handle_fut
-                    .await
-                    .unwrap_or_else(|e| make_error_response(e).into()),
+                Ok(handle_fut) => {
+                    let mut response = handle_fut
+                        .await
+                        .unwrap_or_else(|e| make_error_response(e).into());
+                    let scan_detail_v2 = response.mut_exec_details_v2().mut_scan_detail_v2();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
+                    response
+                }
             };
             GLOBAL_TRACKERS.remove(tracker);
             res

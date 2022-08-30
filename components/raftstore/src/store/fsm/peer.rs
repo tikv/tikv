@@ -52,11 +52,12 @@ use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
@@ -92,9 +93,9 @@ use crate::{
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
             RegionTask, SplitCheckTask,
         },
-        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, SignificantMsg,
-        SnapKey, StoreMsg, WriteCallback,
+        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
+        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
 };
@@ -518,7 +519,7 @@ where
 
             let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.trackers().map(|t| t[0]))
+                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
                 .collect();
 
             let mut cb = Callback::write_ext(
@@ -533,7 +534,7 @@ where
                 committed_cb,
             );
 
-            if let Some(trackers) = cb.trackers_mut() {
+            if let Some(trackers) = cb.write_trackers_mut() {
                 *trackers = tokens;
             }
 
@@ -609,10 +610,17 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    let propose_time = cmd.send_time.saturating_elapsed();
                     self.ctx
                         .raft_metrics
                         .propose_wait_time
-                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+                        .observe(propose_time.as_secs_f64());
+                    cmd.callback.read_tracker().map(|tracker| {
+                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                            t.metrics.read_index_propose_wait_nanos =
+                                propose_time.as_nanos() as u64;
+                        })
+                    });
 
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
@@ -626,8 +634,8 @@ where
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
-                            && !self.fsm.peer.disk_full_peers.majority())
-                            || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
+                        && !self.fsm.peer.disk_full_peers.majority())
+                        || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
@@ -1019,8 +1027,7 @@ where
                     || util::is_epoch_stale(
                         region.get_region_epoch(),
                         self.fsm.peer.region().get_region_epoch(),
-                    )
-                {
+                ) {
                     // Stale message
                     return;
                 }
@@ -1223,7 +1230,7 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command_internal(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::read(Box::new(move |resp| {
                 // Return the error
                 if resp.response.get_header().has_error() {
                     cb.invoke_read(resp);
@@ -2218,7 +2225,7 @@ where
             cmd.mut_header().set_read_quorum(true);
             self.propose_raft_command_internal(
                 cmd,
-                Callback::Read(Box::new(|_| ())),
+                Callback::read(Box::new(|_| ())),
                 DiskFullOpt::AllowedOnAlmostFull,
             );
         }
@@ -4854,7 +4861,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });

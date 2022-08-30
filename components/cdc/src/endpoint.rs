@@ -1242,7 +1242,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = raft_router_clone.significant_send(
                         region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                        SignificantMsg::LeaderCallback(Callback::read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
                                 None
                             } else {

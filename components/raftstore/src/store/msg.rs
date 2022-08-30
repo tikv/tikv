@@ -22,7 +22,7 @@ use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
-use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
+use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
 use super::{
     local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
@@ -91,7 +91,11 @@ pub enum Callback<S: Snapshot> {
     /// No callback.
     None,
     /// Read callback.
-    Read(BoxReadCallback<S>),
+    Read {
+        cb: BoxReadCallback<S>,
+
+        tracker: TrackerToken,
+    },
     /// Write callback.
     Write {
         cb: BoxWriteCallback,
@@ -118,6 +122,11 @@ impl<S> Callback<S>
 where
     S: Snapshot,
 {
+    pub fn read(cb: BoxReadCallback<S>) -> Self {
+        let tracker = get_tls_tracker_token();
+        Callback::Read { cb, tracker }
+    }
+
     pub fn write(cb: BoxWriteCallback) -> Self {
         Self::write_ext(cb, None, None)
     }
@@ -149,13 +158,13 @@ where
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
-            Callback::Read(read) => {
+            Callback::Read { cb, .. } => {
                 let resp = ReadResponse {
                     response: resp,
                     snapshot: None,
                     txn_extra_op: TxnExtraOp::Noop,
                 };
-                read(resp);
+                cb(resp);
             }
             Callback::Write { cb, .. } => {
                 let resp = WriteResponse { response: resp };
@@ -167,19 +176,19 @@ where
     }
 
     pub fn has_proposed_cb(&self) -> bool {
-        let Callback::Write { proposed_cb, .. } = self else { return false };
+        let Callback::Write { proposed_cb, .. } = self else { return false; };
         proposed_cb.is_some()
     }
 
     pub fn invoke_proposed(&mut self) {
-        let Callback::Write { proposed_cb, .. } = self else { return };
+        let Callback::Write { proposed_cb, .. } = self else { return; };
         if let Some(cb) = proposed_cb.take() {
             cb();
         }
     }
 
     pub fn invoke_committed(&mut self) {
-        let Callback::Write { committed_cb, .. } = self else { return };
+        let Callback::Write { committed_cb, .. } = self else { return; };
         if let Some(cb) = committed_cb.take() {
             cb();
         }
@@ -187,18 +196,18 @@ where
 
     pub fn invoke_read(self, args: ReadResponse<S>) {
         match self {
-            Callback::Read(read) => read(args),
-            other => panic!("expect Callback::Read(..), got {:?}", other),
+            Callback::Read { cb, .. } => cb(args),
+            other => panic!("expect Callback::read(..), got {:?}", other),
         }
     }
 
     pub fn take_proposed_cb(&mut self) -> Option<ExtCallback> {
-        let Callback::Write { proposed_cb, .. } = self else { return None };
+        let Callback::Write { proposed_cb, .. } = self else { return None; };
         proposed_cb.take()
     }
 
     pub fn take_committed_cb(&mut self) -> Option<ExtCallback> {
-        let Callback::Write { committed_cb, .. } = self else { return None };
+        let Callback::Write { committed_cb, .. } = self else { return None; };
         committed_cb.take()
     }
 }
@@ -207,6 +216,7 @@ pub trait ReadCallback: ErrorCallback {
     type Response;
 
     fn set_result(self, result: Self::Response);
+    fn read_tracker(&self) -> Option<&TrackerToken>;
 }
 
 pub trait WriteCallback: ErrorCallback {
@@ -214,8 +224,8 @@ pub trait WriteCallback: ErrorCallback {
 
     fn notify_proposed(&mut self);
     fn notify_committed(&mut self);
-    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
-    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>>;
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>>;
     fn set_result(self, result: Self::Response);
 }
 
@@ -230,6 +240,11 @@ impl<S: Snapshot> ReadCallback for Callback<S> {
     #[inline]
     fn set_result(self, result: Self::Response) {
         self.invoke_read(result);
+    }
+
+    fn read_tracker(&self) -> Option<&TrackerToken> {
+        let Callback::Read { tracker, .. } = self else { return None; };
+        Some(tracker)
     }
 }
 
@@ -247,14 +262,14 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
     }
 
     #[inline]
-    fn trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None };
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None; };
         Some(trackers)
     }
 
     #[inline]
-    fn trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
-        let Callback::Write { trackers, .. } = self else { return None };
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        let Callback::Write { trackers, .. } = self else { return None; };
         Some(trackers)
     }
 
@@ -283,7 +298,7 @@ where
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Callback::None => write!(fmt, "Callback::None"),
-            Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
+            Callback::Read { .. } => write!(fmt, "Callback::Read(..)"),
             Callback::Write { .. } => write!(fmt, "Callback::Write(..)"),
             #[cfg(any(test, feature = "testexport"))]
             Callback::Test { .. } => write!(fmt, "Callback::Test(..)"),
