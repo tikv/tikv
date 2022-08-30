@@ -37,7 +37,7 @@ use raftstore::{
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
+        AutoSplitController, Callback, CheckLeaderRunner, LocalReaderCore, RegionSnapshot, SnapManager,
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
@@ -284,7 +284,7 @@ impl ServerCluster {
             }
         }
 
-        let local_reader = LocalReader::new(
+        let local_reader = LocalReaderCore::new(
             engines.kv.clone(),
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),

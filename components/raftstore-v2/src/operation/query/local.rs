@@ -157,7 +157,7 @@ mod tests {
     use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
-        util::Lease, Callback, CasualMessage, CasualRouter, LocalReader, ProposalRouter,
+        util::Lease, Callback, CasualMessage, CasualRouter, LocalReaderCore, ProposalRouter,
         RaftCommand,
     };
     use tempfile::{Builder, TempDir};
