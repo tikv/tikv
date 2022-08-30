@@ -18,6 +18,7 @@ use std::{
     u64,
 };
 
+use arc_swap::ArcSwap;
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,
@@ -502,7 +503,7 @@ where
     pub global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
-    pub zone_info: Arc<RwLock<HashMap<u64, String>>>,
+    pub zone_info: RwLock<Arc<HashMap<u64, String>>>,
     pub engines: Engines<EK, ER>,
     pub pending_count: usize,
     pub ready_count: usize,
@@ -1073,7 +1074,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub coprocessor_host: CoprocessorHost<EK>,
     trans: T,
     global_stat: GlobalStoreStat,
-    pub zone_info: Arc<RwLock<HashMap<u64, String>>>,
+    pub zone_info: RwLock<Arc<HashMap<u64, String>>>,
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
@@ -1298,7 +1299,7 @@ where
             global_replication_state: self.global_replication_state.clone(),
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
-            zone_info: self.zone_info.clone(),
+            zone_info: RwLock::new(Arc::clone(&self.zone_info.read().unwrap())),
             engines: self.engines.clone(),
             pending_count: 0,
             ready_count: 0,
@@ -1366,7 +1367,7 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
             trans: self.trans.clone(),
             global_stat: self.global_stat.clone(),
-            zone_info: self.zone_info.clone(),
+            zone_info: RwLock::new(Arc::clone(&self.zone_info.read().unwrap())),
             engines: self.engines.clone(),
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
@@ -1434,7 +1435,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr: SnapManager,
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
-        zone_info: Arc<RwLock<HashMap<u64, String>>>,
+        zone_info: RwLock<Arc<HashMap<u64, String>>>,
         mut coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
@@ -2750,11 +2751,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 
     fn on_update_zone_information(&self, zone_info: HashMap<u64, String>) {
-        let mut ctx_zone = self.ctx.zone_info.write().unwrap();
-        for (store_id, zone) in zone_info {
-            ctx_zone.insert(store_id, zone);
-        }
-        debug!("Update Zone Information: {:?}", ctx_zone);
+        info!("Update Zone Information: {:?}", zone_info);
+        let new_zone_info = Arc::new(zone_info);
+        *self.ctx.zone_info.write().unwrap() = new_zone_info;
     }
 
     fn on_unsafe_recovery_create_peer(&self, region: Region) {

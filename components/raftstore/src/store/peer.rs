@@ -1699,7 +1699,6 @@ where
             if self.raft_group.is_recent_active(peer_id)
                 && self.raft_group.get_next_idx(peer_id).unwrap() > next_idx
                 && is_voter
-                && is_replicate_state
             {
                 agent_id = Some(peer_id);
                 next_idx = self.raft_group.get_next_idx(peer_id).unwrap();
@@ -1755,9 +1754,12 @@ where
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
         let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-        let zone_info = ctx.zone_info.read().unwrap();
+        let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
         let leader_store_id = self.peer.get_store_id();
         let leader_zone = zone_info.get(&leader_store_id);
+        // Record message that should be discarded after merge_msg_append.
+        let mut discard: HashSet<usize> = HashSet::default();
+
         // Filter MsgAppend.
         if self.follower_repl() {
             for (pos, msg) in msgs.iter().enumerate() {
@@ -1779,9 +1781,6 @@ where
                     }
                 }
             }
-
-            // Record message that should be discarded after merge_msg_append.
-            let mut discard: HashSet<usize> = HashSet::default();
 
             // Build MsgGroupBroadcast.
             for (_, group) in msg_append_group.iter() {
