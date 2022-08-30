@@ -2773,16 +2773,14 @@ pub mod tests {
         let recv_key = SnapKey::new(100, 100, 100);
         let mut recv_head = {
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
-            let snap_data = s
-                .build(
-                    &engine.kv,
-                    &snapshot,
-                    &gen_test_region(100, 1, 1),
-                    true,
-                    false,
-                )
-                .unwrap();
-            snap_data
+            s.build(
+                &engine.kv,
+                &snapshot,
+                &gen_test_region(100, 1, 1),
+                true,
+                false,
+            )
+            .unwrap()
         };
         let recv_remain = {
             let mut data = Vec::with_capacity(1024);
