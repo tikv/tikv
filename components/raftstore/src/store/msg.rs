@@ -41,13 +41,13 @@ use crate::store::{
 pub trait ReadResponseTrait<S: Snapshot>: Default {
     type Response;
 
-    fn set_term(&mut self, term: u64) {
+    fn set_term(&mut self, _term: u64) {
         unimplemented!()
     }
 
     fn set_response(&mut self, response: Self::Response);
 
-    fn set_responses(&mut self, response: RepeatedField<Response>) {
+    fn set_responses(&mut self, _response: RepeatedField<Response>) {
         unimplemented!()
     }
 
@@ -59,7 +59,7 @@ pub trait ReadResponseTrait<S: Snapshot>: Default {
         unimplemented!()
     }
 
-    fn set_txn_extra_op(&mut self, op: TxnExtraOp) {
+    fn set_txn_extra_op(&mut self, _txn_extra_op: TxnExtraOp) {
         unimplemented!()
     }
 
@@ -91,6 +91,10 @@ impl<S: Snapshot> ReadResponseTrait<S> for ReadResponse<S> {
 
     fn set_snapshot(&mut self, snapshot: RegionSnapshot<S>) {
         self.snapshot = Some(snapshot);
+    }
+
+    fn set_txn_extra_op(&mut self, txn_extra_op: TxnExtraOp) {
+        self.txn_extra_op = txn_extra_op;
     }
 
     fn set_error(&mut self, error: RaftCmdResponse) {

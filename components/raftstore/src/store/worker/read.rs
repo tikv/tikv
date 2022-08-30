@@ -534,7 +534,7 @@ impl Progress {
 // , Response = <Self::CB as ReadCallback<E::Snapshot>>::Response
 trait LocalReaderTrait<C, E, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D>,
@@ -694,7 +694,7 @@ where
 
     fn stale_read(
         &mut self,
-        mut read_id: Option<ThreadReadId>,
+        read_id: Option<ThreadReadId>,
         req: &RaftCmdRequest,
         delegate: &mut D,
     ) -> std::result::Result<
@@ -725,9 +725,9 @@ where
 
     fn propose_raft_command(
         &mut self,
-        read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
-        cb: Self::CB,
+        _read_id: Option<ThreadReadId>,
+        _req: RaftCmdRequest,
+        _cb: Self::CB,
     ) {
         unimplemented!()
     }
@@ -739,7 +739,7 @@ where
     /// which left a snapshot cached in LocalReader. ThreadReadId is composed by
     /// thread_id and a thread_local incremental sequence.
     #[inline]
-    fn read(&mut self, read_id: Option<ThreadReadId>, req: RaftCmdRequest, cb: Self::CB) {
+    fn read(&mut self, _read_id: Option<ThreadReadId>, _req: RaftCmdRequest, _cb: Self::CB) {
         unimplemented!()
     }
 
@@ -750,12 +750,27 @@ where
 
 impl<C, E, D, S> LocalReaderTrait<C, E, D, S> for LocalReader<C, E, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E, Response = ReadResponse<E::Snapshot>> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D>,
 {
     type CB = Callback<E::Snapshot>;
+
+    fn store_id(&self) -> &Cell<Option<u64>> {
+        &self.store_id
+    }
+
+    fn router(&self) -> &C {
+        &self.router
+    }
+
+    fn local_read_context(&mut self) -> LocalReadContext<'_, E> {
+        LocalReadContext {
+            snap_cache: &mut self.snap_cache,
+            read_id: &mut self.cache_read_id,
+        }
+    }
 
     fn delegate_lru_and_store_meta(&mut self) -> (&mut LruCache<u64, D>, &S) {
         (&mut self.delegates, &self.store_meta)
@@ -763,18 +778,20 @@ where
 
     fn propose_raft_command(
         &mut self,
-        mut read_id: Option<ThreadReadId>,
+        read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Self::CB,
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                let delegate_ext: LocalReadContext<'_, E>;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         let response = self.read_local(read_id, &req, &mut delegate);
-                        // todo(SpadeA): deal with None
+                        if response.is_none() {
+                            self.redirect(RaftCommand::new(req, cb));
+                            return;
+                        }
                         response.unwrap()
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
@@ -848,7 +865,7 @@ impl<C, E, D, S> LocalReader<C, E, D, S>
 where
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<E, Executor = D>,
 {
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
@@ -898,9 +915,9 @@ where
 
     pub fn read(
         &mut self,
-        read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
-        cb: Callback<E::Snapshot>,
+        _read_id: Option<ThreadReadId>,
+        _req: RaftCmdRequest,
+        _cb: Callback<E::Snapshot>,
     ) {
         unimplemented!()
     }
