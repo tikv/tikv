@@ -712,6 +712,7 @@ pub struct PreAckTransferLeaderMeta {
     pub msg: eraftpb::Message,
     pub receive_time: TiInstant,
     pub min_matched: u64,
+    pub high: u64,
 }
 
 #[derive(Getters)]
@@ -3268,7 +3269,13 @@ where
             let mut need_compact = true;
             if let Some(meta) = &self.pre_ack_transfer_leader_meta {
                 // Timeout.
-                if meta.receive_time.saturating_elapsed_secs() > 30.0 {
+                if meta.receive_time.saturating_elapsed_secs() > 15.0 {
+                    info!(
+                        "(this_pr) pre fill entry cache timeout";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "leader_id" => self.leader_id(),
+                    );
                     self.pre_ack_transfer_leader_meta = None;
                 } else {
                     need_compact = false;
@@ -4412,19 +4419,18 @@ where
     /// Return true means the msg can be acked.
     pub fn pre_ack_transfer_leader_msg(&mut self, msg: eraftpb::Message) -> bool {
         if let Some(meta) = &self.pre_ack_transfer_leader_meta {
-            error!(
+            info!(
                 "(this_pr) already in pre ack transfer leader";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "from_last_time" => ?meta.receive_time.saturating_elapsed_secs(),
             );
-            self.pre_ack_transfer_leader_meta = None;
+            return false;
         }
 
         // min_matched refers to the slowest peer's match index.
         let min_matched = msg.get_index();
 
-        // When min_matched index is not 0, entry cache should cover it.
         if min_matched == 0 {
             warn!(
                 "(this_pr) min_matched is 0";
@@ -4439,6 +4445,11 @@ where
             if let Some(first_index) = store.entry_cache_first_index() {
                 // Already filled.
                 if first_index <= min_matched + 1 {
+                    info!(
+                        "(this_pr) entry cache already covers the min_matched";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                    );
                     return true;
                 }
                 high = first_index;
@@ -4481,6 +4492,7 @@ where
                         msg,
                         receive_time: TiInstant::now(),
                         min_matched: low,
+                        high,
                     });
                     false
                 } else {
