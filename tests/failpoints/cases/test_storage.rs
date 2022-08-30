@@ -19,7 +19,7 @@ use grpcio::*;
 use kvproto::{
     kvrpcpb::{
         self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, RawPutRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -398,7 +398,10 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::PrewritePessimistic::new(
-                vec![(Mutation::make_put(key.clone(), val.clone()), true)],
+                vec![(
+                    Mutation::make_put(key.clone(), val.clone()),
+                    DoPessimisticCheck,
+                )],
                 key.to_raw().unwrap(),
                 10.into(),
                 3000,
@@ -571,7 +574,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
-                        true,
+                        DoPessimisticCheck,
                     )],
                     b"k1".to_vec(),
                     10.into(),
@@ -664,6 +667,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     0.into(),
                     OldValues::default(),
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -705,7 +709,11 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                        need_lock,
+                        if need_lock {
+                            DoPessimisticCheck
+                        } else {
+                            SkipPessimisticCheck
+                        },
                     )],
                     key.to_vec(),
                     start_ts,
@@ -998,6 +1006,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     0.into(),
                     OldValues::default(),
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1036,7 +1045,10 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(Key::from_raw(key), value.to_vec()),
+                        DoPessimisticCheck,
+                    )],
                     key.to_vec(),
                     start_ts,
                     0,

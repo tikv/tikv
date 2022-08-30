@@ -54,15 +54,17 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref MVCC_VERSIONS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref MVCC_VERSIONS_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_mvcc_versions",
         "Histogram of versions for each key",
+        &["key_mode"],
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
-    pub static ref GC_DELETE_VERSIONS_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref GC_DELETE_VERSIONS_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_storage_mvcc_gc_delete_versions",
         "Histogram of versions deleted by gc for each key",
+        &["key_mode"],
         exponential_buckets(1.0, 2.0, 30).unwrap()
     )
     .unwrap();
