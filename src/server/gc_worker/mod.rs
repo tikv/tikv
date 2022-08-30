@@ -1,11 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod applied_lock_collector;
-mod compaction_filter;
+pub mod compaction_filter;
 mod config;
 mod gc_manager;
 mod gc_worker;
-mod rawkv_compaction_filter;
+pub mod rawkv_compaction_filter;
 
 // TODO: Use separated error type for GcWorker instead.
 #[cfg(any(test, feature = "failpoints"))]
@@ -14,7 +14,11 @@ pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
 pub use gc_manager::AutoGcConfig;
-pub use gc_worker::{sync_gc, GcSafePointProvider, GcTask, GcWorker, GC_MAX_EXECUTING_TASKS};
+#[cfg(any(test, feature = "testexport"))]
+pub use gc_worker::test_gc_worker::{MockSafePointProvider, PrefixedEngine};
+pub use gc_worker::{
+    sync_gc, GcSafePointProvider, GcTask, GcWorker, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
+};
 pub use rawkv_compaction_filter::RawCompactionFilterFactory;
 use txn_types::TimeStamp;
 

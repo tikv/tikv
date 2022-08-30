@@ -397,7 +397,7 @@ async fn get_tikv_client(
         CString::new("random id").unwrap(),
         CONN_ID.fetch_add(1, Ordering::SeqCst),
     );
-    let channel = security_mgr.connect(cb, &store.address);
+    let channel = security_mgr.connect(cb, &store.peer_address);
     let cli = TikvClient::new(channel);
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
