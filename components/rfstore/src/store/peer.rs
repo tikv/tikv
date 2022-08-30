@@ -1236,6 +1236,7 @@ impl Peer {
             .mut_store()
             .handle_raft_ready(ctx, &mut ready, &mut store_meta)
         {
+            self.preprocessed_region = None;
             // The peer may change from learner to voter after snapshot persisted.
             let peer = self
                 .region()
@@ -1456,7 +1457,7 @@ impl Peer {
         req: &RaftCmdRequest,
     ) {
         if let Err(err) = check_region_epoch(req, self.get_preprocessed_region(), false) {
-            warn!("preprocess pending split failed {:?}", err);
+            warn!("{} preprocess pending split failed {:?}", self.tag(), err);
             return;
         }
         let regions = split_gen_new_region_metas(
