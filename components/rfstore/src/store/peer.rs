@@ -419,6 +419,8 @@ pub(crate) struct Peer {
     // the current region to do preprocessed_split and preprocessed_conf_change because the current
     // region may be outdated due to slow apply.
     pub(crate) preprocessed_region: Option<Region>,
+    // preprocessed_index is used to avoid duplicated preprocess execution.
+    pub(crate) preprocessed_index: u64,
 
     pub(crate) pending_remove: bool,
 
@@ -525,6 +527,7 @@ impl Peer {
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             preprocessed_region: None,
+            preprocessed_index: 0,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
@@ -1255,6 +1258,15 @@ impl Peer {
                 return;
             }
         }
+        // Some entries in ready.entries may already committed, to make ShardMeta consistent with
+        // commit index, we also need to preprocess the entries in the ready.
+        let committed_index = self.get_store().commit_index();
+        for entry in ready.entries() {
+            if entry.index > committed_index {
+                break;
+            }
+            self.preprocess_committed_entry(ctx, entry);
+        }
         if let Some(ss) = ready.ss() {
             if ss.raft_state == raft::StateRole::Leader {
                 self.heartbeat_pd(ctx)
@@ -1362,6 +1374,9 @@ impl Peer {
     }
 
     pub(crate) fn preprocess_committed_entry(&mut self, ctx: &mut RaftContext, entry: &Entry) {
+        if self.preprocessed_index > 0 && entry.index <= self.preprocessed_index {
+            return;
+        }
         if let Some(cmd) = get_preprocess_cmd(entry) {
             if cmd.has_custom_request() {
                 self.preprocess_change_set(ctx, entry, cmd.get_custom_request());
@@ -1371,6 +1386,7 @@ impl Peer {
         } else if entry.entry_type != eraftpb::EntryType::EntryNormal {
             self.preprocess_conf_change(ctx, entry);
         }
+        self.preprocessed_index = entry.index;
     }
 
     pub(crate) fn preprocess_change_set(
