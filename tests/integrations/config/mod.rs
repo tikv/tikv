@@ -20,10 +20,7 @@ use pd_client::Config as PdConfig;
 use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
 use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
-    store::{
-        config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
-        Config as RaftstoreConfig,
-    },
+    store::Config as RaftstoreConfig,
 };
 use security::SecurityConfig;
 use slog::Level;
@@ -207,8 +204,8 @@ fn test_serde_custom_tikv_config() {
         peer_stale_state_check_interval: ReadableDuration::hours(2),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
-        region_worker_tick_interval: PENDING_APPLY_CHECK_INTERVAL,
-        clean_stale_tick_max: STALE_PEER_CHECK_TICK,
+        region_worker_tick_interval: 1000,
+        clean_stale_tick_max: 10,
         lock_cf_compact_interval: ReadableDuration::minutes(12),
         lock_cf_compact_bytes_threshold: ReadableSize::mb(123),
         consistency_check_interval: ReadableDuration::secs(12),

@@ -746,7 +746,7 @@ where
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
                 fail_point!("handle_new_pending_applies", |_| {});
-                if self
+                if !self
                     .ctx
                     .engine
                     .can_apply_snapshot(is_timeout, is_first, *region_id)
@@ -913,13 +913,13 @@ mod tests {
             ObserverContext,
         },
         store::{
-            config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
-            peer_storage::JOB_STATUS_PENDING,
-            snap::tests::get_test_db_for_regions,
-            worker::RegionRunner,
-            CasualMessage, SnapKey, SnapManager,
+            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
+            worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
         },
     };
+
+    const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
+    const STALE_PEER_CHECK_TICK: usize = 1;
 
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
@@ -1237,6 +1237,21 @@ mod tests {
             }
         };
 
+        let must_not_finish = |ids: &[u64]| {
+            for id in ids {
+                let region_key = keys::region_state_key(*id);
+                assert_eq!(
+                    engine
+                        .kv
+                        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                        .unwrap()
+                        .unwrap()
+                        .get_state(),
+                    PeerState::Applying
+                )
+            }
+        };
+
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
@@ -1378,8 +1393,10 @@ mod tests {
             fail::cfg("handle_new_pending_applies", "return").unwrap();
             gen_and_apply_snap(7);
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
-            wait_apply_finish(&[7]);
+            must_not_finish(&[7]);
             fail::remove("handle_new_pending_applies");
+            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            wait_apply_finish(&[7]);
         }
     }
 

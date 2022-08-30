@@ -34,18 +34,6 @@ lazy_static! {
 // used to periodically check whether we should delete a stale peer's range in
 // region runner
 
-#[cfg(test)]
-pub const STALE_PEER_CHECK_TICK: usize = 1; // 1000 milliseconds
-
-#[cfg(not(test))]
-pub const STALE_PEER_CHECK_TICK: usize = 10; // 10000 milliseconds
-
-// used to periodically check whether schedule pending applies in region runner
-#[cfg(not(test))]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
-#[cfg(test)]
-pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 200; // 200 milliseconds
-
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -358,8 +346,8 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
-            region_worker_tick_interval: PENDING_APPLY_CHECK_INTERVAL,
-            clean_stale_tick_max: STALE_PEER_CHECK_TICK,
+            region_worker_tick_interval: if cfg!(feature = "test") { 200 } else { 1_000 },
+            clean_stale_tick_max: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.

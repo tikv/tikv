@@ -1158,7 +1158,6 @@ pub mod tests {
         store::{
             async_io::write::write_to_db_for_test,
             bootstrap_store,
-            config::{PENDING_APPLY_CHECK_INTERVAL, STALE_PEER_CHECK_TICK},
             entry_storage::tests::validate_cache,
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
@@ -1167,6 +1166,9 @@ pub mod tests {
             },
         },
     };
+
+    const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
+    const STALE_PEER_CHECK_TICK: usize = 1;
 
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
