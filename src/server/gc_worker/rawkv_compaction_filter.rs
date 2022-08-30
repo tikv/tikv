@@ -404,7 +404,7 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-
+        gc_runner.feature_gate_version = "6.1.0".to_string();
         let user_key = b"r\0aaaaaaaaaaa";
 
         let test_raws = vec![
@@ -469,7 +469,7 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-
+        gc_runner.feature_gate_version = "6.1.0".to_string();
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);
 
