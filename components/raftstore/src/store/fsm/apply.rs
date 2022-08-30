@@ -529,7 +529,7 @@ where
                 .applied_batch
                 .cb_batch
                 .iter()
-                .flat_map(|(cb, _)| cb.trackers())
+                .flat_map(|(cb, _)| cb.write_trackers())
                 .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
                 .flatten()
                 .collect();
@@ -568,7 +568,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -3000,7 +3000,7 @@ impl<C: WriteCallback> Apply<C> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Some(trackers) = cb.cb.trackers_mut() {
+            if let Some(trackers) = cb.cb.write_trackers_mut() {
                 for tracker in trackers {
                     tracker.observe(now, &metrics.store_time, |t| {
                         t.metrics.write_instant = Some(now);
@@ -3770,7 +3770,7 @@ where
                     for tracker in apply
                         .cbs
                         .iter()
-                        .flat_map(|p| p.cb.trackers())
+                        .flat_map(|p| p.cb.write_trackers())
                         .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
@@ -5985,7 +5985,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -6054,7 +6054,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(2, observe_handle),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(
                         resp.response
                             .get_header()
@@ -6226,7 +6226,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
                 })),
@@ -6381,7 +6381,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(1, observe_handle),
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
                         resp.response.get_header().get_error().has_epoch_not_match(),
                         "{:?}",
