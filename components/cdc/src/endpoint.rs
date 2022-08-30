@@ -1146,26 +1146,14 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let fut = async move {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let min_ts_pd = pd_client.get_tso().await.unwrap_or_default();
+            let min_ts_pd = match causal_ts_provider {
+                // if causal_ts_provider is not none, it means in apiv2 mode, and causal_ts_provider
+                // cache tso which is used in raw storage, use same ts source here.
+                Some(provider) => provider.get_ts().unwrap_or_default(),
+                None => pd_client.get_tso().await.unwrap_or_default(),
+            };
             let mut min_ts = min_ts_pd;
             let mut min_ts_min_lock = min_ts_pd;
-
-            match scheduler.schedule(Task::RegisterMinTsEvent) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                // advance normally.
-                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
-            }
-
-            // causal_ts_provider is some only if apiv2 is enabled.
-            // update min_ts with causal ts, as CausalTsProvider cache more tso from pd.
-            match causal_ts_provider.map_or(Ok(min_ts), |provider| provider.get_ts()) {
-                Err(e) => {
-                    error!("cdc get causal timestamp failed"; "err" => ?e);
-                    return;
-                }
-                Ok(causal_ts) => min_ts = causal_ts,
-            }
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -1177,6 +1165,13 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     min_ts = min_mem_lock_ts;
                 }
                 min_ts_min_lock = min_mem_lock_ts;
+            }
+
+            match scheduler.schedule(Task::RegisterMinTsEvent) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                // advance normally.
+                Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
             }
 
             let gate = pd_client.feature_gate();

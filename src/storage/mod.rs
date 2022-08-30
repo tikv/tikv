@@ -1847,7 +1847,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let ts = get_causal_ts_from_provider(ts_provider)?;
         if let Some(ts) = ts {
             let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            let key_guard = concurrency_manager.lock_key(&Key::from_raw(&raw_key)).await;
+            // lock with ts encoded key to avoid collision, ts is used to get min_ts in cdc.
+            let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
+            let key_guard = concurrency_manager.lock_key(&encode_key).await;
             let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
             key_guard.with_lock(|l| *l = Some(lock));
             Ok(Some(key_guard))
@@ -2588,6 +2590,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         let sched = self.get_scheduler();
         let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
+            // Raw atomic cmds have two locks, one is CM and the other is txn latch,
+            // Now, cm lock key with ts encoded, so it will not really lock the key.
+            // TODO: Merge the two locks into one to simplify the process, same to other atomic cmd.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return cb(Err(e));
