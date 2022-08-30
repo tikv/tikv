@@ -458,12 +458,14 @@ where
                     ));
                 }
                 Ok(s) if !last_canceled => {
+                    *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
                         return Ok(s);
                     }
                 }
                 Err(TryRecvError::Disconnected) | Ok(_) => {
+                    *snap_state = SnapState::Relax;
                     warn!(
                         "failed to try generating snapshot";
                         "region_id" => self.region.get_id(),
@@ -473,7 +475,6 @@ where
                     );
                 }
             }
-            *snap_state = SnapState::Relax;
         }
 
         if SnapState::Relax != *snap_state {
