@@ -33,9 +33,7 @@ use tikv_util::{
     box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
 };
 
-use super::{
-    entry_storage::last_index, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
-};
+use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
@@ -153,14 +151,14 @@ pub fn recover_from_applying_state<EK: KvEngine, ER: RaftEngine>(
 
     let raft_state = box_try!(engines.raft.get_raft_state(region_id)).unwrap_or_default();
 
-    // if we recv append log when applying snapshot, last_index in raft_local_state
-    // will larger than snapshot_index. since raft_local_state is written to
-    // raft engine, and raft write_batch is written after kv write_batch,
-    // raft_local_state may wrong if restart happen between the two write. so we
-    // copy raft_local_state to kv engine (snapshot_raft_state), and set
-    // snapshot_raft_state.last_index = snapshot_index. after restart, we need
-    // check last_index.
-    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+    // since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch. raft_local_state may wrong
+    // if restart happen between the two write. so we copy raft_local_state to
+    // kv engine (snapshot_raft_state), and set
+    // snapshot_raft_state.hard_state.commit = snapshot_index. after restart, we
+    // need check commit.
+    if snapshot_raft_state.get_hard_state().get_commit() > raft_state.get_hard_state().get_commit()
+    {
         // There is a gap between existing raft logs and snapshot. Clean them up.
         engines
             .raft
@@ -484,12 +482,14 @@ where
                     ));
                 }
                 Ok(s) if !last_canceled => {
+                    *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index, to) {
                         return Ok(s.snapshot);
                     }
                 }
                 Err(TryRecvError::Disconnected) | Ok(_) => {
+                    *snap_state = SnapState::Relax;
                     warn!(
                         "failed to try generating snapshot";
                         "region_id" => self.region.get_id(),
@@ -539,17 +539,18 @@ where
             .find(|p| p.id == to)
             .map(|p| p.store_id)
             .unwrap_or(0);
-
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(GenSnapTask::new(
+        let task = GenSnapTask::new(
             self.region.get_id(),
             index,
             canceled,
             sender,
             store_id,
             for_witness,
-        ));
+        );
+
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(task);
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -1032,14 +1033,16 @@ where
 
     let apply_state: RaftApplyState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-        .and_then(|res| match res {
-            None => Err(box_err!(
+        .map_err(into_other::<_, raft::Error>)?;
+    let apply_state: RaftApplyState = match msg {
+        None => {
+            return Err(storage_error(format!(
                 "could not load raft state of region {}",
                 region_id
-            )),
-            Some(state) => Ok(state),
-        })
-        .map_err(into_other::<_, raft::Error>)?;
+            )));
+        }
+        Some(state) => state,
+    };
     assert_eq!(apply_state, last_applied_state);
 
     let key = SnapKey::new(
@@ -1057,7 +1060,8 @@ where
             Some(state) => Ok(state),
         })
         .map_err(into_other::<_, raft::Error>)?;
-    if region_state.get_state() != PeerState::Normal {
+
+    if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(
             "snap job for {} seems stale, skip.",
             region_id
@@ -1078,8 +1082,6 @@ where
         &kv_snap,
         region_state.get_region(),
         allow_multi_files_snapshot,
-        for_balance,
-        for_witness,
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 

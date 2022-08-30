@@ -150,7 +150,7 @@ pub fn send_snap(
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
-    let total_size = s.total_size()?;
+    let total_size = s.total_size();
 
     let mut chunks = {
         let mut first_chunk = SnapshotChunk::default();

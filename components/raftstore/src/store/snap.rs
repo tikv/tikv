@@ -2250,9 +2250,9 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
-        let mut snap_data =
-            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
@@ -2505,9 +2505,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ =
-            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2516,9 +2516,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let snap_data =
-            Snapshot::build::<KvTestEngine>(&mut s2, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let snap_data = s2
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2579,9 +2579,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ =
-            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2590,9 +2590,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let mut snap_data =
-            Snapshot::build::<KvTestEngine>(&mut s2, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let mut snap_data = s2
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2654,9 +2654,9 @@ pub mod tests {
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data =
-            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
-                .unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
         let mut s2 =
@@ -2807,17 +2807,15 @@ pub mod tests {
         let recv_key = SnapKey::new(100, 100, 100);
         let mut recv_head = {
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
-            let snap_data = s
-                .build(
-                    &engine.kv,
-                    &snapshot,
-                    &gen_test_region(100, 1, 1),
-                    true,
-                    false,
-                    false,
-                )
-                .unwrap();
-            snap_data
+            s.build(
+                &engine.kv,
+                &snapshot,
+                &gen_test_region(100, 1, 1),
+                true,
+                false,
+                false,
+            )
+            .unwrap()
         };
         let recv_remain = {
             let mut data = Vec::with_capacity(1024);

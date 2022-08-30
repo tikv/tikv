@@ -392,6 +392,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
             }
 
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
+            let mut read_size: usize = 0;
             {
                 let _guard = sample.observe_cpu();
                 let result = self.data.next_batch(BATCH_MAX_SIZE);
@@ -431,6 +432,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                         } else {
                             collation_key_vals.push(Vec::new());
                         }
+                        read_size += val.len();
                         column_vals.push(val);
                     }
                     collector.mut_base().count += 1;
@@ -444,6 +446,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 }
             }
 
+            sample.add_read_bytes(read_size);
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
             let quota_delay = {

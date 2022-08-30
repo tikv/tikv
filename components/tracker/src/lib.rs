@@ -37,6 +37,9 @@ impl Tracker {
         detail_v2.set_rocksdb_key_skipped_count(self.metrics.internal_key_skipped_count);
         detail_v2.set_rocksdb_delete_skipped_count(self.metrics.deleted_key_skipped_count);
         detail_v2.set_get_snapshot_nanos(self.metrics.get_snapshot_nanos);
+        detail_v2.set_read_index_propose_wait_nanos(self.metrics.read_index_propose_wait_nanos);
+        detail_v2.set_read_index_confirm_wait_nanos(self.metrics.read_index_confirm_wait_nanos);
+        detail_v2.set_read_pool_schedule_wait_nanos(self.metrics.read_pool_schedule_wait_nanos);
     }
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
@@ -110,6 +113,7 @@ pub enum RequestType {
     KvTxnHeartBeat,
     KvRollback,
     KvPessimisticRollback,
+    KvFlashbackToVersion,
     CoprocessorDag,
     CoprocessorAnalyze,
     CoprocessorChecksum,
@@ -118,6 +122,9 @@ pub enum RequestType {
 #[derive(Debug, Default, Clone)]
 pub struct RequestMetrics {
     pub get_snapshot_nanos: u64,
+    pub read_index_propose_wait_nanos: u64,
+    pub read_index_confirm_wait_nanos: u64,
+    pub read_pool_schedule_wait_nanos: u64,
     pub block_cache_hit_count: u64,
     pub block_read_count: u64,
     pub block_read_byte: u64,
