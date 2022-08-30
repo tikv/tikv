@@ -724,6 +724,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .await?
         })
+        // async move {
+        //     res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+        //         .await?
+        // }
     }
 
     /// Get values of a set of keys with separate context from a snapshot,

@@ -170,6 +170,27 @@ impl<S: Snapshot> PointGetter<S> {
     pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
         fail_point!("point_getter_get");
 
+        if self.isolation_level == IsolationLevel::RcCheckTs || self.ts.is_max() {
+            if let Some(row) = ROW_CACHE.get(user_key) {
+                if row.commit_ts > self.ts {
+                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+                        self.met_newer_ts_data = NewerTsCheckState::Met;
+                    }
+                    if self.isolation_level == IsolationLevel::RcCheckTs {
+                        return Err(WriteConflict {
+                            start_ts: self.ts,
+                            conflict_start_ts: Default::default(),
+                            conflict_commit_ts: row.commit_ts,
+                            key: user_key.as_encoded().clone(),
+                            primary: vec![],
+                        }
+                        .into());
+                    }
+                }
+                return Ok(Some(row.value));
+            }
+        }
+
         if need_check_locks(self.isolation_level) {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
@@ -223,27 +244,6 @@ impl<S: Snapshot> PointGetter<S> {
     /// First, a correct version info in the Write CF will be sought. Then,
     /// value will be loaded from Default CF if necessary.
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        if self.isolation_level == IsolationLevel::RcCheckTs || self.ts.is_max() {
-            if let Some(row) = ROW_CACHE.get(user_key) {
-                if row.commit_ts > self.ts {
-                    if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
-                        self.met_newer_ts_data = NewerTsCheckState::Met;
-                    }
-                    if self.isolation_level == IsolationLevel::RcCheckTs {
-                        return Err(WriteConflict {
-                            start_ts: self.ts,
-                            conflict_start_ts: Default::default(),
-                            conflict_commit_ts: row.commit_ts,
-                            key: user_key.as_encoded().clone(),
-                            primary: vec![],
-                        }
-                        .into());
-                    }
-                }
-                return Ok(Some(row.value));
-            }
-        }
-
         let mut use_near_seek = false;
         let mut seek_key = user_key.clone();
 
