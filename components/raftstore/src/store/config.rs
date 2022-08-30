@@ -142,7 +142,7 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    pub region_worker_tick_interval: u64,
+    pub region_worker_tick_interval: ReadableDuration,
 
     #[doc(hidden)]
     #[online_config(skip)]
@@ -346,7 +346,11 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
-            region_worker_tick_interval: if cfg!(feature = "test") { 200 } else { 1_000 },
+            region_worker_tick_interval: if cfg!(feature = "test") {
+                ReadableDuration::millis(200)
+            } else {
+                ReadableDuration::millis(1000)
+            },
             clean_stale_tick_max: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
