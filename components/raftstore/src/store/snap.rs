@@ -121,24 +121,22 @@ pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
     pub idx: u64,
-    pub for_witness: bool,
 }
 
 impl SnapKey {
     #[inline]
-    pub fn new(region_id: u64, term: u64, idx: u64, for_witness: bool) -> SnapKey {
+    pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
         SnapKey {
             region_id,
             term,
             idx,
-            for_witness,
         }
     }
 
-    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot, for_witness: bool) -> SnapKey {
+    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot) -> SnapKey {
         let index = snap.get_metadata().get_index();
         let term = snap.get_metadata().get_term();
-        SnapKey::new(region_id, term, index, for_witness)
+        SnapKey::new(region_id, term, index)
     }
 
     pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
@@ -150,18 +148,13 @@ impl SnapKey {
         Ok(SnapKey::from_region_snap(
             snap_data.get_region().get_id(),
             snap,
-            snap_data.get_meta().get_for_witness(),
         ))
     }
 }
 
 impl Display for SnapKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)?;
-        if self.for_witness {
-            write!(f, "_witness")?;
-        }
-        Ok(())
+        write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)
     }
 }
 
@@ -778,7 +771,7 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, for_send: bool, for_witness: bool) -> RaftStoreResult<()> {
+    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
         // TODO: check self.meta_file.meta for witness
         for cf_file in &self.cf_files {
             let file_paths = cf_file.file_paths();
