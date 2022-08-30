@@ -65,7 +65,9 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = self.get_value(key.as_encoded()).map_err(|e|ErrorInner::Other(Box::new(e)))?;
+        let v = self
+            .get_value(key.as_encoded())
+            .map_err(|e| ErrorInner::Other(Box::new(e)))?;
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -73,7 +75,9 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = self.get_value_cf(cf, key.as_encoded()).map_err(|e|ErrorInner::Other(Box::new(e)))?;
+        let v = self
+            .get_value_cf(cf, key.as_encoded())
+            .map_err(|e| ErrorInner::Other(Box::new(e)))?;
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -81,7 +85,9 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = self.get_value_cf_opt(&opts, cf, key.as_encoded()).map_err(|e|ErrorInner::Other(Box::new(e)))?;
+        let v = self
+            .get_value_cf_opt(&opts, cf, key.as_encoded())
+            .map_err(|e| ErrorInner::Other(Box::new(e)))?;
         Ok(v.map(|v| v.to_vec()))
     }
 

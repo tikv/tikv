@@ -83,7 +83,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             storage_stats: Statistics::default(),
             quota_limiter,
             is_auto_analyze,
-            _phantom: PhantomData
+            _phantom: PhantomData,
         })
     }
 
