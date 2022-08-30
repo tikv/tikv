@@ -225,10 +225,7 @@ impl WriteCompactionFilterFactory {
             ),
             None => {
                 let gc_context_option = GC_CONTEXT.lock().unwrap();
-                match *gc_context_option {
-                    Some(ref ctx) => Some(ctx.db.clone()),
-                    None => None,
-                }
+                (*gc_context_option).as_ref().map(|ctx| ctx.db.clone())
             }
         };
     }
@@ -307,7 +304,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         );
 
         let filter = WriteCompactionFilter::new(
-            db.clone(),
+            db,
             safe_point,
             context,
             gc_scheduler,

@@ -213,7 +213,7 @@ mod tests {
         let mut iter_opt = IterOptions::default();
         iter_opt.set_max_skippable_internal_keys(1);
         let mut iter = Cursor::new(
-            snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
+            snapshot.iter(engine_traits::CF_DEFAULT, iter_opt).unwrap(),
             ScanMode::Forward,
             false,
         );
@@ -242,7 +242,9 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
+            snapshot
+                .iter(engine_traits::CF_DEFAULT, IterOptions::default())
+                .unwrap(),
             ScanMode::Forward,
             false,
         );
@@ -314,7 +316,7 @@ mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut iter = CursorBuilder::new(&snapshot, CF_WRITE)
+        let mut iter = CursorBuilder::new(&snapshot, engine_traits::CF_WRITE)
             .prefix_seek(true)
             .scan_mode(ScanMode::Forward)
             .build()
