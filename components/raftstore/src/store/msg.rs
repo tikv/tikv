@@ -38,8 +38,9 @@ use crate::store::{
     SnapKey,
 };
 
-pub trait ReadResponseTrait<S: Snapshot>: Default {
+pub trait ReadResponseTrait: Default {
     type Response;
+    type Snapshot;
 
     fn set_term(&mut self, _term: u64) {
         unimplemented!()
@@ -51,11 +52,11 @@ pub trait ReadResponseTrait<S: Snapshot>: Default {
         unimplemented!()
     }
 
-    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<S>> {
+    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<Self::Snapshot>> {
         unimplemented!()
     }
 
-    fn set_snapshot(&mut self, _snapshot: RegionSnapshot<S>) {
+    fn set_snapshot(&mut self, _snapshot: RegionSnapshot<Self::Snapshot>) {
         unimplemented!()
     }
 
@@ -66,8 +67,9 @@ pub trait ReadResponseTrait<S: Snapshot>: Default {
     fn set_error(&mut self, error: RaftCmdResponse);
 }
 
-impl<S: Snapshot> ReadResponseTrait<S> for ReadResponse<S> {
+impl<S: Snapshot> ReadResponseTrait for ReadResponse<S> {
     type Response = RaftCmdResponse;
+    type Snapshot = S;
 
     fn set_term(&mut self, term: u64) {
         if term == 0 {
@@ -85,11 +87,11 @@ impl<S: Snapshot> ReadResponseTrait<S> for ReadResponse<S> {
         self.response.set_responses(response);
     }
 
-    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<S>> {
+    fn mut_snapshot(&mut self) -> Option<&mut RegionSnapshot<Self::Snapshot>> {
         self.snapshot.as_mut()
     }
 
-    fn set_snapshot(&mut self, snapshot: RegionSnapshot<S>) {
+    fn set_snapshot(&mut self, snapshot: RegionSnapshot<Self::Snapshot>) {
         self.snapshot = Some(snapshot);
     }
 
@@ -279,8 +281,8 @@ where
     }
 }
 
-pub trait ReadCallback<S: Snapshot>: ErrorCallback {
-    type Response: ReadResponseTrait<S>;
+pub trait ReadCallback: ErrorCallback {
+    type Response: ReadResponseTrait;
 
     fn set_result(self, result: Self::Response);
 }
@@ -300,7 +302,7 @@ pub trait ErrorCallback: Send {
     fn is_none(&self) -> bool;
 }
 
-impl<S: Snapshot> ReadCallback<S> for Callback<S> {
+impl<S: Snapshot> ReadCallback for Callback<S> {
     type Response = ReadResponse<S>;
 
     #[inline]

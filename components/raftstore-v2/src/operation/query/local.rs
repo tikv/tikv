@@ -89,12 +89,16 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_snapshot(
+    fn get_region_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
+        region: &Arc<metapb::Region>,
         _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
-    ) -> Arc<E::Snapshot> {
-        Arc::new(self.cached_tablet.latest().unwrap().snapshot())
+    ) -> RegionSnapshot<E::Snapshot> {
+        RegionSnapshot::from_snapshot(
+            Arc::new(self.cached_tablet.latest().unwrap().snapshot()),
+            region,
+        )
     }
 }
 
@@ -230,7 +234,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_region_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -240,7 +244,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_snapshot(None, &mut None);
+        let snapshot = delegate.get_region_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()
