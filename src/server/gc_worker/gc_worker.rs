@@ -316,10 +316,11 @@ fn get_keys_in_regions(
                 let region = box_try!(region_provider.find_region_by_key(key));
 
                 if region.is_none() {
-                    return Err(box_err!(
-                        "The region that contains {:?} has not been found",
-                        key
-                    ));
+                    // Return a empty iterator when region has not been found.
+                    return Ok(Box::new(KeysInRegions {
+                        keys: Vec::new().into_iter().peekable(),
+                        regions: Vec::new().into_iter().peekable(),
+                    }));
                 }
 
                 Ok(Box::new(KeysInRegions {
@@ -441,6 +442,10 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
+    // Flush the modifications to the disk.
+    // `engine` here represents the storage level engien (ex: RaftKv) which may do
+    // some specific encoding works for each modification.
+    // `kv_engine` here represents the underlying db (ex: RocksEngine)
     fn flush_txn<EK: KvEngine>(
         txn: MvccTxn,
         limiter: &Limiter,
@@ -790,6 +795,10 @@ where
         gc_info.deleted_versions += 1;
     }
 
+    // Flush the modifications to the disk.
+    // `engine` here represents the storage level engien (ex: RaftKv) which may do
+    // some specific encoding works for each modification.
+    // `kv_engine` here represents the underlying db (ex: RocksEngine)
     fn flush_raw_gc<EK: KvEngine>(
         raw_modifies: MvccRaw,
         limiter: &Limiter,
