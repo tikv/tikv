@@ -12,7 +12,7 @@
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
-    store::{cmd_resp, util, ReadCallback},
+    store::{cmd_resp, region_meta::RegionMeta, util, GroupState, ReadCallback},
     Error, Result,
 };
 use tikv_util::box_err;
@@ -20,7 +20,7 @@ use tikv_util::box_err;
 use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
-    router::{QueryResChannel, QueryResult},
+    router::{DebugInfoChannel, QueryResChannel, QueryResult},
 };
 
 mod local;
@@ -78,5 +78,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Bind peer current term here.
         cmd_resp::bind_term(resp, self.term());
         Ok(())
+    }
+
+    /// Query internal states for debugging purpose.
+    pub fn on_query_debug_info(&self, ch: DebugInfoChannel) {
+        let entry_storage = self.storage().entry_storage();
+        let meta = RegionMeta::new(
+            self.storage().region_state(),
+            entry_storage.apply_state(),
+            GroupState::Ordered,
+            self.raft_group().status(),
+        );
+        ch.set_result(meta);
     }
 }
