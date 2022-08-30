@@ -711,6 +711,7 @@ pub struct PreAckTransferLeaderMeta {
     // TODO(cosven): save index/term/... instead of a message object?
     pub msg: eraftpb::Message,
     pub receive_time: TiInstant,
+    pub min_matched: u64,
 }
 
 #[derive(Getters)]
@@ -3266,8 +3267,10 @@ where
         if !self.is_leader() {
             let mut need_compact = true;
             if let Some(meta) = &self.pre_ack_transfer_leader_meta {
-                if meta.receive_time.saturating_elapsed_secs() > 60.0 {
+                // Timeout.
+                if meta.receive_time.saturating_elapsed_secs() > 30.0 {
                     self.pre_ack_transfer_leader_meta = None;
+                } else {
                     need_compact = false;
                 }
             }
@@ -4408,6 +4411,16 @@ where
     ///
     /// Return true means the msg can be acked.
     pub fn pre_ack_transfer_leader_msg(&mut self, msg: eraftpb::Message) -> bool {
+        if let Some(meta) = &self.pre_ack_transfer_leader_meta {
+            error!(
+                "(this_pr) already in pre ack transfer leader";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "from_last_time" => ?meta.receive_time.saturating_elapsed_secs(),
+            );
+            self.pre_ack_transfer_leader_meta = None;
+        }
+
         // min_matched refers to the slowest peer's match index.
         let min_matched = msg.get_index();
 
@@ -4467,6 +4480,7 @@ where
                     self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
                         msg,
                         receive_time: TiInstant::now(),
+                        min_matched: low,
                     });
                     false
                 } else {

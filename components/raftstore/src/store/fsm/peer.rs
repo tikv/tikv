@@ -1685,32 +1685,35 @@ where
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
         } else {
-            // If this peer is in 'pre ack transfer leader' status, check if
-            // the needed entry cache is filled.
-            if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
-                self.fsm
-                    .peer
-                    .raft_group
-                    .mut_store()
-                    .update_async_fetch_res(low, Some(res));
-                // TODO(cosven): cache may be not filled. Need to know how entry cache is
-                // stored.
-                if meta.msg.get_index() == low {
-                    let elapsed = meta.receive_time.saturating_elapsed_secs();
-                    info!(
-                        "(this_pr) entry cache has been prefilled, ack now.";
-                        "low" => low,
-                        "region_id" => self.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "elapsed" => ?elapsed,
-                    );
-                    PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
-                    self.fsm.peer.ack_transfer_leader_msg();
-                    self.fsm.peer.pre_ack_transfer_leader_meta = None;
+            if !self.fsm.peer.is_leader() {
+                // If this peer is in 'pre ack transfer leader' status, check if
+                // the needed entry cache is filled.
+                if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
+                    self.fsm
+                        .peer
+                        .raft_group
+                        .mut_store()
+                        .update_async_fetch_res(low, Some(res));
+                    // TODO(cosven): cache may be not filled. Need to know how entry cache is
+                    // stored.
+                    if meta.msg.get_index() == low {
+                        let elapsed = meta.receive_time.saturating_elapsed_secs();
+                        info!(
+                            "(this_pr) entry cache has been prefilled, ack now.";
+                            "low" => low,
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "elapsed" => ?elapsed,
+                        );
+                        PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
+                        self.fsm.peer.ack_transfer_leader_msg();
+                        self.fsm.peer.pre_ack_transfer_leader_meta = None;
+                    }
+                } else {
+                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
                 }
-            } else if !self.fsm.peer.is_leader() {
-                self.fsm.peer.mut_store().clean_async_fetch_res(low);
             }
+
         }
         self.fsm.peer.raft_group.on_entries_fetched(context);
         // clean the async fetch result immediately if not used to free memory
