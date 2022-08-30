@@ -1002,14 +1002,12 @@ where
 
     let apply_state: RaftApplyState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-        .and_then(|res| match res {
-            None => Err(box_err!(
-                "could not load raft state of region {}",
-                region_id
-            )),
-            Some(state) => Ok(state),
-        })
-        .map_err(into_other::<_, raft::Error>)?;
+        .map_err(into_other::<_, raft::Error>)
+        .and_then(|v| {
+            v.ok_or_else(|| {
+                storage_error(format!("could not load raft state of region {}", region_id))
+            })
+        })?;
     assert_eq!(apply_state, last_applied_state);
 
     let key = SnapKey::new(
@@ -1022,11 +1020,12 @@ where
 
     let region_state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
-        .and_then(|res| match res {
-            None => Err(box_err!("region {} could not find region info", region_id)),
-            Some(state) => Ok(state),
-        })
-        .map_err(into_other::<_, raft::Error>)?;
+        .map_err(into_other::<_, raft::Error>)
+        .and_then(|v| {
+            v.ok_or_else(|| {
+                storage_error(format!("region {} could not find region info", region_id))
+            })
+        })?;
     if region_state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(
             "snap job for {} seems stale, skip.",
