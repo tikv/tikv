@@ -215,7 +215,7 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     cb(on_read_result(resp).map_err(Error::into));
                 })),
             )

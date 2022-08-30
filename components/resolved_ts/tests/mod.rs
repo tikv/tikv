@@ -6,7 +6,10 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use grpcio::{ChannelBuilder, ClientUnaryReceiver, Environment};
-use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    tikvpb::TikvClient,
+};
 use online_config::ConfigValue;
 use raftstore::coprocessor::CoprocessorHost;
 use resolved_ts::{Observer, Task};
@@ -261,7 +264,9 @@ impl TestSuite {
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         prewrite_req.for_update_ts = for_update_ts.into_inner();
-        prewrite_req.mut_is_pessimistic_lock().push(true);
+        prewrite_req
+            .mut_pessimistic_actions()
+            .push(DoPessimisticCheck);
         let prewrite_resp = self
             .get_tikv_client(region_id)
             .kv_prewrite(&prewrite_req)

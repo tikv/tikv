@@ -637,7 +637,7 @@ mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_panic::PanicEngine;
     use engine_traits::{CfName, IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::{AssertionLevel, Context};
+    use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
     use tikv_kv::DummySnapshotExt;
 
     use super::*;
@@ -709,7 +709,7 @@ mod tests {
                         },
                         Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
-                        false,
+                        SkipPessimisticCheck,
                     )
                     .unwrap();
                 }

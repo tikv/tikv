@@ -295,7 +295,7 @@ where
                 SignificantMsg::CaptureChange {
                     cmd,
                     region_epoch: region.get_region_epoch().clone(),
-                    callback: Callback::Read(Box::new(|snapshot| {
+                    callback: Callback::read(Box::new(|snapshot| {
                         if snapshot.response.get_header().has_error() {
                             callback(Err(Error::RaftRequest(
                                 snapshot.response.get_header().get_error().clone(),

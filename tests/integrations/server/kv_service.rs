@@ -19,7 +19,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{self, *},
+    kvrpcpb::{self, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -667,7 +667,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b", b"c", b"d", b"e",]
+        vec![b"b", b"c", b"d", b"e"]
             .into_iter()
             .map(|k| encode_key(&k[..]))
             .collect::<Vec<_>>()
@@ -2074,7 +2074,7 @@ fn test_commands_write_detail() {
     mutation.set_op(Op::Put);
     mutation.set_value(v);
     prewrite_req.set_mutations(vec![mutation].into());
-    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     prewrite_req.set_context(ctx.clone());
     prewrite_req.set_primary_lock(k.clone());
     prewrite_req.set_start_version(20);
