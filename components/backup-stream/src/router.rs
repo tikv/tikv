@@ -1182,16 +1182,19 @@ impl StreamTaskInfo {
                 .await?
                 .generate_metadata(store_id)
                 .await?;
-            metadata_info.min_resolved_ts = metadata_info
-                .min_resolved_ts
-                .max(Some(resolved_ts_provided.into_inner()));
-            let rts = metadata_info.min_resolved_ts;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
                 .observe(sw.lap().as_secs_f64());
 
             // flush log file to storage.
             self.flush_log(&mut metadata_info).await?;
+
+            // the field `min_resolved_ts` of metadata will be updated
+            // only after flush is done.
+            metadata_info.min_resolved_ts = metadata_info
+                .min_resolved_ts
+                .max(Some(resolved_ts_provided.into_inner()));
+            let rts = metadata_info.min_resolved_ts;
 
             // compress length
             let file_size_vec = metadata_info
