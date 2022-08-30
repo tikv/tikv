@@ -383,14 +383,14 @@ where
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
-        let region_key = keys::region_state_key(region_id);
-        let mut region_state = self.region_state(region_id)?;
 
-        // clear up origin data.
+        let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
+
+        // clear up origin data.
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(&start_key, &end_key);
@@ -404,8 +404,8 @@ where
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
+        // apply snapshot
         let apply_state = self.apply_state(region_id)?;
-
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -430,9 +430,10 @@ where
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
+        // delete snapshot state.
         let mut wb = self.engine.write_batch();
         region_state.set_state(PeerState::Normal);
-        box_try!(wb.put_msg_cf(CF_RAFT, &region_key, &region_state));
+        box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
         wb.write().unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
@@ -455,8 +456,7 @@ where
             Ordering::SeqCst,
         );
         SNAP_COUNTER.apply.all.inc();
-        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        // let timer = apply_histogram.start_coarse_timer();
+
         let start = Instant::now();
 
         match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
@@ -892,8 +892,9 @@ mod tests {
         RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
     };
     use keys::data_key;
-    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+    use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftSnapshotData, RegionLocalState};
     use pd_client::RpcClient;
+    use protobuf::Message;
     use tempfile::Builder;
     use tikv_util::worker::{LazyWorker, Worker};
 
@@ -1148,11 +1149,14 @@ mod tests {
                 }
                 msg => panic!("expected SnapshotGenerated, but got {:?}", msg),
             }
-            let data = s1.get_data();
+            let mut data = RaftSnapshotData::default();
+            data.merge_from_bytes(s1.get_data()).unwrap();
             let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
-            let mut s3 = mgr.get_snapshot_for_receiving(&key, data).unwrap();
+            let mut s3 = mgr
+                .get_snapshot_for_receiving(&key, data.take_meta())
+                .unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
             s3.save().unwrap();
 
@@ -1372,11 +1376,8 @@ mod tests {
             key: &crate::store::SnapKey,
             snapshot: Option<&crate::store::Snapshot>,
         ) {
-            let code = snapshot.unwrap().total_size().unwrap()
-                + key.term
-                + key.region_id
-                + key.idx
-                + peer_id;
+            let code =
+                snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;
             self.pre_apply_count.fetch_add(1, Ordering::SeqCst);
             self.pre_apply_hash
                 .fetch_add(code as usize, Ordering::SeqCst);
@@ -1389,11 +1390,8 @@ mod tests {
             key: &crate::store::SnapKey,
             snapshot: Option<&crate::store::Snapshot>,
         ) {
-            let code = snapshot.unwrap().total_size().unwrap()
-                + key.term
-                + key.region_id
-                + key.idx
-                + peer_id;
+            let code =
+                snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;
             self.post_apply_count.fetch_add(1, Ordering::SeqCst);
             self.post_apply_hash
                 .fetch_add(code as usize, Ordering::SeqCst);
