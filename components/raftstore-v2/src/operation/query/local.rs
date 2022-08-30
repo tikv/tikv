@@ -29,8 +29,9 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        CasualRouter, LocalReaderCore, ProposalRouter, ReadDelegate, ReadExecutor,
+        ReadExecutorProvider, ReadProgress, ReadResponse, RegionSnapshot, RequestInspector,
+        RequestPolicy, TrackVer, TxnExt,
     },
     Error, Result,
 };
@@ -43,6 +44,83 @@ use tikv_util::{
 use time::Timespec;
 
 use crate::{fsm::StoreMeta, tablet::CachedTablet};
+
+#[derive(Clone)]
+pub struct LocalReader<C, E, D, S>
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
+    E: KvEngine,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<E, Executor = D>,
+{
+    local_reader: LocalReaderCore<C, E, D, S>,
+}
+
+impl<C, E, D, S> LocalReader<C, E, D, S>
+where
+    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
+    E: KvEngine,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<E, Executor = D> + Clone,
+{
+    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
+        let cache_read_id = ThreadReadId::new();
+        Self {
+            local_reader: LocalReaderCore::new(kv_engine, store_meta, router),
+        }
+    }
+
+    fn try_get_snapshot(&self, req: RaftCmdRequest) -> Result<RegionSnapshot<E::Snapshot>> {
+        match self.local_reader.pre_propose_raft_command(&req) {
+            Ok(Some((mut delegate, policy))) => match policy {
+                RequestPolicy::ReadLocal => {
+                    let snapshot_ts = monotonic_raw_now();
+                    if !delegate.is_in_leader_lease(snapshot_ts) {
+                        unimplemented!()
+                    }
+
+                    let region = Arc::clone(&delegate.region);
+                    let snap = delegate.get_region_snapshot(None, region, &mut None);
+
+                    // Try renew lease in advance
+                    delegate.maybe_renew_lease_advance(self.local_reader.router(), snapshot_ts);
+                    Ok(snap)
+                }
+                RequestPolicy::StaleRead => {
+                    let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                    if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
+                        unimplemented!()
+                    }
+
+                    let region = Arc::clone(&delegate.region);
+                    let snap = delegate.get_region_snapshot(None, region, &mut None);
+
+                    if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
+                        unimplemented!()
+                    }
+
+                    // TLS_LOCAL_READ_METRICS.with(|m|
+                    // m.borrow_mut().local_executed_stale_read_requests.inc());
+
+                    Ok(snap)
+                }
+                _ => unreachable!(),
+            },
+            Ok(None) => unimplemented!(),
+            Err(e) => unimplemented!(),
+        }
+    }
+
+    pub async fn snapshot(&self, req: RaftCmdRequest) -> RegionSnapshot<E::Snapshot> {
+        loop {
+            if let Ok(snap) = self.try_get_snapshot(req.clone()) {
+                return snap;
+            }
+
+            // try to renew the lease
+        }
+    }
+}
 
 /// CachedReadDelegate is a wrapper the ReadDelegate and CachedTablet.
 /// CachedTablet can fetch the latest tablet of this ReadDelegate's region. The
@@ -92,7 +170,7 @@ where
     fn get_region_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        region: &Arc<metapb::Region>,
+        region: Arc<metapb::Region>,
         _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
     ) -> RegionSnapshot<E::Snapshot> {
         RegionSnapshot::from_snapshot(

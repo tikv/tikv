@@ -506,13 +506,17 @@ where
         }
     }
 
+    pub fn router(&self) -> &C {
+        &self.router
+    }
+
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
     // lifetime of the returned `&ReadDelegate` will bind to `self`, and make it
     // impossible to use `&mut self` while the `&ReadDelegate` is alive, a better
     // choice is use `Rc` but `LocalReader: Send` will be violated, which is
     // required by `LocalReadRouter: Send`, use `Arc` will introduce extra cost but
     // make the logic clear
-    fn get_delegate(&mut self, region_id: u64) -> Option<D> {
+    pub fn get_delegate(&mut self, region_id: u64) -> Option<D> {
         let rd = match self.delegates.get(&region_id) {
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(d.clone()),
@@ -538,7 +542,7 @@ where
         rd.filter(|r| !r.pending_remove)
     }
 
-    fn pre_propose_raft_command(
+    pub fn pre_propose_raft_command(
         &mut self,
         req: &RaftCmdRequest,
     ) -> Result<Option<(D, RequestPolicy)>> {
@@ -711,7 +715,7 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        match self.stale_read(read_id, &req, &mut delegate) {
+                        match self.stale_read(&req, &mut delegate) {
                             Ok(response) => response,
                             Err(response) => {
                                 cb.set_result(response);
@@ -767,8 +771,6 @@ where
             None => monotonic_raw_now(),
         };
         if !delegate.is_in_leader_lease(snapshot_ts) {
-            // Forward to raftstore.
-            // self.redirect(RaftCommand::new(req, cb));
             return None;
         }
 
@@ -776,13 +778,12 @@ where
         let response = self.execute_read(delegate, req, &region, read_id);
 
         // Try renew lease in advance
-        delegate.maybe_renew_lease_advance(&self.local_reader.router, snapshot_ts);
+        delegate.maybe_renew_lease_advance(self.local_reader.router(), snapshot_ts);
         Some(response)
     }
 
     fn stale_read(
         &mut self,
-        read_id: Option<ThreadReadId>,
         req: &RaftCmdRequest,
         delegate: &mut D,
     ) -> std::result::Result<ReadResponse<E::Snapshot>, ReadResponse<E::Snapshot>> {
@@ -798,7 +799,7 @@ where
 
         let region = Arc::clone(&delegate.region);
         // Getting the snapshot
-        let response = self.execute_read(delegate, req, &region, read_id);
+        let response = self.execute_read(delegate, req, &region, None);
 
         // Double check in case `safe_ts` change after the first check and before
         // getting snapshot
