@@ -45,7 +45,9 @@ use kvproto::{
 };
 use pd_client::{new_bucket_stats, BucketMeta, BucketStat};
 use prometheus::local::LocalHistogram;
-use raft::eraftpb::{ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType};
+use raft::eraftpb::{
+    ConfChange, ConfChangeType, ConfChangeV2, Entry, EntryType, Snapshot as RaftSnapshot,
+};
 use raft_proto::ConfChangeI;
 use smallvec::{smallvec, SmallVec};
 use sst_importer::SstImporter;
@@ -83,7 +85,7 @@ use crate::{
         metrics::*,
         msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
-        peer_storage::{write_initial_apply_state, write_peer_state, SnapshotWithRegionMeta},
+        peer_storage::{write_initial_apply_state, write_peer_state},
         util,
         util::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
@@ -3134,13 +3136,11 @@ pub struct GenSnapTask {
     // Fetch it to cancel the task if necessary.
     pub canceled: Arc<AtomicBool>,
 
-    snap_notifier: SyncSender<SnapshotWithRegionMeta>,
+    snap_notifier: SyncSender<RaftSnapshot>,
     // indicates whether the snapshot is triggered due to load balance
     for_balance: bool,
     // the store id the snapshot will be sent to
     to_store_id: u64,
-    // whether the target peer is witness
-    for_witness: bool,
 }
 
 impl GenSnapTask {
@@ -3148,9 +3148,8 @@ impl GenSnapTask {
         region_id: u64,
         index: Arc<AtomicU64>,
         canceled: Arc<AtomicBool>,
-        snap_notifier: SyncSender<SnapshotWithRegionMeta>,
+        snap_notifier: SyncSender<RaftSnapshot>,
         to_store_id: u64,
-        for_witness: bool,
     ) -> GenSnapTask {
         GenSnapTask {
             region_id,
@@ -3159,7 +3158,6 @@ impl GenSnapTask {
             snap_notifier,
             for_balance: false,
             to_store_id,
-            for_witness,
         }
     }
 
@@ -3190,7 +3188,6 @@ impl GenSnapTask {
             // open files in rocksdb.
             kv_snap,
             to_store_id: self.to_store_id,
-            for_witness: self.for_witness,
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -4433,13 +4430,10 @@ mod tests {
     };
 
     impl GenSnapTask {
-        fn new_for_test(
-            region_id: u64,
-            snap_notifier: SyncSender<SnapshotWithRegionMeta>,
-        ) -> GenSnapTask {
+        fn new_for_test(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
             let index = Arc::new(AtomicU64::new(0));
             let canceled = Arc::new(AtomicBool::new(false));
-            Self::new(region_id, index, canceled, snap_notifier, 0, false)
+            Self::new(region_id, index, canceled, snap_notifier, 0)
         }
     }
 

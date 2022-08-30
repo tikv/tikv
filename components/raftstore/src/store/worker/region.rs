@@ -21,6 +21,7 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
+use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try, defer, error, info, thd_name,
     time::Instant,
@@ -38,8 +39,8 @@ use crate::{
     store::{
         self, check_abort,
         peer_storage::{
-            SnapshotWithRegionMeta, JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED,
-            JOB_STATUS_FINISHED, JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
+            JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
+            JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
@@ -76,10 +77,9 @@ pub enum Task<S> {
         last_applied_state: RaftApplyState,
         kv_snap: S,
         canceled: Arc<AtomicBool>,
-        notifier: SyncSender<SnapshotWithRegionMeta>,
+        notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
         to_store_id: u64,
-        for_witness: bool,
     },
     Apply {
         region_id: u64,
@@ -269,9 +269,8 @@ where
         last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
-        notifier: SyncSender<SnapshotWithRegionMeta>,
+        notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
-        for_witness: bool,
         allow_multi_files_snapshot: bool,
     ) -> Result<()> {
         // do we need to check leader here?
@@ -283,7 +282,6 @@ where
             last_applied_term,
             last_applied_state,
             for_balance,
-            for_witness,
             allow_multi_files_snapshot,
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -313,9 +311,8 @@ where
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
         canceled: Arc<AtomicBool>,
-        notifier: SyncSender<SnapshotWithRegionMeta>,
+        notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
-        for_witness: bool,
         allow_multi_files_snapshot: bool,
     ) {
         fail_point!("before_region_gen_snap", |_| ());
@@ -339,7 +336,6 @@ where
             kv_snap,
             notifier,
             for_balance,
-            for_witness,
             allow_multi_files_snapshot,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
@@ -782,7 +778,6 @@ where
                 notifier,
                 for_balance,
                 to_store_id,
-                for_witness,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
@@ -821,7 +816,6 @@ where
                         canceled,
                         notifier,
                         for_balance,
-                        for_witness,
                         allow_multi_files_snapshot,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
@@ -1146,7 +1140,6 @@ mod tests {
                     notifier: tx,
                     for_balance: false,
                     to_store_id: 0,
-                    for_witness: false,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
@@ -1157,8 +1150,8 @@ mod tests {
                 msg => panic!("expected SnapshotGenerated, but got {:?}", msg),
             }
             let mut data = RaftSnapshotData::default();
-            data.merge_from_bytes(s1.snapshot.get_data()).unwrap();
-            let key = SnapKey::from_snap(&s1.snapshot).unwrap();
+            data.merge_from_bytes(s1.get_data()).unwrap();
+            let key = SnapKey::from_snap(&s1).unwrap();
             let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr

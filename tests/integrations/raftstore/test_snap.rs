@@ -577,7 +577,6 @@ fn test_gen_during_heavy_recv() {
         snap_term,
         snap_apply_state,
         true,
-        false,
         true,
     )
     .unwrap();
