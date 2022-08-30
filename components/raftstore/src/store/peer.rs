@@ -1754,45 +1754,44 @@ where
         mut msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
-
         let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-        let leader_store_id = self.peer.get_store_id();
         let zone_info = ctx.zone_info.read().unwrap();
+        let leader_store_id = self.peer.get_store_id();
+        let leader_zone = zone_info.get(&leader_store_id);
         // Filter MsgAppend.
-        for (pos, msg) in msgs.iter().enumerate() {
-            // Follower replication is enabled and msg is append.
-            if self.follower_repl()
-                && msg.get_msg_type() == MessageType::MsgAppend
-                && self.raft_group.raft.is_replicate_state(msg.get_to())
-            {
-                if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
-                    let to_peer_store_id = to_peer.get_store_id();
-                    // Leader and to_peer is not in the same zone.
-                    if let Some(to_peer_zone) = zone_info.get(&to_peer_store_id)
-                        && to_peer_zone != zone_info.get(&leader_store_id).unwrap()
-                    {
-                        if msg_append_group.contains_key(to_peer_zone) {
-                            let msg_group =
-                                msg_append_group.get_mut(to_peer_zone).unwrap();
-                            msg_group.push(pos);
-                        } else {
-                            msg_append_group.insert(to_peer_zone.clone(), vec![pos]);
+        if self.follower_repl() {
+            for (pos, msg) in msgs.iter().enumerate() {
+                // Follower replication is enabled and msg is append.
+                if msg.get_msg_type() == MessageType::MsgAppend && self.raft_group.raft.is_replicate_state(msg.get_to())
+                {
+                    if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
+                        let to_peer_store_id = to_peer.get_store_id();
+                        // Leader and to_peer is not in the same zone.
+                        if let Some(to_peer_zone) = zone_info.get(&to_peer_store_id)
+                            && leader_zone.is_some() && to_peer_zone != leader_zone.unwrap()
+                        {
+                            if let Some(v) = msg_append_group.get_mut(to_peer_zone) {
+                                v.push(pos);
+                            } else {
+                                msg_append_group.insert(to_peer_zone.clone(), vec![pos]);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Record message that should be discarded after merge_msg_append.
-        let mut discard: HashSet<usize> = HashSet::default();
+            // Record message that should be discarded after merge_msg_append.
+            let mut discard: HashSet<usize> = HashSet::default();
 
-        // Build MsgGroupBroadcast.
-        for (zone, group) in msg_append_group.iter() {
-            debug!("Zone name: {}, group info: {:?}", zone, group);
-            if group.len() > 1 {
-                self.merge_msg_append(group, &mut msgs, &mut discard);
+            // Build MsgGroupBroadcast.
+            for (_, group) in msg_append_group.iter() {
+                if group.len() > 1 {
+                    self.merge_msg_append(group, &mut msgs, &mut discard);
+                }
             }
         }
+
+        
 
         let mut pos: usize = 0;
         for msg in msgs {
