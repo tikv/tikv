@@ -7,6 +7,8 @@ use std::{
 
 use causal_ts::tests::DummyRawTsTracker;
 use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
+use engine_rocks::RocksCfOptions;
+use engine_traits::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use file_system::IoRateLimiter;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::config::ReadableSize;
@@ -91,19 +93,33 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let api_version = self.api_version;
+        let cfs = self.cfs.unwrap_or_else(|| ALL_CFS.to_vec());
         let mut cache_opt = BlockCacheConfig::default();
         if !enable_block_cache {
             cache_opt.capacity = Some(ReadableSize::kb(0));
         }
         let cache = cache_opt.build_shared_cache();
-        let cfs_opts = cfg_rocksdb.build_cf_opts(&cache, None, api_version, 0, 0, None);
-        let mut engine = RocksEngine::new(
-            &path,
-            None,
-            cfs_opts.clone(),
-            cache.is_some(),
-            self.io_rate_limiter,
-        )?;
+        let cfs_opts = cfs
+            .iter()
+            .map(|cf| match *cf {
+                CF_DEFAULT => (
+                    CF_DEFAULT,
+                    cfg_rocksdb
+                        .defaultcf
+                        .build_opt(&cache, None, api_version, 0, 0, None),
+                ),
+                CF_LOCK => (CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => (
+                    CF_WRITE,
+                    cfg_rocksdb.writecf.build_opt(&cache, None, 0, 0, None),
+                ),
+                CF_RAFT => (CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
+                _ => (*cf, RocksCfOptions::default()),
+            })
+            .collect();
+        let mut engine =
+            RocksEngine::new(&path, None, cfs_opts, cache.is_some(), self.io_rate_limiter)?;
+
         if let ApiVersion::V2 = api_version {
             Self::register_causal_observer(&mut engine);
         }
@@ -205,7 +221,7 @@ mod tests {
         let mut iter_opt = IterOptions::default();
         iter_opt.set_max_skippable_internal_keys(1);
         let mut iter = Cursor::new(
-            snapshot.iter(engine_traits::CF_DEFAULT, iter_opt).unwrap(),
+            snapshot.iter(CF_DEFAULT, iter_opt).unwrap(),
             ScanMode::Forward,
             false,
         );
@@ -234,9 +250,7 @@ mod tests {
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut iter = Cursor::new(
-            snapshot
-                .iter(engine_traits::CF_DEFAULT, IterOptions::default())
-                .unwrap(),
+            snapshot.iter(CF_DEFAULT, IterOptions::default()).unwrap(),
             ScanMode::Forward,
             false,
         );
@@ -308,7 +322,7 @@ mod tests {
             .unwrap();
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let mut iter = CursorBuilder::new(&snapshot, engine_traits::CF_WRITE)
+        let mut iter = CursorBuilder::new(&snapshot, CF_WRITE)
             .prefix_seek(true)
             .scan_mode(ScanMode::Forward)
             .build()
