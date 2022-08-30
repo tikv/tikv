@@ -43,7 +43,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     ));
     if lock_only_if_exists && !need_value {
         error!(
-            "When acquires a pessimistic lock, Lock_only_if_exists of a pessimistic lock request is set to true,
+            "lock_only_if_exists of a pessimistic lock request is set to true,
             but return_value is not";
             "start_ts" => reader.start_ts,
             "key" => log_wrappers::Value::key(key.as_encoded()),
