@@ -21,6 +21,7 @@ mod test_metrics_overflow;
 mod test_pd_client;
 mod test_pending_peers;
 mod test_rawkv;
+mod test_read_execution_tracker;
 mod test_replica_read;
 mod test_replica_stale_read;
 mod test_server;
