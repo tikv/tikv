@@ -8,6 +8,7 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
+        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -106,8 +107,6 @@ use crate::{
     },
     Error, Result,
 };
-
-use std::sync::mpsc::{SyncSender};
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
@@ -612,9 +611,7 @@ pub struct RecoveryFollowerWaitApplySyncer {
 }
 
 impl RecoveryFollowerWaitApplySyncer {
-    pub fn new(
-        sender: SyncSender<u64>,
-    ) -> Self {
+    pub fn new(sender: SyncSender<u64>) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
@@ -626,9 +623,12 @@ impl RecoveryFollowerWaitApplySyncer {
             }
             let router_ptr = thread_safe_router.lock().unwrap();
 
-            (*router_ptr).send(1).map_err(|_| {
-                warn!("reply waitapply states failure.");
-            }).unwrap();
+            (*router_ptr)
+                .send(1)
+                .map_err(|_| {
+                    warn!("reply waitapply states failure.");
+                })
+                .unwrap();
         }));
         RecoveryFollowerWaitApplySyncer {
             _closure: Arc::new(closure),
@@ -649,10 +649,7 @@ pub struct RecoveryLeaderWaitApplySyncer {
 }
 
 impl RecoveryLeaderWaitApplySyncer {
-    pub fn new(
-        region_id: u64,
-        sender: SyncSender<u64>,
-    ) -> Self {
+    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
@@ -664,9 +661,12 @@ impl RecoveryLeaderWaitApplySyncer {
             }
             let router_ptr = thread_safe_router.lock().unwrap();
 
-            (*router_ptr).send(region_id).map_err(|_| {
-                warn!("reply waitapply states failure.");
-            }).unwrap();
+            (*router_ptr)
+                .send(region_id)
+                .map_err(|_| {
+                    warn!("reply waitapply states failure.");
+                })
+                .unwrap();
         }));
         RecoveryLeaderWaitApplySyncer {
             _closure: Arc::new(closure),
@@ -763,18 +763,20 @@ impl UnsafeRecoveryFillOutReportSyncer {
 }
 
 pub enum RecoveryState {
-    // This state is set by the follow peer fsm. Once set, it is checked if forward the commit index to last index, and this peer applies a
-    // the last index, if the last index is met, this state is reset / droppeds. The
-    // syncer is droped and send the response to the invoker, triggers the next step of recovery process.
+    // This state is set by the follow peer fsm. Once set, it is checked if forward the commit
+    // index to last index, and this peer applies a the last index, if the last index is met,
+    // this state is reset / droppeds. The syncer is droped and send the response to the
+    // invoker, triggers the next step of recovery process.
     WaitFollowerLogApply {
         target_index: u64,
         syncer: RecoveryFollowerWaitApplySyncer,
     },
 
-    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index and force forward to last index once follower appended
-    // and then it also is checked every time this peer applies a
-    // the last index, if the last index is met, this state is reset / droppeds. The
-    // syncer is droped and send the response to the invoker, triggers the next step of recovery process.
+    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
+    // and force forward to last index once follower appended and then it also is checked
+    // every time this peer applies a the last index, if the last index is met, this state is
+    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
+    // the next step of recovery process.
     WaitLeaderLogApply {
         target_index: u64,
         syncer: RecoveryLeaderWaitApplySyncer,
@@ -5019,12 +5021,12 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
-    
-    pub fn recovery_maybe_finish_wait_apply(&mut self, force: bool) {            
+
+    pub fn recovery_maybe_finish_wait_apply(&mut self, force: bool) {
         match &self.recovery_state {
-            Some(RecoveryState::WaitLeaderLogApply { target_index, .. }) |
-            Some(RecoveryState::WaitFollowerLogApply { target_index, .. }) |
-            Some(RecoveryState::WaitApply { target_index, .. }) => {
+            Some(RecoveryState::WaitLeaderLogApply { target_index, .. })
+            | Some(RecoveryState::WaitFollowerLogApply { target_index, .. })
+            | Some(RecoveryState::WaitApply { target_index, .. }) => {
                 if self.raft_group.raft.raft_log.applied >= *target_index || force {
                     if self.is_force_leader() {
                         info!("Unsafe recovery, finish wait apply";);
@@ -5039,7 +5041,7 @@ where
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
                     );
-                self.recovery_state = None;
+                    self.recovery_state = None;
                 }
             }
             Some(_) | None => {}

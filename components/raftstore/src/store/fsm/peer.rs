@@ -79,10 +79,10 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, RecoveryState, UnsafeRecoveryWaitApplySyncer,
-            RecoveryLeaderWaitApplySyncer, RecoveryFollowerWaitApplySyncer,
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult,
+            RecoveryFollowerWaitApplySyncer, RecoveryLeaderWaitApplySyncer, RecoveryState,
+            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         transport::Transport,
@@ -790,13 +790,12 @@ where
             );
 
             if !*failed.lock().unwrap() {
-                self.fsm.peer.recovery_state =
-                    Some(RecoveryState::DemoteFailedVoters {
-                        syncer,
-                        failed_voters,
-                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                        demote_after_exit: true,
-                    });
+                self.fsm.peer.recovery_state = Some(RecoveryState::DemoteFailedVoters {
+                    syncer,
+                    failed_voters,
+                    target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                    demote_after_exit: true,
+                });
             }
         } else {
             self.unsafe_recovery_demote_failed_voters(syncer, failed_voters);
@@ -829,13 +828,12 @@ where
             }));
             self.propose_raft_command_internal(req, callback, DiskFullOpt::AllowedOnAlmostFull);
             if !*failed.lock().unwrap() {
-                self.fsm.peer.recovery_state =
-                    Some(RecoveryState::DemoteFailedVoters {
-                        syncer,
-                        failed_voters: vec![], // No longer needed since here.
-                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                        demote_after_exit: false,
-                    });
+                self.fsm.peer.recovery_state = Some(RecoveryState::DemoteFailedVoters {
+                    syncer,
+                    failed_voters: vec![], // No longer needed since here.
+                    target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                    demote_after_exit: false,
+                });
             }
         } else {
             warn!(
@@ -910,7 +908,8 @@ where
             target_index,
             syncer,
         });
-        self.fsm.peer
+        self.fsm
+            .peer
             .recovery_maybe_finish_wait_apply(self.fsm.stopped);
     }
 
@@ -930,7 +929,8 @@ where
             syncer,
         });
 
-        self.fsm.peer
+        self.fsm
+            .peer
             .recovery_maybe_finish_wait_apply(self.fsm.stopped);
     }
 
@@ -1360,7 +1360,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::RecoveryLeaderWaitApply (syncer) => {
+            SignificantMsg::RecoveryLeaderWaitApply(syncer) => {
                 self.on_recovery_leader_wait_apply(syncer)
             }
             SignificantMsg::RecoveryFollowerWaitApply(syncer) => {
@@ -2071,12 +2071,11 @@ where
 
     fn check_recovery_state(&mut self) {
         match &self.fsm.peer.recovery_state {
-                Some(RecoveryState::WaitApply { .. }) |
-                Some(RecoveryState::WaitLeaderLogApply { .. }) |
-                Some(RecoveryState::WaitFollowerLogApply { .. }) => self
-                .fsm
-                .peer
-                .recovery_maybe_finish_wait_apply(false),    
+            Some(RecoveryState::WaitApply { .. })
+            | Some(RecoveryState::WaitLeaderLogApply { .. })
+            | Some(RecoveryState::WaitFollowerLogApply { .. }) => {
+                self.fsm.peer.recovery_maybe_finish_wait_apply(false)
+            }
             Some(RecoveryState::DemoteFailedVoters {
                 syncer,
                 failed_voters,
