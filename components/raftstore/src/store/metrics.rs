@@ -44,8 +44,8 @@ make_auto_flush_static_metric! {
 
     pub label_enum SnapValidationType {
         stale,
-        decode,
         epoch,
+        witness,
     }
 
     pub label_enum RegionHashType {

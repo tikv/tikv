@@ -121,22 +121,24 @@ pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
     pub idx: u64,
+    pub for_witness: bool,
 }
 
 impl SnapKey {
     #[inline]
-    pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
+    pub fn new(region_id: u64, term: u64, idx: u64, for_witness: bool) -> SnapKey {
         SnapKey {
             region_id,
             term,
             idx,
+            for_witness,
         }
     }
 
-    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot) -> SnapKey {
+    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot, for_witness: bool) -> SnapKey {
         let index = snap.get_metadata().get_index();
         let term = snap.get_metadata().get_term();
-        SnapKey::new(region_id, term, index)
+        SnapKey::new(region_id, term, index, for_witness)
     }
 
     pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
@@ -148,13 +150,18 @@ impl SnapKey {
         Ok(SnapKey::from_region_snap(
             snap_data.get_region().get_id(),
             snap,
+            snap_data.get_meta().get_for_witness(),
         ))
     }
 }
 
 impl Display for SnapKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)
+        write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)?;
+        if self.for_witness {
+            write!(f, "_witness")?;
+        }
+        Ok(())
     }
 }
 
@@ -424,7 +431,7 @@ impl CfFile {
 
 #[derive(Default)]
 struct MetaFile {
-    pub meta: SnapshotMeta,
+    pub meta: Option<SnapshotMeta>,
     pub path: PathBuf,
     pub file: Option<File>,
 
@@ -735,7 +742,7 @@ impl Snapshot {
                 }
             }
         }
-        self.meta_file.meta = snapshot_meta;
+        self.meta_file.meta = Some(snapshot_meta);
         Ok(())
     }
 
@@ -754,7 +761,7 @@ impl Snapshot {
     }
 
     pub fn load_snapshot_meta_if_necessary(&mut self) -> RaftStoreResult<()> {
-        if self.meta_file.meta.get_cf_files().is_empty() && file_exists(&self.meta_file.path) {
+        if self.meta_file.meta.is_none() && file_exists(&self.meta_file.path) {
             return self.load_snapshot_meta();
         }
         Ok(())
@@ -771,7 +778,8 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
+    fn validate(&self, for_send: bool, for_witness: bool) -> RaftStoreResult<()> {
+        // TODO: check self.meta_file.meta for witness
         for cf_file in &self.cf_files {
             let file_paths = cf_file.file_paths();
             let clone_file_paths = cf_file.clone_file_paths();
@@ -817,7 +825,7 @@ impl Snapshot {
 
     // Only called in `do_build`.
     fn save_meta_file(&mut self) -> RaftStoreResult<()> {
-        let v = box_try!(self.meta_file.meta.write_to_bytes());
+        let v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot
             // exists so no temporary meta file is created, and this field is
@@ -931,7 +939,11 @@ impl Snapshot {
         }
 
         // save snapshot meta to meta file
-        self.meta_file.meta = gen_snapshot_meta(&self.cf_files[..], for_balance, for_witness)?;
+        self.meta_file.meta = Some(gen_snapshot_meta(
+            &self.cf_files[..],
+            for_balance,
+            for_witness,
+        )?);
         self.save_meta_file()?;
         Ok(())
     }
@@ -1051,21 +1063,21 @@ impl Snapshot {
             for_witness,
         )?;
 
-        let total_size = self.total_size()?;
-        let kv_count: u64 = self.cf_files.iter().map(|cf| cf.kv_count).sum();
+        let total_size = self.total_size();
+        let total_count = self.total_count();
         // set snapshot meta data
         snap_data.set_file_size(total_size);
         snap_data.set_version(SNAPSHOT_VERSION);
-        snap_data.set_meta(self.meta_file.meta.clone());
+        snap_data.set_meta(self.meta_file.meta.as_ref().unwrap().clone());
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
-        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(kv_count as f64);
+        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_count as f64);
         SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
-            "key_count" => kv_count,
+            "key_count" => total_count,
             "size" => total_size,
             "takes" => ?t.saturating_elapsed(),
         );
@@ -1134,11 +1146,15 @@ impl Snapshot {
         file_system::metadata(&self.meta_file.path)
     }
 
-    pub fn total_size(&self) -> io::Result<u64> {
-        Ok(self
-            .cf_files
+    pub fn total_size(&self) -> u64 {
+        self.cf_files
             .iter()
-            .fold(0, |acc, x| acc + x.size.iter().sum::<u64>()))
+            .map(|cf| cf.size.iter().sum::<u64>())
+            .sum()
+    }
+
+    pub fn total_count(&self) -> u64 {
+        self.cf_files.iter().map(|cf| cf.kv_count).sum()
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -1197,7 +1213,7 @@ impl Snapshot {
         sync_dir(&self.dir_path)?;
 
         // write meta file
-        let v = self.meta_file.meta.write_to_bytes()?;
+        let v = self.meta_file.meta.as_ref().unwrap().write_to_bytes()?;
         {
             let mut meta_file = self.meta_file.file.take().unwrap();
             meta_file.write_all(&v[..])?;
@@ -1915,7 +1931,7 @@ pub mod tests {
     use kvproto::{
         encryptionpb::EncryptionMethod,
         metapb::{Peer, Region},
-        raft_serverpb::{RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta},
+        raft_serverpb::{RaftApplyState, RegionLocalState, SnapshotMeta},
     };
     use protobuf::Message;
     use raft::eraftpb::Entry;
@@ -2037,7 +2053,7 @@ pub mod tests {
         Ok(Engines::new(kv, raft))
     }
 
-    pub fn get_kv_count(snap: &impl EngineSnapshot) -> usize {
+    pub fn get_kv_count(snap: &impl EngineSnapshot) -> u64 {
         let mut kv_count = 0;
         for cf in SNAPSHOT_CFS {
             snap.scan(
@@ -2152,7 +2168,7 @@ pub mod tests {
             };
             cf_file.push(f);
         }
-        let meta = super::gen_snapshot_meta(&cf_file).unwrap();
+        let meta = super::gen_snapshot_meta(&cf_file, false, false).unwrap();
         let cf_files = meta.get_cf_files();
         assert_eq!(cf_files.len(), super::SNAPSHOT_CFS.len() * 2); // each CF has two snapshot files;
         for (i, cf_file_meta) in meta.get_cf_files().iter().enumerate() {
@@ -2234,29 +2250,16 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        Snapshot::build::<KvTestEngine>(
-            &mut s1,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let mut snap_data =
+            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
+                .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
-        let total_size = s1.total_size().unwrap();
+        let size = s1.total_size();
         // Ensure the `size_track` is modified correctly.
-        let size = mgr_core.get_total_snap_size().unwrap();
-        assert_eq!(size, total_size);
-        assert_eq!(stat.size as u64, size);
-        assert_eq!(stat.kv_count, get_kv_count(&snapshot));
+        assert_eq!(size, mgr_core.get_total_snap_size().unwrap());
+        assert_eq!(s1.total_count(), get_kv_count(&snapshot));
 
         // Ensure this snapshot could be read for sending.
         let mut s2 = Snapshot::new_for_sending(src_dir.path(), &key, &mgr_core).unwrap();
@@ -2349,36 +2352,17 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        Snapshot::build::<KvTestEngine>(
-            &mut s1,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let _ =
+            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s1.exists());
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
-        Snapshot::build::<KvTestEngine>(
-            &mut s2,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let _ =
+            Snapshot::build::<KvTestEngine>(&mut s2, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s2.exists());
     }
 
@@ -2521,20 +2505,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        Snapshot::build::<KvTestEngine>(
-            &mut s1,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let _ =
+            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2543,17 +2516,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        Snapshot::build::<KvTestEngine>(
-            &mut s2,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let snap_data =
+            Snapshot::build::<KvTestEngine>(&mut s2, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2614,20 +2579,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        Snapshot::build::<KvTestEngine>(
-            &mut s1,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let _ =
+            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2636,17 +2590,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        Snapshot::build::<KvTestEngine>(
-            &mut s2,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let mut snap_data =
+            Snapshot::build::<KvTestEngine>(&mut s2, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2708,22 +2654,11 @@ pub mod tests {
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        Snapshot::build::<KvTestEngine>(
-            &mut s1,
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let mut snap_data =
+            Snapshot::build::<KvTestEngine>(&mut s1, &db, &snapshot, &region, true, false, false)
+                .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
-        let expected_size = s.total_size().unwrap();
+        let expected_size = s.total_size();
         let mut s2 =
             Snapshot::new_for_receiving(&path, &key1, &mgr_core, snap_data.get_meta().clone())
                 .unwrap();
@@ -2793,26 +2728,16 @@ pub mod tests {
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.set_region(region.clone());
-        let mut stat = SnapshotStatistics::new();
-        s1.build(
-            &db,
-            &snapshot,
-            &region,
-            &mut snap_data,
-            &mut stat,
-            true,
-            false,
-        )
-        .unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, false)
+            .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
         // Ensure the snapshot being sent will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Sending);
         let mut s2 = src_mgr.get_snapshot_for_sending(&key).unwrap();
-        let expected_size = s2.total_size().unwrap();
+        let expected_size = s2.total_size();
 
         let dst_temp_dir = Builder::new()
             .prefix("test-snap-deletion-on-registry-dst")
@@ -2881,19 +2806,17 @@ pub mod tests {
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
         let mut recv_head = {
-            let mut stat = SnapshotStatistics::new();
-            let mut snap_data = RaftSnapshotData::default();
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
-            s.build(
-                &engine.kv,
-                &snapshot,
-                &gen_test_region(100, 1, 1),
-                &mut snap_data,
-                &mut stat,
-                true,
-                false,
-            )
-            .unwrap();
+            let snap_data = s
+                .build(
+                    &engine.kv,
+                    &snapshot,
+                    &gen_test_region(100, 1, 1),
+                    true,
+                    false,
+                    false,
+                )
+                .unwrap();
             snap_data
         };
         let recv_remain = {
@@ -2915,18 +2838,9 @@ pub mod tests {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let mut snap_data = RaftSnapshotData::default();
-            let mut stat = SnapshotStatistics::new();
-            s.build(
-                &engine.kv,
-                &snapshot,
-                &region,
-                &mut snap_data,
-                &mut stat,
-                true,
-                false,
-            )
-            .unwrap();
+            let _ = s
+                .build(&engine.kv, &snapshot, &region, true, false, false)
+                .unwrap();
 
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.
@@ -2995,19 +2909,9 @@ pub mod tests {
         // correctly.
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let mut snap_data = RaftSnapshotData::default();
-            snap_data.set_region(region.clone());
-            let mut stat = SnapshotStatistics::new();
-            s1.build(
-                &db,
-                &snapshot,
-                &region,
-                &mut snap_data,
-                &mut stat,
-                true,
-                false,
-            )
-            .unwrap();
+            let _ = s1
+                .build(&db, &snapshot, &region, true, false, false)
+                .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }

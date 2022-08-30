@@ -74,13 +74,19 @@ pub enum CheckApplyingSnapStatus {
 }
 
 #[derive(Debug)]
+pub struct SnapshotWithRegionMeta {
+    pub snapshot: Snapshot,
+    pub region: Region,
+    pub for_witness: bool,
+}
+
+#[derive(Debug)]
 pub enum SnapState {
     Relax,
     Generating {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
-        receiver: Receiver<Snapshot>,
-        for_witness: bool,
+        receiver: Receiver<SnapshotWithRegionMeta>,
     },
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
@@ -392,8 +398,8 @@ where
         Ok(())
     }
 
-    fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
-        let idx = snap.get_metadata().get_index();
+    fn validate_snap(&self, s: &SnapshotWithRegionMeta, request_index: u64, to: u64) -> bool {
+        let idx = s.snapshot.get_metadata().get_index();
         if idx < self.truncated_index() || idx < request_index {
             // stale snapshot, should generate again.
             info!(
@@ -408,18 +414,7 @@ where
             return false;
         }
 
-        let mut snap_data = RaftSnapshotData::default();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            error!(
-                "failed to decode snapshot, it may be corrupted";
-                "region_id" => self.region.get_id(),
-                "peer_id" => self.peer_id,
-                "err" => ?e,
-            );
-            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.decode.inc();
-            return false;
-        }
-        let snap_epoch = snap_data.get_region().get_region_epoch();
+        let snap_epoch = s.region.get_region_epoch();
         let latest_epoch = self.region().get_region_epoch();
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
@@ -430,6 +425,27 @@ where
                 "latest_epoch" => ?latest_epoch,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.epoch.inc();
+            return false;
+        }
+
+        let for_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
+        if s.for_witness != for_witness {
+            if for_witness {
+                info!(
+                    "ignore non-witness snapshot for witness";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "to_peer" => to,
+                )
+            } else {
+                info!(
+                    "ignore witness snapshot for non-witness";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "to_peer" => to,
+                )
+            }
+            STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.witness.inc();
             return false;
         }
 
@@ -450,13 +466,12 @@ where
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
-        let to_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
+        let for_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
         let mut tried = false;
         let mut last_canceled = false;
         if let SnapState::Generating {
             ref canceled,
             ref receiver,
-            for_witness,
             ..
         } = *snap_state
         {
@@ -470,8 +485,8 @@ where
                 }
                 Ok(s) if !last_canceled => {
                     *tried_cnt = 0;
-                    if self.validate_snap(&s, request_index) && for_witness == to_witness {
-                        return Ok(s);
+                    if self.validate_snap(&s, request_index, to) {
+                        return Ok(s.snapshot);
                     }
                 }
                 Err(TryRecvError::Disconnected) | Ok(_) => {
@@ -505,7 +520,7 @@ where
             "peer_id" => self.peer_id,
             "request_index" => request_index,
             "request_peer" => to,
-            "for_witness" => to_witness,
+            "for_witness" => for_witness,
         );
 
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -515,14 +530,15 @@ where
             canceled: canceled.clone(),
             index: index.clone(),
             receiver,
-            for_witness: to_witness,
         };
 
-        let store_id = if let Some(peer) = self.region().get_peers().iter().find(|p| p.id == to) {
-            peer.store_id
-        } else {
-            0
-        };
+        let store_id = self
+            .region()
+            .get_peers()
+            .iter()
+            .find(|p| p.id == to)
+            .map(|p| p.store_id)
+            .unwrap_or(0);
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
@@ -532,7 +548,7 @@ where
             canceled,
             sender,
             store_id,
-            to_witness,
+            for_witness,
         ));
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
@@ -1005,7 +1021,7 @@ pub fn do_snapshot<E>(
     for_balance: bool,
     for_witness: bool,
     allow_multi_files_snapshot: bool,
-) -> raft::Result<Snapshot>
+) -> raft::Result<SnapshotWithRegionMeta>
 where
     E: KvEngine,
 {
@@ -1067,7 +1083,11 @@ where
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 
-    Ok(snapshot)
+    Ok(SnapshotWithRegionMeta {
+        snapshot,
+        region: region_state.get_region().clone(),
+        for_witness,
+    })
 }
 
 // When we bootstrap the region we must call this to initialize region local
@@ -1590,7 +1610,10 @@ pub mod tests {
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
-                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+                receiver
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .snapshot
             }
             ref s => panic!("unexpected state: {:?}", s),
         };
@@ -1609,12 +1632,22 @@ pub mod tests {
         assert_eq!(s.snapshot(0, 0).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
-        tx.send(snap.clone()).unwrap();
+        tx.send(SnapshotWithRegionMeta {
+            snapshot: snap.clone(),
+            region: data.get_region().clone(),
+            for_witness: false,
+        })
+        .unwrap();
         assert_eq!(s.snapshot(0, 0), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
-        tx.send(snap.clone()).unwrap();
+        tx.send(SnapshotWithRegionMeta {
+            snapshot: snap.clone(),
+            region: data.get_region().clone(),
+            for_witness: false,
+        })
+        .unwrap();
         s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
@@ -1647,7 +1680,12 @@ pub mod tests {
         kv_wb.write().unwrap();
 
         let (tx, rx) = channel();
-        tx.send(snap).unwrap();
+        tx.send(SnapshotWithRegionMeta {
+            snapshot: snap,
+            region: data.get_region().clone(),
+            for_witness: false,
+        })
+        .unwrap();
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
@@ -1738,7 +1776,10 @@ pub mod tests {
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
-                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+                receiver
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .snapshot
             }
             ref s => panic!("unexpected state: {:?}", s),
         };
@@ -1814,7 +1855,8 @@ pub mod tests {
                 ref s => panic!("unexpected state: {:?}", s),
             };
             *s.snap_tried_cnt.borrow_mut() = 0;
-            snap
+            println!("snapshot {:?}, {}", snap.region, snap.for_witness);
+            snap.snapshot
         };
 
         // generate snapshot for peer
@@ -1875,7 +1917,10 @@ pub mod tests {
 
         let snap1 = match *s1.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
-                receiver.recv_timeout(Duration::from_secs(3)).unwrap()
+                receiver
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .snapshot
             }
             ref s => panic!("unexpected state: {:?}", s),
         };
@@ -2136,12 +2181,11 @@ pub mod tests {
         assert!(build_storage().is_err());
     }
 
-    fn gen_snap_for_test(rx: Receiver<Snapshot>) -> SnapState {
+    fn gen_snap_for_test(rx: Receiver<SnapshotWithRegionMeta>) -> SnapState {
         SnapState::Generating {
             canceled: Arc::new(AtomicBool::new(false)),
             index: Arc::new(AtomicU64::new(0)),
             receiver: rx,
-            for_witness: false,
         }
     }
 }
