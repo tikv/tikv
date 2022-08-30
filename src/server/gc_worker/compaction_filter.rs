@@ -217,7 +217,7 @@ impl WriteCompactionFilterFactory {
     }
 
     pub fn get_rocksdb(&self) -> Option<RocksEngine> {
-        return match &(*self).tablet_factory {
+        return match &self.tablet_factory {
             Some(factory) => Some(
                 factory
                     .open_tablet(self.region_id, Some(self.suffix), OpenOptions::default())

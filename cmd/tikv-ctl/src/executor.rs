@@ -77,6 +77,7 @@ pub fn new_debug_executor(
         &cache,
         None,
         cfg.storage.api_version(),
+        // FIXME when tikv-ctl multi-rocksdb support is needed
         WriteCompactionFilterFactory::new(0, 0, None),
     );
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
