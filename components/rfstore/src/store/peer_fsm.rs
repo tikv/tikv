@@ -732,7 +732,7 @@ impl<'a> PeerMsgHandler<'a> {
                     let mut cmd = RaftCmdRequest::default();
                     cmd.set_header(msg.get_header().clone());
                     let mut custom_builder = CustomBuilder::new();
-                    custom_builder.set_change_set(cs);
+                    custom_builder.set_change_set(&cs);
                     cmd.set_custom_request(custom_builder.build());
                     router.send_command(cmd, cb);
                 }
@@ -931,7 +931,7 @@ impl<'a> PeerMsgHandler<'a> {
         cs.set_property_value(prefix);
         cs.set_property_merge(true);
         let mut custom_builder = CustomBuilder::new();
-        custom_builder.set_change_set(cs);
+        custom_builder.set_change_set(&cs);
         cmd.set_custom_request(custom_builder.build());
         self.propose_raft_command(cmd, callback);
     }
@@ -957,17 +957,18 @@ impl<'a> PeerMsgHandler<'a> {
         let tag = self.peer.tag();
         let mut req = self.new_raft_cmd_request();
         let mut builder = CustomBuilder::new();
-        builder.set_change_set(cs);
+        builder.set_change_set(&cs);
         let custom_req = builder.build();
         req.set_custom_request(custom_req);
+        let router = self.ctx.global.router.clone();
         let cb = Callback::write(Box::new(move |resp| {
             if resp.response.get_header().has_error() {
                 let err_msg = resp.response.get_header().get_error().get_message();
                 warn!("{} failed to propose engine change set {:?}", tag, err_msg);
-                // TODO(x): handle the error.
-                // We need to detect if this error can be retried and retry it.
-                // Or we may lose data if it is a flush.
-                // And we need to stop propose change set if previous change set propose failed.
+                if err_msg.contains("raft: proposal dropped") {
+                    // Proposal may dropped due to leader transfer in progress.
+                    router.send_store(StoreMsg::GenerateEngineChangeSet(cs));
+                }
             } else {
                 info!("{} proposed meta change event", tag);
             }

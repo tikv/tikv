@@ -249,7 +249,7 @@ impl CustomBuilder {
         self.cnt += 1;
     }
 
-    pub fn set_change_set(&mut self, cs: kvenginepb::ChangeSet) {
+    pub fn set_change_set(&mut self, cs: &kvenginepb::ChangeSet) {
         assert_eq!(self.buf.len(), HEADER_SIZE);
         let data = cs.write_to_bytes().unwrap();
         self.buf.extend_from_slice(&data);
