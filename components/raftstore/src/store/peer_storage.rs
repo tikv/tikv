@@ -35,7 +35,6 @@ use tikv_util::{
 
 use super::{
     entry_storage::last_index, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
-    SnapshotStatistics,
 };
 use crate::{
     store::{
@@ -1015,18 +1014,16 @@ where
         "region_id" => region_id,
     );
 
-    let msg = kv_snap
+    let apply_state: RaftApplyState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-        .map_err(into_other::<_, raft::Error>)?;
-    let apply_state: RaftApplyState = match msg {
-        None => {
-            return Err(storage_error(format!(
+        .and_then(|res| match res {
+            None => Err(box_err!(
                 "could not load raft state of region {}",
                 region_id
-            )));
-        }
-        Some(state) => state,
-    };
+            )),
+            Some(state) => Ok(state),
+        })
+        .map_err(into_other::<_, raft::Error>)?;
     assert_eq!(apply_state, last_applied_state);
 
     let key = SnapKey::new(
@@ -1034,19 +1031,17 @@ where
         last_applied_term,
         apply_state.get_applied_index(),
     );
-
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = kv_snap
+    let region_state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
             None => Err(box_err!("region {} could not find region info", region_id)),
             Some(state) => Ok(state),
         })
         .map_err(into_other::<_, raft::Error>)?;
-
-    if state.get_state() != PeerState::Normal {
+    if region_state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(
             "snap job for {} seems stale, skip.",
             region_id
@@ -1054,34 +1049,23 @@ where
     }
 
     let mut snapshot = Snapshot::default();
-
     // Set snapshot metadata.
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
-
-    let conf_state = util::conf_state_from_region(state.get_region());
-    snapshot.mut_metadata().set_conf_state(conf_state);
-
-    let mut s = mgr.get_snapshot_for_building(&key)?;
+    snapshot
+        .mut_metadata()
+        .set_conf_state(util::conf_state_from_region(region_state.get_region()));
     // Set snapshot data.
-    let mut snap_data = RaftSnapshotData::default();
-    snap_data.set_region(state.get_region().clone());
-    let mut stat = SnapshotStatistics::new();
-    s.build(
+    let mut s = mgr.get_snapshot_for_building(&key)?;
+    let snap_data = s.build(
         engine,
         &kv_snap,
-        state.get_region(),
-        &mut snap_data,
-        &mut stat,
+        region_state.get_region(),
         allow_multi_files_snapshot,
+        for_balance,
         for_witness,
     )?;
-    snap_data.mut_meta().set_for_balance(for_balance);
-    let v = snap_data.write_to_bytes()?;
-    snapshot.set_data(v.into());
-
-    SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
-    SNAPSHOT_SIZE_HISTOGRAM.observe(stat.size as f64);
+    snapshot.set_data(snap_data.write_to_bytes()?.into());
 
     Ok(snapshot)
 }

@@ -41,13 +41,7 @@ use tikv_util::{
 
 use crate::{
     coprocessor::CoprocessorHost,
-    store::{
-        metrics::{
-            CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
-            SNAPSHOT_CF_KV_COUNT, SNAPSHOT_CF_SIZE,
-        },
-        peer_storage::JOB_STATUS_CANCELLING,
-    },
+    store::{metrics::*, peer_storage::JOB_STATUS_CANCELLING},
     Error as RaftStoreError, Result as RaftStoreResult,
 };
 
@@ -211,7 +205,11 @@ fn retry_delete_snapshot(mgr: &SnapManagerCore, key: &SnapKey, snap: &Snapshot) 
     false
 }
 
-fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
+fn gen_snapshot_meta(
+    cf_files: &[CfFile],
+    for_balance: bool,
+    for_witness: bool,
+) -> RaftStoreResult<SnapshotMeta> {
     let mut meta = Vec::with_capacity(cf_files.len());
     for cf_file in cf_files {
         if !SNAPSHOT_CFS.iter().any(|cf| cf_file.cf == *cf) {
@@ -239,6 +237,8 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
     }
     let mut snapshot_meta = SnapshotMeta::default();
     snapshot_meta.set_cf_files(meta.into());
+    snapshot_meta.set_for_balance(for_balance);
+    snapshot_meta.set_for_witness(for_witness);
     Ok(snapshot_meta)
 }
 
@@ -843,8 +843,8 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        stat: &mut SnapshotStatistics,
         allow_multi_files_snapshot: bool,
+        for_balance: bool,
         for_witness: bool,
     ) -> RaftStoreResult<()>
     where
@@ -930,10 +930,8 @@ impl Snapshot {
             }
         }
 
-        stat.kv_count = self.cf_files.iter().map(|cf| cf.kv_count as usize).sum();
         // save snapshot meta to meta file
-        let snapshot_meta = gen_snapshot_meta(&self.cf_files[..])?;
-        self.meta_file.meta = snapshot_meta;
+        self.meta_file.meta = gen_snapshot_meta(&self.cf_files[..], for_balance, for_witness)?;
         self.save_meta_file()?;
         Ok(())
     }
@@ -1036,39 +1034,43 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        snap_data: &mut RaftSnapshotData,
-        stat: &mut SnapshotStatistics,
         allow_multi_files_snapshot: bool,
+        for_balance: bool,
         for_witness: bool,
-    ) -> RaftStoreResult<()> {
+    ) -> RaftStoreResult<RaftSnapshotData> {
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.set_region(region.clone());
+
         let t = Instant::now();
         self.do_build::<EK>(
             engine,
             kv_snap,
             region,
-            stat,
             allow_multi_files_snapshot,
+            for_balance,
             for_witness,
         )?;
 
         let total_size = self.total_size()?;
-        stat.size = total_size;
+        let kv_count: u64 = self.cf_files.iter().map(|cf| cf.kv_count).sum();
         // set snapshot meta data
         snap_data.set_file_size(total_size);
         snap_data.set_version(SNAPSHOT_VERSION);
         snap_data.set_meta(self.meta_file.meta.clone());
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
+        SNAPSHOT_KV_COUNT_HISTOGRAM.observe(kv_count as f64);
+        SNAPSHOT_SIZE_HISTOGRAM.observe(total_size as f64);
         info!(
             "scan snapshot";
             "region_id" => region.get_id(),
             "snapshot" => self.path(),
-            "key_count" => stat.kv_count,
+            "key_count" => kv_count,
             "size" => total_size,
             "takes" => ?t.saturating_elapsed(),
         );
 
-        Ok(())
+        Ok(snap_data)
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
