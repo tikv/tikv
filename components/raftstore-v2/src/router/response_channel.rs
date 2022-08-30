@@ -16,7 +16,7 @@ use std::{
     cell::UnsafeCell,
     fmt,
     future::Future,
-    mem::{self, ManuallyDrop},
+    mem,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -231,7 +231,7 @@ unsafe impl<Res: Send> Sync for BaseSubscriber<Res> {}
 
 /// A base channel that contains most common implementation of channels.
 pub struct BaseChannel<Res> {
-    core: ManuallyDrop<Arc<EventCore<Res>>>,
+    core: Arc<EventCore<Res>>,
 }
 
 impl<Res> BaseChannel<Res> {
@@ -239,22 +239,13 @@ impl<Res> BaseChannel<Res> {
     #[inline]
     pub fn pair() -> (Self, BaseSubscriber<Res>) {
         let core: Arc<EventCore<Res>> = Arc::default();
-        (
-            Self {
-                core: ManuallyDrop::new(core.clone()),
-            },
-            BaseSubscriber { core },
-        )
+        (Self { core: core.clone() }, BaseSubscriber { core })
     }
 
     /// Sets the final result.
     #[inline]
     pub fn set_result(mut self, res: Res) {
         self.core.set_result(res);
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
-        mem::forget(self);
     }
 }
 
@@ -262,9 +253,6 @@ impl<Res> Drop for BaseChannel<Res> {
     #[inline]
     fn drop(&mut self) {
         self.core.cancel();
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
     }
 }
 
