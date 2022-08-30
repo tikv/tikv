@@ -15,31 +15,80 @@ use engine_rocks::{
     },
     RocksEngine,
 };
-use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
+use engine_traits::{raw_ttl::ttl_current_ts, MiscExt, OpenOptions, TabletFactory};
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
 
 use crate::{
+<<<<<<< HEAD
     server::gc_worker::{
         compaction_filter::{
             check_need_gc, CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT,
             GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
             GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_COMPACTION_FILTER_PERFORM,
             GC_COMPACTION_FILTER_SKIP, GC_CONTEXT,
+=======
+    server::{
+        engine_factory_v2::KvEngineFactoryV2,
+        gc_worker::{
+            compaction_filter::{
+                CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
+                GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+                GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            },
+            GcTask, STAT_RAW_KEYMODE,
+>>>>>>> e682d8885 (*: support to rawkv compaction filter)
         },
-        GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
+<<<<<<< HEAD
 pub struct RawCompactionFilterFactory;
+=======
+
+pub struct RawCompactionFilterFactory {
+    region_id: u64,
+    suffix: u64,
+    tablet_factory: Option<KvEngineFactoryV2>,
+}
+impl RawCompactionFilterFactory {
+    pub fn new(region_id: u64, suffix: u64, tablet_factory: Option<KvEngineFactoryV2>) -> Self {
+        Self {
+            region_id,
+            suffix,
+            tablet_factory,
+        }
+    }
+
+    pub fn get_rocksdb(&self) -> Option<RocksEngine> {
+        return match &self.tablet_factory {
+            Some(factory) => Some(
+                factory
+                    .open_tablet(self.region_id, Some(self.suffix), OpenOptions::default())
+                    .unwrap(),
+            ),
+            None => {
+                let gc_context_option = GC_CONTEXT.lock().unwrap();
+                (*gc_context_option).as_ref().map(|ctx| ctx.db.clone())
+            }
+        };
+    }
+}
+>>>>>>> e682d8885 (*: support to rawkv compaction filter)
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
     fn create_compaction_filter(
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
+        let db = match self.get_rocksdb() {
+            Some(rocksdb) => rocksdb,
+            None => {
+                return std::ptr::null_mut();
+            }
+        };
         //---------------- GC context --------------
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
@@ -48,7 +97,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         };
         //---------------- GC context END --------------
 
-        let db = gc_context.db.clone();
         let gc_scheduler = gc_context.gc_scheduler.clone();
         let store_id = gc_context.store_id;
         let region_info_provider = gc_context.region_info_provider.clone();

@@ -73,6 +73,7 @@ use crate::{
     coprocessor_v2::Config as CoprocessorV2Config,
     import::Config as ImportConfig,
     server::{
+        engine_factory_v2::KvEngineFactoryV2,
         gc_worker::{GcConfig, RawCompactionFilterFactory, WriteCompactionFilterFactory},
         lock_manager::Config as PessimisticTxnConfig,
         ttl::TtlCompactionFilterFactory,
@@ -675,6 +676,9 @@ impl DefaultCfConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
+        region_id: u64,
+        suffix_id: u64,
+        tablet_factory: Option<KvEngineFactoryV2>,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_DEFAULT, cache, region_info_accessor);
         let f = RangePropertiesCollectorFactory {
@@ -706,7 +710,7 @@ impl DefaultCfConfig {
                 cf_opts
                     .set_compaction_filter_factory(
                         "apiv2_gc_compaction_filter_factory",
-                        RawCompactionFilterFactory,
+                        RawCompactionFilterFactory::new(region_id, suffix_id, tablet_factory),
                     )
                     .unwrap();
             }
@@ -790,7 +794,9 @@ impl WriteCfConfig {
         &self,
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
-        write_compaction_filter: WriteCompactionFilterFactory,
+        region_id: u64,
+        suffix_id: u64,
+        tablet_factory: Option<KvEngineFactoryV2>,
     ) -> RocksCfOptions {
         let mut cf_opts = build_cf_opt!(self, CF_WRITE, cache, region_info_accessor);
         // Prefix extractor(trim the timestamp at tail) for write cf.
@@ -826,7 +832,7 @@ impl WriteCfConfig {
         cf_opts
             .set_compaction_filter_factory(
                 "write_compaction_filter_factory",
-                write_compaction_filter,
+                WriteCompactionFilterFactory::new(region_id, suffix_id, tablet_factory),
             )
             .unwrap();
 >>>>>>> bd28806d5 (*: rebase and rework writecompactionfilter factory to address comments)
@@ -1217,13 +1223,21 @@ impl DbConfig {
         cache: &Option<Cache>,
         region_info_accessor: Option<&RegionInfoAccessor>,
         api_version: ApiVersion,
-        write_compaction_filter_factory: WriteCompactionFilterFactory,
+        region_id: u64,
+        suffix_id: u64,
+        tablet_factory: Option<KvEngineFactoryV2>,
     ) -> Vec<(&'static str, RocksCfOptions)> {
         vec![
             (
                 CF_DEFAULT,
-                self.defaultcf
-                    .build_opt(cache, region_info_accessor, api_version),
+                self.defaultcf.build_opt(
+                    cache,
+                    region_info_accessor,
+                    api_version,
+                    region_id,
+                    suffix_id,
+                    tablet_factory.clone(),
+                ),
             ),
             (CF_LOCK, self.lockcf.build_opt(cache)),
             (
@@ -1231,7 +1245,9 @@ impl DbConfig {
                 self.writecf.build_opt(
                     cache,
                     region_info_accessor,
-                    write_compaction_filter_factory,
+                    region_id,
+                    suffix_id,
+                    tablet_factory,
                 ),
             ),
             // TODO: remove CF_RAFT.
@@ -4526,7 +4542,9 @@ mod tests {
                 &cfg.storage.block_cache.build_shared_cache(),
                 None,
                 cfg.storage.api_version(),
-                WriteCompactionFilterFactory::new(0, 0, None),
+                0,
+                0,
+                None,
             ),
             true,
             None,

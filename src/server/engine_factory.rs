@@ -19,10 +19,7 @@ use raftstore::RegionInfoAccessor;
 use tikv_util::worker::Scheduler;
 
 use super::engine_factory_v2::KvEngineFactoryV2;
-use crate::{
-    config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR},
-    server::gc_worker::WriteCompactionFilterFactory,
-};
+use crate::config::{DbConfig, TikvConfig, DEFAULT_ROCKSDB_SUB_DIR};
 
 struct FactoryInner {
     env: Arc<Env>,
@@ -137,7 +134,7 @@ impl KvEngineFactory {
         tablet_path: &Path,
         region_id: u64,
         suffix: u64,
-        write_compaction_filter_factory: WriteCompactionFilterFactory,
+        tablet_factory: Option<KvEngineFactoryV2>,
     ) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
@@ -156,7 +153,9 @@ impl KvEngineFactory {
             &self.inner.block_cache,
             self.inner.region_info_accessor.as_ref(),
             self.inner.api_version,
-            write_compaction_filter_factory,
+            region_id,
+            suffix,
+            tablet_factory,
         );
 
         let kv_engine = engine_rocks::util::new_engine_opt(
@@ -228,12 +227,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(
-            &root_path,
-            0,
-            0,
-            WriteCompactionFilterFactory::new(0, 0, None),
-        )?;
+        let tablet = self.create_tablet(&root_path, 0, 0, None)?;
         let mut root_db = self.inner.root_db.lock().unwrap();
         root_db.replace(tablet.clone());
         Ok(tablet)

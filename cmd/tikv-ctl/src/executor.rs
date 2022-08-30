@@ -28,10 +28,7 @@ use security::SecurityManager;
 use serde_json::json;
 use tikv::{
     config::{ConfigController, TikvConfig},
-    server::{
-        debug::{BottommostLevelCompaction, Debugger, RegionInfo},
-        gc_worker::WriteCompactionFilterFactory,
-    },
+    server::debug::{BottommostLevelCompaction, Debugger, RegionInfo},
 };
 use tikv_util::escape;
 
@@ -78,7 +75,9 @@ pub fn new_debug_executor(
         None,
         cfg.storage.api_version(),
         // FIXME when tikv-ctl multi-rocksdb support is needed
-        WriteCompactionFilterFactory::new(0, 0, None),
+        0,
+        0,
+        None,
     );
     let kv_path = PathBuf::from(kv_path).canonicalize().unwrap();
     let kv_path = kv_path.to_str().unwrap();
