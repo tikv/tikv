@@ -31,6 +31,7 @@ use crate::store::{
     peer::{
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        RecoveryLeaderWaitApplySyncer, RecoveryFollowerWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -454,6 +455,8 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    RecoveryLeaderWaitApply(RecoveryLeaderWaitApplySyncer),
+    RecoveryFollowerWaitApply(RecoveryFollowerWaitApplySyncer),
 }
 
 /// Message that will be sent to a peer.
