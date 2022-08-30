@@ -476,6 +476,10 @@ where
             *snap_state = SnapState::Relax;
         }
 
+        if SnapState::Relax != *snap_state {
+            panic!("{} unexpected state: {:?}", self.tag, *snap_state);
+        }
+
         if *tried_cnt >= MAX_SNAP_TRY_CNT {
             let cnt = *tried_cnt;
             *tried_cnt = 0;
@@ -512,16 +516,11 @@ where
             .find(|p| p.id == to)
             .map(|p| p.store_id)
             .unwrap_or(0);
+        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, store_id);
 
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(GenSnapTask::new(
-            self.region.get_id(),
-            index,
-            canceled,
-            sender,
-            store_id,
-        ));
+        *gen_snap_task = Some(task);
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
