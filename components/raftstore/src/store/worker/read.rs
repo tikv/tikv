@@ -18,7 +18,7 @@ use kvproto::{
     errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response},
 };
 use pd_client::BucketMeta;
 use tikv_util::{
@@ -472,9 +472,8 @@ impl Progress {
 /// #[RaftstoreCommon]: LocalReader is an entry point where local read requests are dipatch to the
 /// relevant regions by LocalReader so that these requests can be handled by the
 /// relevant ReadDelegate respectively.
-pub struct LocalReaderCore<C, E, D, S>
+pub struct LocalReaderCore<E, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<E, Executor = D>,
@@ -485,29 +484,21 @@ where
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
-    // A channel to raftstore.
-    router: C,
 }
 
-impl<C, E, D, S> LocalReaderCore<C, E, D, S>
+impl<E, D, S> LocalReaderCore<E, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D>,
 {
-    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
+    pub fn new(kv_engine: E, store_meta: S) -> Self {
         LocalReaderCore {
             store_meta,
             kv_engine,
-            router,
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
-    }
-
-    pub fn router(&self) -> &C {
-        &self.router
     }
 
     // Ideally `get_delegate` should return `Option<&ReadDelegate>`, but if so the
@@ -610,9 +601,8 @@ where
     }
 }
 
-impl<C, E, D, S> Clone for LocalReaderCore<C, E, D, S>
+impl<E, D, S> Clone for LocalReaderCore<E, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E> + Clone,
     E: KvEngine,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<E, Executor = D>,
@@ -621,7 +611,6 @@ where
         LocalReaderCore {
             store_meta: self.store_meta.clone(),
             kv_engine: self.kv_engine.clone(),
-            router: self.router.clone(),
             store_id: self.store_id.clone(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -635,9 +624,12 @@ where
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<E, Executor = D>,
 {
-    local_reader: LocalReaderCore<C, E, D, S>,
+    local_reader: LocalReaderCore<E, D, S>,
     snap_cache: Box<Option<Arc<E::Snapshot>>>,
     cache_read_id: ThreadReadId,
+
+    // A channel to raftstore.
+    router: C,
 }
 
 impl<C, E, D, S> LocalReader<C, E, D, S>
@@ -650,9 +642,10 @@ where
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
-            local_reader: LocalReaderCore::new(kv_engine, store_meta, router),
+            local_reader: LocalReaderCore::new(kv_engine, store_meta),
             snap_cache: Box::new(None),
             cache_read_id,
+            router,
         }
     }
 
@@ -667,7 +660,7 @@ where
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        match ProposalRouter::send(&self.local_reader.router, cmd) {
+        match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
@@ -714,15 +707,13 @@ where
                         response.unwrap()
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
-                    RequestPolicy::StaleRead => {
-                        match self.stale_read(&req, &mut delegate) {
-                            Ok(response) => response,
-                            Err(response) => {
-                                cb.set_result(response);
-                                return;
-                            }
+                    RequestPolicy::StaleRead => match self.stale_read(&req, &mut delegate) {
+                        Ok(response) => response,
+                        Err(response) => {
+                            cb.set_result(response);
+                            return;
                         }
-                    }
+                    },
                     _ => unreachable!(),
                 };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
@@ -778,7 +769,7 @@ where
         let response = self.execute_read(delegate, req, &region, read_id);
 
         // Try renew lease in advance
-        delegate.maybe_renew_lease_advance(self.local_reader.router(), snapshot_ts);
+        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
         Some(response)
     }
 
@@ -892,6 +883,7 @@ where
             local_reader: self.local_reader.clone(),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
+            router: self.router.clone(),
         }
     }
 }

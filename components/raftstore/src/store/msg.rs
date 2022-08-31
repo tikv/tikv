@@ -13,13 +13,12 @@ use kvproto::{
     metapb,
     metapb::RegionEpoch,
     pdpb::{self, CheckPolicy},
-    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response},
+    raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
     replication_modepb::ReplicationStatus,
 };
 #[cfg(any(test, feature = "testexport"))]
 use pd_client::BucketMeta;
-use protobuf::RepeatedField;
 use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};

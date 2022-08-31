@@ -13,7 +13,7 @@ use crate::{
     store::{
         fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
-        CachedReadDelegate, Callback, CasualMessage, LocalReaderCore, LocalReader, PeerMsg,
+        CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg,
         RaftCmdExtraOpts, RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
