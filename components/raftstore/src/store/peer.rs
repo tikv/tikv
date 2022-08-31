@@ -4453,7 +4453,8 @@ where
         } else {
             let store = self.get_store();
 
-            let mut high = store.commit_index();
+            // Note the `high` index should be a VALID value.
+            let mut high = store.last_index() + 1;
             if let Some(first_index) = store.entry_cache_first_index() {
                 // Already filled.
                 if first_index <= min_matched + 1 {

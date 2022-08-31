@@ -1722,6 +1722,7 @@ where
                                 "region_id" => self.region_id(),
                                 "peer_id" => self.fsm.peer_id(),
                                 "high" => high,
+                                "entries_last_index" => entries.last().map(|e|e.get_index()).unwrap_or(0),
                             );
                             self.fsm.peer.mut_store().fill_entry_cache(entries);
                         }

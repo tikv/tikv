@@ -23,7 +23,7 @@ use kvproto::{
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
-use tikv_util::{box_err, debug, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, debug, info, error, time::Instant, warn, worker::Scheduler};
 
 use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
@@ -161,6 +161,15 @@ impl EntryCache {
                 if first_index != entry_last_index + 1 {
                     is_valid = false;
                 }
+            } else {
+                info!(
+                    "(this_pr) appendleft when cache is empty";
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                    "entry_last_index" => entry_last_index,
+                    "persisted" => self.persisted,
+                );
+                assert!(entry_last_index >= self.persisted);
             }
 
             // Append the entries to the left and update used memory size.
@@ -182,10 +191,20 @@ impl EntryCache {
                     "entries_len" => entries.len(),
                     "region_id" => region_id,
                     "peer_id" => peer_id,
+                    "entry_last_index" => entry_last_index,
+                    "entry_first_index" => entries.first().unwrap().get_index(),
+                    "persisted" => self.persisted,
                 );
                 self.flush_mem_size_change(mem_size_change);
                 return true;
             }
+            error!(
+                "(this_pr) appendleft is invalid";
+                "region_id" => region_id,
+                "peer_id" => peer_id,
+                "entry_last_index" => entry_last_index,
+                "cache_first_index" => self.first_index().unwrap_or(0),
+            );
             return false;
         }
         // entries is empty.
