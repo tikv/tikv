@@ -17,6 +17,7 @@ use kvproto::{
     raft_cmdpb::*,
     raft_serverpb::{self, RaftMessage},
 };
+use protobuf::Message;
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
@@ -94,7 +95,10 @@ impl Transport for ChannelTransport {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
+                    let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
+                    snapshot_data.merge_from_bytes(data).unwrap();
+                    p.0.get_snapshot_for_receiving(&key, snapshot_data.take_meta())
+                        .unwrap()
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
