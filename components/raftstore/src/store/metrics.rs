@@ -777,4 +777,16 @@ lazy_static! {
         "Sum of applying sst.",
         &["type"]
     ).unwrap();
+
+    pub static ref FLASHBACK_CHECK: IntCounter =
+    register_int_counter!(
+        "flashback_check",
+        "Total number of flashback check."
+    ).unwrap();
+
+    pub static ref FORCE_LEADER_CHECK: IntCounter =
+    register_int_counter!(
+        "forced_leader_check",
+        "Total number of forced leader check."
+    ).unwrap();
 }

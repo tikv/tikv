@@ -17,15 +17,13 @@ use std::{
 use bitflags::bitflags;
 use bytes::Bytes;
 use collections::{HashMap, HashSet};
-use crossbeam::{
-    atomic::AtomicCell,
-    channel::{Sender, TrySendError},
-};
+use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
     Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use futures::channel::oneshot::Sender;
 use getset::Getters;
 use kvproto::{
     errorpb,
@@ -711,18 +709,24 @@ pub enum UnsafeRecoveryState {
 // it is checked every time this peer applies a new entry or a snapshot,
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
-#[derive(Clone, Debug)]
-pub struct FlashbackState(Sender<bool>);
+#[derive(Debug)]
+pub struct FlashbackState(Option<Sender<bool>>);
 
 impl FlashbackState {
     pub fn new(ch: Sender<bool>) -> Self {
-        FlashbackState(ch)
+        FlashbackState(Some(ch))
     }
 
-    pub fn finish_wait_apply(&self) {
-        match self.0.send(true) {
+    pub fn finish_wait_apply(&mut self) {
+        if self.0.is_none() {
+            return;
+        }
+        let ch = self.0.take().unwrap();
+        match ch.send(true) {
             Ok(_) => (),
-            Err(e) => error!("fail to notify flashback state"; "err" => ?e),
+            Err(e) => {
+                error!("Fail to notify flashback state"; "err" => ?e);
+            }
         }
     }
 }
@@ -2404,6 +2408,7 @@ where
 
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
+                        FLASHBACK_CHECK.inc();
                         self.maybe_finish_flashback_wait_apply();
                     }
                 }
@@ -3367,11 +3372,10 @@ where
             );
             None
         } else if self.force_leader.is_some() {
-            debug!(
-                "prevents renew lease while in force leader state";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
+            FORCE_LEADER_CHECK.inc();
+            None
+        } else if self.flashback_state.is_some() {
+            FLASHBACK_CHECK.inc();
             None
         } else {
             self.leader_lease.renew(ts);
@@ -4293,6 +4297,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
+            FORCE_LEADER_CHECK.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4968,17 +4973,22 @@ where
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
-        if let Some(flashback_state) = &self.flashback_state {
-            if self.raft_group.raft.raft_log.applied == self.get_store().last_index() {
-                info!(
-                    "flashback finish wait apply";
-                    "region_id" => self.region().get_id(),
-                    "peer_id" => self.peer_id(),
-                    "last_index" => self.get_store().last_index(),
-                    "applied_index" =>  self.raft_group.raft.raft_log.applied,
-                );
-                flashback_state.finish_wait_apply();
-            }
+        let mut finished = false;
+        if self.flashback_state.is_some()
+            && self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index()
+        {
+            info!(
+                "flashback finish wait apply";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_index" => self.get_store().last_index(),
+                "applied_index" =>  self.raft_group.raft.raft_log.applied,
+            );
+            finished = true;
+        }
+
+        if finished {
+            self.flashback_state.as_mut().unwrap().finish_wait_apply();
         }
     }
 }

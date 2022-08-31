@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
-use crossbeam::channel::Sender;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use futures::channel::oneshot::Sender;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},

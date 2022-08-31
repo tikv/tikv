@@ -10,7 +10,7 @@ use std::{
 };
 
 use collections::{HashMap, HashSet};
-use crossbeam::channel::{Receiver, TrySendError};
+use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
@@ -19,7 +19,7 @@ use engine_traits::{
     WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
-use futures::executor::block_on;
+use futures::{self, channel::oneshot, executor::block_on};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context},
@@ -1411,17 +1411,18 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) -> Receiver<bool> {
-        use crossbeam::channel::bounded;
-
+    pub async fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
-        let (tx, rx) = bounded(1);
+        let (tx, rx) = oneshot::channel();
 
         router
             .significant_send(region_id, SignificantMsg::PrepareFlashback(tx))
             .unwrap();
 
-        rx
+        let prepared = rx.await.unwrap();
+        if !prepared {
+            panic!("prepare flashback failed");
+        }
     }
 
     pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {

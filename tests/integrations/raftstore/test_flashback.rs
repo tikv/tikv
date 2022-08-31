@@ -2,143 +2,64 @@
 
 use std::time::Duration;
 
-use engine_traits::CF_DEFAULT;
+use futures::executor::block_on;
+use kvproto::metapb;
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
 #[test]
-fn test_flahsback_for_parameters() {
+fn test_flahsback_for_applied_index() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-
     cluster.run();
-    cluster.must_put(b"k1", b"v1");
 
+    // write for cluster.
+    let value = vec![1_u8; 8096];
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+
+    // prepare for flashback
     let region = cluster.get_region(b"k1");
-    cluster.call_prepare_flashback(region.get_id(), 1);
-    sleep_ms(100);
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
 
-    assert!(
-        cluster.store_metas[&1]
-            .lock()
-            .unwrap()
-            .readers
-            .get(&region.get_id())
-            .unwrap()
-            .flashback_pending_ignore
-    );
+    let last_index = cluster
+        .raft_local_state(region.get_id(), 1)
+        .get_last_index();
+    let appied_index = cluster.apply_state(region.get_id(), 1).get_applied_index();
 
-    cluster.call_finish_flashback(region.get_id(), 1);
-    sleep_ms(100);
-
-    assert!(
-        !cluster.store_metas[&1]
-            .lock()
-            .unwrap()
-            .readers
-            .get(&region.get_id())
-            .unwrap()
-            .flashback_pending_ignore
-    );
-}
-
-#[test]
-fn test_flahsback_for_write() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
-
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    assert!(!resp.get_header().has_error());
-
-    let mut region = cluster.get_region(b"k1");
-    cluster.call_prepare_flashback(region.get_id(), 1);
-    sleep_ms(1000);
-
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    println!("{}", resp.get_header().get_error().get_message());
-    assert!(resp.get_header().has_error());
-
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![new_put_cmd(b"k1", b"v1")],
-        false,
-    );
-    req.mut_header().set_peer(new_peer(1, 1));
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
-    assert!(!resp.get_header().has_error());
-
-    cluster.call_finish_flashback(region.get_id(), 1);
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    assert!(!resp.get_header().has_error());
-}
-
-#[test]
-fn test_flahsback_for_read() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
-
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    assert!(!resp.get_header().has_error());
-
-    let reqs = vec![new_get_cf_cmd(CF_DEFAULT, b"k1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    assert!(!resp.get_header().has_error());
-
-    let mut region = cluster.get_region(b"k1");
-    cluster.call_prepare_flashback(region.get_id(), 1);
-    sleep_ms(1000);
-
-    let reqs = vec![new_get_cf_cmd(CF_DEFAULT, b"k1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    println!("{}", resp.get_header().get_error().get_message());
-    assert!(resp.get_header().has_error());
-
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![new_get_cf_cmd(CF_DEFAULT, b"k1")],
-        false,
-    );
-    req.mut_header().set_peer(new_peer(1, 1));
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
-    assert!(!resp.get_header().has_error());
-
-    cluster.call_finish_flashback(region.get_id(), 1);
-    let reqs = vec![new_get_cf_cmd(CF_DEFAULT, b"k1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    assert!(!resp.get_header().has_error());
+    assert_eq!(last_index, appied_index);
 }
 
 #[test]
 fn test_flashback_for_schedule() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
     cluster.run();
 
-    // transfer leader to (2, 2) first to make address resolve happen early.
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
+    // prepare for flashback
     let region = cluster.get_region(b"k1");
-    cluster.call_prepare_flashback(region.get_id(), 1);
-    sleep_ms(1000);
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
 
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
-    println!("{}", resp.get_header().get_error().get_message());
-    assert!(resp.get_header().has_error());
+    // verify the schedule is unabled.
+    let mut region = cluster.get_region(b"k3");
+    let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
+    let mut transfer_leader =
+        new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
+    transfer_leader.mut_header().set_peer(new_peer(1, 1));
+    let resp = cluster
+        .call_command_on_leader(transfer_leader, Duration::from_secs(3))
+        .unwrap();
+    let e = resp.get_header().get_error();
+    assert_eq!(
+        e.get_recovery_in_progress(),
+        &kvproto::errorpb::RecoveryInProgress {
+            region_id: region.get_id(),
+            ..Default::default()
+        }
+    );
 
+    // verify the schedule can be executed if add flashback flag in request's
+    // header.
     let mut region = cluster.get_region(b"k3");
     let admin_req = new_transfer_leader_cmd(new_peer(2, 2));
     let mut transfer_leader =
@@ -158,13 +79,136 @@ fn test_flashback_for_schedule() {
 }
 
 #[test]
-fn test_flahsback_for_status_cmd_as_region_detail() {
+fn test_flahsback_for_write() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
     cluster.run();
 
-    cluster.call_prepare_flashback(1, 1);
-    sleep_ms(1000);
+    // write for cluster
+    let value = vec![1_u8; 8096];
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+
+    // prepare for flashback
+    let region = cluster.get_region(b"k1");
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+
+    // write will be blocked
+    let value = vec![1_u8; 8096];
+    must_get_error_recovery_in_progress(&mut cluster, &region, new_put_cmd(b"k1", &value));
+
+    must_cmd_add_flashback_flag(
+        &mut cluster,
+        &mut region.clone(),
+        new_put_cmd(b"k1", &value),
+    );
+
+    cluster.call_finish_flashback(region.get_id(), 1);
+
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+}
+
+#[test]
+fn test_flahsback_for_read() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    // write for cluster
+    let value = vec![1_u8; 8096];
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+    // get for cluster
+    multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
+
+    // prepare for flashback
+    let region = cluster.get_region(b"k1");
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+
+    // read will be blocked
+    must_get_error_recovery_in_progress(
+        &mut cluster,
+        &region.clone(),
+        new_get_cf_cmd("write", b"k1"),
+    );
+    // read index will be blocked
+    must_get_error_recovery_in_progress(&mut cluster, &region, new_read_index_cmd());
+
+    // verify the read can be executed if add flashback flag in request's
+    // header.
+    must_cmd_add_flashback_flag(
+        &mut cluster,
+        &mut region.clone(),
+        new_get_cf_cmd("write", b"k1"),
+    );
+
+    cluster.call_finish_flashback(region.get_id(), 1);
+
+    multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
+}
+
+// LocalReader will try to renew lease in advance,
+// but when enable flashback, will make lease at None and prevent renew lease,
+// so the region should go to hibernate.
+#[test]
+fn test_flahsback_for_local_read() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), None);
+    cluster.run();
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    // write for cluster
+    let value = vec![1_u8; 8096];
+    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+
+    let mut region = cluster.get_region(b"k1");
+    // prepare for flashback
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+
+    // Force `peer` to become leader. will renew lease.
+    let node_id = 2;
+    let store_id = 2;
+    let peer = new_peer(store_id, node_id);
+
+    let admin_req = new_transfer_leader_cmd(peer);
+    let mut transfer_leader =
+        new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
+    transfer_leader.mut_header().set_peer(new_peer(1, 1));
+    transfer_leader
+        .mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster
+        .call_command_on_leader(transfer_leader, Duration::from_secs(5))
+        .unwrap();
+    assert!(!resp.get_header().has_error());
+
+    // wait for transfer leader to complete, and will renew no lease.
+    sleep_ms(100);
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector));
+
+    // verify the read can be executed if add flashback flag in request's
+    // header.
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![new_get_cf_cmd("write", b"k1")],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    // where get the EpochNotMatch error.
+    assert!(resp.get_header().has_error());
+}
+
+#[test]
+fn test_flahsback_for_status_cmd_as_region_detail() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.run();
+
+    let region = cluster.get_region(b"k1");
+    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
 
     let leader = cluster.leader_of_region(1).unwrap();
     let region_detail = cluster.region_detail(1, 1);
@@ -182,22 +226,58 @@ fn test_flahsback_for_status_cmd_as_region_detail() {
     assert_eq!(region_detail.get_leader(), &leader);
 }
 
-#[test]
-fn test_flahsback_for_applied_index_with_last_index() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
+fn multi_do_cmd<T: Simulator>(cluster: &mut Cluster<T>, cmd: kvproto::raft_cmdpb::Request) {
+    for _ in 0..100 {
+        let mut reqs = vec![];
+        for _ in 0..100 {
+            reqs.push(cmd.clone());
+        }
+        cluster.batch_put(b"k1", reqs).unwrap();
+    }
+}
 
-    let reqs = vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v1")];
-    let resp = cluster.request(b"k1", reqs, false, Duration::from_secs(5));
+fn must_cmd_add_flashback_flag<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &mut metapb::Region,
+    cmd: kvproto::raft_cmdpb::Request,
+) {
+    // verify the read can be executed if add flashback flag in request's
+    // header.
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![cmd],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
+    req.mut_header()
+        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     assert!(!resp.get_header().has_error());
+}
 
-    let region = cluster.get_region(b"k1");
-    cluster.call_prepare_flashback(region.get_id(), 1);
-    sleep_ms(1000);
-
-    let last_index = cluster.raft_local_state(1, 1).get_last_index();
-    let appied_index = cluster.apply_state(1, 1).get_applied_index();
-
-    assert_eq!(last_index, appied_index);
+fn must_get_error_recovery_in_progress<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    region: &metapb::Region,
+    cmd: kvproto::raft_cmdpb::Request,
+) {
+    for _ in 0..100 {
+        let mut reqs = vec![];
+        for _ in 0..100 {
+            reqs.push(cmd.clone());
+        }
+        match cluster.batch_put(b"k1", reqs) {
+            Ok(_) => {}
+            Err(e) => {
+                assert_eq!(
+                    e.get_recovery_in_progress(),
+                    &kvproto::errorpb::RecoveryInProgress {
+                        region_id: region.get_id(),
+                        ..Default::default()
+                    }
+                );
+            }
+        }
+    }
 }

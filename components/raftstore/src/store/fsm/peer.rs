@@ -18,10 +18,10 @@ use std::{
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use futures::channel::oneshot::Sender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
@@ -868,6 +868,7 @@ where
             return;
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
+            FORCE_LEADER_CHECK.inc();
             // For regions that lose quorum (or regions have force leader), whatever has
             // been proposed will be committed. Based on that fact, we simply use "last
             // index" here to avoid implementing another "wait commit" process.
@@ -923,26 +924,12 @@ where
     // to be considered, we add a flag in readers to ignore local read.
     fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         if self.fsm.peer.flashback_state.is_some() {
-            warn!(
-                "can not prepare the flashback, another flashback is executing in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
+            FLASHBACK_CHECK.inc();
             ch.send(false).unwrap();
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
-
-        // mark regions's local reader as removed from the flashback state.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        info!(
-            "mark regions's reader as removing from the flashback state";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-        );
-        if let Some(d) = meta.readers.get_mut(&self.fsm.region_id()) {
-            d.mark_flashback_pending_ignore();
-        }
+        self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
     fn on_finish_flashback(&mut self) {
@@ -952,17 +939,6 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
-
-        // recover regions's local reader from the flashback state.
-        let mut meta = self.ctx.store_meta.lock().unwrap();
-        info!(
-            "mark regions' reader as recovering from the flashback state";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-        );
-        if let Some(d) = meta.readers.get_mut(&self.fsm.region_id()) {
-            d.mark_flashback_pending_recover();
-        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -2202,6 +2178,7 @@ where
         }
         // TODO: combine recovery state and flashback state as a wait apply queue.
         if self.fsm.peer.flashback_state.is_some() {
+            FLASHBACK_CHECK.inc();
             self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
@@ -4768,16 +4745,10 @@ where
         // When in the flashback state, we should not allow any other request to be
         // proposed.
         if self.fsm.peer.flashback_state.is_some() {
-            info!(
-                "cannot propose any other request when in flashback state";
-                "region_id" => region_id,
-                "peer_id" => self.fsm.peer.peer_id(),
-            );
+            FLASHBACK_CHECK.inc();
             let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
             if !flags.contains(WriteBatchFlags::FLASHBACK) {
-                return Err(box_err!(
-                    "cannot propose non-flashback request when in flashback state"
-                ));
+                return Err(Error::FlashbackInProgress(self.region_id()));
             }
         }
 
@@ -4786,6 +4757,7 @@ where
         let request = msg.get_requests();
 
         if self.fsm.peer.force_leader.is_some() {
+            FORCE_LEADER_CHECK.inc();
             // in force leader state, forbid requests to make the recovery progress less
             // error-prone
             if !(msg.has_admin_request()

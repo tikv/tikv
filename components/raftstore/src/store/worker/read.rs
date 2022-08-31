@@ -167,7 +167,6 @@ pub struct ReadDelegate {
     pub txn_ext: Arc<TxnExt>,
     pub read_progress: Arc<RegionReadProgress>,
     pub pending_remove: bool,
-    pub flashback_pending_ignore: bool,
 
     // `track_ver` used to keep the local `ReadDelegate` in `LocalReader`
     // up-to-date with the global `ReadDelegate` stored at `StoreMeta`
@@ -354,7 +353,6 @@ impl ReadDelegate {
             txn_ext: peer.txn_ext.clone(),
             read_progress: peer.read_progress.clone(),
             pending_remove: false,
-            flashback_pending_ignore: false,
             bucket_meta: peer.region_buckets.as_ref().map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
@@ -367,14 +365,6 @@ impl ReadDelegate {
     pub fn mark_pending_remove(&mut self) {
         self.pending_remove = true;
         self.track_ver.inc();
-    }
-
-    pub fn mark_flashback_pending_ignore(&mut self) {
-        self.flashback_pending_ignore = true;
-    }
-
-    pub fn mark_flashback_pending_recover(&mut self) {
-        self.flashback_pending_ignore = false;
     }
 
     pub fn update(&mut self, progress: Progress) {
@@ -490,7 +480,6 @@ impl ReadDelegate {
             txn_ext: Default::default(),
             read_progress,
             pending_remove: false,
-            flashback_pending_ignore: false,
             track_ver: TrackVer::new(),
             bucket_meta: None,
         }
@@ -680,7 +669,7 @@ where
         };
         // Return `None` if the read delegate is pending remove
         // Or when enable flashback need to ignore local read
-        rd.filter(|r| !r.pending_remove && !r.flashback_pending_ignore)
+        rd.filter(|r| !r.pending_remove)
     }
 
     pub fn pre_propose_raft_command(
@@ -1123,7 +1112,6 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: read_progress.clone(),
                 pending_remove: false,
-                flashback_pending_ignore: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };
@@ -1415,7 +1403,6 @@ mod tests {
                 track_ver: TrackVer::new(),
                 read_progress: Arc::new(RegionReadProgress::new(&region, 0, 0, "".to_owned())),
                 pending_remove: false,
-                flashback_pending_ignore: false,
                 bucket_meta: None,
             };
             meta.readers.insert(1, read_delegate);
@@ -1552,7 +1539,6 @@ mod tests {
                 txn_ext: Arc::new(TxnExt::default()),
                 read_progress: Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned())),
                 pending_remove: false,
-                flashback_pending_ignore: false,
                 track_ver: TrackVer::new(),
                 bucket_meta: None,
             };
