@@ -90,7 +90,12 @@ pub fn commit<S: Snapshot>(
     };
     if let LockType::Put | LockType::Delete = lock.lock_type {
         let value = if lock.lock_type == LockType::Put && lock.short_value.is_none() {
-            reader.snapshot().get(&key).unwrap().unwrap()
+            let default_key = key.clone().append_ts(lock.ts);
+            reader
+                .snapshot()
+                .get(&default_key)
+                .unwrap()
+                .unwrap_or(vec![])
         } else {
             lock.short_value.clone().unwrap_or(vec![])
         };
