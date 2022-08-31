@@ -201,14 +201,24 @@ where
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
+        let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.into_inner())
                 .unwrap();
-            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
+        if ctx.flashback {
+            let mut data = [0u8; 8];
+            (&mut data[..])
+                .encode_u64(ctx.start_ts.into_inner())
+                .unwrap();
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
