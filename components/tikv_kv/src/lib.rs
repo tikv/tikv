@@ -256,7 +256,7 @@ pub struct SnapContext<'a> {
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
     // Marks that this read is a FlashbackToVersionReadPhase.
-    pub flashback: bool,
+    pub is_for_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.

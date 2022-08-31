@@ -210,7 +210,7 @@ where
             flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
-        if ctx.flashback {
+        if ctx.is_for_flashback {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.into_inner())
@@ -266,7 +266,7 @@ where
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if txn_extra.flashback {
+        if txn_extra.is_for_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
