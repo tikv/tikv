@@ -72,9 +72,9 @@ impl ReqBatcher {
         self.raw_get_ids.push(id);
     }
 
-    pub fn maybe_commit<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+    pub fn maybe_commit<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
         &mut self,
-        storage: &Storage<E, L, F, Tp>,
+        storage: &Storage<E, L, F, TP>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if self.gets.len() >= self.batch_size {
@@ -91,9 +91,9 @@ impl ReqBatcher {
         }
     }
 
-    pub fn commit<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+    pub fn commit<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
         self,
-        storage: &Storage<E, L, F, Tp>,
+        storage: &Storage<E, L, F, TP>,
         tx: &Sender<MeasuredSingleResponse>,
     ) {
         if !self.gets.is_empty() {
@@ -226,9 +226,9 @@ fn future_batch_get_command<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
     trackers: Vec<TrackerToken>,
@@ -283,9 +283,9 @@ fn future_batch_raw_get_command<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,
     tx: Sender<MeasuredSingleResponse>,

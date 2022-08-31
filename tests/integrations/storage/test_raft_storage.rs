@@ -276,7 +276,7 @@ fn check_data<E: Engine, F: KvFormat>(
 fn test_auto_gc() {
     let count = 3;
     let (mut cluster, first_leader_storage, ctx) =
-        new_raft_storage_with_store_count::<ApiV1>(1, "");
+        new_raft_storage_with_store_count::<ApiV1>(count, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish

@@ -156,7 +156,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// that multiple versions can be saved at the same time. Raw operations use raw
 /// keys, which are saved directly to the engine without memcomparable- encoding
 /// and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> {
+pub struct Storage<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -179,7 +179,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider 
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<Tp>>,
+    causal_ts_provider: Option<Arc<TP>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -190,8 +190,8 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider 
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1, causal_ts::tests::TestProvider>;
 
-impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Clone
-    for Storage<E, L, F, Tp>
+impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Clone
+    for Storage<E, L, F, TP>
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -217,8 +217,8 @@ impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Clo
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Drop
-    for Storage<E, L, F, Tp>
+impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Drop
+    for Storage<E, L, F, TP>
 {
     #[inline]
     fn drop(&mut self) {
@@ -251,7 +251,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Storage<E, L, F, Tp> {
+impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Storage<E, L, F, TP> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -265,7 +265,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Sto
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<Tp>>,
+        causal_ts_provider: Option<Arc<TP>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1850,7 +1850,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Sto
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<Tp>>) -> Result<Option<TimeStamp>> {
+    fn get_causal_ts(ts_provider: &Option<Arc<TP>>) -> Result<Option<TimeStamp>> {
         if let Some(p) = ts_provider {
             match p.get_ts() {
                 Ok(ts) => Ok(Some(ts)),
@@ -1862,7 +1862,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Sto
     }
 
     async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<Tp>>,
+        ts_provider: &Option<Arc<TP>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
         let ts = Self::get_causal_ts(ts_provider)?;
@@ -3304,9 +3304,9 @@ pub mod test_util {
         E: Engine,
         L: LockManager,
         F: KvFormat,
-        Tp: CausalTsProvider + 'static,
+        TP: CausalTsProvider + 'static,
     >(
-        storage: &Storage<E, L, F, Tp>,
+        storage: &Storage<E, L, F, TP>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -5498,9 +5498,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_put<F: KvFormat, Tp: CausalTsProvider>(
+    fn run_raw_batch_put<F: KvFormat, TP: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F, Tp>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, TP>,
         ctx: Context,
         kvpairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -5699,9 +5699,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_delete<F: KvFormat, Tp: CausalTsProvider>(
+    fn run_raw_batch_delete<F: KvFormat, TP: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F, Tp>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, TP>,
         ctx: Context,
         keys: Vec<Vec<u8>>,
         cb: Callback<()>,

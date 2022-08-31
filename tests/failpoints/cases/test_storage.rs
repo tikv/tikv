@@ -1179,6 +1179,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag.load(Ordering::Acquire));
     assert!(!acquire_flag_fail.load(Ordering::Acquire));
     acquire_flag.store(false, Ordering::Release);
@@ -1194,6 +1195,7 @@ fn test_atomic_cas_lock_by_latch() {
             cb,
         )
         .unwrap();
+    thread::sleep(Duration::from_secs(1));
     assert!(acquire_flag_fail.load(Ordering::Acquire));
     assert!(!acquire_flag.load(Ordering::Acquire));
     fail::remove(pending_cas_fp);

@@ -29,25 +29,25 @@ pub struct RawStorageImpl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 > {
     context: Context,
-    storage: &'a Storage<E, L, F, Tp>,
+    storage: &'a Storage<E, L, F, TP>,
 }
 
-impl<'a, E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>
-    RawStorageImpl<'a, E, L, F, Tp>
+impl<'a, E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>
+    RawStorageImpl<'a, E, L, F, TP>
 {
     /// Constructs a new `RawStorageImpl` that wraps a given [`Context`] and
     /// [`Storage`].
-    pub fn new(context: Context, storage: &'a Storage<E, L, F, Tp>) -> Self {
+    pub fn new(context: Context, storage: &'a Storage<E, L, F, TP>) -> Self {
         RawStorageImpl { context, storage }
     }
 }
 
 #[async_trait(?Send)]
-impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> RawStorage
-    for RawStorageImpl<'_, E, L, F, Tp>
+impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> RawStorage
+    for RawStorageImpl<'_, E, L, F, TP>
 {
     async fn get(&self, key: Key) -> PluginResult<Option<Value>> {
         let ctx = self.context.clone();

@@ -75,13 +75,13 @@ pub struct Service<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 > {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
     // For handling KV requests.
-    storage: Storage<E, L, F, Tp>,
+    storage: Storage<E, L, F, TP>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
     // For handling corprocessor v2 requests.
@@ -108,8 +108,8 @@ impl<
     E: Engine + Clone,
     L: LockManager + Clone,
     F: KvFormat,
-    Tp: CausalTsProvider,
-> Clone for Service<T, E, L, F, Tp>
+    TP: CausalTsProvider,
+> Clone for Service<T, E, L, F, TP>
 {
     fn clone(&self) -> Self {
         Service {
@@ -134,13 +134,13 @@ impl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
-> Service<T, E, L, F, Tp>
+    TP: CausalTsProvider + 'static,
+> Service<T, E, L, F, TP>
 {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
-        storage: Storage<E, L, F, Tp>,
+        storage: Storage<E, L, F, TP>,
         gc_worker: GcWorker<E, T>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
@@ -246,8 +246,8 @@ impl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
-> Tikv for Service<T, E, L, F, Tp>
+    TP: CausalTsProvider + 'static,
+> Tikv for Service<T, E, L, F, TP>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
@@ -1264,10 +1264,10 @@ fn handle_batch_commands_request<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
     batcher: &mut Option<ReqBatcher>,
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     copr: &Endpoint<E>,
     copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
@@ -1449,8 +1449,8 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-fn future_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1498,8 +1498,8 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'st
     }
 }
 
-fn future_scan<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1546,8 +1546,8 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 's
     }
 }
 
-fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1597,8 +1597,8 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider
     }
 }
 
-fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1640,8 +1640,8 @@ async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1668,8 +1668,8 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvi
     }
 }
 
-fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawGetRequest,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {
     let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
@@ -1690,8 +1690,8 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider +
     }
 }
 
-fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
     let keys = req.take_keys().into();
@@ -1709,8 +1709,8 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProv
     }
 }
 
-fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1749,8 +1749,8 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider +
     }
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
@@ -1798,8 +1798,8 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProv
     }
 }
 
-fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1829,9 +1829,9 @@ fn future_raw_batch_delete<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
     let cf = req.take_cf();
@@ -1859,8 +1859,8 @@ fn future_raw_batch_delete<
     }
 }
 
-fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawScanRequest,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1890,8 +1890,8 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider 
     }
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
     let v = storage.raw_batch_scan(
@@ -1919,9 +1919,9 @@ fn future_raw_delete_range<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1952,9 +1952,9 @@ fn future_raw_get_key_ttl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     mut req: RawGetKeyTtlRequest,
 ) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
     let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
@@ -1979,9 +1979,9 @@ fn future_raw_compare_and_swap<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
     let (cb, f) = paired_future_callback();
@@ -2024,8 +2024,8 @@ fn future_raw_compare_and_swap<
     }
 }
 
-fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, Tp>,
+fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, TP>,
     mut req: RawChecksumRequest,
 ) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
     let f = storage.raw_checksum(
@@ -2065,10 +2065,10 @@ fn future_raw_coprocessor<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    Tp: CausalTsProvider + 'static,
+    TP: CausalTsProvider + 'static,
 >(
     copr_v2: &coprocessor_v2::Endpoint,
-    storage: &Storage<E, L, F, Tp>,
+    storage: &Storage<E, L, F, TP>,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = copr_v2.handle_request(storage, req);
@@ -2077,8 +2077,8 @@ fn future_raw_coprocessor<
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
-            storage: &Storage<E, L, F, Tp>,
+        fn $fn_name<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
+            storage: &Storage<E, L, F, TP>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude

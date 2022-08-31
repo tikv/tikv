@@ -96,18 +96,18 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
 ///
 /// Only used for test purpose.
 #[derive(Clone)]
-pub struct SyncTestStorage<E: Engine, F: KvFormat, Tp: CausalTsProvider + 'static> {
+pub struct SyncTestStorage<E: Engine, F: KvFormat, TP: CausalTsProvider + 'static> {
     gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager, F, Tp>,
+    store: Storage<E, DummyLockManager, F, TP>,
 }
 
 /// SyncTestStorage for Api V1
 /// To be convenience for test cases unrelated to RawKV.
 pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1, causal_ts::tests::TestProvider>;
 
-impl<E: Engine, F: KvFormat, Tp: CausalTsProvider> SyncTestStorage<E, F, Tp> {
+impl<E: Engine, F: KvFormat, TP: CausalTsProvider> SyncTestStorage<E, F, TP> {
     pub fn from_storage(
-        storage: Storage<E, DummyLockManager, F, Tp>,
+        storage: Storage<E, DummyLockManager, F, TP>,
         config: GcConfig,
     ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -134,7 +134,7 @@ impl<E: Engine, F: KvFormat, Tp: CausalTsProvider> SyncTestStorage<E, F, Tp> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F, Tp> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F, TP> {
         self.store.clone()
     }
 

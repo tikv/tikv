@@ -88,11 +88,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+    pub fn new<L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L, F, Tp>,
+        storage: Storage<E, L, F, TP>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,

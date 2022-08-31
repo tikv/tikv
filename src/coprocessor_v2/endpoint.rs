@@ -58,10 +58,10 @@ impl Endpoint {
         E: Engine,
         L: LockManager,
         F: KvFormat,
-        Tp: CausalTsProvider + 'static,
+        TP: CausalTsProvider + 'static,
     >(
         &self,
-        storage: &Storage<E, L, F, Tp>,
+        storage: &Storage<E, L, F, TP>,
         req: kvrpcpb::RawCoprocessorRequest,
     ) -> impl Future<Output = kvrpcpb::RawCoprocessorResponse> {
         let mut response = kvrpcpb::RawCoprocessorResponse::default();
@@ -82,10 +82,10 @@ impl Endpoint {
         E: Engine,
         L: LockManager,
         F: KvFormat,
-        Tp: CausalTsProvider + 'static,
+        TP: CausalTsProvider + 'static,
     >(
         &self,
-        storage: &Storage<E, L, F, Tp>,
+        storage: &Storage<E, L, F, TP>,
         mut req: kvrpcpb::RawCoprocessorRequest,
     ) -> Result<RawResponse, CoprocessorError> {
         let plugin_registry = self
