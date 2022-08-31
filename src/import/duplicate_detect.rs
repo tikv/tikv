@@ -233,6 +233,7 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use api_version::KvFormat;
+    use causal_ts::CausalTsProvider;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
     use txn_types::Mutation;
@@ -244,8 +245,8 @@ mod tests {
         Storage, TestStorageBuilderApiV1,
     };
 
-    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat>(
-        storage: &Storage<E, L, F>,
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Tp>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -276,8 +277,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager, F: KvFormat>(
-        storage: &Storage<E, L, F>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Tp>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -299,8 +300,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, F: KvFormat>(
-        storage: &Storage<E, L, F>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Tp>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {

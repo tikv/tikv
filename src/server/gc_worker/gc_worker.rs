@@ -1254,6 +1254,7 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
+    use causal_ts::CausalTsProvider;
     use engine_rocks::{util::get_cf_handle, RocksEngine, RocksSnapshot};
     use engine_traits::KvEngine;
     use futures::executor::block_on;
@@ -1396,8 +1397,8 @@ mod tests {
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in
     /// `expected_data` should be encoded form without ts.
-    fn check_data<E: Engine, F: KvFormat>(
-        storage: &Storage<E, DummyLockManager, F>,
+    fn check_data<E: Engine, F: KvFormat, Tp: CausalTsProvider>(
+        storage: &Storage<E, DummyLockManager, F, Tp>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = block_on(storage.scan(

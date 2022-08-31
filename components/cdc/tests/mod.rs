@@ -2,6 +2,7 @@
 
 use std::{sync::*, time::Duration};
 
+use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, CdcObserver, FeatureGate, MemoryQuota, Task};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;

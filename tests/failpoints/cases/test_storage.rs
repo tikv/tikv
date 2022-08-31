@@ -11,6 +11,7 @@ use std::{
 };
 
 use api_version::KvFormat;
+use causal_ts::tests::TestProvider;
 use collections::HashMap;
 use engine_traits::DummyFactory;
 use errors::{extract_key_error, extract_region_error};
@@ -632,7 +633,7 @@ fn expect_locked(err: tikv::storage::Error, key: &[u8], lock_ts: TimeStamp) {
 }
 
 fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
-    storage: &Storage<E, DummyLockManager, F>,
+    storage: &Storage<E, DummyLockManager, F, TestProvider>,
     ctx: Context,
     key: &[u8],
     value: &[u8],
@@ -971,7 +972,7 @@ fn test_async_apply_prewrite_fallback() {
 }
 
 fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
-    storage: &Storage<E, DummyLockManager, F>,
+    storage: &Storage<E, DummyLockManager, F, TestProvider>,
     ctx: Context,
     key: &[u8],
     value: &[u8],

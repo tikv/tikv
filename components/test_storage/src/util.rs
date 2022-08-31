@@ -30,7 +30,7 @@ pub fn new_raft_storage_with_store_count<F: KvFormat>(
     key: &str,
 ) -> (
     Cluster<ServerCluster>,
-    SyncTestStorage<SimulateEngine, F>,
+    SyncTestStorage<SimulateEngine, F, causal_ts::tests::TestProvider>,
     Context,
 ) {
     let (cluster, engine, ctx) = new_raft_engine(count, key);

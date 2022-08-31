@@ -17,7 +17,7 @@ use super::*;
 
 #[derive(Clone)]
 pub struct AssertionStorage<E: Engine, F: KvFormat> {
-    pub store: SyncTestStorage<E, F>,
+    pub store: SyncTestStorage<E, F, causal_ts::tests::TestProvider>,
     pub ctx: Context,
 }
 

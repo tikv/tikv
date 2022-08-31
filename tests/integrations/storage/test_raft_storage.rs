@@ -208,7 +208,7 @@ fn test_engine_leader_change_twice() {
 }
 
 fn write_test_data<E: Engine, F: KvFormat>(
-    storage: &SyncTestStorage<E, F>,
+    storage: &SyncTestStorage<E, F, causal_ts::tests::TestProvider>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
@@ -235,7 +235,7 @@ fn write_test_data<E: Engine, F: KvFormat>(
 
 fn check_data<E: Engine, F: KvFormat>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncTestStorage<E, F>>,
+    storages: &HashMap<u64, SyncTestStorage<E, F, causal_ts::tests::TestProvider>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
     expect_success: bool,
@@ -276,7 +276,7 @@ fn check_data<E: Engine, F: KvFormat>(
 fn test_auto_gc() {
     let count = 3;
     let (mut cluster, first_leader_storage, ctx) =
-        new_raft_storage_with_store_count::<ApiV1>(count, "");
+        new_raft_storage_with_store_count::<ApiV1>(1, "");
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Used to wait for all storage's GC to finish

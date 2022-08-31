@@ -119,9 +119,7 @@ use crate::{
         metrics::{CommandKind, *},
         mvcc::{MvccReader, PointGetterBuilder},
         txn::{
-            commands::{
-                get_causal_ts_from_provider, RawAtomicStore, RawCompareAndSwap, TypedCommand,
-            },
+            commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::Scheduler as TxnScheduler,
             Command,
@@ -158,7 +156,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// that multiple versions can be saved at the same time. Raw operations use raw
 /// keys, which are saved directly to the engine without memcomparable- encoding
 /// and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
+pub struct Storage<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -181,7 +179,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+    causal_ts_provider: Option<Arc<Tp>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -190,9 +188,11 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
 /// Storage for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
+pub type StorageApiV1<E, L> = Storage<E, L, ApiV1, causal_ts::tests::TestProvider>;
 
-impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
+impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Clone
+    for Storage<E, L, F, Tp>
+{
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -217,7 +217,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
+impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Drop
+    for Storage<E, L, F, Tp>
+{
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -249,7 +251,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
+impl<E: Engine, L: LockManager, F: KvFormat, Tp: CausalTsProvider + 'static> Storage<E, L, F, Tp> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -263,7 +265,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
+        causal_ts_provider: Option<Arc<Tp>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1840,11 +1842,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
+    fn get_causal_ts(ts_provider: &Option<Arc<Tp>>) -> Result<Option<TimeStamp>> {
+        if let Some(p) = ts_provider {
+            match p.get_ts() {
+                Ok(ts) => Ok(Some(ts)),
+                Err(e) => Err(box_err!("Fail to get ts: {}", e)),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<dyn CausalTsProvider>>,
+        ts_provider: &Option<Arc<Tp>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
-        let ts = get_causal_ts_from_provider(ts_provider)?;
+        let ts = Self::get_causal_ts(ts_provider)?;
         if let Some(ts) = ts {
             let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
             // lock with ts encoded key to avoid collision, ts is used to get min_ts in cdc.
@@ -1891,9 +1904,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts_from_provider(&provider);
+            let ts = Self::get_causal_ts(&provider);
             if let Err(e) = ts {
-                return callback(Err(Error::from(e)));
+                return callback(Err(e));
             }
             let command_duration = tikv_util::time::Instant::now();
             let raw_value = RawValue {
@@ -2000,9 +2013,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts_from_provider(&provider);
+            let ts = Self::get_causal_ts(&provider);
             if let Err(e) = ts {
-                return callback(Err(Error::from(e)));
+                return callback(Err(e));
             }
 
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, ts.unwrap());
@@ -2061,9 +2074,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts_from_provider(&provider);
+            let ts = Self::get_causal_ts(&provider);
             if let Err(e) = ts {
-                return callback(Err(Error::from(e)));
+                return callback(Err(e));
             }
             let m = Self::raw_delete_request_to_modify(cf, key, ts.unwrap());
             let mut batch = WriteData::from_modifies(vec![m]);
@@ -2166,9 +2179,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
-            let ts = get_causal_ts_from_provider(&provider);
+            let ts = Self::get_causal_ts(&provider);
             if let Err(e) = ts {
-                return callback(Err(Error::from(e)));
+                return callback(Err(e));
             }
             let ts = ts.unwrap();
             let modifies: Vec<Modify> = keys
@@ -2592,9 +2605,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         self.sched_raw_command(CMD, async move {
             // Raw atomic cmds have two locks, one is CM and the other is txn latch,
             // Now, cm lock key with ts encoded, so it will not really lock the key.
-            // TODO: Merge the two locks into one to simplify the process, same to other atomic cmd.
+            // TODO: Merge the two locks into one to simplify the process, same to other
+            // atomic cmd.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
+                return cb(Err(e));
+            }
+            let ts = Self::get_causal_ts(&provider);
+            if let Err(e) = ts {
                 return cb(Err(e));
             }
             // do not encode ts here as RawCompareAndSwap use key to gen lock.
@@ -2606,7 +2624,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 value,
                 ttl,
                 api_version,
-                provider,
+                ts.unwrap(),
                 ctx,
             );
             Self::sched_raw_atomic_command(
@@ -2647,9 +2665,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
+            let ts = Self::get_causal_ts(&provider);
+            if let Err(e) = ts {
+                return callback(Err(e));
+            }
             // donot encode ts here as RawAtomicStore use key to gen lock
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
-            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -2680,12 +2702,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             if let Err(e) = key_guard {
                 return callback(Err(e));
             }
+            let ts = Self::get_causal_ts(&provider);
+            if let Err(e) = ts {
+                return callback(Err(e));
+            }
             // donot encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
                 .collect();
-            let cmd = RawAtomicStore::new(cf, modifies, provider, ctx);
+            let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
             Self::sched_raw_atomic_command(
                 sched,
                 cmd,
@@ -3069,7 +3095,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, L, F>> {
+    pub fn build(self) -> Result<Storage<E, L, F, causal_ts::tests::TestProvider>> {
         let read_pool = build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -3095,11 +3121,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.resource_tag_factory,
             Arc::new(QuotaLimiter::default()),
             latest_feature_gate(),
-            ts_provider.map(|provider| provider as Arc<dyn CausalTsProvider>),
+            ts_provider,
         )
     }
 
-    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, F>> {
+    pub fn build_for_txn(
+        self,
+        txn_ext: Arc<TxnExt>,
+    ) -> Result<Storage<TxnTestEngine<E>, L, F, causal_ts::tests::TestProvider>> {
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -3262,8 +3291,13 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
-        storage: &Storage<E, L, F>,
+    pub fn delete_pessimistic_lock<
+        E: Engine,
+        L: LockManager,
+        F: KvFormat,
+        Tp: CausalTsProvider + 'static,
+    >(
+        storage: &Storage<E, L, F, Tp>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -5129,9 +5163,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_put<F: KvFormat>(
+    fn run_raw_batch_put<F: KvFormat, Tp: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, Tp>,
         ctx: Context,
         kvpairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -5330,9 +5364,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_delete<F: KvFormat>(
+    fn run_raw_batch_delete<F: KvFormat, Tp: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, Tp>,
         ctx: Context,
         keys: Vec<Vec<u8>>,
         cb: Callback<()>,

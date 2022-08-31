@@ -41,6 +41,7 @@ pub mod tests {
     use super::*;
 
     /// for TEST purpose.
+    #[derive(Clone)]
     pub struct TestProvider {
         ts: Arc<AtomicU64>,
     }

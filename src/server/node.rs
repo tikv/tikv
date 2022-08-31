@@ -48,7 +48,13 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
+pub fn create_raft_storage<
+    S,
+    EK,
+    R: FlowStatsReporter,
+    F: KvFormat,
+    Tp: CausalTsProvider + 'static,
+>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -60,8 +66,8 @@ pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<dyn CausalTsProvider>>,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
+    causal_ts_provider: Option<Arc<Tp>>,
+) -> Result<Storage<RaftKv<EK, S>, LockManager, F, Tp>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
