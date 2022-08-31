@@ -158,6 +158,12 @@ pub enum ErrorInner {
         existing_commit_ts: TimeStamp,
     },
 
+    #[error(
+        "Lock_only_if_exists of a pessimistic lock request is set to true, but return_value is not, start_ts:{}, key:{}",
+        .start_ts, log_wrappers::Value::key(.key)
+    )]
+    LockIfExistsFailed { start_ts: TimeStamp, key: Vec<u8> },
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -276,6 +282,12 @@ impl ErrorInner {
                 existing_start_ts: *existing_start_ts,
                 existing_commit_ts: *existing_commit_ts,
             }),
+            ErrorInner::LockIfExistsFailed { start_ts, key } => {
+                Some(ErrorInner::LockIfExistsFailed {
+                    start_ts: *start_ts,
+                    key: key.clone(),
+                })
+            }
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -375,6 +387,7 @@ impl ErrorCodeExt for Error {
             }
             ErrorInner::CommitTsTooLarge { .. } => error_code::storage::COMMIT_TS_TOO_LARGE,
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
+            ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }

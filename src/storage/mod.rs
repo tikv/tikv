@@ -696,6 +696,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         wait_wall_time_ms: duration_to_ms(wait_wall_time),
                         process_wall_time_ms: duration_to_ms(process_wall_time),
                     };
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.read_pool_schedule_wait_nanos =
+                            schedule_wait_time.as_nanos() as u64;
+                    });
                     Ok((
                         result?,
                         KvGetStatistics {
@@ -1041,6 +1045,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         stage_snap_recv_ts.saturating_duration_since(stage_begin_ts);
                     let process_wall_time =
                         stage_finished_ts.saturating_duration_since(stage_snap_recv_ts);
+                    with_tls_tracker(|tracker| {
+                        tracker.metrics.read_pool_schedule_wait_nanos =
+                            schedule_wait_time.as_nanos() as u64;
+                    });
                     let latency_stats = StageLatencyStats {
                         schedule_wait_time_ms: duration_to_ms(schedule_wait_time),
                         snapshot_wait_time_ms: duration_to_ms(snapshot_wait_time),
@@ -3112,6 +3120,7 @@ pub mod test_util {
             for_update_ts.next(),
             OldValues::default(),
             check_existence,
+            false,
             Context::default(),
         )
     }
@@ -3227,14 +3236,17 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*};
+    use kvproto::kvrpcpb::{
+        Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*,
+    };
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
-    use txn_types::{Mutation, PessimisticLock, WriteType};
+    use txn_types::{Mutation, PessimisticLock, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
+        txn::commands::FLASHBACK_BATCH_SIZE,
         *,
     };
     use crate::{
@@ -4396,6 +4408,329 @@ mod tests {
             block_on(storage.get(Context::default(), Key::from_raw(b"x"), ts(230, 0)))
                 .unwrap()
                 .0,
+        );
+    }
+
+    #[test]
+    fn test_flashback_to_version() {
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let writes = vec![
+            // (Mutation, StartTS, CommitTS)
+            (
+                Mutation::Put((Key::from_raw(b"k"), b"v@1".to_vec()), Assertion::None),
+                1,
+                2,
+            ),
+            (
+                Mutation::Put((Key::from_raw(b"k"), b"v@3".to_vec()), Assertion::None),
+                3,
+                4,
+            ),
+            (
+                Mutation::Put((Key::from_raw(b"k"), b"v@5".to_vec()), Assertion::None),
+                5,
+                6,
+            ),
+            (
+                Mutation::Put((Key::from_raw(b"k"), b"v@7".to_vec()), Assertion::None),
+                7,
+                8,
+            ),
+            (
+                Mutation::Delete(Key::from_raw(b"k"), Assertion::None),
+                9,
+                10,
+            ),
+            (
+                Mutation::Put((Key::from_raw(b"k"), b"v@11".to_vec()), Assertion::None),
+                11,
+                12,
+            ),
+            // Non-short value
+            (
+                Mutation::Put(
+                    (Key::from_raw(b"k"), vec![b'v'; SHORT_VALUE_MAX_LEN + 1]),
+                    Assertion::None,
+                ),
+                13,
+                14,
+            ),
+        ];
+        let (tx, rx) = channel();
+        // Prewrite and commit.
+        for write in writes.iter() {
+            let (key, value) = write.0.clone().into_key_value();
+            let start_ts = write.1.into();
+            let commit_ts = write.2.into();
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![write.0.clone()],
+                        key.clone().to_raw().unwrap(),
+                        start_ts,
+                    ),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![key.clone()],
+                        start_ts,
+                        commit_ts,
+                        Context::default(),
+                    ),
+                    expect_value_callback(tx.clone(), 1, TxnStatus::committed(commit_ts)),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            if let Mutation::Put(..) = write.0 {
+                expect_value(
+                    value.unwrap(),
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
+                        .unwrap()
+                        .0,
+                );
+            } else {
+                expect_none(
+                    block_on(storage.get(Context::default(), key, commit_ts))
+                        .unwrap()
+                        .0,
+                );
+            }
+        }
+        // Flashback.
+        for idx in (0..writes.len()).rev() {
+            let write = &writes[idx];
+            let key = write.0.key();
+            let start_ts = write.1.into();
+            let commit_ts = write.2.into();
+            storage
+                .sched_txn_command(
+                    commands::FlashbackToVersionReadPhase::new(
+                        start_ts,
+                        None,
+                        Some(key.clone()),
+                        Some(key.clone()),
+                        Context::default(),
+                    ),
+                    expect_ok_callback(tx.clone(), 2),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            if idx == 0 || matches!(writes[idx - 1].0, Mutation::Delete(..)) {
+                expect_none(
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
+                        .unwrap()
+                        .0,
+                );
+            } else {
+                let (_, old_value) = writes[idx - 1].0.clone().into_key_value();
+                expect_value(
+                    old_value.unwrap(),
+                    block_on(storage.get(Context::default(), key.clone(), commit_ts))
+                        .unwrap()
+                        .0,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_flashback_to_version_lock() {
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@1".to_vec())],
+                    b"k".to_vec(),
+                    1.into(),
+                ),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .sched_txn_command(
+                commands::Commit::new(
+                    vec![Key::from_raw(b"k")],
+                    1.into(),
+                    2.into(),
+                    Context::default(),
+                ),
+                expect_value_callback(tx.clone(), 1, TxnStatus::committed(2.into())),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@1".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 2.into()))
+                .unwrap()
+                .0,
+        );
+        storage
+            .sched_txn_command(
+                commands::Prewrite::with_defaults(
+                    vec![Mutation::make_put(Key::from_raw(b"k"), b"v@3".to_vec())],
+                    b"k".to_vec(),
+                    3.into(),
+                ),
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_error(
+            |e| match e {
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::KeyIsLocked { .. },
+                ))))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 3.into())),
+        );
+
+        storage
+            .sched_txn_command(
+                commands::FlashbackToVersionReadPhase::new(
+                    2.into(),
+                    None,
+                    Some(Key::from_raw(b"k")),
+                    Some(Key::from_raw(b"k")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx.clone(), 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_value(
+            b"v@1".to_vec(),
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 3.into()))
+                .unwrap()
+                .0,
+        );
+        storage
+            .sched_txn_command(
+                commands::FlashbackToVersionReadPhase::new(
+                    1.into(),
+                    None,
+                    Some(Key::from_raw(b"k")),
+                    Some(Key::from_raw(b"k")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k"), 3.into()))
+                .unwrap()
+                .0,
+        );
+    }
+
+    #[test]
+    fn test_flashback_to_version_in_multi_batch() {
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+            .build()
+            .unwrap();
+        let (tx, rx) = channel();
+        // Add (FLASHBACK_BATCH_SIZE * 2) lock records.
+        for i in 1..=FLASHBACK_BATCH_SIZE * 2 {
+            let start_ts = (i as u64).into();
+            let key = Key::from_raw(format!("k{}", i).as_bytes());
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![Mutation::make_put(
+                            key.clone(),
+                            format!("v@{}", i).as_bytes().to_vec(),
+                        )],
+                        key.to_raw().unwrap(),
+                        start_ts,
+                    ),
+                    expect_ok_callback(tx.clone(), i as i32),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            expect_error(
+                |e| match e {
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::KeyIsLocked { .. },
+                    ))))) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                },
+                block_on(storage.get(Context::default(), key, start_ts)),
+            );
+        }
+        // Add (FLASHBACK_BATCH_SIZE * 2) write records.
+        for i in FLASHBACK_BATCH_SIZE * 2 + 1..=FLASHBACK_BATCH_SIZE * 4 {
+            let start_ts = (i as u64).into();
+            let commit_ts = ((i + 1) as u64).into();
+            let key = Key::from_raw(format!("k{}", i).as_bytes());
+            let value = format!("v@{}", i).as_bytes().to_vec();
+            storage
+                .sched_txn_command(
+                    commands::Prewrite::with_defaults(
+                        vec![Mutation::make_put(key.clone(), value.clone())],
+                        key.to_raw().unwrap(),
+                        start_ts,
+                    ),
+                    expect_ok_callback(tx.clone(), i as i32),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            storage
+                .sched_txn_command(
+                    commands::Commit::new(
+                        vec![key.clone()],
+                        start_ts,
+                        commit_ts,
+                        Context::default(),
+                    ),
+                    expect_value_callback(tx.clone(), i as i32, TxnStatus::committed(commit_ts)),
+                )
+                .unwrap();
+            rx.recv().unwrap();
+            expect_value(
+                value,
+                block_on(storage.get(Context::default(), key, commit_ts))
+                    .unwrap()
+                    .0,
+            );
+        }
+        // Flashback all records.
+        storage
+            .sched_txn_command(
+                commands::FlashbackToVersionReadPhase::new(
+                    TimeStamp::zero(),
+                    None,
+                    Some(Key::from_raw(b"k")),
+                    Some(Key::from_raw(b"k")),
+                    Context::default(),
+                ),
+                expect_ok_callback(tx, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            block_on(storage.get(Context::default(), Key::from_raw(b"k1"), 1.into()))
+                .unwrap()
+                .0,
+        );
+        expect_none(
+            block_on(storage.get(
+                Context::default(),
+                Key::from_raw(format!("k{}", FLASHBACK_BATCH_SIZE * 4).as_bytes()),
+                ((FLASHBACK_BATCH_SIZE * 4 + 1) as u64).into(),
+            ))
+            .unwrap()
+            .0,
         );
     }
 
@@ -7441,6 +7776,7 @@ mod tests {
                     21.into(),
                     OldValues::default(),
                     false,
+                    false,
                     Context::default(),
                 ),
                 expect_ok_callback(tx, 0),
@@ -8131,6 +8467,7 @@ mod tests {
                     0.into(),
                     OldValues::default(),
                     false,
+                    false,
                     Default::default(),
                 ),
                 expect_ok_callback(tx.clone(), 0),
@@ -8152,6 +8489,7 @@ mod tests {
                     false,
                     0.into(),
                     OldValues::default(),
+                    false,
                     false,
                     Default::default(),
                 ),
@@ -8380,6 +8718,7 @@ mod tests {
                 TimeStamp::new(12),
                 OldValues::default(),
                 false,
+                false,
                 Context::default(),
             ),
             pipelined_pessimistic_lock: true,
@@ -8404,6 +8743,7 @@ mod tests {
                 false,
                 TimeStamp::new(12),
                 OldValues::default(),
+                false,
                 false,
                 Context::default(),
             ),
