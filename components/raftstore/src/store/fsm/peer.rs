@@ -1685,63 +1685,75 @@ where
             // term has changed, the result may be not correct.
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
         } else if !self.fsm.peer.is_leader() {
-                // If this peer is in 'pre ack transfer leader' status, check if
-                // the needed entry cache is filled.
-                if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
-                    let high = meta.high;
-                    let ents_last = res.ents.as_ref().unwrap().last().map(|e| e.index).unwrap();
-                    self.fsm
-                        .peer
-                        .raft_group
-                        .mut_store()
-                        .update_async_fetch_res(low, Some(res));
-                    // TODO(cosven): cache may be not filled. Need to know how entry cache is
-                    // stored.
-                    if meta.min_matched == low {
-                        let elapsed = meta.receive_time.saturating_elapsed_secs();
-                        info!(
-                            "(this_pr) pre fill entry cache seems finished.";
-                            "low" => low,
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.fsm.peer_id(),
-                            "elapsed" => ?elapsed,
-                            "high" => high,
-                            "ents_last" => ents_last,
-                        );
-                        PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
-                        match self.fsm.peer.get_store().entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
-                            Ok(_) => {
-                                info!(
-                                    "(this_pr) entry cache is filled, ack now.";
-                                    "low" => low,
-                                    "region_id" => self.region_id(),
-                                    "peer_id" => self.fsm.peer_id(),
-                                    "high" => high,
-                                )
-                                // TODO(cosven): fill the cache.
-                            }
-                            Err(_) => {
-                                warn!(
-                                    "(this_pr) entry cache is still not filled, ack anyway.";
-                                    "low" => low,
-                                    "region_id" => self.region_id(),
-                                    "peer_id" => self.fsm.peer_id(),
-                                    "high" => high,
-                                )
-                            }
+            // If this peer is in 'pre ack transfer leader' status, check if
+            // the needed entry cache is filled.
+            if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
+                let high = meta.high;
+                let ents_last = res.ents.as_ref().unwrap().last().map(|e| e.index).unwrap();
+                self.fsm
+                    .peer
+                    .raft_group
+                    .mut_store()
+                    .update_async_fetch_res(low, Some(res));
+                // TODO(cosven): cache may be not filled. Need to know how entry cache is
+                // stored.
+                if meta.min_matched == low {
+                    let elapsed = meta.receive_time.saturating_elapsed_secs();
+                    info!(
+                        "(this_pr) pre fill entry cache seems finished.";
+                        "low" => low,
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "elapsed" => ?elapsed,
+                        "high" => high,
+                        "ents_last" => ents_last,
+                    );
+                    PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
+                    match self.fsm.peer.get_store().entries(
+                        low,
+                        high,
+                        u64::MAX,
+                        GetEntriesContext::empty(true),
+                    ) {
+                        Ok(_) => {
+                            info!(
+                                "(this_pr) entry cache is filled, ack now.";
+                                "low" => low,
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "high" => high,
+                            )
+                            // TODO(cosven): fill the cache.
                         }
-                        self.fsm.peer.ack_transfer_leader_msg();
-                        self.fsm.peer.pre_ack_transfer_leader_meta = None;
+                        Err(_) => {
+                            warn!(
+                                "(this_pr) entry cache is still not filled, ack anyway.";
+                                "low" => low,
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "high" => high,
+                            )
+                        }
                     }
-                } else {
-                    self.fsm.peer.mut_store().clean_async_fetch_res(low);
+                    self.fsm.peer.ack_transfer_leader_msg();
+                    self.fsm.peer.pre_ack_transfer_leader_meta = None;
                 }
+                // clean the async fetch result immediately if not used to free memory
+                self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+            } else {
+                self.fsm.peer.mut_store().clean_async_fetch_res(low);
             }
-
-        self.fsm.peer.raft_group.on_entries_fetched(context);
-        // clean the async fetch result immediately if not used to free memory
-        self.fsm.peer.mut_store().update_async_fetch_res(low, None);
-        self.fsm.has_ready = true;
+        } else {
+            self.fsm
+                .peer
+                .raft_group
+                .mut_store()
+                .update_async_fetch_res(low, Some(res));
+            self.fsm.peer.raft_group.on_entries_fetched(context);
+            // clean the async fetch result immediately if not used to free memory
+            self.fsm.peer.mut_store().update_async_fetch_res(low, None);
+            self.fsm.has_ready = true;
+        }
     }
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
