@@ -666,7 +666,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b", b"c", b"d", b"e",]
+        vec![b"b", b"c", b"d", b"e"]
             .into_iter()
             .map(|k| encode_key(&k[..]))
             .collect::<Vec<_>>()
