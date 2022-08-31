@@ -19,7 +19,7 @@ use lazy_static::lazy_static;
 #[cfg(target_os = "linux")]
 use mnt::get_mount;
 use sysinfo::RefreshKind;
-pub use sysinfo::{DiskExt, NetworkExt, ProcessExt, ProcessorExt, SystemExt};
+pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
 use crate::config::{ReadableSize, KIB};
 
@@ -92,7 +92,7 @@ impl SysQuota {
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
         let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.get_total_memory() * KIB
+        system.total_memory() * KIB
     }
 }
 
