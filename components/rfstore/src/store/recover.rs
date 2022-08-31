@@ -73,7 +73,7 @@ impl RecoverHandler {
                 });
             let mut raft_state = RaftState::default();
             raft_state.unmarshal(val.as_ref());
-            return Ok((region, raft_state.commit));
+            return Ok((region, raft_state.last_preprocessed_index));
         }
         let err_msg = format!(
             "{} failed to load region meta, state keys {:?}",
@@ -130,14 +130,14 @@ impl kvengine::RecoverHandler for RecoverHandler {
         let mut ctx = ApplyContext::new(engine.clone(), None);
         let applied_index_term = shard.get_property(TERM_KEY).unwrap().get_u64_le();
         let apply_state = RaftApplyState::new(applied_index, applied_index_term);
-        let (region_meta, commit_idx) = self.load_region_meta(shard.id, shard.ver)?;
+        let (region_meta, preprocessed_index) = self.load_region_meta(shard.id, shard.ver)?;
         let low_idx = applied_index + 1;
-        let high_idx = commit_idx + 1;
+        let high_idx = preprocessed_index + 1;
         info!(
-            "{} recover from applied {} to committed {}",
+            "{} recover from applied {} to index {}",
             shard.tag(),
             applied_index,
-            commit_idx
+            preprocessed_index,
         );
         let mut entries = Vec::with_capacity((high_idx.saturating_sub(low_idx)) as usize);
         self.rf_engine

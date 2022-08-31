@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::{ByteOrder, LittleEndian};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use raft_proto::eraftpb;
 
 use super::peer_storage::{RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM};
+use crate::store::TERM_KEY;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RaftApplyState {
@@ -28,6 +28,13 @@ impl RaftApplyState {
             applied_index_term,
         }
     }
+
+    pub(crate) fn from_snapshot(snap: &kvenginepb::Snapshot) -> Self {
+        let index = snap.get_data_sequence();
+        let term_val = kvengine::get_shard_property(TERM_KEY, snap.get_properties()).unwrap();
+        let term = term_val.as_slice().get_u64_le();
+        Self::new(index, term)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -36,6 +43,10 @@ pub(crate) struct RaftState {
     pub(crate) vote: u64,
     pub(crate) commit: u64,
     pub(crate) last_index: u64,
+    /// `ShardMeta` is changed by preprocessed committed entries. When recovering, we can't replay
+    /// entries from applied_index to committed_index directly, because some committed entries may
+    /// not be preprocessed, so we record `last_preprocessed_index` to replay to it.
+    pub(crate) last_preprocessed_index: u64,
 }
 
 impl RaftState {
@@ -45,14 +56,16 @@ impl RaftState {
         buf.put_u64_le(self.vote);
         buf.put_u64_le(self.commit);
         buf.put_u64_le(self.last_index);
+        buf.put_u64_le(self.last_preprocessed_index);
         buf.freeze()
     }
 
-    pub(crate) fn unmarshal(&mut self, data: &[u8]) {
-        self.term = LittleEndian::read_u64(data);
-        self.vote = LittleEndian::read_u64(&data[8..]);
-        self.commit = LittleEndian::read_u64(&data[16..]);
-        self.last_index = LittleEndian::read_u64(&data[24..]);
+    pub(crate) fn unmarshal(&mut self, mut data: &[u8]) {
+        self.term = data.get_u64_le();
+        self.vote = data.get_u64_le();
+        self.commit = data.get_u64_le();
+        self.last_index = data.get_u64_le();
+        self.last_preprocessed_index = data.get_u64_le();
     }
 
     pub(crate) fn get_hard_state(&self) -> eraftpb::HardState {
@@ -93,8 +106,8 @@ impl RaftTruncatedState {
         buf.freeze()
     }
 
-    pub(crate) fn unmarshal(&mut self, data: &[u8]) {
-        self.truncated_index_term = LittleEndian::read_u64(data);
-        self.truncated_index = LittleEndian::read_u64(&data[8..]);
+    pub(crate) fn unmarshal(&mut self, mut data: &[u8]) {
+        self.truncated_index_term = data.get_u64_le();
+        self.truncated_index = data.get_u64_le();
     }
 }

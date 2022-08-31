@@ -1232,10 +1232,13 @@ impl Peer {
 
         let new_role = ready.ss().map(|ss| ss.raft_state);
         self.handle_raft_committed_entries(ctx, ready.take_committed_entries(), new_role);
-        if let Some(snap_res) = self
-            .mut_store()
-            .handle_raft_ready(ctx, &mut ready, &mut store_meta)
-        {
+        let last_preprocessed_index = self.last_applying_idx;
+        if let Some(snap_res) = self.mut_store().handle_raft_ready(
+            ctx,
+            &mut ready,
+            last_preprocessed_index,
+            &mut store_meta,
+        ) {
             self.preprocessed_region = None;
             // The peer may change from learner to voter after snapshot persisted.
             let peer = self
@@ -1258,15 +1261,6 @@ impl Peer {
             if !self.update_store_meta_for_snap(ctx, snap_res, store_meta.unwrap()) {
                 return;
             }
-        }
-        // Some entries in ready.entries may already committed, to make ShardMeta consistent with
-        // commit index, we also need to preprocess the entries in the ready.
-        let committed_index = self.get_store().commit_index();
-        for entry in ready.entries() {
-            if entry.index > committed_index {
-                break;
-            }
-            self.preprocess_committed_entry(ctx, entry);
         }
         if let Some(ss) = ready.ss() {
             if ss.raft_state == raft::StateRole::Leader {

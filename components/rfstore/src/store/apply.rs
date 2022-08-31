@@ -940,11 +940,7 @@ impl Applier {
             let cs_pb = cs.change_set.clone();
             let is_ingest_files = cs.has_ingest_files();
             let result = if cs.has_snapshot() {
-                let snap = cs.get_snapshot();
-                self.apply_state.applied_index = snap.get_data_sequence();
-                let term_val =
-                    kvengine::get_shard_property(TERM_KEY, snap.get_properties()).unwrap();
-                self.apply_state.applied_index_term = term_val.as_slice().get_u64_le();
+                self.apply_state = RaftApplyState::from_snapshot(cs.get_snapshot());
                 ctx.engine.ingest(cs, false).map(|()| cs_pb)
             } else {
                 ctx.engine.apply_change_set(cs).map(|()| cs_pb)
@@ -994,6 +990,7 @@ impl Applier {
             "reg_region_id" => reg.region.get_id(),
         );
         assert_eq!(self.get_peer().get_id(), reg.peer.id);
+        assert!(self.apply_state.applied_index <= reg.apply_state.applied_index);
         self.term = reg.term;
         self.clear_all_commands_as_stale();
         *self = Applier::new_from_reg(reg);

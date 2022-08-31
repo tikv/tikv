@@ -995,9 +995,6 @@ impl<'a> PeerMsgHandler<'a> {
                 "err" => ?err,
                 "region" => tag,
             );
-            if self.peer.mut_store().snap_state == SnapState::Applying {
-                self.peer.mut_store().snap_state = SnapState::ApplyAborted;
-            }
             return;
         }
         let change = result.unwrap();
@@ -1009,15 +1006,15 @@ impl<'a> PeerMsgHandler<'a> {
                 .get_version()
         {
             error!("change set version not match change {:?}", &change; "region" => tag);
+            // The peer can't change until applying snapshot finished, so applying snapshot should
+            // always succeed.
+            assert!(!change.has_snapshot(), "{:?}", change);
             return;
         }
         if change.has_snapshot() {
             if self.peer.mut_store().is_applying_snapshot() {
                 self.peer.mut_store().snap_state = SnapState::Relax;
-                let apply_state = RaftApplyState::new(
-                    self.peer.mut_store().snapshot_index(),
-                    self.peer.mut_store().snapshot_term(),
-                );
+                let apply_state = RaftApplyState::from_snapshot(change.get_snapshot());
                 let apply_result = MsgApplyResult {
                     peer_id: self.peer.peer_id(),
                     results: VecDeque::new(),

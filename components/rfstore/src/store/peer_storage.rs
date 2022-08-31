@@ -391,6 +391,7 @@ impl PeerStorage {
         &mut self,
         ctx: &mut RaftContext,
         ready: &mut raft::Ready,
+        last_preprocessed_index: u64,
         store_meta: &mut Option<&mut StoreMeta>,
     ) -> Option<RestoreSnapResult> {
         let mut res = None;
@@ -428,6 +429,7 @@ impl PeerStorage {
             if let Some(hs) = ready.hs() {
                 self.raft_state.set_hard_state(hs);
             }
+            self.raft_state.last_preprocessed_index = last_preprocessed_index;
         }
         if prev_raft_state != self.raft_state || !ready.snapshot().is_empty() {
             self.write_raft_state(ctx);
@@ -635,6 +637,7 @@ pub fn write_initial_raft_state(
         vote: 0,
         term: RAFT_INIT_LOG_TERM,
         commit: RAFT_INIT_LOG_INDEX,
+        last_preprocessed_index: RAFT_INIT_LOG_INDEX,
     };
     raft_wb.set_state(
         region_id,
