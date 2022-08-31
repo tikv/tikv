@@ -100,13 +100,11 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
         let opt: RocksWriteOptions = opts.into();
         if self.support_write_batch_vec {
             self.get_db()
-                .multi_batch_write(self.as_inner(), &opt.into_raw())
-                .map_err(Error::Engine)
+                .multi_batch_write(self.as_inner(), &opt.into_raw())?;
         } else {
-            self.get_db()
-                .write_opt(&self.wbs[0], &opt.into_raw())
-                .map_err(Error::Engine)
+            self.get_db().write_opt(&self.wbs[0], &opt.into_raw())?;
         }
+        Ok(())
     }
 
     fn data_size(&self) -> usize {
