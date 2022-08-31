@@ -34,8 +34,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
+        RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -53,11 +53,12 @@ use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 
 use self::memtrace::*;
@@ -84,6 +85,7 @@ use crate::{
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
+        region_meta::RegionMeta,
         transport::Transport,
         util,
         util::{is_learner, KeysInfoFormatter, LeaseState},
@@ -92,8 +94,8 @@ use crate::{
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
             RegionTask, SplitCheckTask,
         },
-        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult,
+        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
         SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
@@ -518,7 +520,7 @@ where
 
             let tokens: SmallVec<[TimeTracker; 4]> = cbs
                 .iter_mut()
-                .filter_map(|cb| cb.trackers().map(|t| t[0]))
+                .filter_map(|cb| cb.write_trackers().map(|t| t[0]))
                 .collect();
 
             let mut cb = Callback::write_ext(
@@ -533,7 +535,7 @@ where
                 committed_cb,
             );
 
-            if let Some(trackers) = cb.trackers_mut() {
+            if let Some(trackers) = cb.write_trackers_mut() {
                 *trackers = tokens;
             }
 
@@ -609,10 +611,17 @@ where
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
+                    let propose_time = cmd.send_time.saturating_elapsed();
                     self.ctx
                         .raft_metrics
                         .propose_wait_time
-                        .observe(duration_to_sec(cmd.send_time.saturating_elapsed()) as f64);
+                        .observe(propose_time.as_secs_f64());
+                    cmd.callback.read_tracker().map(|tracker| {
+                        GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                            t.metrics.read_index_propose_wait_nanos =
+                                propose_time.as_nanos() as u64;
+                        })
+                    });
 
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
@@ -626,8 +635,8 @@ where
                         // so that normal writes can be rejected when proposing if the
                         // store's disk is full.
                         && ((self.ctx.self_disk_usage == DiskUsage::Normal
-                            && !self.fsm.peer.disk_full_peers.majority())
-                            || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
+                        && !self.fsm.peer.disk_full_peers.majority())
+                        || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
                         self.fsm.batch_req_builder.add(cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
@@ -1020,7 +1029,24 @@ where
             CasualMessage::ForceCompactRaftLogs => {
                 self.on_raft_gc_log_tick(true);
             }
-            CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
+            CasualMessage::AccessPeer(cb) => {
+                let peer = &self.fsm.peer;
+                let store = peer.get_store();
+                let mut local_state = RegionLocalState::default();
+                local_state.set_region(store.region().clone());
+                if let Some(s) = &peer.pending_merge_state {
+                    local_state.set_merge_state(s.clone());
+                }
+                if store.is_applying_snapshot() {
+                    local_state.set_state(PeerState::Applying);
+                }
+                cb(RegionMeta::new(
+                    &local_state,
+                    store.apply_state(),
+                    self.fsm.hibernate_state.group_state(),
+                    peer.raft_group.status(),
+                ))
+            }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
@@ -1028,8 +1054,7 @@ where
                     || util::is_epoch_stale(
                         region.get_region_epoch(),
                         self.fsm.peer.region().get_region_epoch(),
-                    )
-                {
+                ) {
                     // Stale message
                     return;
                 }
@@ -1232,7 +1257,7 @@ where
         let apply_router = self.ctx.apply_router.clone();
         self.propose_raft_command_internal(
             msg,
-            Callback::Read(Box::new(move |resp| {
+            Callback::read(Box::new(move |resp| {
                 // Return the error
                 if resp.response.get_header().has_error() {
                     cb.invoke_read(resp);
@@ -2234,7 +2259,7 @@ where
             cmd.mut_header().set_read_quorum(true);
             self.propose_raft_command_internal(
                 cmd,
-                Callback::Read(Box::new(|_| ())),
+                Callback::read(Box::new(|_| ())),
                 DiskFullOpt::AllowedOnAlmostFull,
             );
         }
@@ -3781,8 +3806,13 @@ where
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            new_peer.peer.last_compacted_idx =
-                new_peer.apply_state().get_truncated_state().get_index() + 1;
+            new_peer.peer.last_compacted_idx = new_peer
+                .peer
+                .get_store()
+                .apply_state()
+                .get_truncated_state()
+                .get_index()
+                + 1;
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
@@ -4876,7 +4906,7 @@ where
 
         if self.ctx.raft_metrics.waterfall_metrics {
             let now = Instant::now();
-            for tracker in cb.trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.ctx.raft_metrics.wf_batch_wait, |t| {
                     &mut t.metrics.wf_batch_wait_nanos
                 });
@@ -6255,30 +6285,6 @@ where
         }
 
         Ok(resp)
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
-    fn meta_peer(&self) -> &metapb::Peer {
-        &self.peer.peer
-    }
-    fn group_state(&self) -> GroupState {
-        self.hibernate_state.group_state()
-    }
-    fn region(&self) -> &metapb::Region {
-        self.peer.raft_group.store().region()
-    }
-    fn apply_state(&self) -> &RaftApplyState {
-        self.peer.raft_group.store().apply_state()
-    }
-    fn raft_status(&self) -> raft::Status<'_> {
-        self.peer.raft_group.status()
-    }
-    fn raft_commit_index(&self) -> u64 {
-        self.peer.raft_group.store().commit_index()
-    }
-    fn pending_merge_state(&self) -> Option<&MergeState> {
-        self.peer.pending_merge_state.as_ref()
     }
 }
 
