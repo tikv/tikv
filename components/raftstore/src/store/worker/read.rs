@@ -740,7 +740,7 @@ where
 
     pub fn propose_raft_command(
         &mut self,
-        is_snap_for_gc: bool,
+        get_snap_for_certainty: bool,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
@@ -786,7 +786,7 @@ where
                         // When is_snap_gc_gc is true, the read_ts should 0 in which case we
                         // guarantee to get the snapshot.
                         assert!(
-                            (read_ts > 0 && !is_snap_for_gc) || (read_ts == 0 && is_snap_for_gc)
+                            (read_ts > 0 && !get_snap_for_certainty) || (read_ts == 0 && get_snap_for_certainty)
                         );
                         if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
@@ -848,12 +848,12 @@ where
     #[inline]
     pub fn read(
         &mut self,
-        is_snap_for_gc: bool,
+        get_snap_for_certainty: bool,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        self.propose_raft_command(is_snap_for_gc, read_id, req, cb);
+        self.propose_raft_command(get_snap_for_certainty, read_id, req, cb);
         maybe_tls_local_read_metrics_flush();
     }
 

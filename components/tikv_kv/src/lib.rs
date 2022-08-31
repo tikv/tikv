@@ -252,8 +252,11 @@ pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
     pub start_ts: TimeStamp,
-    // `is_snap_for_gc` is used by gc oeprations to bypass the start_ts check.
-    pub is_snap_for_gc: bool,
+    // `get_snap_for_certainty` is used when we want to make sure to get the snapshot. It is
+    // combined with setting `stale_read` be true in `Context` and `start_ts` be 0. In normal
+    // cases, when `start_ts` is 0, the request will not be regarded as stale read even though
+    // `stale_read` is true. `get_snap_for_certainty` is used to break this rule.
+    pub get_snap_for_certainty: bool,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
