@@ -16,7 +16,7 @@ use std::{
     cell::UnsafeCell,
     fmt,
     future::Future,
-    mem::{self, ManuallyDrop},
+    mem,
     pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -29,7 +29,8 @@ use engine_traits::Snapshot;
 use futures::task::AtomicWaker;
 use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, raft_cmdpb::RaftCmdResponse};
 use raftstore::store::{
-    local_metrics::TimeTracker, msg::ErrorCallback, ReadCallback, RegionSnapshot, WriteCallback,
+    local_metrics::TimeTracker, msg::ErrorCallback, region_meta::RegionMeta, ReadCallback,
+    RegionSnapshot, WriteCallback,
 };
 use smallvec::SmallVec;
 use tikv_util::memory::HeapSize;
@@ -67,6 +68,17 @@ const fn subscribed_bit_of(event: u64) -> u64 {
 #[inline]
 const fn fired_bit_of(event: u64) -> u64 {
     1 << (event * 2 + 1)
+}
+
+impl<Res> Default for EventCore<Res> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            event: AtomicU64::new(0),
+            res: UnsafeCell::new(None),
+            waker: AtomicWaker::new(),
+        }
+    }
 }
 
 impl<Res> EventCore<Res> {
@@ -201,9 +213,53 @@ impl<'a, Res> Future for WaitResult<'a, Res> {
     }
 }
 
-pub struct CmdResSubscriber {
-    core: Arc<EventCore<RaftCmdResponse>>,
+/// A base subscriber that contains most common implementation of subscribers.
+pub struct BaseSubscriber<Res> {
+    core: Arc<EventCore<Res>>,
 }
+
+impl<Res> BaseSubscriber<Res> {
+    /// Wait for the result.
+    #[inline]
+    pub async fn result(mut self) -> Option<Res> {
+        WaitResult { core: &self.core }.await
+    }
+}
+
+unsafe impl<Res: Send> Send for BaseSubscriber<Res> {}
+unsafe impl<Res: Send> Sync for BaseSubscriber<Res> {}
+
+/// A base channel that contains most common implementation of channels.
+pub struct BaseChannel<Res> {
+    core: Arc<EventCore<Res>>,
+}
+
+impl<Res> BaseChannel<Res> {
+    /// Creates a pair of channel and subscriber.
+    #[inline]
+    pub fn pair() -> (Self, BaseSubscriber<Res>) {
+        let core: Arc<EventCore<Res>> = Arc::default();
+        (Self { core: core.clone() }, BaseSubscriber { core })
+    }
+
+    /// Sets the final result.
+    #[inline]
+    pub fn set_result(mut self, res: Res) {
+        self.core.set_result(res);
+    }
+}
+
+impl<Res> Drop for BaseChannel<Res> {
+    #[inline]
+    fn drop(&mut self) {
+        self.core.cancel();
+    }
+}
+
+unsafe impl<Res: Send> Send for BaseChannel<Res> {}
+unsafe impl<Res: Send> Sync for BaseChannel<Res> {}
+
+pub type CmdResSubscriber = BaseSubscriber<RaftCmdResponse>;
 
 impl CmdResSubscriber {
     pub async fn wait_proposed(&mut self) -> bool {
@@ -221,38 +277,14 @@ impl CmdResSubscriber {
         }
         .await
     }
-
-    pub async fn result(mut self) -> Option<RaftCmdResponse> {
-        WaitResult { core: &self.core }.await
-    }
 }
 
-unsafe impl Send for CmdResSubscriber {}
-unsafe impl Sync for CmdResSubscriber {}
-
-pub struct CmdResChannel {
-    core: ManuallyDrop<Arc<EventCore<RaftCmdResponse>>>,
-}
+pub type CmdResChannel = BaseChannel<RaftCmdResponse>;
 
 impl CmdResChannel {
     // Valid range is [1, 30]
     const PROPOSED_EVENT: u64 = 1;
     const COMMITTED_EVENT: u64 = 2;
-
-    #[inline]
-    pub fn pair() -> (Self, CmdResSubscriber) {
-        let core = Arc::new(EventCore {
-            event: AtomicU64::new(0),
-            res: UnsafeCell::new(None),
-            waker: AtomicWaker::new(),
-        });
-        (
-            Self {
-                core: ManuallyDrop::new(core.clone()),
-            },
-            CmdResSubscriber { core },
-        )
-    }
 }
 
 impl ErrorCallback for CmdResChannel {
@@ -294,26 +326,9 @@ impl WriteCallback for CmdResChannel {
     // TODO: support executing hooks inside setting result.
     #[inline]
     fn set_result(mut self, res: RaftCmdResponse) {
-        self.core.set_result(res);
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
-        mem::forget(self);
+        self.set_result(res);
     }
 }
-
-impl Drop for CmdResChannel {
-    #[inline]
-    fn drop(&mut self) {
-        self.core.cancel();
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
-    }
-}
-
-unsafe impl Send for CmdResChannel {}
-unsafe impl Sync for CmdResChannel {}
 
 /// Response for Read.
 ///
@@ -351,25 +366,7 @@ impl QueryResult {
     }
 }
 
-pub struct QueryResChannel {
-    core: ManuallyDrop<Arc<EventCore<QueryResult>>>,
-}
-
-impl QueryResChannel {
-    pub fn pair() -> (Self, QueryResSubscriber) {
-        let core = Arc::new(EventCore {
-            event: AtomicU64::new(0),
-            res: UnsafeCell::new(None),
-            waker: AtomicWaker::new(),
-        });
-        (
-            Self {
-                core: ManuallyDrop::new(core.clone()),
-            },
-            QueryResSubscriber { core },
-        )
-    }
-}
+pub type QueryResChannel = BaseChannel<QueryResult>;
 
 impl ErrorCallback for QueryResChannel {
     #[inline]
@@ -388,11 +385,7 @@ impl ReadCallback for QueryResChannel {
 
     #[inline]
     fn set_result(mut self, res: QueryResult) {
-        self.core.set_result(res);
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
-        mem::forget(self);
+        self.set_result(res);
     }
 
     fn read_tracker(&self) -> Option<&TrackerToken> {
@@ -400,31 +393,10 @@ impl ReadCallback for QueryResChannel {
     }
 }
 
-impl Drop for QueryResChannel {
-    #[inline]
-    fn drop(&mut self) {
-        self.core.cancel();
-        unsafe {
-            ManuallyDrop::drop(&mut self.core);
-        }
-    }
-}
+pub type QueryResSubscriber = BaseSubscriber<QueryResult>;
 
-unsafe impl Send for QueryResChannel {}
-unsafe impl Sync for QueryResChannel {}
-
-pub struct QueryResSubscriber {
-    core: Arc<EventCore<QueryResult>>,
-}
-
-impl QueryResSubscriber {
-    pub async fn result(mut self) -> Option<QueryResult> {
-        WaitResult { core: &self.core }.await
-    }
-}
-
-unsafe impl Send for QueryResSubscriber {}
-unsafe impl Sync for QueryResSubscriber {}
+pub type DebugInfoChannel = BaseChannel<RegionMeta>;
+pub type DebugInfoSubscriber = BaseSubscriber<RegionMeta>;
 
 #[cfg(test)]
 mod tests {
