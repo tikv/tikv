@@ -4974,9 +4974,7 @@ where
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
         let mut finished = false;
-        if self.flashback_state.is_some()
-            && self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index()
-        {
+        if self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index() {
             info!(
                 "flashback finish wait apply";
                 "region_id" => self.region().get_id(),
