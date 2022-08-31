@@ -18,7 +18,6 @@ use std::{
     u64,
 };
 
-use arc_swap::ArcSwap;
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
     HandlerBuilder, PollHandler, Priority,

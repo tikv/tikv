@@ -1764,7 +1764,8 @@ where
         if self.follower_repl() {
             for (pos, msg) in msgs.iter().enumerate() {
                 // Follower replication is enabled and msg is append.
-                if msg.get_msg_type() == MessageType::MsgAppend && self.raft_group.raft.is_replicate_state(msg.get_to())
+                if msg.get_msg_type() == MessageType::MsgAppend
+                    && self.raft_group.raft.is_replicate_state(msg.get_to())
                 {
                     if let Some(to_peer) = self.get_peer_from_cache(msg.get_to()) {
                         let to_peer_store_id = to_peer.get_store_id();
@@ -1789,8 +1790,6 @@ where
                 }
             }
         }
-
-        
 
         let mut pos: usize = 0;
         for msg in msgs {

@@ -83,6 +83,7 @@ pub struct RaftSendMessageMetrics {
     pub append: SendStatus,
     pub append_resp: SendStatus,
     pub group_broadcast: SendStatus,
+    pub group_broadcast_resp: SendStatus,
     pub prevote: SendStatus,
     pub prevote_resp: SendStatus,
     pub vote: SendStatus,
@@ -103,6 +104,7 @@ impl RaftSendMessageMetrics {
             MessageType::MsgAppend => self.append[i] += 1,
             MessageType::MsgAppendResponse => self.append_resp[i] += 1,
             MessageType::MsgGroupBroadcast => self.group_broadcast[i] += 1,
+            MessageType::MsgGroupBroadcastResponse => self.group_broadcast_resp[i] += 1,
             MessageType::MsgRequestPreVote => self.prevote[i] += 1,
             MessageType::MsgRequestPreVoteResponse => self.prevote_resp[i] += 1,
             MessageType::MsgRequestVote => self.vote[i] += 1,
@@ -131,6 +133,7 @@ impl RaftSendMessageMetrics {
         flush_send_status!(append, self);
         flush_send_status!(append_resp, self);
         flush_send_status!(group_broadcast, self);
+        flush_send_status!(group_broadcast_resp, self);
         flush_send_status!(prevote, self);
         flush_send_status!(prevote_resp, self);
         flush_send_status!(vote, self);

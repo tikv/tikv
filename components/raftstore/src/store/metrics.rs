@@ -66,6 +66,7 @@ make_auto_flush_static_metric! {
         append,
         append_resp,
         group_broadcast,
+        group_broadcast_resp,
         prevote,
         prevote_resp,
         vote,
