@@ -34,9 +34,8 @@ use pd_client::RpcClient;
 use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
-    fsm::StoreMeta,
     router::{PeerMsg, QueryResult},
-    Bootstrap, StoreRouter, StoreSystem,
+    Bootstrap, StoreMeta, StoreRouter, StoreSystem,
 };
 use slog::{o, Logger};
 use tempfile::TempDir;

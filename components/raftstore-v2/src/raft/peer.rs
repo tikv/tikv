@@ -362,12 +362,3 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         false
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn init_peer<EK: KvEngine, ER: RaftEngine>() -> Result<Option<Peer<EK, ER>>> {
-        Ok(None)
-    }
-}

@@ -17,12 +17,11 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
         cmd_resp,
-        region_meta::RegionMeta,
         peer::{RequestInspector, RequestPolicy},
+        region_meta::RegionMeta,
         util,
         util::LeaseState,
-        GroupState，
-        ReadCallback,
+        GroupState, ReadCallback,
     },
     Error, Result,
 };
@@ -72,7 +71,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                         .peer_mut()
                         .read_index(self.store_ctx, req, resp, ch);
                 }
-                Ok(RequestPolicy::ReadLocal) => {  
+                Ok(RequestPolicy::ReadLocal) => {
                     let read_resp = ReadResponse::new(0);
                     ch.set_result(QueryResult::Read(read_resp));
                 }
