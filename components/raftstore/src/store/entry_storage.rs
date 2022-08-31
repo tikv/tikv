@@ -147,6 +147,43 @@ impl EntryCache {
         }
     }
 
+    /// Append entries to the left.
+    ///
+    /// Index of the last entry in entries should exactly equal to
+    ///    `start index of the cached entries - 1` when cache is not empty.
+    ///
+    /// Return true when entries are appended successfully.
+    fn appendleft(&mut self, entries: &[Entry]) -> bool {
+        if let Some(entry_last_index) = entries.last().map(|e| e.get_index()) {
+            // Check if the entries is valid to append.
+            let mut is_valid = true;
+            if let Some(first_index) = self.first_index() {
+                if first_index != entry_last_index + 1 {
+                    is_valid = false;
+                }
+            }
+
+            // Append the entries to the left and update used memory size.
+            if is_valid {
+                let mut mem_size_change = 0;
+                let old_capacity = self.cache.capacity();
+                for e in entries.iter().rev() {
+                    self.cache.push_front(e.to_owned());
+                    mem_size_change +=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
+                }
+                let new_capacity = self.cache.capacity();
+                mem_size_change += Self::cache_vec_mem_size_change(new_capacity, old_capacity);
+                mem_size_change += self.shrink_if_necessary();
+                self.flush_mem_size_change(mem_size_change);
+                return true;
+            }
+            return false;
+        }
+        // entries is empty.
+        true
+    }
+
     fn append_impl(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) -> i64 {
         let mut mem_size_change = 0;
 
@@ -978,6 +1015,12 @@ impl<ER: RaftEngine> EntryStorage<ER> {
 
         self.raft_state.set_last_index(last_index);
         self.last_term = last_term;
+    }
+
+    // Fill entry cache with entries.
+    pub fn fill_entry_cache(&mut self, entries: Vec<Entry>) {
+        // This should always succeed.
+        assert!(self.cache.appendleft(&entries));
     }
 
     pub fn compact_entry_cache(&mut self, idx: u64) {

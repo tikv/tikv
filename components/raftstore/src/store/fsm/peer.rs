@@ -1715,15 +1715,15 @@ where
                         u64::MAX,
                         GetEntriesContext::empty(true),
                     ) {
-                        Ok(_) => {
+                        Ok(entries) => {
                             info!(
                                 "(this_pr) entry cache is filled, ack now.";
                                 "low" => low,
                                 "region_id" => self.region_id(),
                                 "peer_id" => self.fsm.peer_id(),
                                 "high" => high,
-                            )
-                            // TODO(cosven): fill the cache.
+                            );
+                            self.fsm.peer.mut_store().fill_entry_cache(entries);
                         }
                         Err(_) => {
                             warn!(
