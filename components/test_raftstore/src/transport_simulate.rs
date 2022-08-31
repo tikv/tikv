@@ -252,12 +252,11 @@ impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateT
 impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {
     fn read(
         &self,
-        get_snap_for_certainty: bool,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(get_snap_for_certainty, read_id, req, cb)
+        self.ch.read(read_id, req, cb)
     }
 
     fn release_snapshot_cache(&self) {

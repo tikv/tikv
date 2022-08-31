@@ -120,7 +120,6 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
         &self,
-        _: bool,
         _: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
