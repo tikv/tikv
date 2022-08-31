@@ -290,6 +290,7 @@ impl Snapshot for Arc<RocksSnapshot> {
         Ok(self.iterator_opt(cf, iter_opt)?)
     }
 
+    #[inline]
     fn inner_engine(&self) -> Self::E {
         BaseRocksEngine::from_db(self.db())
     }

@@ -230,6 +230,7 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
     }
+
     fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
@@ -239,14 +240,21 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
+
     #[inline]
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
+
+    fn inner_engine(&self) -> Self::E {
+        panic!("BTreeEngine is in memory and does not support this method.")
+    }
+
     fn ext(&self) -> DummySnapshotExt {
         DummySnapshotExt
     }

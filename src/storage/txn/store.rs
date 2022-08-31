@@ -832,6 +832,10 @@ mod tests {
             Some(self.end.as_slice())
         }
 
+        fn inner_engine(&self) -> Self::E {
+            unimplemented!()
+        }
+
         fn ext(&self) -> DummySnapshotExt {
             DummySnapshotExt
         }

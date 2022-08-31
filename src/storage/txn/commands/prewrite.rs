@@ -1493,6 +1493,9 @@ mod tests {
             fn iter(&self, _: CfName, _: IterOptions) -> Result<Self::Iter> {
                 unimplemented!()
             }
+            fn inner_engine(&self) -> Self::E {
+                unimplemented!()
+            }
             fn ext(&self) -> MockSnapshotExt {
                 MockSnapshotExt
             }

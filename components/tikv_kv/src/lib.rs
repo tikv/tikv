@@ -251,7 +251,8 @@ impl WriteData {
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
-    // When start_ts is None and `stale_read` is true, we can make sure to get the snapshot.
+    // When start_ts is None and `stale_read` is true, it means acquire a snapshot without any
+    // consistency guarantee.
     pub start_ts: Option<TimeStamp>,
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
@@ -266,8 +267,9 @@ pub trait Engine: Send + Clone + 'static {
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
-    /// Do some specialization encoding works on `Modify`s according to the
-    /// different implementation of `Engine`
+    /// Do some specialization encoding works on `modifies`s according to the
+    /// different implementation of `Engine` before flushing them to the
+    /// underlying kv engine.
     fn adjust_modify(&self, _modifies: &mut Vec<Modify>) {}
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
@@ -380,10 +382,8 @@ pub trait Snapshot: Sync + Send + Clone {
         None
     }
 
-    #[inline]
-    fn inner_engine(&self) -> Self::E {
-        unimplemented!()
-    }
+    /// Get the underlying kv_engine inside the snapshot.
+    fn inner_engine(&self) -> Self::E;
 
     fn ext(&self) -> Self::Ext<'_>;
 }

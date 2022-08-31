@@ -200,9 +200,7 @@ where
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
-        if ctx.pb_ctx.get_stale_read()
-            && (ctx.start_ts.is_none() || !ctx.start_ts.as_ref().unwrap().is_zero())
-        {
+        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
@@ -415,10 +413,7 @@ where
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty()
-            && ctx.start_ts.is_some()
-            && !ctx.start_ts.as_ref().unwrap().is_zero()
-        {
+        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
             req.mut_read_index()
                 .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
             req.mut_read_index()
