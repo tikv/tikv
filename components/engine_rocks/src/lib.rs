@@ -32,7 +32,7 @@ mod compact;
 pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
-pub mod db_vector;
+mod db_vector;
 pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;

@@ -543,13 +543,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.apply_snapshot_observers {
             let observer = observer.observer.inner();
-            let res = observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap);
-            #[allow(clippy::all)]
-            {
-                if res.is_err() {
-                    return res;
-                }
-            }
+            observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap)?;
         }
         Ok(())
     }

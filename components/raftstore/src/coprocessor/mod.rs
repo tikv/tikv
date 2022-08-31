@@ -21,7 +21,7 @@ use raft::{eraftpb, StateRole};
 pub mod config;
 mod consistency_check;
 pub mod dispatcher;
-pub mod error;
+mod error;
 mod metrics;
 pub mod region_info_accessor;
 mod split_check;

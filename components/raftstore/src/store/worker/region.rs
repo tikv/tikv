@@ -412,14 +412,11 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
-        match self
-            .coprocessor_host
-            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
+        if let Err(e) =
+            self.coprocessor_host
+                .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
         {
-            Ok(_) => (),
-            Err(e) => {
-                return Err(box_err!("post apply snapshot error {:?}", e));
-            }
+            return Err(box_err!("post apply snapshot error {:?}", e));
         };
 
         // delete snapshot state.
@@ -1398,9 +1395,11 @@ mod tests {
             gen_and_apply_snap(7);
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
             must_not_finish(&[7]);
+            obs.apply_error.store(true, Ordering::SeqCst);
             fail::remove("handle_new_pending_applies");
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
-            wait_apply_finish(&[7]);
+            must_not_finish(&[7]);
+            obs.apply_error.store(false, Ordering::SeqCst);
         }
     }
 
@@ -1410,6 +1409,7 @@ mod tests {
         pub post_apply_count: Arc<AtomicUsize>,
         pub pre_apply_hash: Arc<AtomicUsize>,
         pub post_apply_hash: Arc<AtomicUsize>,
+        pub apply_error: Arc<AtomicBool>,
     }
 
     impl Coprocessor for MockApplySnapshotObserver {}
@@ -1435,13 +1435,17 @@ mod tests {
             peer_id: u64,
             key: &crate::store::SnapKey,
             snapshot: Option<&crate::store::Snapshot>,
-        ) -> std::result::Result<(), crate::coprocessor::error::Error> {
+        ) -> std::result::Result<(), crate::coprocessor::Error> {
             let code =
                 snapshot.unwrap().total_size() + key.term + key.region_id + key.idx + peer_id;
             self.post_apply_count.fetch_add(1, Ordering::SeqCst);
             self.post_apply_hash
                 .fetch_add(code as usize, Ordering::SeqCst);
-            Ok(())
+            if !self.apply_error.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(box_err!("mock error"))
+            }
         }
 
         fn should_pre_apply_snapshot(&self) -> bool {
