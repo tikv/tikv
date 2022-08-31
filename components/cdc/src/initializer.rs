@@ -144,7 +144,7 @@ impl<E: KvEngine> Initializer<E> {
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch,
-                callback: Callback::Read(Box::new(move |resp| {
+                callback: Callback::read(Box::new(move |resp| {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
                         region_id,
                         downstream_id,
