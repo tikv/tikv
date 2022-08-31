@@ -2,9 +2,11 @@
 
 use std::collections::HashMap;
 
-use kvproto::metapb::PeerRole;
-use raft::{Progress, ProgressState, StateRole};
-use raftstore::store::{AbstractPeer, GroupState};
+use kvproto::{metapb::PeerRole, raft_serverpb};
+use raft::{Progress, ProgressState, StateRole, Status};
+use serde::{Deserialize, Serialize};
+
+use super::GroupState;
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum RaftProgressState {
@@ -179,22 +181,34 @@ pub struct RaftApplyState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegionMeta {
+pub struct RegionLocalState {
     pub id: u64,
-    pub group_state: GroupState,
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
     pub epoch: Epoch,
     pub peers: Vec<RegionPeer>,
     pub merge_state: Option<RegionMergeState>,
+    pub tablet_index: u64,
+}
+
+/// A serializeable struct that exposes the internal debug information of a
+/// peer. TODO: make protobuf generated code derive serde directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegionMeta {
+    pub group_state: GroupState,
     pub raft_status: RaftStatus,
     pub raft_apply: RaftApplyState,
+    pub region_state: RegionLocalState,
 }
 
 impl RegionMeta {
-    pub fn new(abstract_peer: &dyn AbstractPeer) -> Self {
-        let region = abstract_peer.region();
-        let apply_state = abstract_peer.apply_state();
+    pub fn new(
+        local_state: &raft_serverpb::RegionLocalState,
+        apply_state: &raft_serverpb::RaftApplyState,
+        group_state: GroupState,
+        raft_status: Status<'_>,
+    ) -> Self {
+        let region = local_state.get_region();
         let epoch = region.get_region_epoch();
         let start_key = region.get_start_key();
         let end_key = region.get_end_key();
@@ -207,25 +221,15 @@ impl RegionMeta {
                 role: peer.get_role().into(),
             });
         }
+        let merge_state = if local_state.has_merge_state() {
+            Some(local_state.get_merge_state())
+        } else {
+            None
+        };
 
         Self {
-            id: region.get_id(),
-            group_state: abstract_peer.group_state(),
-            start_key: start_key.to_owned(),
-            end_key: end_key.to_owned(),
-            epoch: Epoch {
-                conf_ver: epoch.get_conf_ver(),
-                version: epoch.get_version(),
-            },
-            peers,
-            merge_state: abstract_peer
-                .pending_merge_state()
-                .map(|state| RegionMergeState {
-                    min_index: state.get_min_index(),
-                    commit: state.get_commit(),
-                    region_id: state.get_target().get_id(),
-                }),
-            raft_status: abstract_peer.raft_status().into(),
+            group_state,
+            raft_status: raft_status.into(),
             raft_apply: RaftApplyState {
                 applied_index: apply_state.get_applied_index(),
                 commit_index: apply_state.get_commit_index(),
@@ -234,6 +238,22 @@ impl RegionMeta {
                     index: apply_state.get_truncated_state().get_index(),
                     term: apply_state.get_truncated_state().get_term(),
                 },
+            },
+            region_state: RegionLocalState {
+                id: region.get_id(),
+                start_key: start_key.to_owned(),
+                end_key: end_key.to_owned(),
+                epoch: Epoch {
+                    conf_ver: epoch.get_conf_ver(),
+                    version: epoch.get_version(),
+                },
+                peers,
+                merge_state: merge_state.map(|state| RegionMergeState {
+                    min_index: state.get_min_index(),
+                    commit: state.get_commit(),
+                    region_id: state.get_target().get_id(),
+                }),
+                tablet_index: local_state.get_tablet_index(),
             },
         }
     }

@@ -33,8 +33,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
+        RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -85,6 +85,7 @@ use crate::{
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
+        region_meta::RegionMeta,
         transport::Transport,
         util,
         util::{is_learner, KeysInfoFormatter, LeaseState},
@@ -93,8 +94,8 @@ use crate::{
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
             RegionTask, SplitCheckTask,
         },
-        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
         SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
@@ -1043,7 +1044,24 @@ where
             CasualMessage::ForceCompactRaftLogs => {
                 self.on_raft_gc_log_tick(true);
             }
-            CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
+            CasualMessage::AccessPeer(cb) => {
+                let peer = &self.fsm.peer;
+                let store = peer.get_store();
+                let mut local_state = RegionLocalState::default();
+                local_state.set_region(store.region().clone());
+                if let Some(s) = &peer.pending_merge_state {
+                    local_state.set_merge_state(s.clone());
+                }
+                if store.is_applying_snapshot() {
+                    local_state.set_state(PeerState::Applying);
+                }
+                cb(RegionMeta::new(
+                    &local_state,
+                    store.apply_state(),
+                    self.fsm.hibernate_state.group_state(),
+                    peer.raft_group.status(),
+                ))
+            }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
@@ -3804,8 +3822,13 @@ where
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            new_peer.peer.last_compacted_idx =
-                new_peer.apply_state().get_truncated_state().get_index() + 1;
+            new_peer.peer.last_compacted_idx = new_peer
+                .peer
+                .get_store()
+                .apply_state()
+                .get_truncated_state()
+                .get_index()
+                + 1;
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
@@ -6267,30 +6290,6 @@ where
         }
 
         Ok(resp)
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
-    fn meta_peer(&self) -> &metapb::Peer {
-        &self.peer.peer
-    }
-    fn group_state(&self) -> GroupState {
-        self.hibernate_state.group_state()
-    }
-    fn region(&self) -> &metapb::Region {
-        self.peer.raft_group.store().region()
-    }
-    fn apply_state(&self) -> &RaftApplyState {
-        self.peer.raft_group.store().apply_state()
-    }
-    fn raft_status(&self) -> raft::Status<'_> {
-        self.peer.raft_group.status()
-    }
-    fn raft_commit_index(&self) -> u64 {
-        self.peer.raft_group.store().commit_index()
-    }
-    fn pending_merge_state(&self) -> Option<&MergeState> {
-        self.peer.pending_merge_state.as_ref()
     }
 }
 
