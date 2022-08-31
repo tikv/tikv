@@ -1743,7 +1743,7 @@ where
                 }
             }
         } else {
-            debug!("Fail to select agent.");
+            info!("Fail to select agent.");
         }
     }
 
@@ -1753,15 +1753,17 @@ where
         mut msgs: Vec<eraftpb::Message>,
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
-        let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-        let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
-        let leader_store_id = self.peer.get_store_id();
-        let leader_zone = zone_info.get(&leader_store_id);
-        // Record message that should be discarded after merge_msg_append.
-        let mut discard: HashSet<usize> = HashSet::default();
 
-        // Filter MsgAppend.
         if self.follower_repl() {
+            // Group MsgAppend by AZ.
+            let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
+            let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+            let leader_store_id = self.peer.get_store_id();
+            let leader_zone = zone_info.get(&leader_store_id);
+            // Record message that should be discarded after merge_msg_append.
+            let mut discard: HashSet<usize> = HashSet::default();
+
+            // Filter MsgAppend.
             for (pos, msg) in msgs.iter().enumerate() {
                 // Follower replication is enabled and msg is append.
                 if msg.get_msg_type() == MessageType::MsgAppend
@@ -1789,17 +1791,24 @@ where
                     self.merge_msg_append(group, &mut msgs, &mut discard);
                 }
             }
-        }
 
-        let mut pos: usize = 0;
-        for msg in msgs {
-            if discard.contains(&pos) {
-                continue;
+            // Filter unnecessary MsgAppend and build raft messages.
+            let mut pos: usize = 0;
+            for msg in msgs {
+                if discard.contains(&pos) {
+                    continue;
+                }
+                if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
+                    raft_msgs.push(m);
+                }
+                pos += 1;
             }
-            if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
-                raft_msgs.push(m);
+        } else {
+            for msg in msgs {
+                if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
+                    raft_msgs.push(m);
+                }
             }
-            pos += 1;
         }
         raft_msgs
     }
