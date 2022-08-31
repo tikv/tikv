@@ -213,6 +213,7 @@ where
         cmd.set_requests(vec![req].into());
         self.router
             .read(
+                ctx.is_snap_for_gc,
                 ctx.read_id,
                 cmd,
                 StoreCallback::read(Box::new(move |resp| {

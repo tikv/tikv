@@ -117,6 +117,7 @@ where
 {
     fn read(
         &self,
+        is_snap_for_gc: bool,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
@@ -249,12 +250,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftStoreRouter<EK> for ServerRaftStoreRouter
 impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter<EK, ER> {
     fn read(
         &self,
+        is_snap_for_gc: bool,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
         let mut local_reader = self.local_reader.borrow_mut();
-        local_reader.read(read_id, req, cb);
+        local_reader.read(is_snap_for_gc, read_id, req, cb);
         Ok(())
     }
 

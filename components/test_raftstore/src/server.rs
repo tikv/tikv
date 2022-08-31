@@ -718,7 +718,7 @@ impl Simulator for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router.read(batch_id, request, cb).unwrap();
+                meta.sim_router.read(false, batch_id, request, cb).unwrap();
             }
         };
     }

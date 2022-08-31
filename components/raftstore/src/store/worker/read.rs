@@ -740,6 +740,7 @@ where
 
     pub fn propose_raft_command(
         &mut self,
+        is_snap_for_gc: bool,
         mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
@@ -782,6 +783,11 @@ where
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        // When is_snap_gc_gc is true, the read_ts should 0 in which case we
+                        // guarantee to get the snapshot.
+                        assert!(
+                            (read_ts > 0 && !is_snap_for_gc) || (read_ts == 0 && is_snap_for_gc)
+                        );
                         if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;
@@ -842,11 +848,12 @@ where
     #[inline]
     pub fn read(
         &mut self,
+        is_snap_for_gc: bool,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        self.propose_raft_command(read_id, req, cb);
+        self.propose_raft_command(is_snap_for_gc, read_id, req, cb);
         maybe_tls_local_read_metrics_flush();
     }
 
@@ -1013,6 +1020,7 @@ mod tests {
         cmd: RaftCmdRequest,
     ) {
         reader.propose_raft_command(
+            false,
             None,
             cmd.clone(),
             Callback::read(Box::new(|resp| {
@@ -1037,7 +1045,7 @@ mod tests {
         rx: &Receiver<RaftCommand<KvTestSnapshot>>,
         task: RaftCommand<KvTestSnapshot>,
     ) {
-        reader.propose_raft_command(None, task.request, task.callback);
+        reader.propose_raft_command(false, None, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -1169,6 +1177,7 @@ mod tests {
             .mut_peer()
             .set_store_id(store_id + 1);
         reader.propose_raft_command(
+            false,
             None,
             cmd_store_id,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1193,6 +1202,7 @@ mod tests {
             .mut_peer()
             .set_id(leader2.get_id() + 1);
         reader.propose_raft_command(
+            false,
             None,
             cmd_peer_id,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1218,6 +1228,7 @@ mod tests {
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
         reader.propose_raft_command(
+            false,
             None,
             cmd_term,
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1254,8 +1265,9 @@ mod tests {
         );
 
         // Channel full.
-        reader.propose_raft_command(None, cmd.clone(), Callback::None);
+        reader.propose_raft_command(false, None, cmd.clone(), Callback::None);
         reader.propose_raft_command(
+            false,
             None,
             cmd.clone(),
             Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
@@ -1288,6 +1300,7 @@ mod tests {
                 .update(Progress::applied_term(term6 + 3));
         }
         reader.propose_raft_command(
+            false,
             None,
             cmd9.clone(),
             Callback::read(Box::new(|resp| {
