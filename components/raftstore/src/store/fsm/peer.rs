@@ -80,7 +80,7 @@ use crate::{
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult,
-            RecoveryFollowerWaitApplySyncer, RecoveryLeaderWaitApplySyncer, RecoveryState,
+            RecoveryWaitApplySyncer, RecoveryState,
             StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
@@ -891,7 +891,7 @@ where
             .recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
-    fn on_recovery_leader_wait_apply(&mut self, syncer: RecoveryLeaderWaitApplySyncer) {
+    fn on_recovery_wait_apply(&mut self, syncer: RecoveryWaitApplySyncer) {
         if self.fsm.peer.recovery_state.is_some() {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -904,31 +904,10 @@ where
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
 
-        self.fsm.peer.recovery_state = Some(RecoveryState::WaitLeaderLogApply {
+        self.fsm.peer.recovery_state = Some(RecoveryState::WaitLogApplyToLast {
             target_index,
             syncer,
         });
-        self.fsm
-            .peer
-            .recovery_maybe_finish_wait_apply(self.fsm.stopped);
-    }
-
-    fn on_recovery_follower_wait_apply(&mut self, syncer: RecoveryFollowerWaitApplySyncer) {
-        if self.fsm.peer.recovery_state.is_some() {
-            warn!(
-                "can't wait apply, another recovery in progress";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            syncer.abort();
-            return;
-        }
-        let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
-        self.fsm.peer.recovery_state = Some(RecoveryState::WaitFollowerLogApply {
-            target_index,
-            syncer,
-        });
-
         self.fsm
             .peer
             .recovery_maybe_finish_wait_apply(self.fsm.stopped);
@@ -1360,11 +1339,8 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::RecoveryLeaderWaitApply(syncer) => {
-                self.on_recovery_leader_wait_apply(syncer)
-            }
-            SignificantMsg::RecoveryFollowerWaitApply(syncer) => {
-                self.on_recovery_follower_wait_apply(syncer)
+            SignificantMsg::RecoveryWaitApply(syncer) => {
+                self.on_recovery_wait_apply(syncer)
             }
         }
     }
@@ -2072,8 +2048,7 @@ where
     fn check_recovery_state(&mut self) {
         match &self.fsm.peer.recovery_state {
             Some(RecoveryState::WaitApply { .. })
-            | Some(RecoveryState::WaitLeaderLogApply { .. })
-            | Some(RecoveryState::WaitFollowerLogApply { .. }) => {
+            | Some(RecoveryState::WaitLogApplyToLast { .. }) => {
                 self.fsm.peer.recovery_maybe_finish_wait_apply(false)
             }
             Some(RecoveryState::DemoteFailedVoters {

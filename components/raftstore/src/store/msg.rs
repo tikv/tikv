@@ -29,7 +29,7 @@ use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        RecoveryFollowerWaitApplySyncer, RecoveryLeaderWaitApplySyncer,
+        RecoveryWaitApplySyncer,
         UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
         UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
     },
@@ -455,8 +455,7 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    RecoveryLeaderWaitApply(RecoveryLeaderWaitApplySyncer),
-    RecoveryFollowerWaitApply(RecoveryFollowerWaitApplySyncer),
+    RecoveryWaitApply(RecoveryWaitApplySyncer),
 }
 
 /// Message that will be sent to a peer.
