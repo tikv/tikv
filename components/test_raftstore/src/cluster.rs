@@ -1411,7 +1411,7 @@ impl<T: Simulator> Cluster<T> {
             .unwrap();
     }
 
-    pub async fn call_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
+    pub async fn call_and_wait_prepare_flashback(&mut self, region_id: u64, store_id: u64) {
         let router = self.sim.rl().get_router(store_id).unwrap();
         let (tx, rx) = oneshot::channel();
 

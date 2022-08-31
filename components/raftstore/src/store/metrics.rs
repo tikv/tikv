@@ -236,6 +236,18 @@ make_static_metric! {
         unable_to_split_cpu_top,
     }
 
+    pub label_enum UnsafeRecoveryEventType {
+        // force leader.
+        force_leader,
+    }
+
+    pub label_enum FlashbackEventType {
+        prepare,
+        wait_apply,
+        finish_apply,
+        finish,
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
@@ -270,6 +282,14 @@ make_static_metric! {
 
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
+    }
+
+    pub struct UnsafeRecoveryEventCounterVec: IntCounter {
+        "type" => UnsafeRecoveryEventType,
+    }
+
+    pub struct FlashbackEventCounterVec: IntCounter {
+        "type" => FlashbackEventType,
     }
 
 }
@@ -778,15 +798,19 @@ lazy_static! {
         &["type"]
     ).unwrap();
 
-    pub static ref FLASHBACK_CHECK: IntCounter =
-    register_int_counter!(
-        "flashback_check",
-        "Total number of flashback check."
+    pub static ref UNSAFE_RECOVERY_EVENT: UnsafeRecoveryEventCounterVec =
+    register_static_int_counter_vec!(
+        UnsafeRecoveryEventCounterVec,
+        "tikv_unsafe_recovery_event",
+        "Unsafe recovery event",
+        &["type"]
     ).unwrap();
 
-    pub static ref FORCE_LEADER_CHECK: IntCounter =
-    register_int_counter!(
-        "forced_leader_check",
-        "Total number of forced leader check."
+    pub static ref FLASHBACK_EVENT: FlashbackEventCounterVec =
+    register_static_int_counter_vec!(
+        FlashbackEventCounterVec,
+        "tikv_flashback_event",
+        "Flashback event",
+        &["type"]
     ).unwrap();
 }

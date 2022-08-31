@@ -3,7 +3,10 @@
 use std::time::Duration;
 
 use futures::executor::block_on;
-use kvproto::metapb;
+use kvproto::{
+    metapb,
+    raft_cmdpb::{self, CmdType},
+};
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
@@ -18,7 +21,7 @@ fn test_flahsback_for_applied_index() {
 
     // prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     let last_index = cluster
         .raft_local_state(region.get_id(), 1)
@@ -38,7 +41,7 @@ fn test_flashback_for_schedule() {
 
     // prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // verify the schedule is unabled.
     let mut region = cluster.get_region(b"k3");
@@ -89,7 +92,7 @@ fn test_flahsback_for_write() {
 
     // prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // write will be blocked
     let value = vec![1_u8; 8096];
@@ -114,12 +117,12 @@ fn test_flahsback_for_read() {
     // write for cluster
     let value = vec![1_u8; 8096];
     multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
-    // get for cluster
+    // read for cluster
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 
     // prepare for flashback
     let region = cluster.get_region(b"k1");
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // read will be blocked
     must_get_error_recovery_in_progress(
@@ -161,7 +164,7 @@ fn test_flahsback_for_local_read() {
 
     let mut region = cluster.get_region(b"k1");
     // prepare for flashback
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // Force `peer` to become leader. will renew lease.
     let node_id = 2;
@@ -182,21 +185,33 @@ fn test_flahsback_for_local_read() {
 
     // wait for transfer leader to complete, and will renew no lease.
     sleep_ms(100);
-    let detector = LeaseReadFilter::default();
-    cluster.add_send_filter(CloneFilterFactory(detector));
 
-    // verify the read can be executed if add flashback flag in request's
-    // header.
+    // Snap
+    let mut request = raft_cmdpb::Request::default();
+    request.set_cmd_type(CmdType::Snap);
     let mut req = new_request(
         region.get_id(),
         region.take_region_epoch(),
-        vec![new_get_cf_cmd("write", b"k1")],
+        vec![request],
         false,
     );
     let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
     req.mut_header().set_peer(new_leader.unwrap());
-    req.mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
+    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
+    // where get the EpochNotMatch error.
+    assert!(resp.get_header().has_error());
+
+    // Get
+    let mut request = raft_cmdpb::Request::default();
+    request.set_cmd_type(CmdType::Get);
+    let mut req = new_request(
+        region.get_id(),
+        region.take_region_epoch(),
+        vec![request],
+        false,
+    );
+    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
+    req.mut_header().set_peer(new_leader.unwrap());
     let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
     // where get the EpochNotMatch error.
     assert!(resp.get_header().has_error());
@@ -208,7 +223,7 @@ fn test_flahsback_for_status_cmd_as_region_detail() {
     cluster.run();
 
     let region = cluster.get_region(b"k1");
-    block_on(cluster.call_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     let leader = cluster.leader_of_region(1).unwrap();
     let region_detail = cluster.region_detail(1, 1);

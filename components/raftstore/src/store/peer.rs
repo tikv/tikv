@@ -725,7 +725,9 @@ impl FlashbackState {
         }
         let ch = self.0.take().unwrap();
         match ch.send(true) {
-            Ok(_) => (),
+            Ok(_) => {
+                FLASHBACK_EVENT.finish_apply.inc();
+            }
             Err(e) => {
                 error!("Fail to notify flashback state"; "err" => ?e);
             }
@@ -2410,7 +2412,6 @@ where
 
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
-                        FLASHBACK_CHECK.inc();
                         self.maybe_finish_flashback_wait_apply();
                     }
                 }
@@ -3381,10 +3382,10 @@ where
             );
             None
         } else if self.force_leader.is_some() {
-            FORCE_LEADER_CHECK.inc();
+            UNSAFE_RECOVERY_EVENT.force_leader.inc();
             None
         } else if self.flashback_state.is_some() {
-            FLASHBACK_CHECK.inc();
+            FLASHBACK_EVENT.wait_apply.inc();
             None
         } else {
             self.leader_lease.renew(ts);
@@ -4306,7 +4307,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
-            FORCE_LEADER_CHECK.inc();
+            UNSAFE_RECOVERY_EVENT.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4982,18 +4983,11 @@ where
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
+        FLASHBACK_EVENT.wait_apply.inc();
         let mut finished = false;
         if self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index() {
-            info!(
-                "flashback finish wait apply";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.peer_id(),
-                "last_index" => self.get_store().last_index(),
-                "applied_index" =>  self.raft_group.raft.raft_log.applied,
-            );
             finished = true;
         }
-
         if finished {
             self.flashback_state.as_mut().unwrap().finish_wait_apply();
         }
