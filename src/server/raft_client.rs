@@ -204,7 +204,7 @@ impl BatchMessageBuffer {
     }
 
     #[inline]
-    fn message_size(msg: &RaftMessage) -> usize {
+    pub fn message_size(msg: &RaftMessage) -> usize {
         let mut msg_size = msg.start_key.len()
             + msg.end_key.len()
             + msg.get_message().context.len()
@@ -1035,11 +1035,16 @@ where
         transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
+                let len = BatchMessageBuffer::message_size(&msg) as u64;
+                let is_cross_az = msg.is_cross_az;
                 match s.queue.push(msg) {
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
                             self.need_flush.push((store_id, conn_id));
+                        }
+                        if is_cross_az {
+                            RAFT_CROSS_AZ_TRAFFIC_COUNTER.inc_by(len);
                         }
                         return Ok(());
                     }

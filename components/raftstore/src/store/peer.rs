@@ -1608,7 +1608,9 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
-        for msg in msgs {
+        let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+        let leader_az = zone_info.get(&self.peer.store_id);
+        for mut msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
                 let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
@@ -1660,6 +1662,13 @@ where
                     }
                 }
             }
+
+            let to_az = zone_info.get(&to_store_id);
+            let mut is_cross_az: bool = true;
+            if to_az.is_some() && leader_az.is_some() && to_az.unwrap() == leader_az.unwrap() {
+                is_cross_az = false;
+            }
+            msg.set_is_cross_az(is_cross_az);
 
             if let Err(e) = ctx.trans.send(msg) {
                 // We use metrics to observe failure on production.
