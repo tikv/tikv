@@ -80,6 +80,6 @@ fn test_read_stale() {
         .set_region_epoch(region.take_region_epoch());
     req.mut_requests().push(request_inner);
     let res = router.query(region.get_id(), req.clone()).unwrap();
-    let resps = res.read().unwrap().response.get_responses();
-    assert_eq!(resps.len(), 1);
+    let read_index = res.read().unwrap().read_index;
+    assert_eq!(read_index, 0);
 }

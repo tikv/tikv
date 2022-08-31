@@ -19,10 +19,8 @@ use raftstore::{
             get_sync_log_from_request, CmdEpochChecker, ProposalContext, ProposalQueue,
             RequestInspector,
         },
-        read_queue::{ReadIndexQueue, ReadIndexRequest},
         util::{Lease, RegionReadProgress},
-        worker::{LocalReadContext, ReadExecutor},
-        Config, EntryStorage, RaftlogFetchTask, Transport,
+        Config, EntryStorage, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest, Transport,
     },
     Error,
 };
@@ -210,10 +208,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(ctx)
     }
 
-    fn next_proposal_index(&self) -> u64 {
-        self.raft_group.raft.raft_log.last_index() + 1
-    }
-
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {
         self.raft_group.mut_store()
     }
@@ -336,24 +330,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn store_commit_index(&self) -> u64 {
-        self.raft_group.store().commit_index()
-    }
-
-    #[inline]
     // TODO
     pub fn has_force_leader(&self) -> bool {
         false
-    }
-
-    #[inline]
-    pub fn store_applied_term(&self) -> u64 {
-        self.raft_group.store().applied_term()
-    }
-
-    #[inline]
-    pub fn store_applied_index(&self) -> u64 {
-        self.raft_group.store().applied_index()
     }
 
     #[inline]

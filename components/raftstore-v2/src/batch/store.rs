@@ -16,12 +16,9 @@ use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raft::INVALID_ID;
-use raftstore::{
-    bytes_capacity,
-    store::{
-        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-        RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
-    },
+use raftstore::store::{
+    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{

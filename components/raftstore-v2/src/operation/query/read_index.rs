@@ -17,9 +17,8 @@ use raftstore::{
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
         peer::{can_amend_read, propose_read_index, should_renew_lease, RequestInspector},
-        read_queue::{ReadIndexContext, ReadIndexRequest},
         util::LeaseState,
-        ReadDelegate, ReadProgress, Transport,
+        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, Transport,
     },
     Error,
 };
@@ -93,7 +92,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
-            let commit_index = self.store_commit_index();
+            let commit_index = self.raft_group.store().commit_index();
             if let Some(read) = self.pending_reads.back_mut() {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
@@ -194,11 +193,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 response.mut_read_index().set_locked(*locked);
                 let mut cmd_resp = RaftCmdResponse::default();
                 cmd_resp.mut_responses().push(response);
-                let read_resp = ReadResponse {
-                    response: cmd_resp,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-                ch.set_result(QueryResult::Read(read_resp));
+                ch.set_result(QueryResult::Response(cmd_resp));
             } else {
                 match (read_index, read_index_req.read_index) {
                     (Some(local_responsed_index), Some(batch_index)) => {
@@ -222,7 +217,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn apply_reads<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
+    pub(crate) fn apply_reads<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
         let states = ready.read_states().iter().map(|state| {
             let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
             (read_index_ctx.id, read_index_ctx.locked, state.index)

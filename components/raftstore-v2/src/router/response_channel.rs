@@ -339,18 +339,14 @@ impl WriteCallback for CmdResChannel {
 /// need to be a field of the struct.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ReadResponse {
-    pub response: RaftCmdResponse,
+    pub read_index: u64,
     pub txn_extra_op: TxnExtraOp,
 }
 
 impl ReadResponse {
     pub fn new(read_index: u64) -> Self {
-        let mut response = Response::default();
-        response.mut_read_index().set_read_index(read_index);
-        let mut cmd_resp = RaftCmdResponse::default();
-        cmd_resp.mut_responses().push(response);
         ReadResponse {
-            response: cmd_resp,
+            read_index,
             txn_extra_op: TxnExtraOp::Noop,
         }
     }

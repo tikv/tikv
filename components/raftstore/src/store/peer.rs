@@ -3932,7 +3932,31 @@ where
                 .invalid_proposal
                 .read_index_no_leader
                 .inc();
-            self.wake_up_leader(poll_ctx);
+            // The leader may be hibernated, send a message for trying to awaken the leader.
+            if self.bcast_wake_up_time.is_none()
+                || self
+                    .bcast_wake_up_time
+                    .as_ref()
+                    .unwrap()
+                    .saturating_elapsed()
+                    >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
+            {
+                self.bcast_wake_up_message(poll_ctx);
+                self.bcast_wake_up_time = Some(TiInstant::now_coarse());
+
+                let task = PdTask::QueryRegionLeader {
+                    region_id: self.region_id,
+                };
+                if let Err(e) = poll_ctx.pd_scheduler.schedule(task) {
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer_id(),
+                        "err" => %e,
+                    )
+                }
+            }
+            self.should_wake_up = true;
             cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id, None));
             cb.report_error(err_resp);
             return false;
@@ -3985,37 +4009,6 @@ where
         }
 
         true
-    }
-
-    // When a replica cannot detect any leader, `MsgReadIndex` will be dropped,
-    // which would cause a long time waiting for a read response. Then we should
-    // return an error directly in this situation.
-    fn wake_up_leader<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        // The leader may be hibernated, send a message for trying to awaken the leader.
-        if self.bcast_wake_up_time.is_none()
-            || self
-                .bcast_wake_up_time
-                .as_ref()
-                .unwrap()
-                .saturating_elapsed()
-                >= Duration::from_millis(MIN_BCAST_WAKE_UP_INTERVAL)
-        {
-            self.bcast_wake_up_message(ctx);
-            self.bcast_wake_up_time = Some(TiInstant::now_coarse());
-
-            let task = PdTask::QueryRegionLeader {
-                region_id: self.region_id,
-            };
-            if let Err(e) = ctx.pd_scheduler.schedule(task) {
-                error!(
-                    "failed to notify pd";
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer_id(),
-                    "err" => %e,
-                )
-            }
-        }
-        self.should_wake_up = true;
     }
 
     // Propose a read index request to the raft group, return the request id and

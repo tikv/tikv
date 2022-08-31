@@ -9,7 +9,7 @@ pub mod memory;
 pub mod metrics;
 pub mod msg;
 pub mod peer;
-pub mod read_queue;
+mod read_queue;
 pub mod region_meta;
 pub mod transport;
 #[macro_use]
@@ -24,7 +24,7 @@ mod region_snapshot;
 mod replication_mode;
 pub mod snap;
 mod txn_ext;
-pub mod worker;
+mod worker;
 
 #[cfg(any(test, feature = "testexport"))]
 pub use self::msg::PeerInternalStat;
@@ -58,7 +58,7 @@ pub use self::{
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
         RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
     },
-    read_queue::ReadIndexContext,
+    read_queue::{ReadIndexContext, ReadIndexQueue, ReadIndexRequest},
     region_snapshot::{RegionIterator, RegionSnapshot},
     replication_mode::{GlobalReplicationState, StoreGroup},
     snap::{

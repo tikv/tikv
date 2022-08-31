@@ -8,7 +8,7 @@ use kvproto::{
 use raftstore::{
     store::{
         cmd_resp, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        read_queue::ReadIndexRequest, util::check_region_epoch, ReadCallback,
+        util::check_region_epoch, ReadCallback, ReadIndexRequest,
     },
     Error,
 };
@@ -45,11 +45,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 response.mut_read_index().set_locked(*locked);
                 let mut cmd_resp = RaftCmdResponse::default();
                 cmd_resp.mut_responses().push(response);
-                let read_resp = ReadResponse {
-                    response: cmd_resp,
-                    txn_extra_op: TxnExtraOp::Noop,
-                };
-                ch.set_result(QueryResult::Read(read_resp));
+                ch.set_result(QueryResult::Response(cmd_resp));
                 continue;
             }
             if req.get_header().get_replica_read() {
@@ -111,7 +107,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // problem if the leader applies fewer values than the follower, the follower
         // read could get a newer value, and after that, the leader may read a stale
         // value, which violates linearizability.
-        self.store_applied_index() >= read_index
+        self.storage().apply_state().get_applied_index() >= read_index
             // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
             // TODO: Add a test to cover this case
             && !self.has_pending_merge_state()

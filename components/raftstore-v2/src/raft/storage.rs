@@ -186,11 +186,6 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 
     #[inline]
-    pub fn applied_index(&self) -> u64 {
-        self.entry_storage.apply_state().get_applied_index()
-    }
-
-    #[inline]
     pub fn applied_term(&self) -> u64 {
         self.entry_storage.applied_term()
     }

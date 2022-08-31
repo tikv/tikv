@@ -45,7 +45,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
-            println!("inspect_read stale read");
             return Ok(RequestPolicy::StaleRead);
         }
 
@@ -76,7 +75,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                     ch.set_result(QueryResult::Read(read_resp));
                 }
                 Ok(RequestPolicy::StaleRead) => {
-                    println!("ReadStale is called");
                     ch.set_result(self.fsm.peer_mut().can_replica_read(req, true, None));
                 }
                 _ => {
