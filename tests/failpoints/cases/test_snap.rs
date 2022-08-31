@@ -256,7 +256,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 // And when it's destroyed (destroy is not finished either), the machine restarted.
 // After the restart, the snapshot should be applied successfully.println!
 // And new data should be written to store 3 successfully.
-#[test]
+// #[test]
 fn test_destroy_peer_on_pending_snapshot_and_restart() {
     let mut cluster = new_server_cluster(0, 3);
     configure_for_snapshot(&mut cluster);

@@ -502,7 +502,7 @@ where
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate<EK>) {
-        // TODO(tiflash): pengding PR https://github.com/tikv/tikv/pull/12957.
+        // TODO(tiflash): pending PR https://github.com/tikv/tikv/pull/12957.
         // We always persist advanced apply state here.
         // However, it should not be called from `handle_raft_entry_normal`.
         if delegate.last_flush_applied_index < delegate.apply_state.get_applied_index() {
@@ -1633,7 +1633,6 @@ where
                 self.metrics.lock_cf_written_bytes += value.len() as u64;
             }
             // TODO: check whether cf exists or not.
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.put_cf(cf, key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}) to cf {}: {:?}",
@@ -1645,7 +1644,6 @@ where
                 )
             });
         } else {
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.put(key, value).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to write ({}, {}): {:?}",
@@ -1676,7 +1674,6 @@ where
         if !req.get_delete().get_cf().is_empty() {
             let cf = req.get_delete().get_cf();
             // TODO: check whether cf exists or not.
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.delete_cf(cf, key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1693,7 +1690,6 @@ where
                 self.metrics.delete_keys_hint += 1;
             }
         } else {
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             ctx.kv_wb.delete(key).unwrap_or_else(|e| {
                 panic!(
                     "{} failed to delete {}: {}",
@@ -1758,7 +1754,6 @@ where
                 )
             };
 
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             engine
                 .delete_ranges_cf(cf, DeleteStrategy::DeleteFiles, &range)
                 .unwrap_or_else(|e| fail_f(e, DeleteStrategy::DeleteFiles));
@@ -1769,7 +1764,6 @@ where
                 DeleteStrategy::DeleteByKey
             };
 
-            // TODO(tiflash): open this comment if we finish engine_tiflash.
             // Delete all remaining keys.
             engine
                 .delete_ranges_cf(cf, strategy.clone(), &range)

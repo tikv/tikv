@@ -156,12 +156,9 @@ pub fn must_get_mem(
     value: Option<&[u8]>,
 ) {
     let mut last_res: Option<&Vec<u8>> = None;
+    let cf = new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default;
     for _ in 1..300 {
-        let res = engine_store_server.get_mem(
-            region_id,
-            new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default,
-            &key.to_vec(),
-        );
+        let res = engine_store_server.get_mem(region_id, cf, &key.to_vec());
 
         if let (Some(value), Some(last_res)) = (value, res) {
             assert_eq!(value, &last_res[..]);
@@ -174,11 +171,12 @@ pub fn must_get_mem(
     }
     let s = std::str::from_utf8(key).unwrap_or("");
     panic!(
-        "can't get mem value {:?} for key {}({}) in {}, actual {:?}",
+        "can't get mem value {:?} for key {}({}) in store {} cf {:?}, actual {:?}",
         value.map(tikv_util::escape),
         log_wrappers::hex_encode_upper(key),
         s,
         engine_store_server.id,
+        cf,
         last_res,
     )
 }
@@ -291,6 +289,15 @@ pub fn get_valid_compact_index(states: &HashMap<u64, States>) -> (u64, u64) {
         })
         .min_by(|l, r| l.0.cmp(&r.0))
         .unwrap()
+}
+
+pub fn disable_auto_gen_compact_log(cluster: &mut Cluster<NodeCluster>) {
+    // Disable AUTO generated compact log.
+    // This will not totally disable, so we use some failpoints later.
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
+    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
 }
 
 #[test]

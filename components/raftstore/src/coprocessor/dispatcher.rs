@@ -504,6 +504,51 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn should_pre_apply_snapshot(&self) -> bool {
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            if observer.should_pre_apply_snapshot() {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn pre_apply_snapshot(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_snapshot,
+            peer_id,
+            snap_key,
+            snap,
+        );
+    }
+
+    pub fn post_apply_snapshot(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) -> Result<()> {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            let res = observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap);
+            if res.is_err() {
+                return res;
+            }
+        }
+        Ok(())
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
@@ -646,7 +691,10 @@ mod tests {
     };
     use tikv_util::box_err;
 
-    use crate::coprocessor::*;
+    use crate::{
+        coprocessor::*,
+        store::{SnapKey, Snapshot},
+    };
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -673,6 +721,9 @@ mod tests {
         PostExecQuery = 17,
         PostExecAdmin = 18,
         OnComputeEngineSize = 19,
+        PreApplySnapshot = 20,
+        PostApplySnapshot = 21,
+        ShouldPreApplySnapshot = 22,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -840,6 +891,39 @@ mod tests {
                 .fetch_add(ObserverIndex::ApplySst as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
+
+        fn pre_apply_snapshot(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: u64,
+            _: &SnapKey,
+            _: Option<&Snapshot>,
+        ) {
+            self.called
+                .fetch_add(ObserverIndex::PreApplySnapshot as usize, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn post_apply_snapshot(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: u64,
+            _: &crate::store::SnapKey,
+            _: Option<&Snapshot>,
+        ) -> Result<()> {
+            self.called
+                .fetch_add(ObserverIndex::PostApplySnapshot as usize, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn should_pre_apply_snapshot(&self) -> bool {
+            self.called.fetch_add(
+                ObserverIndex::ShouldPreApplySnapshot as usize,
+                Ordering::SeqCst,
+            );
+            false
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -983,6 +1067,19 @@ mod tests {
         let cmd = Cmd::default();
         host.post_exec(&region, &cmd, &apply_state, &region_state, &mut info);
         index += ObserverIndex::PostExecQuery as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let key = SnapKey::new(region.get_id(), 1, 1);
+        host.pre_apply_snapshot(&region, 0, &key, None);
+        index += ObserverIndex::PreApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let _ = host.post_apply_snapshot(&region, 0, &key, None);
+        index += ObserverIndex::PostApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.should_pre_apply_snapshot();
+        index += ObserverIndex::ShouldPreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
 

@@ -11,7 +11,7 @@ use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv::config::{TiKvConfig, LAST_CONFIG_FILE};
-use tikv_util::crit;
+use tikv_util::{config::ReadableDuration, crit};
 
 use crate::fatal;
 
@@ -165,11 +165,14 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
+        info!("check_critical_config finished compatible_adjust");
         cfg.compatible_adjust();
         if let Err(e) = cfg.validate() {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
+        info!("check_critical_config finished validate");
         config.check_critical_cfg_with(&cfg)?;
+        info!("check_critical_config finished check_critical_cfg_with");
     }
     Ok(())
 }

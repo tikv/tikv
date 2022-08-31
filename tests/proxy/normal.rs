@@ -64,687 +64,882 @@ use tikv_util::{
 
 use crate::proxy::*;
 
-#[test]
-fn test_config() {
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    let text = "memory-usage-high-water=0.65\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
-    write!(file, "{}", text).unwrap();
-    let path = file.path();
+mod store {
+    use super::*;
+    #[test]
+    fn test_store_stats() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 1);
 
-    let mut unrecognized_keys = Vec::new();
-    let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
-    // Othersize we have no default addr for TiKv.
-    setup_default_tikv_config(&mut config);
-    assert_eq!(config.memory_usage_high_water, 0.65);
-    assert_eq!(config.rocksdb.max_open_files, 111);
-    assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
-    assert_eq!(unrecognized_keys.len(), 3);
+        let _ = cluster.run();
 
-    let mut proxy_unrecognized_keys = Vec::new();
-    let proxy_config = ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
-    assert_eq!(proxy_config.raft_store.snap_handle_pool_size, 4);
-    assert_eq!(proxy_config.server.engine_addr, "1.2.3.4:5");
-    assert!(proxy_unrecognized_keys.contains(&"rocksdb".to_string()));
-    assert!(proxy_unrecognized_keys.contains(&"memory-usage-high-water".to_string()));
-    assert!(proxy_unrecognized_keys.contains(&"nosense".to_string()));
-    let v1 = vec!["a.b", "b"]
-        .iter()
-        .map(|e| String::from(*e))
-        .collect::<Vec<String>>();
-    let v2 = vec!["a.b", "b.b", "c"]
-        .iter()
-        .map(|e| String::from(*e))
-        .collect::<Vec<String>>();
-    let unknown = ensure_no_common_unrecognized_keys(&v1, &v2);
-    assert_eq!(unknown.is_err(), true);
-    assert_eq!(unknown.unwrap_err(), "a.b, b.b");
-    let unknown = ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys);
-    assert_eq!(unknown.is_err(), true);
-    assert_eq!(unknown.unwrap_err(), "nosense, rocksdb.z");
+        for id in cluster.engines.keys() {
+            let engine = cluster.get_tiflash_engine(*id);
+            assert_eq!(
+                engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
+                444444
+            );
+        }
 
-    // Need run this test with ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
-    std::fs::remove_file(
-        PathBuf::from_str(&config.storage.data_dir)
-            .unwrap()
-            .join(LAST_CONFIG_FILE),
-    );
-    validate_and_persist_config(&mut config, true);
-
-    // Will not override ProxyConfig
-    let proxy_config_new = ProxyConfig::from_file(path, None).unwrap();
-    assert_eq!(proxy_config_new.raft_store.snap_handle_pool_size, 4);
+        for id in cluster.engines.keys() {
+            cluster.must_send_store_heartbeat(*id);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        // let resp = block_on(pd_client.store_heartbeat(Default::default(), None, None)).unwrap();
+        for id in cluster.engines.keys() {
+            let store_stat = pd_client.get_store_stats(*id).unwrap();
+            assert_eq!(store_stat.get_capacity(), 444444);
+            assert_eq!(store_stat.get_available(), 333333);
+        }
+        // The same to mock-engine-store
+        cluster.shutdown();
+    }
 }
 
-#[test]
-fn test_validate_config() {
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    let text = "memory-usage-high-water=0.65\n[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
-    write!(file, "{}", text).unwrap();
-    let path = file.path();
-    let tmp_store_folder = tempfile::TempDir::new().unwrap();
-    let tmp_last_config_path = tmp_store_folder.path().join(LAST_CONFIG_FILE);
-    std::fs::copy(path, tmp_last_config_path.as_path()).unwrap();
-    std::fs::copy(path, "./last_ttikv.toml").unwrap();
-    get_last_config(tmp_store_folder.path().to_str().unwrap());
+mod region {
+    use super::*;
+
+    #[test]
+    fn test_handle_destroy() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        disable_auto_gen_compact_log(&mut cluster);
+
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+
+        cluster.run();
+        cluster.must_put(b"k1", b"v1");
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
+        let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
+        let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
+        cluster.must_transfer_leader(region_id, peer_1);
+
+        iter_ffi_helpers(
+            &cluster,
+            Some(vec![eng_ids[1]]),
+            &mut |_, _, ffi: &mut FFIHelperSet| {
+                let server = &ffi.engine_store_server;
+                assert!(server.kvstore.contains_key(&region_id));
+            },
+        );
+
+        pd_client.must_remove_peer(region_id, peer_2);
+
+        check_key(
+            &cluster,
+            b"k1",
+            b"v2",
+            Some(false),
+            None,
+            Some(vec![eng_ids[1]]),
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Region removed in server.
+        iter_ffi_helpers(
+            &cluster,
+            Some(vec![eng_ids[1]]),
+            &mut |_, _, ffi: &mut FFIHelperSet| {
+                let server = &ffi.engine_store_server;
+                assert!(!server.kvstore.contains_key(&region_id));
+            },
+        );
+
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_get_region_local_state() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        cluster.run();
+
+        let k = b"k1";
+        let v = b"v1";
+        cluster.must_put(k, v);
+        check_key(&cluster, k, v, Some(true), None, None);
+        let region_id = cluster.get_region(k).get_id();
+
+        // Get RegionLocalState through ffi
+        unsafe {
+            iter_ffi_helpers(
+                &cluster,
+                None,
+                &mut |id: u64, _, ffi_set: &mut FFIHelperSet| {
+                    let f = ffi_set.proxy_helper.fn_get_region_local_state.unwrap();
+                    let mut state = kvproto::raft_serverpb::RegionLocalState::default();
+                    let mut error_msg = mock_engine_store::RawCppStringPtrGuard::default();
+
+                    assert_eq!(
+                        f(
+                            ffi_set.proxy_helper.proxy_ptr,
+                            region_id,
+                            &mut state as *mut _ as _,
+                            error_msg.as_mut(),
+                        ),
+                        KVGetStatus::Ok
+                    );
+                    assert!(state.has_region());
+                    assert_eq!(state.get_state(), kvproto::raft_serverpb::PeerState::Normal);
+                    assert!(error_msg.as_ref().is_null());
+
+                    let mut state = kvproto::raft_serverpb::RegionLocalState::default();
+                    assert_eq!(
+                        f(
+                            ffi_set.proxy_helper.proxy_ptr,
+                            0, // not exist
+                            &mut state as *mut _ as _,
+                            error_msg.as_mut(),
+                        ),
+                        KVGetStatus::NotFound
+                    );
+                    assert!(!state.has_region());
+                    assert!(error_msg.as_ref().is_null());
+
+                    ffi_set
+                        .proxy
+                        .get_value_cf("none_cf", "123".as_bytes(), |value| {
+                            let msg = value.unwrap_err();
+                            assert_eq!(msg, "Storage Engine cf none_cf not found");
+                        });
+                    ffi_set
+                        .proxy
+                        .get_value_cf("raft", "123".as_bytes(), |value| {
+                            let res = value.unwrap();
+                            assert!(res.is_none());
+                        });
+
+                    // If we have no kv engine.
+                    ffi_set.proxy.set_kv_engine(None);
+                    let res = ffi_set.proxy_helper.fn_get_region_local_state.unwrap()(
+                        ffi_set.proxy_helper.proxy_ptr,
+                        region_id,
+                        &mut state as *mut _ as _,
+                        error_msg.as_mut(),
+                    );
+                    assert_eq!(res, KVGetStatus::Error);
+                    assert!(!error_msg.as_ref().is_null());
+                    assert_eq!(
+                        error_msg.as_str(),
+                        "KV engine is not initialized".as_bytes()
+                    );
+                },
+            );
+        }
+
+        cluster.shutdown();
+    }
 }
 
-#[test]
-fn test_config_default_addr() {
-    let mut file = tempfile::NamedTempFile::new().unwrap();
-    let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
-    write!(file, "{}", text).unwrap();
-    let path = file.path();
-    let args: Vec<&str> = vec![];
-    let matches = App::new("RaftStore Proxy")
-        .arg(
-            Arg::with_name("config")
-                .short("C")
-                .long("config")
-                .value_name("FILE")
-                .help("Set the configuration file")
-                .takes_value(true),
-        )
-        .get_matches_from(args);
-    let c = format!("--config {}", path.to_str().unwrap());
-    let mut v = vec![c];
-    let config = gen_tikv_config(&matches, false, &mut v);
-    assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
-    assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
-    assert_eq!(
-        config.server.advertise_status_addr,
-        TIFLASH_DEFAULT_STATUS_ADDR
-    );
-}
+mod config {
+    use super::*;
+    #[test]
+    fn test_config() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let text = "memory-usage-high-water=0.65\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+        write!(file, "{}", text).unwrap();
+        let path = file.path();
 
-fn test_store_stats() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 1);
+        let mut unrecognized_keys = Vec::new();
+        let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        // Othersize we have no default addr for TiKv.
+        setup_default_tikv_config(&mut config);
+        assert_eq!(config.memory_usage_high_water, 0.65);
+        assert_eq!(config.rocksdb.max_open_files, 111);
+        assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
+        assert_eq!(unrecognized_keys.len(), 3);
 
-    let _ = cluster.run();
+        let mut proxy_unrecognized_keys = Vec::new();
+        let proxy_config =
+            ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
+        assert_eq!(proxy_config.raft_store.snap_handle_pool_size, 4);
+        assert_eq!(proxy_config.server.engine_addr, "1.2.3.4:5");
+        assert!(proxy_unrecognized_keys.contains(&"rocksdb".to_string()));
+        assert!(proxy_unrecognized_keys.contains(&"memory-usage-high-water".to_string()));
+        assert!(proxy_unrecognized_keys.contains(&"nosense".to_string()));
+        let v1 = vec!["a.b", "b"]
+            .iter()
+            .map(|e| String::from(*e))
+            .collect::<Vec<String>>();
+        let v2 = vec!["a.b", "b.b", "c"]
+            .iter()
+            .map(|e| String::from(*e))
+            .collect::<Vec<String>>();
+        let unknown = ensure_no_common_unrecognized_keys(&v1, &v2);
+        assert_eq!(unknown.is_err(), true);
+        assert_eq!(unknown.unwrap_err(), "a.b, b.b");
+        let unknown =
+            ensure_no_common_unrecognized_keys(&proxy_unrecognized_keys, &unrecognized_keys);
+        assert_eq!(unknown.is_err(), true);
+        assert_eq!(unknown.unwrap_err(), "nosense, rocksdb.z");
 
-    for id in cluster.engines.keys() {
-        let engine = cluster.get_tiflash_engine(*id);
+        // Need run this test with ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
+        std::fs::remove_file(
+            PathBuf::from_str(&config.storage.data_dir)
+                .unwrap()
+                .join(LAST_CONFIG_FILE),
+        );
+        validate_and_persist_config(&mut config, true);
+
+        // Will not override ProxyConfig
+        let proxy_config_new = ProxyConfig::from_file(path, None).unwrap();
+        assert_eq!(proxy_config_new.raft_store.snap_handle_pool_size, 4);
+    }
+
+    #[test]
+    fn test_validate_config() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let text = "memory-usage-high-water=0.65\n[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+        write!(file, "{}", text).unwrap();
+        let path = file.path();
+        let tmp_store_folder = tempfile::TempDir::new().unwrap();
+        let tmp_last_config_path = tmp_store_folder.path().join(LAST_CONFIG_FILE);
+        std::fs::copy(path, tmp_last_config_path.as_path()).unwrap();
+        std::fs::copy(path, "./last_ttikv.toml").unwrap();
+        get_last_config(tmp_store_folder.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_config_default_addr() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let text = "memory-usage-high-water=0.65\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+        write!(file, "{}", text).unwrap();
+        let path = file.path();
+        let args: Vec<&str> = vec![];
+        let matches = App::new("RaftStore Proxy")
+            .arg(
+                Arg::with_name("config")
+                    .short("C")
+                    .long("config")
+                    .value_name("FILE")
+                    .help("Set the configuration file")
+                    .takes_value(true),
+            )
+            .get_matches_from(args);
+        let c = format!("--config {}", path.to_str().unwrap());
+        let mut v = vec![c];
+        let config = gen_tikv_config(&matches, false, &mut v);
+        assert_eq!(config.server.addr, TIFLASH_DEFAULT_LISTENING_ADDR);
+        assert_eq!(config.server.status_addr, TIFLASH_DEFAULT_STATUS_ADDR);
         assert_eq!(
-            engine.ffi_hub.as_ref().unwrap().get_store_stats().capacity,
-            444444
+            config.server.advertise_status_addr,
+            TIFLASH_DEFAULT_STATUS_ADDR
+        );
+        assert_eq!(
+            config.raft_store.region_worker_tick_interval.as_millis(),
+            500
         );
     }
 
-    for id in cluster.engines.keys() {
-        cluster.must_send_store_heartbeat(*id);
+    #[test]
+    fn test_store_setup() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        // Add label to cluster
+        address_proxy_config(&mut cluster.cfg.tikv);
+
+        // Try to start this node, return after persisted some keys.
+        let _ = cluster.start();
+        let store_id = cluster.engines.keys().last().unwrap();
+        let store = pd_client.get_store(*store_id).unwrap();
+        println!("store {:?}", store);
+        assert!(
+            store
+                .get_labels()
+                .iter()
+                .find(|&x| x.key == "engine" && x.value == "tiflash")
+                .is_some()
+        );
+        cluster.shutdown();
     }
-    std::thread::sleep(std::time::Duration::from_millis(1000));
-    // let resp = block_on(pd_client.store_heartbeat(Default::default(), None, None)).unwrap();
-    for id in cluster.engines.keys() {
-        let store_stat = pd_client.get_store_stats(*id).unwrap();
-        assert_eq!(store_stat.get_capacity(), 444444);
-        assert_eq!(store_stat.get_available(), 333333);
-    }
-    // The same to mock-engine-store
-    cluster.shutdown();
 }
 
-#[test]
-fn test_store_setup() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+mod write {
+    use super::*;
+    #[test]
+    fn test_interaction() {
+        // TODO Maybe we should pick this test to TiKV.
+        // This test is to check if empty entries can affect pre_exec and post_exec.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    // Add label to cluster
-    address_proxy_config(&mut cluster.cfg.tikv);
+        fail::cfg("try_flush_data", "return(0)").unwrap();
+        let _ = cluster.run();
 
-    // Try to start this node, return after persisted some keys.
-    let _ = cluster.start();
-    let store_id = cluster.engines.keys().last().unwrap();
-    let store = pd_client.get_store(*store_id).unwrap();
-    println!("store {:?}", store);
-    assert!(
-        store
-            .get_labels()
-            .iter()
-            .find(|&x| x.key == "engine" && x.value == "tiflash")
-            .is_some()
-    );
+        cluster.must_put(b"k1", b"v1");
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
 
-    cluster.shutdown();
-}
+        // Wait until all nodes have (k1, v1).
+        check_key(&cluster, b"k1", b"v1", Some(true), None, None);
 
-#[test]
-fn test_interaction() {
-    // TODO Maybe we should pick this test to TiKV.
-    // This test is to check if empty entries can affect pre_exec and post_exec.
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+        let prev_states = collect_all_states(&cluster, region_id);
+        let compact_log = test_raftstore::new_compact_log_request(100, 10);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        let _ = cluster
+            .call_command_on_leader(req.clone(), Duration::from_secs(3))
+            .unwrap();
 
-    fail::cfg("try_flush_data", "return(0)").unwrap();
-    let _ = cluster.run();
+        // Empty result can also be handled by post_exec
+        let mut retry = 0;
+        let new_states = loop {
+            let new_states = collect_all_states(&cluster, region_id);
+            let mut ok = true;
+            for i in prev_states.keys() {
+                let old = prev_states.get(i).unwrap();
+                let new = new_states.get(i).unwrap();
+                if old.in_memory_apply_state == new.in_memory_apply_state
+                    && old.in_memory_applied_term == new.in_memory_applied_term
+                {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                break new_states;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            retry += 1;
+        };
 
-    cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-
-    // Wait until all nodes have (k1, v1).
-    check_key(&cluster, b"k1", b"v1", Some(true), None, None);
-
-    let prev_states = collect_all_states(&cluster, region_id);
-    let compact_log = test_raftstore::new_compact_log_request(100, 10);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let _ = cluster
-        .call_command_on_leader(req.clone(), Duration::from_secs(3))
-        .unwrap();
-
-    // Empty result can also be handled by post_exec
-    let mut retry = 0;
-    let new_states = loop {
-        let new_states = collect_all_states(&cluster, region_id);
-        let mut ok = true;
         for i in prev_states.keys() {
             let old = prev_states.get(i).unwrap();
             let new = new_states.get(i).unwrap();
-            if old.in_memory_apply_state == new.in_memory_apply_state
-                && old.in_memory_applied_term == new.in_memory_applied_term
-            {
-                ok = false;
-                break;
+            assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+            assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+            // An empty cmd will not cause persistence.
+            assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
+        }
+
+        cluster.must_put(b"k2", b"v2");
+        // Wait until all nodes have (k2, v2).
+        check_key(&cluster, b"k2", b"v2", Some(true), None, None);
+
+        fail::cfg("on_empty_cmd_normal", "return").unwrap();
+        let prev_states = collect_all_states(&cluster, region_id);
+        let _ = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let new_states = collect_all_states(&cluster, region_id);
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+            assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        }
+
+        fail::remove("try_flush_data");
+        fail::remove("on_empty_cmd_normal");
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_leadership_change_filter() {
+        test_leadership_change_impl(true);
+    }
+
+    #[test]
+    fn test_leadership_change_no_persist() {
+        test_leadership_change_impl(false);
+    }
+
+    fn test_leadership_change_impl(filter: bool) {
+        // Test if a empty command can be observed when leadership changes.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        disable_auto_gen_compact_log(&mut cluster);
+
+        if filter {
+            // We don't handle CompactLog at all.
+            fail::cfg("try_flush_data", "return(0)").unwrap();
+        } else {
+            // We don't return Persist after handling CompactLog.
+            fail::cfg("no_persist_compact_log", "return").unwrap();
+        }
+        // Do not handle empty cmd.
+        fail::cfg("on_empty_cmd_normal", "return").unwrap();
+        let _ = cluster.run();
+
+        cluster.must_put(b"k1", b"v1");
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
+
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+        let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
+        let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
+        cluster.must_transfer_leader(region.get_id(), peer_1.clone());
+
+        cluster.must_put(b"k2", b"v2");
+        fail::cfg("on_empty_cmd_normal", "return").unwrap();
+
+        // Wait until all nodes have (k2, v2), then transfer leader.
+        check_key(&cluster, b"k2", b"v2", Some(true), None, None);
+        if filter {
+            // We should also filter normal kv, since a empty result can also be invoke pose_exec.
+            fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+        }
+        let prev_states = collect_all_states(&cluster, region_id);
+        cluster.must_transfer_leader(region.get_id(), peer_2.clone());
+
+        // The states remain the same, since we don't observe empty cmd.
+        let new_states = collect_all_states(&cluster, region_id);
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            if filter {
+                // CompactLog can still change in-memory state, when exec in memory.
+                assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
+                assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
             }
+            assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
         }
-        if ok {
-            break new_states;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        retry += 1;
-    };
 
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
-        // An empty cmd will not cause persistence.
-        assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
+        fail::remove("on_empty_cmd_normal");
+        // We need forward empty cmd generated by leadership changing to TiFlash.
+        cluster.must_transfer_leader(region.get_id(), peer_1.clone());
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        let new_states = collect_all_states(&cluster, region_id);
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+            assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
+        }
+
+        if filter {
+            fail::remove("try_flush_data");
+            fail::remove("on_post_exec_normal");
+        } else {
+            fail::remove("no_persist_compact_log");
+        }
+        cluster.shutdown();
     }
 
-    cluster.must_put(b"k2", b"v2");
-    // Wait until all nodes have (k2, v2).
-    check_key(&cluster, b"k2", b"v2", Some(true), None, None);
+    #[test]
+    fn test_kv_write_always_persist() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
-    let prev_states = collect_all_states(&cluster, region_id);
-    let _ = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
+        let _ = cluster.run();
 
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let new_states = collect_all_states(&cluster, region_id);
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        cluster.must_put(b"k0", b"v0");
+        let region_id = cluster.get_region(b"k0").get_id();
+
+        let mut prev_states = collect_all_states(&cluster, region_id);
+        // Always persist on every command
+        fail::cfg("on_post_exec_normal_end", "return(true)").unwrap();
+        for i in 1..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+
+            // We can't always get kv from disk, even we commit everytime,
+            // since they are filtered by engint_tiflash
+            check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+
+            // This may happen after memory write data and before commit.
+            // We must check if we already have in memory.
+            check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            // However, advanced apply index will always persisted.
+            let new_states = collect_all_states(&cluster, region_id);
+            for id in cluster.engines.keys() {
+                let p = &prev_states.get(id).unwrap().in_disk_apply_state;
+                let n = &new_states.get(id).unwrap().in_disk_apply_state;
+                assert_ne!(p, n);
+            }
+            prev_states = new_states;
+        }
+        fail::remove("on_post_exec_normal_end");
+        cluster.shutdown();
     }
 
-    fail::remove("try_flush_data");
-    fail::remove("on_empty_cmd_normal");
-    cluster.shutdown();
-}
+    #[test]
+    fn test_kv_write() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-#[test]
-fn test_leadership_change_filter() {
-    test_leadership_change_impl(true);
-}
-
-#[test]
-fn test_leadership_change_no_persist() {
-    test_leadership_change_impl(false);
-}
-
-fn test_leadership_change_impl(filter: bool) {
-    // Test if a empty command can be observed when leadership changes.
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-
-    // Disable AUTO generated compact log.
-    // This will not totally disable, so we use some failpoints later.
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
-    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-
-    if filter {
-        // We don't handle CompactLog at all.
+        fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+        fail::cfg("on_post_exec_admin", "return(false)").unwrap();
+        // Abandon CompactLog and previous flush.
         fail::cfg("try_flush_data", "return(0)").unwrap();
-    } else {
+
+        let _ = cluster.run();
+
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        // Since we disable all observers, we can get nothing in either memory and disk.
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(false),
+                Some(false),
+                None,
+            );
+        }
+
+        // We can read initial raft state, since we don't persist meta either.
+        let r1 = cluster.get_region(b"k1").get_id();
+        let prev_states = collect_all_states(&cluster, r1);
+
+        fail::remove("on_post_exec_normal");
+        fail::remove("on_post_exec_admin");
+        for i in 10..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        // Since we enable all observers, we can get in memory.
+        // However, we get nothing in disk since we don't persist.
+        for i in 10..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                Some(false),
+                None,
+            );
+        }
+
+        let new_states = collect_all_states(&cluster, r1);
+        for id in cluster.engines.keys() {
+            assert_ne!(
+                &prev_states.get(id).unwrap().in_memory_apply_state,
+                &new_states.get(id).unwrap().in_memory_apply_state
+            );
+            assert_eq!(
+                &prev_states.get(id).unwrap().in_disk_apply_state,
+                &new_states.get(id).unwrap().in_disk_apply_state
+            );
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fail::remove("try_flush_data");
+
+        let prev_states = collect_all_states(&cluster, r1);
+        // Write more after we force persist when CompactLog.
+        for i in 20..30 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        // We can read from mock-store's memory, we are not sure if we can read from disk,
+        // since there may be or may not be a CompactLog.
+        for i in 11..30 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+        }
+
+        // Force a compact log to persist.
+        let region_r = cluster.get_region("k1".as_bytes());
+        let region_id = region_r.get_id();
+        let compact_log = test_raftstore::new_compact_log_request(1000, 100);
+        let req =
+            test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
+        let res = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+        assert!(res.get_header().has_error(), "{:?}", res);
+        // This CompactLog is executed with an error. It will not trigger a compaction.
+        // However, it can trigger a persistence.
+        for i in 11..30 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                Some(true),
+                None,
+            );
+        }
+
+        let new_states = collect_all_states(&cluster, r1);
+
+        // apply_state is changed in memory, and persisted.
+        for id in cluster.engines.keys() {
+            assert_ne!(
+                &prev_states.get(id).unwrap().in_memory_apply_state,
+                &new_states.get(id).unwrap().in_memory_apply_state
+            );
+            assert_ne!(
+                &prev_states.get(id).unwrap().in_disk_apply_state,
+                &new_states.get(id).unwrap().in_disk_apply_state
+            );
+        }
+
+        fail::remove("no_persist_compact_log");
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_consistency_check() {
+        // ComputeHash and VerifyHash shall be filtered.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 2);
+
+        cluster.run();
+
+        cluster.must_put(b"k", b"v");
+        let region = cluster.get_region("k".as_bytes());
+        let region_id = region.get_id();
+
+        let r = new_compute_hash_request();
+        let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+        let _ = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+
+        let r = new_verify_hash_request(vec![7, 8, 9, 0], 1000);
+        let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
+        let _ = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+
+        cluster.must_put(b"k2", b"v2");
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_old_compact_log() {
+        // If we just return None for CompactLog, the region state in ApplyFsm will change.
+        // Because there is no rollback in new implementation.
+        // This is a ERROR state.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+        cluster.run();
+
         // We don't return Persist after handling CompactLog.
         fail::cfg("no_persist_compact_log", "return").unwrap();
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+        }
+
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
+        let prev_state = collect_all_states(&cluster, region_id);
+        let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+        let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        let res = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+
+        // Wait for state applys.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let new_state = collect_all_states(&cluster, region_id);
+        for i in prev_state.keys() {
+            let old = prev_state.get(i).unwrap();
+            let new = new_state.get(i).unwrap();
+            assert_ne!(
+                old.in_memory_apply_state.get_truncated_state(),
+                new.in_memory_apply_state.get_truncated_state()
+            );
+            assert_eq!(
+                old.in_disk_apply_state.get_truncated_state(),
+                new.in_disk_apply_state.get_truncated_state()
+            );
+        }
+
+        fail::remove("no_persist_compact_log");
+        cluster.shutdown();
     }
-    // Do not handle empty cmd.
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
-    let _ = cluster.run();
 
-    cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
+    #[test]
+    fn test_compact_log() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    let eng_ids = cluster
-        .engines
-        .iter()
-        .map(|e| e.0.to_owned())
-        .collect::<Vec<_>>();
-    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
-    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
+        disable_auto_gen_compact_log(&mut cluster);
 
-    cluster.must_put(b"k2", b"v2");
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
+        cluster.run();
 
-    // Wait until all nodes have (k2, v2), then transfer leader.
-    check_key(&cluster, b"k2", b"v2", Some(true), None, None);
-    if filter {
-        // We should also filter normal kv, since a empty result can also be invoke pose_exec.
-        fail::cfg("on_post_exec_normal", "return(false)").unwrap();
+        cluster.must_put(b"k", b"v");
+        let region = cluster.get_region("k".as_bytes());
+        let region_id = region.get_id();
+
+        fail::cfg("on_empty_cmd_normal", "return").unwrap();
+        fail::cfg("try_flush_data", "return(0)").unwrap();
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let prev_state = collect_all_states(&cluster, region_id);
+
+        let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+        let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        let res = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+        // compact index should less than applied index
+        assert!(!res.get_header().has_error(), "{:?}", res);
+
+        // TODO(tiflash) Make sure compact log is filtered successfully.
+        // Can be abstract to a retry function.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // CompactLog is filtered, because we can't flush data.
+        // However, we can still observe apply index advanced
+        let new_state = collect_all_states(&cluster, region_id);
+        for i in prev_state.keys() {
+            let old = prev_state.get(i).unwrap();
+            let new = new_state.get(i).unwrap();
+            assert_eq!(
+                old.in_memory_apply_state.get_truncated_state(),
+                new.in_memory_apply_state.get_truncated_state()
+            );
+            assert_eq!(
+                old.in_disk_apply_state.get_truncated_state(),
+                new.in_disk_apply_state.get_truncated_state()
+            );
+            assert_eq!(
+                old.in_memory_apply_state.get_applied_index() + 1,
+                new.in_memory_apply_state.get_applied_index()
+            );
+            // Persist is before.
+            assert_eq!(
+                old.in_disk_apply_state.get_applied_index(),
+                new.in_disk_apply_state.get_applied_index()
+            );
+        }
+
+        fail::remove("on_empty_cmd_normal");
+        fail::remove("try_flush_data");
+
+        let (compact_index, compact_term) = get_valid_compact_index(&new_state);
+        let prev_state = new_state;
+        let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        let res = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+        assert!(!res.get_header().has_error(), "{:?}", res);
+
+        cluster.must_put(b"kz", b"vz");
+        check_key(&cluster, b"kz", b"vz", Some(true), None, None);
+
+        // CompactLog is not filtered
+        let new_state = collect_all_states(&cluster, region_id);
+        for i in prev_state.keys() {
+            let old = prev_state.get(i).unwrap();
+            let new = new_state.get(i).unwrap();
+            assert_ne!(
+                old.in_memory_apply_state.get_truncated_state(),
+                new.in_memory_apply_state.get_truncated_state()
+            );
+            assert_eq!(
+                old.in_memory_apply_state.get_applied_index() + 2, // compact log + (kz,vz)
+                new.in_memory_apply_state.get_applied_index()
+            );
+        }
+
+        cluster.shutdown();
     }
-    let prev_states = collect_all_states(&cluster, region_id);
-    cluster.must_transfer_leader(region.get_id(), peer_2.clone());
 
-    // The states remain the same, since we don't observe empty cmd.
-    let new_states = collect_all_states(&cluster, region_id);
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        if filter {
-            // CompactLog can still change in-memory state, when exec in memory.
+    #[test]
+    fn test_empty_cmd() {
+        // Test if a empty command can be observed when leadership changes.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+        // Disable compact log
+        cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
+        cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
+        cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
+        cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+
+        let _ = cluster.run();
+
+        cluster.must_put(b"k1", b"v1");
+        let region = cluster.get_region(b"k1");
+        let region_id = region.get_id();
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+        let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
+        let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
+        cluster.must_transfer_leader(region.get_id(), peer_1.clone());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        check_key(&cluster, b"k1", b"v1", Some(true), None, None);
+        let prev_states = collect_all_states(&cluster, region_id);
+
+        // We need forward empty cmd generated by leadership changing to TiFlash.
+        cluster.must_transfer_leader(region.get_id(), peer_2.clone());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let new_states = collect_all_states(&cluster, region_id);
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
+            assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
+            assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        fail::cfg("on_empty_cmd_normal", "return").unwrap();
+
+        let prev_states = new_states;
+        cluster.must_transfer_leader(region.get_id(), peer_1.clone());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let new_states = collect_all_states(&cluster, region_id);
+        for i in prev_states.keys() {
+            let old = prev_states.get(i).unwrap();
+            let new = new_states.get(i).unwrap();
             assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
             assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
         }
-        assert_eq!(old.in_disk_apply_state, new.in_disk_apply_state);
+
+        fail::remove("on_empty_cmd_normal");
+
+        cluster.shutdown();
     }
-
-    fail::remove("on_empty_cmd_normal");
-    // We need forward empty cmd generated by leadership changing to TiFlash.
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    let new_states = collect_all_states(&cluster, region_id);
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
-    }
-
-    if filter {
-        fail::remove("try_flush_data");
-        fail::remove("on_post_exec_normal");
-    } else {
-        fail::remove("no_persist_compact_log");
-    }
-    cluster.shutdown();
-}
-
-#[test]
-fn test_kv_write_always_persist() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-
-    let _ = cluster.run();
-
-    cluster.must_put(b"k0", b"v0");
-    let region_id = cluster.get_region(b"k0").get_id();
-
-    let mut prev_states = collect_all_states(&cluster, region_id);
-    // Always persist on every command
-    fail::cfg("on_post_exec_normal_end", "return(true)").unwrap();
-    for i in 1..20 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-
-        // We can't always get kv from disk, even we commit everytime,
-        // since they are filtered by engint_tiflash
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-
-        // This may happen after memory write data and before commit.
-        // We must check if we already have in memory.
-        check_apply_state(&cluster, region_id, &prev_states, Some(false), None);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        // However, advanced apply index will always persisted.
-        let new_states = collect_all_states(&cluster, region_id);
-        for id in cluster.engines.keys() {
-            let p = &prev_states.get(id).unwrap().in_disk_apply_state;
-            let n = &new_states.get(id).unwrap().in_disk_apply_state;
-            assert_ne!(p, n);
-        }
-        prev_states = new_states;
-    }
-
-    cluster.shutdown();
-}
-
-#[test]
-fn test_kv_write() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-
-    fail::cfg("on_post_exec_normal", "return(false)").unwrap();
-    fail::cfg("on_post_exec_admin", "return(false)").unwrap();
-    // Abandon CompactLog and previous flush.
-    fail::cfg("try_flush_data", "return(0)").unwrap();
-
-    let _ = cluster.run();
-
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    // Since we disable all observers, we can get nothing in either memory and disk.
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(
-            &cluster,
-            k.as_bytes(),
-            v.as_bytes(),
-            Some(false),
-            Some(false),
-            None,
-        );
-    }
-
-    // We can read initial raft state, since we don't persist meta either.
-    let r1 = cluster.get_region(b"k1").get_id();
-    let prev_states = collect_all_states(&cluster, r1);
-
-    fail::remove("on_post_exec_normal");
-    fail::remove("on_post_exec_admin");
-    for i in 10..20 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    // Since we enable all observers, we can get in memory.
-    // However, we get nothing in disk since we don't persist.
-    for i in 10..20 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(
-            &cluster,
-            k.as_bytes(),
-            v.as_bytes(),
-            Some(true),
-            Some(false),
-            None,
-        );
-    }
-
-    let new_states = collect_all_states(&cluster, r1);
-    for id in cluster.engines.keys() {
-        assert_ne!(
-            &prev_states.get(id).unwrap().in_memory_apply_state,
-            &new_states.get(id).unwrap().in_memory_apply_state
-        );
-        assert_eq!(
-            &prev_states.get(id).unwrap().in_disk_apply_state,
-            &new_states.get(id).unwrap().in_disk_apply_state
-        );
-    }
-
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    fail::remove("try_flush_data");
-
-    let prev_states = collect_all_states(&cluster, r1);
-    // Write more after we force persist when CompactLog.
-    for i in 20..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    // We can read from mock-store's memory, we are not sure if we can read from disk,
-    // since there may be or may not be a CompactLog.
-    for i in 11..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
-
-    // Force a compact log to persist.
-    let region_r = cluster.get_region("k1".as_bytes());
-    let region_id = region_r.get_id();
-    let compact_log = test_raftstore::new_compact_log_request(1000, 100);
-    let req =
-        test_raftstore::new_admin_request(region_id, region_r.get_region_epoch(), compact_log);
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    assert!(res.get_header().has_error(), "{:?}", res);
-    // This CompactLog is executed with an error. It will not trigger a compaction.
-    // However, it can trigger a persistence.
-    for i in 11..30 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(
-            &cluster,
-            k.as_bytes(),
-            v.as_bytes(),
-            Some(true),
-            Some(true),
-            None,
-        );
-    }
-
-    let new_states = collect_all_states(&cluster, r1);
-
-    // apply_state is changed in memory, and persisted.
-    for id in cluster.engines.keys() {
-        assert_ne!(
-            &prev_states.get(id).unwrap().in_memory_apply_state,
-            &new_states.get(id).unwrap().in_memory_apply_state
-        );
-        assert_ne!(
-            &prev_states.get(id).unwrap().in_disk_apply_state,
-            &new_states.get(id).unwrap().in_disk_apply_state
-        );
-    }
-
-    fail::remove("no_persist_compact_log");
-    cluster.shutdown();
-}
-
-#[test]
-fn test_consistency_check() {
-    // ComputeHash and VerifyHash shall be filtered.
-    let (mut cluster, pd_client) = new_mock_cluster(0, 2);
-
-    cluster.run();
-
-    cluster.must_put(b"k", b"v");
-    let region = cluster.get_region("k".as_bytes());
-    let region_id = region.get_id();
-
-    let r = new_compute_hash_request();
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
-    let _ = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-
-    let r = new_verify_hash_request(vec![7, 8, 9, 0], 1000);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), r);
-    let _ = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-
-    cluster.must_put(b"k2", b"v2");
-    cluster.shutdown();
-}
-
-#[test]
-fn test_old_compact_log() {
-    // If we just return None for CompactLog, the region state in ApplyFsm will change.
-    // Because there is no rollback in new implementation.
-    // This is a ERROR state.
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-    cluster.run();
-
-    // We don't return Persist after handling CompactLog.
-    fail::cfg("no_persist_compact_log", "return").unwrap();
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
-
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-    let prev_state = collect_all_states(&cluster, region_id);
-    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
-    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-
-    // Wait for state applys.
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
-    let new_state = collect_all_states(&cluster, region_id);
-    for i in prev_state.keys() {
-        let old = prev_state.get(i).unwrap();
-        let new = new_state.get(i).unwrap();
-        assert_ne!(
-            old.in_memory_apply_state.get_truncated_state(),
-            new.in_memory_apply_state.get_truncated_state()
-        );
-        assert_eq!(
-            old.in_disk_apply_state.get_truncated_state(),
-            new.in_disk_apply_state.get_truncated_state()
-        );
-    }
-
-    cluster.shutdown();
-}
-
-#[test]
-fn test_compact_log() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-
-    // Disable auto compact log
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
-    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-
-    cluster.run();
-
-    cluster.must_put(b"k", b"v");
-    let region = cluster.get_region("k".as_bytes());
-    let region_id = region.get_id();
-
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
-    fail::cfg("try_flush_data", "return(0)").unwrap();
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        cluster.must_put(k.as_bytes(), v.as_bytes());
-    }
-    for i in 0..10 {
-        let k = format!("k{}", i);
-        let v = format!("v{}", i);
-        check_key(&cluster, k.as_bytes(), v.as_bytes(), Some(true), None, None);
-    }
-
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    let prev_state = collect_all_states(&cluster, region_id);
-
-    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
-    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    // compact index should less than applied index
-    assert!(!res.get_header().has_error(), "{:?}", res);
-
-    // TODO(tiflash) Make sure compact log is filtered successfully.
-    // Can be abstract to a retry function.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    // CompactLog is filtered, because we can't flush data.
-    // However, we can still observe apply index advanced
-    let new_state = collect_all_states(&cluster, region_id);
-    for i in prev_state.keys() {
-        let old = prev_state.get(i).unwrap();
-        let new = new_state.get(i).unwrap();
-        assert_eq!(
-            old.in_memory_apply_state.get_truncated_state(),
-            new.in_memory_apply_state.get_truncated_state()
-        );
-        assert_eq!(
-            old.in_disk_apply_state.get_truncated_state(),
-            new.in_disk_apply_state.get_truncated_state()
-        );
-        assert_eq!(
-            old.in_memory_apply_state.get_applied_index() + 1,
-            new.in_memory_apply_state.get_applied_index()
-        );
-        // Persist is before.
-        assert_eq!(
-            old.in_disk_apply_state.get_applied_index(),
-            new.in_disk_apply_state.get_applied_index()
-        );
-    }
-
-    fail::remove("on_empty_cmd_normal");
-    fail::remove("try_flush_data");
-
-    let (compact_index, compact_term) = get_valid_compact_index(&new_state);
-    let prev_state = new_state;
-    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
-    let req = test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
-    let res = cluster
-        .call_command_on_leader(req, Duration::from_secs(3))
-        .unwrap();
-    assert!(!res.get_header().has_error(), "{:?}", res);
-
-    cluster.must_put(b"kz", b"vz");
-    check_key(&cluster, b"kz", b"vz", Some(true), None, None);
-
-    // CompactLog is not filtered
-    let new_state = collect_all_states(&cluster, region_id);
-    for i in prev_state.keys() {
-        let old = prev_state.get(i).unwrap();
-        let new = new_state.get(i).unwrap();
-        assert_ne!(
-            old.in_memory_apply_state.get_truncated_state(),
-            new.in_memory_apply_state.get_truncated_state()
-        );
-        assert_eq!(
-            old.in_memory_apply_state.get_applied_index() + 2, // compact log + (kz,vz)
-            new.in_memory_apply_state.get_applied_index()
-        );
-    }
-
-    cluster.shutdown();
-}
-
-// TODO(tiflash) Test a KV will not be write twice by not only handle_put but also observer. When we fully enable engine_tiflash.
-
-pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
-    let mut cmd = Request::default();
-    cmd.set_cmd_type(CmdType::IngestSst);
-    cmd.mut_ingest_sst().set_sst(meta);
-    cmd
-}
-
-pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
-    let dir = Path::new(kv_path).join("import-sst");
-    let importer = {
-        Arc::new(
-            SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version()).unwrap(),
-        )
-    };
-    (dir, importer)
 }
 
 mod ingest {
@@ -754,6 +949,23 @@ mod ingest {
 
     use super::*;
 
+    pub fn new_ingest_sst_cmd(meta: SstMeta) -> Request {
+        let mut cmd = Request::default();
+        cmd.set_cmd_type(CmdType::IngestSst);
+        cmd.mut_ingest_sst().set_sst(meta);
+        cmd
+    }
+
+    pub fn create_tmp_importer(cfg: &Config, kv_path: &str) -> (PathBuf, Arc<SstImporter>) {
+        let dir = Path::new(kv_path).join("import-sst");
+        let importer = {
+            Arc::new(
+                SstImporter::new(&cfg.import, dir.clone(), None, cfg.storage.api_version())
+                    .unwrap(),
+            )
+        };
+        (dir, importer)
+    }
     fn make_sst(
         cluster: &Cluster<NodeCluster>,
         region_id: u64,
@@ -783,10 +995,10 @@ mod ingest {
 
         // copy file to save dir.
         let src = sst_path.clone();
-        let dst = file.path.save.to_str().unwrap();
+        let dst = file.get_import_path().save.to_str().unwrap();
         std::fs::copy(src.clone(), dst);
 
-        (file.path.save.clone(), meta, sst_path)
+        (file.get_import_path().save.clone(), meta, sst_path)
     }
 
     #[test]
@@ -862,11 +1074,7 @@ mod ingest {
     fn test_ingest_return_none() {
         let (mut cluster, pd_client) = new_mock_cluster(0, 1);
 
-        // Disable auto compact log
-        cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-        cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
-        cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
-        cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+        disable_auto_gen_compact_log(&mut cluster);
 
         let _ = cluster.run();
 
@@ -969,119 +1177,571 @@ mod ingest {
     }
 }
 
-#[test]
-fn test_handle_destroy() {
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+mod restart {
+    use super::*;
+    #[test]
+    fn test_snap_restart() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    // Disable raft log gc in this test case.
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+        fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
+        disable_auto_gen_compact_log(&mut cluster);
+        cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize(u64::MAX);
 
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+        let r1 = cluster.run_conf_change();
 
-    cluster.run();
-    cluster.must_put(b"k1", b"v1");
-    let eng_ids = cluster
-        .engines
-        .iter()
-        .map(|e| e.0.to_owned())
-        .collect::<Vec<_>>();
+        let first_value = vec![0; 10240];
+        for i in 0..10 {
+            let key = format!("{:03}", i);
+            cluster.must_put(key.as_bytes(), &first_value);
+        }
+        let first_key: &[u8] = b"000";
 
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
-    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
-    cluster.must_transfer_leader(region_id, peer_1);
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
 
-    iter_ffi_helpers(
-        &cluster,
-        Some(vec![eng_ids[1]]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
-            let server = &ffi.engine_store_server;
-            assert!(server.kvstore.contains_key(&region_id));
-        },
-    );
+        tikv_util::info!("engine_2 is {}", eng_ids[1]);
+        // engine 2 will not exec post apply snapshot.
+        fail::cfg("on_ob_pre_handle_snapshot", "return").unwrap();
+        fail::cfg("on_ob_post_apply_snapshot", "return").unwrap();
 
-    pd_client.must_remove_peer(region_id, peer_2);
+        let engine_2 = cluster.get_engine(eng_ids[1]);
+        must_get_none(&engine_2, first_key);
+        // add peer (engine_2,engine_2) to region 1.
+        pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
 
-    check_key(
-        &cluster,
-        b"k1",
-        b"k2",
-        Some(false),
-        None,
-        Some(vec![eng_ids[1]]),
-    );
+        check_key(&cluster, first_key, &first_value, Some(false), None, None);
 
-    // Region removed in server.
-    iter_ffi_helpers(
-        &cluster,
-        Some(vec![eng_ids[1]]),
-        &mut |_, _, ffi: &mut FFIHelperSet| {
-            let server = &ffi.engine_store_server;
-            assert!(!server.kvstore.contains_key(&region_id));
-        },
-    );
+        info!("stop node {}", eng_ids[1]);
+        cluster.stop_node(eng_ids[1]);
+        {
+            let lock = cluster.ffi_helper_set.lock();
+            lock.unwrap()
+                .deref_mut()
+                .get_mut(&eng_ids[1])
+                .unwrap()
+                .engine_store_server
+                .stop();
+        }
 
-    cluster.shutdown();
+        fail::remove("on_ob_pre_handle_snapshot");
+        fail::remove("on_ob_post_apply_snapshot");
+        info!("resume node {}", eng_ids[1]);
+        {
+            let lock = cluster.ffi_helper_set.lock();
+            lock.unwrap()
+                .deref_mut()
+                .get_mut(&eng_ids[1])
+                .unwrap()
+                .engine_store_server
+                .restore();
+        }
+        info!("restored node {}", eng_ids[1]);
+        cluster.run_node(eng_ids[1]).unwrap();
+
+        let (key, value) = (b"k2", b"v2");
+        cluster.must_put(key, value);
+        // we can get in memory, since snapshot is pre handled, though it is not persisted
+        check_key(
+            &cluster,
+            key,
+            value,
+            Some(true),
+            None,
+            Some(vec![eng_ids[1]]),
+        );
+        // now snapshot must be applied on peer engine_2
+        check_key(
+            &cluster,
+            first_key,
+            first_value.as_slice(),
+            Some(true),
+            None,
+            Some(vec![eng_ids[1]]),
+        );
+
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_kv_restart() {
+        // Test if a empty command can be observed when leadership changes.
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        // Disable AUTO generated compact log.
+        disable_auto_gen_compact_log(&mut cluster);
+
+        // We don't handle CompactLog at all.
+        fail::cfg("try_flush_data", "return(0)").unwrap();
+        let _ = cluster.run();
+
+        cluster.must_put(b"k", b"v");
+        let region = cluster.get_region(b"k");
+        let region_id = region.get_id();
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+        let prev_state = collect_all_states(&cluster, region_id);
+        let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+        let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+        let req =
+            test_raftstore::new_admin_request(region_id, region.get_region_epoch(), compact_log);
+        fail::cfg("try_flush_data", "return(1)").unwrap();
+        let res = cluster
+            .call_command_on_leader(req, Duration::from_secs(3))
+            .unwrap();
+
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+
+        for i in 0..10 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            // Whatever already persisted or not, we won't loss data.
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                Some(true),
+                Some(vec![eng_ids[0]]),
+            );
+        }
+
+        for i in 10..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        for i in 10..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            // Whatever already persisted or not, we won't loss data.
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                Some(false),
+                Some(vec![eng_ids[0]]),
+            );
+        }
+
+        info!("stop node {}", eng_ids[0]);
+        cluster.stop_node(eng_ids[0]);
+        {
+            let lock = cluster.ffi_helper_set.lock();
+            lock.unwrap()
+                .deref_mut()
+                .get_mut(&eng_ids[0])
+                .unwrap()
+                .engine_store_server
+                .stop();
+        }
+
+        info!("resume node {}", eng_ids[0]);
+        {
+            let lock = cluster.ffi_helper_set.lock();
+            lock.unwrap()
+                .deref_mut()
+                .get_mut(&eng_ids[0])
+                .unwrap()
+                .engine_store_server
+                .restore();
+        }
+        info!("restored node {}", eng_ids[0]);
+        cluster.run_node(eng_ids[0]).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+
+        for i in 0..20 {
+            let k = format!("k{}", i);
+            let v = format!("v{}", i);
+            // Whatever already persisted or not, we won't loss data.
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                None,
+                Some(vec![eng_ids[0]]),
+            );
+        }
+
+        fail::remove("try_flush_data");
+        cluster.shutdown();
+    }
 }
 
-#[test]
-fn test_empty_cmd() {
-    // Test if a empty command can be observed when leadership changes.
-    let (mut cluster, pd_client) = new_mock_cluster(0, 3);
-    // Disable compact log
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10000);
-    cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(50000);
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+mod snapshot {
+    use super::*;
 
-    let _ = cluster.run();
+    #[test]
+    fn test_huge_snapshot() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    cluster.must_put(b"k1", b"v1");
-    let region = cluster.get_region(b"k1");
-    let region_id = region.get_id();
-    let eng_ids = cluster
-        .engines
-        .iter()
-        .map(|e| e.0.to_owned())
-        .collect::<Vec<_>>();
-    let peer_1 = find_peer(&region, eng_ids[0]).cloned().unwrap();
-    let peer_2 = find_peer(&region, eng_ids[1]).cloned().unwrap();
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+        fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
+        disable_auto_gen_compact_log(&mut cluster);
+        cluster.cfg.raft_store.max_snapshot_file_raw_size = ReadableSize(u64::MAX);
 
-    check_key(&cluster, b"k1", b"v1", Some(true), None, None);
-    let prev_states = collect_all_states(&cluster, region_id);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+        let r1 = cluster.run_conf_change();
 
-    // We need forward empty cmd generated by leadership changing to TiFlash.
-    cluster.must_transfer_leader(region.get_id(), peer_2.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+        let first_value = vec![0; 10240];
+        // at least 4m data
+        for i in 0..400 {
+            let key = format!("{:03}", i);
+            cluster.must_put(key.as_bytes(), &first_value);
+        }
+        let first_key: &[u8] = b"000";
 
-    let new_states = collect_all_states(&cluster, region_id);
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        assert_ne!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_ne!(old.in_memory_applied_term, new.in_memory_applied_term);
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+        tikv_util::info!("engine_2 is {}", eng_ids[1]);
+        let engine_2 = cluster.get_engine(eng_ids[1]);
+        must_get_none(&engine_2, first_key);
+        // add peer (engine_2,engine_2) to region 1.
+        pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
+
+        let (key, value) = (b"k2", b"v2");
+        cluster.must_put(key, value);
+        // we can get in memory, since snapshot is pre handled, though it is not persisted
+        check_key(
+            &cluster,
+            key,
+            value,
+            Some(true),
+            None,
+            Some(vec![eng_ids[1]]),
+        );
+        // now snapshot must be applied on peer engine_2
+        must_get_equal(&engine_2, first_key, first_value.as_slice());
+
+        // engine 3 will not exec post apply snapshot.
+        fail::cfg("on_ob_post_apply_snapshot", "pause").unwrap();
+
+        tikv_util::info!("engine_3 is {}", eng_ids[2]);
+        let engine_3 = cluster.get_engine(eng_ids[2]);
+        must_get_none(&engine_3, first_key);
+        pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // We have not apply pre handled snapshot,
+        // we can't be sure if it exists in only get from memory too, since pre handle snapshot is async.
+        must_get_none(&engine_3, first_key);
+        fail::remove("on_ob_post_apply_snapshot");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        tikv_util::info!("put to engine_3");
+        let (key, value) = (b"k3", b"v3");
+        cluster.must_put(key, value);
+        tikv_util::info!("check engine_3");
+        check_key(&cluster, key, value, Some(true), None, None);
+
+        fail::remove("on_can_apply_snapshot");
+
+        cluster.shutdown();
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    fail::cfg("on_empty_cmd_normal", "return").unwrap();
+    #[test]
+    fn test_concurrent_snapshot() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
-    let prev_states = new_states;
-    cluster.must_transfer_leader(region.get_id(), peer_1.clone());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+        disable_auto_gen_compact_log(&mut cluster);
 
-    let new_states = collect_all_states(&cluster, region_id);
-    for i in prev_states.keys() {
-        let old = prev_states.get(i).unwrap();
-        let new = new_states.get(i).unwrap();
-        assert_eq!(old.in_memory_apply_state, new.in_memory_apply_state);
-        assert_eq!(old.in_memory_applied_term, new.in_memory_applied_term);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+
+        let r1 = cluster.run_conf_change();
+        cluster.must_put(b"k1", b"v1");
+        pd_client.must_add_peer(r1, new_peer(2, 2));
+        // Force peer 2 to be followers all the way.
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(r1, 2)
+                .msg_type(MessageType::MsgRequestVote)
+                .direction(Direction::Send),
+        ));
+        cluster.must_transfer_leader(r1, new_peer(1, 1));
+        cluster.must_put(b"k3", b"v3");
+        // Pile up snapshots of overlapped region ranges and deliver them all at once.
+        let (tx, rx) = mpsc::channel();
+        cluster
+            .sim
+            .wl()
+            .add_recv_filter(3, Box::new(CollectSnapshotFilter::new(tx)));
+        pd_client.must_add_peer(r1, new_peer(3, 3));
+        let region = cluster.get_region(b"k1");
+        // Ensure the snapshot of range ("", "") is sent and piled in filter.
+        if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
+            panic!("the snapshot is not sent before split, e: {:?}", e);
+        }
+
+        // Occasionally fails.
+        // // Split the region range and then there should be another snapshot for the split ranges.
+        // cluster.must_split(&region, b"k2");
+        // check_key(&cluster, b"k3", b"v3", None, Some(true), Some(vec![3]));
+        //
+        // // Ensure the regions work after split.
+        // cluster.must_put(b"k11", b"v11");
+        // check_key(&cluster, b"k11", b"v11", Some(true), None, Some(vec![3]));
+        // cluster.must_put(b"k4", b"v4");
+        // check_key(&cluster, b"k4", b"v4", Some(true), None, Some(vec![3]));
+
+        cluster.shutdown();
     }
 
-    fail::remove("on_empty_cmd_normal");
+    fn new_split_region_cluster(count: u64) -> (Cluster<NodeCluster>, Arc<TestPdClient>) {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+        // Disable raft log gc in this test case.
+        cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
 
-    cluster.shutdown();
+        let r1 = cluster.run_conf_change();
+        for i in 0..count {
+            let k = format!("k{:0>4}", 2 * i + 1);
+            let v = format!("v{}", 2 * i + 1);
+            cluster.must_put(k.as_bytes(), v.as_bytes());
+        }
+
+        // k1 in [ , ]  splited by k2 -> (, k2] [k2, )
+        // k3 in [k2, ) splited by k4 -> [k2, k4) [k4, )
+        for i in 0..count {
+            let k = format!("k{:0>4}", 2 * i + 1);
+            let region = cluster.get_region(k.as_bytes());
+            let sp = format!("k{:0>4}", 2 * i + 2);
+            cluster.must_split(&region, sp.as_bytes());
+            let region = cluster.get_region(k.as_bytes());
+        }
+
+        (cluster, pd_client)
+    }
+
+    #[test]
+    fn test_prehandle_fail() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        // Disable raft log gc in this test case.
+        cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+        let r1 = cluster.run_conf_change();
+        cluster.must_put(b"k1", b"v1");
+
+        let eng_ids = cluster
+            .engines
+            .iter()
+            .map(|e| e.0.to_owned())
+            .collect::<Vec<_>>();
+        // If we fail to call pre-handle snapshot, we can still handle it when apply snapshot.
+        fail::cfg("before_actually_pre_handle", "return").unwrap();
+        pd_client.must_add_peer(r1, new_peer(eng_ids[1], eng_ids[1]));
+        check_key(
+            &cluster,
+            b"k1",
+            b"v1",
+            Some(true),
+            Some(true),
+            Some(vec![eng_ids[1]]),
+        );
+        fail::remove("before_actually_pre_handle");
+
+        // If we failed in apply snapshot(not panic), even if per_handle_snapshot is not called.
+        fail::cfg("on_ob_pre_handle_snapshot", "return").unwrap();
+        check_key(
+            &cluster,
+            b"k1",
+            b"v1",
+            Some(false),
+            Some(false),
+            Some(vec![eng_ids[2]]),
+        );
+        pd_client.must_add_peer(r1, new_peer(eng_ids[2], eng_ids[2]));
+        check_key(
+            &cluster,
+            b"k1",
+            b"v1",
+            Some(true),
+            Some(true),
+            Some(vec![eng_ids[2]]),
+        );
+        fail::remove("on_ob_pre_handle_snapshot");
+
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_split_merge() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        // Can always apply snapshot immediately
+        fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
+        cluster.cfg.raft_store.right_derive_when_split = true;
+
+        // May fail if cluster.start, since node 2 is not in region1.peers(),
+        // and node 2 has not bootstrap region1,
+        // because region1 is not bootstrap if we only call cluster.start()
+        cluster.run();
+
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k3", b"v3");
+
+        check_key(&cluster, b"k1", b"v1", Some(true), None, None);
+        check_key(&cluster, b"k3", b"v3", Some(true), None, None);
+
+        let r1 = cluster.get_region(b"k1");
+        let r3 = cluster.get_region(b"k3");
+        assert_eq!(r1.get_id(), r3.get_id());
+
+        cluster.must_split(&r1, b"k2");
+        let r1_new = cluster.get_region(b"k1");
+        let r3_new = cluster.get_region(b"k3");
+
+        assert_eq!(r1.get_id(), r3_new.get_id());
+
+        iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+            if !server.kvstore.contains_key(&r1_new.get_id()) {
+                panic!("node {} has no region {}", id, r1_new.get_id())
+            }
+            if !server.kvstore.contains_key(&r3_new.get_id()) {
+                panic!("node {} has no region {}", id, r3_new.get_id())
+            }
+            // Region meta must equal
+            assert_eq!(server.kvstore.get(&r1_new.get_id()).unwrap().region, r1_new);
+            assert_eq!(server.kvstore.get(&r3_new.get_id()).unwrap().region, r3_new);
+
+            // Can get from disk
+            check_key(&cluster, b"k1", b"v1", None, Some(true), None);
+            check_key(&cluster, b"k3", b"v3", None, Some(true), None);
+            // TODO Region in memory data must not contradict, but now we do not delete data
+        });
+
+        pd_client.must_merge(r1_new.get_id(), r3_new.get_id());
+        let r1_new2 = cluster.get_region(b"k1");
+        let r3_new2 = cluster.get_region(b"k3");
+
+        iter_ffi_helpers(&cluster, None, &mut |id: u64, _, ffi: &mut FFIHelperSet| {
+            let server = &ffi.engine_store_server;
+
+            // The left region is removed
+            if server.kvstore.contains_key(&r1_new.get_id()) {
+                panic!("node {} should has no region {}", id, r1_new.get_id())
+            }
+            if !server.kvstore.contains_key(&r3_new.get_id()) {
+                panic!("node {} has no region {}", id, r3_new.get_id())
+            }
+            // Region meta must equal
+            assert_eq!(
+                server.kvstore.get(&r3_new2.get_id()).unwrap().region,
+                r3_new2
+            );
+
+            // Can get from disk
+            check_key(&cluster, b"k1", b"v1", None, Some(true), None);
+            check_key(&cluster, b"k3", b"v3", None, Some(true), None);
+            // TODO Region in memory data must not contradict, but now we do not delete data
+
+            let origin_epoch = r3_new.get_region_epoch();
+            let new_epoch = r3_new2.get_region_epoch();
+            // PrepareMerge + CommitMerge, so it should be 2.
+            assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+            assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
+        });
+
+        fail::remove("on_can_apply_snapshot");
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_basic_concurrent_snapshot() {
+        let (mut cluster, pd_client) = new_mock_cluster(0, 3);
+
+        disable_auto_gen_compact_log(&mut cluster);
+        assert_eq!(cluster.cfg.tikv.raft_store.snap_handle_pool_size, 2);
+        assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
+
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+
+        let r1 = cluster.run_conf_change();
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k3", b"v3");
+
+        let region1 = cluster.get_region(b"k1");
+        cluster.must_split(&region1, b"k2");
+        let r1 = cluster.get_region(b"k1").get_id();
+        let r3 = cluster.get_region(b"k3").get_id();
+
+        fail::cfg("before_actually_pre_handle", "sleep(1000)").unwrap();
+        tikv_util::info!("region k1 {} k3 {}", r1, r3);
+        let pending_count = cluster
+            .engines
+            .get(&2)
+            .unwrap()
+            .kv
+            .pending_applies_count
+            .clone();
+        pd_client.add_peer(r1, new_peer(2, 2));
+        pd_client.add_peer(r3, new_peer(2, 2));
+        fail::cfg("apply_pending_snapshot", "return").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Now, k1 and k3 are not handled, since pre-handle process is not finished.
+        // This is because `pending_applies_count` is not greater than `snap_handle_pool_size`,
+        // So there are no `handle_pending_applies` until `on_timeout`.
+
+        fail::remove("apply_pending_snapshot");
+        assert_eq!(pending_count.load(Ordering::SeqCst), 2);
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        check_key(&cluster, b"k1", b"v1", None, Some(true), Some(vec![1, 2]));
+        check_key(&cluster, b"k3", b"v3", None, Some(true), Some(vec![1, 2]));
+        // Now, k1 and k3 are handled.
+        assert_eq!(pending_count.load(Ordering::SeqCst), 0);
+
+        fail::remove("before_actually_pre_handle");
+
+        cluster.shutdown();
+    }
+
+    #[test]
+    fn test_many_concurrent_snapshot() {
+        let c = 4;
+        let (mut cluster, pd_client) = new_split_region_cluster(c);
+
+        for i in 0..c {
+            let k = format!("k{:0>4}", 2 * i + 1);
+            let region_id = cluster.get_region(k.as_bytes()).get_id();
+            pd_client.must_add_peer(region_id, new_peer(2, 2));
+        }
+
+        for i in 0..c {
+            let k = format!("k{:0>4}", 2 * i + 1);
+            let v = format!("v{}", 2 * i + 1);
+            check_key(
+                &cluster,
+                k.as_bytes(),
+                v.as_bytes(),
+                Some(true),
+                Some(true),
+                Some(vec![2]),
+            );
+        }
+
+        cluster.shutdown();
+    }
 }

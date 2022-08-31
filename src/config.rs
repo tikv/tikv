@@ -3281,13 +3281,10 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
         cfg.compatible_adjust();
-        info!("check_critical_config finished compatible_adjust");
         if let Err(e) = cfg.validate() {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
-        info!("check_critical_config finished validate");
         config.check_critical_cfg_with(&cfg)?;
-        info!("check_critical_config finished check_critical_cfg_with");
     }
     Ok(())
 }

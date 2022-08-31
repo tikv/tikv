@@ -150,6 +150,12 @@ impl KvEngine for RocksEngine {
     }
 
     // TODO(tiflash) enable this after merge
+    // The whole point is:
+    // 1. When `handle_pending_applies` is called by `on_timeout`, we can handle at least one.
+    // 2. When `handle_pending_applies` is called when we receive a new task,
+    //    or when `handle_pending_applies` need to handle multiple snapshots.
+    //    We need to compare to what's in queue.
+
     // fn can_apply_snapshot(&self) -> bool {
     //     // is called after calling observer's pre_handle_snapshot
     //     let in_queue = self.pending_applies_count.load(Ordering::Relaxed);

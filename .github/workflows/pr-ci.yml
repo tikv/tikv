@@ -73,6 +73,12 @@ jobs:
           cargo test --features compat_old_proxy --package tests --test failpoints cases::test_import_service
           cargo test --features compat_old_proxy --package tests --test failpoints cases::test_proxy_replica_read
           # tests based on new-mock-engine-store, with compat for new proxy
-          cargo test --package tests --test proxy normal
+          cargo test --package tests --test proxy normal::store
+          cargo test --package tests --test proxy normal::region
+          cargo test --package tests --test proxy normal::config
+          cargo test --package tests --test proxy normal::write
+          cargo test --package tests --test proxy normal::ingest
+          cargo test --package tests --test proxy normal::snapshot
+          cargo test --package tests --test proxy normal::restart
           # tests based on new-mock-engine-store, for some tests not available for new proxy
           cargo test --package tests --test proxy proxy

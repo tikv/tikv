@@ -28,7 +28,6 @@ use kvproto::{
 };
 use lazy_static::lazy_static;
 use pd_client::PdClient;
-use protobuf::Message;
 pub use proxy_server::config::ProxyConfig;
 use proxy_server::fatal;
 // mock cluster
@@ -55,6 +54,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+use test_raftstore::FilterFactory;
 pub use test_raftstore::{
     is_error_response, make_cb, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
@@ -75,7 +75,7 @@ use tikv_util::{
 pub use crate::config::Config;
 use crate::{
     gen_engine_store_server_helper, transport_simulate::Filter, EngineStoreServer,
-    EngineStoreServerWrap,
+    EngineStoreServerWrap, MockConfig,
 };
 
 pub struct FFIHelperSet {
@@ -95,7 +95,8 @@ pub struct EngineHelperSet {
 }
 
 pub struct Cluster<T: Simulator<TiFlashEngine>> {
-    pub ffi_helper_lst: Vec<FFIHelperSet>,
+    // Helper to set ffi_helper_set.
+    ffi_helper_lst: Vec<FFIHelperSet>,
     pub ffi_helper_set: Arc<Mutex<HashMap<u64, FFIHelperSet>>>,
 
     pub cfg: Config,
@@ -135,6 +136,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 prefer_mem: true,
                 proxy_cfg,
                 proxy_compat: false,
+                mock_cfg: Default::default(),
             },
             leaders: HashMap::default(),
             count,
@@ -160,6 +162,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         node_cfg: TiKvConfig,
         cluster_id: isize,
         proxy_compat: bool,
+        mock_cfg: MockConfig,
     ) -> (FFIHelperSet, TiKvConfig) {
         // We must allocate on heap to avoid move.
         let proxy = Box::new(engine_store_ffi::RaftStoreProxy {
@@ -178,6 +181,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         let mut proxy_helper = Box::new(engine_store_ffi::RaftStoreProxyFFIHelper::new(&proxy));
         let mut engine_store_server = Box::new(EngineStoreServer::new(id, Some(engines)));
         engine_store_server.proxy_compat = proxy_compat;
+        engine_store_server.mock_cfg = mock_cfg;
         let engine_store_server_wrap = Box::new(EngineStoreServerWrap::new(
             &mut *engine_store_server,
             Some(&mut *proxy_helper),
@@ -224,6 +228,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             self.cfg.tikv.clone(),
             self as *const Cluster<T> as isize,
             self.cfg.proxy_compat,
+            self.cfg.mock_cfg.clone(),
         )
     }
 
@@ -259,7 +264,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
-        let (mut ffi_helper_set, mut node_cfg) =
+        let (mut ffi_helper_set, node_cfg) =
             self.make_ffi_helper_set(0, engines, key_manager, router);
 
         // We can not use moved or cloned engines any more.
@@ -328,8 +333,8 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
             debug!("recover node"; "node_id" => node_id);
-            let engines = self.engines.get_mut(&node_id).unwrap().clone();
-            let key_mgr = self.key_managers_map[&node_id].clone();
+            let _engines = self.engines.get_mut(&node_id).unwrap().clone();
+            let _key_mgr = self.key_managers_map[&node_id].clone();
             // Always at the front of the vector.
             self.associate_ffi_helper_set(Some(0), node_id);
             // Like TiKVServer::init
@@ -430,7 +435,7 @@ pub fn init_global_ffi_helper_set() {
 pub fn create_tiflash_test_engine(
     // ref init_tiflash_engines and create_test_engine
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
+    _router: Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     limiter: Option<Arc<IORateLimiter>>,
     cfg: &Config,
 ) -> (
@@ -622,6 +627,15 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
                 }
             }
             self.pd_client.put_store(store).unwrap();
+        }
+    }
+
+    pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {
+        let mut sim = self.sim.wl();
+        for node_id in sim.get_node_ids() {
+            for filter in factory.generate(node_id) {
+                sim.add_send_filter(node_id, filter);
+            }
         }
     }
 

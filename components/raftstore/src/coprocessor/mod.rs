@@ -21,7 +21,7 @@ use raft::{eraftpb, StateRole};
 pub mod config;
 mod consistency_check;
 pub mod dispatcher;
-mod error;
+pub mod error;
 mod metrics;
 pub mod region_info_accessor;
 mod split_check;
@@ -176,6 +176,36 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call after applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+
+    /// Hook when receiving Task::Apply.
+    /// Should pass valid snapshot, the option is only for testing.
+    /// Notice that we can call `pre_apply_snapshot` to multiple snapshots at
+    /// the same time.
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _peer_id: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
+
+    /// Hook when the whole snapshot is applied.
+    /// Should pass valid snapshot, the option is only for testing.
+    fn post_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _snapshot: Option<&crate::store::Snapshot>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// We call pre_apply_snapshot only when one of the observer returns true.
+    fn should_pre_apply_snapshot(&self) -> bool {
+        false
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
