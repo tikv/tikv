@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod msg;
 pub mod peer;
 pub mod read_queue;
+pub mod region_meta;
 pub mod transport;
 #[macro_use]
 pub mod util;
@@ -29,7 +30,10 @@ pub mod worker;
 pub use self::msg::PeerInternalStat;
 pub use self::{
     async_io::{
-        write::{PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg, WriteTask},
+        write::{
+            ExtraStates, PersistedNotifier, StoreWriters, Worker as WriteWorker, WriteMsg,
+            WriteTask,
+        },
         write_router::{WriteRouter, WriteRouterContext, WriteSenders},
     },
     bootstrap::{
@@ -48,7 +52,7 @@ pub use self::{
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
-    peer::{AbstractPeer, Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
+    peer::{Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,

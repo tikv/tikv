@@ -40,6 +40,7 @@ define_error_codes!(
     COMMIT_TS_TOO_LARGE => ("CommitTsTooLarge", "", ""),
 
     ASSERTION_FAILED => ("AssertionFailed", "", ""),
+    LOCK_IF_EXISTS_FAILED => ("LockIfExistsFailed", "", ""),
 
     UNKNOWN => ("Unknown", "", "")
 );

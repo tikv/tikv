@@ -17,9 +17,11 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
         cmd_resp,
+        region_meta::RegionMeta,
         peer::{RequestInspector, RequestPolicy},
         util,
         util::LeaseState,
+        GroupState，
         ReadCallback,
     },
     Error, Result,
@@ -30,7 +32,7 @@ use txn_types::WriteBatchFlags;
 use crate::{
     fsm::PeerFsmDelegate,
     raft::Peer,
-    router::{QueryResChannel, QueryResult, ReadResponse},
+    router::{DebugInfoChannel, QueryResChannel, QueryResult, ReadResponse},
 };
 
 mod follower_read_index;
@@ -130,5 +132,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Bind peer current term here.
         cmd_resp::bind_term(resp, self.term());
         Ok(())
+    }
+
+    /// Query internal states for debugging purpose.
+    pub fn on_query_debug_info(&self, ch: DebugInfoChannel) {
+        let entry_storage = self.storage().entry_storage();
+        let meta = RegionMeta::new(
+            self.storage().region_state(),
+            entry_storage.apply_state(),
+            GroupState::Ordered,
+            self.raft_group().status(),
+        );
+        ch.set_result(meta);
     }
 }

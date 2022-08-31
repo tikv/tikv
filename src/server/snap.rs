@@ -150,7 +150,7 @@ pub fn send_snap(
     if !s.exists() {
         return Err(box_err!("missing snap file: {:?}", s.path()));
     }
-    let total_size = s.total_size()?;
+    let total_size = s.total_size();
 
     let mut chunks = {
         let mut first_chunk = SnapshotChunk::default();
@@ -234,7 +234,7 @@ impl RecvSnapContext {
         let _with_io_type = WithIoType::new(io_type);
 
         let snap = {
-            let s = match snap_mgr.get_snapshot_for_receiving(&key, data) {
+            let s = match snap_mgr.get_snapshot_for_receiving(&key, snapshot.take_meta()) {
                 Ok(s) => s,
                 Err(e) => return Err(box_err!("{} failed to create snapshot file: {:?}", key, e)),
             };
