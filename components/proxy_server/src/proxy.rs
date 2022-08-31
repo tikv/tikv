@@ -13,9 +13,7 @@ use tikv::config::TiKvConfig;
 
 use crate::{
     fatal,
-    setup::{
-        ensure_no_unrecognized_config, overwrite_config_with_cmd_args, validate_and_persist_config,
-    },
+    setup::{ensure_no_unrecognized_config, overwrite_config_with_cmd_args},
 };
 
 // Not the same as TiKV
@@ -298,7 +296,7 @@ pub unsafe fn run_proxy(
 
     // TODO(tiflash) We should later use ProxyConfig for proxy's own settings like `snap_handle_pool_size`
     if is_config_check {
-        validate_and_persist_config(&mut config, false);
+        crate::config::validate_and_persist_config(&mut config, false);
         match crate::config::ensure_no_common_unrecognized_keys(
             &proxy_unrecognized_keys,
             &unrecognized_keys,

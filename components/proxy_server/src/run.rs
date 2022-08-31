@@ -596,7 +596,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     fn init_config(mut config: TiKvConfig) -> ConfigController {
         // Add {label: {"engine": "tiflash"}} to Config
         crate::config::address_proxy_config(&mut config);
-        validate_and_persist_config(&mut config, true);
+        crate::config::validate_and_persist_config(&mut config, true);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
         if !config.rocksdb.wal_dir.is_empty() {

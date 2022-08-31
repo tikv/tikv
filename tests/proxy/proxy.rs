@@ -30,7 +30,7 @@ use new_mock_engine_store::{
     Cluster, ProxyConfig, Simulator, TestPdClient,
 };
 use pd_client::PdClient;
-use proxy_server::config::ensure_no_common_unrecognized_keys;
+use proxy_server::config::{ensure_no_common_unrecognized_keys, validate_and_persist_config};
 use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, Coprocessor},
@@ -38,7 +38,6 @@ use raftstore::{
     engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI},
     store::util::find_peer,
 };
-use server::setup::validate_and_persist_config;
 use sst_importer::SstImporter;
 pub use test_raftstore::{must_get_equal, must_get_none, new_peer};
 use tikv::config::TiKvConfig;

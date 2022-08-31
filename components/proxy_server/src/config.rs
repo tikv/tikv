@@ -10,7 +10,7 @@ use itertools::Itertools;
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use serde_with::with_prefix;
-use tikv::config::TiKvConfig;
+use tikv::config::{TiKvConfig, LAST_CONFIG_FILE};
 use tikv_util::crit;
 
 use crate::fatal;
@@ -137,4 +137,63 @@ pub fn address_proxy_config(config: &mut TiKvConfig) {
         .server
         .labels
         .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
+}
+
+pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e);
+    }
+
+    if let Err(e) = check_critical_config(config) {
+        fatal!("critical config check failed: {}", e);
+    }
+
+    if persist {
+        if let Err(e) = tikv::config::persist_config(config) {
+            fatal!("persist critical config failed: {}", e);
+        }
+    }
+}
+
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
+pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
+    // Check current critical configurations with last time, if there are some
+    // changes, user must guarantee relevant works have been done.
+    if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
+        cfg.compatible_adjust();
+        if let Err(e) = cfg.validate() {
+            warn!("last_tikv.toml is invalid but ignored: {:?}", e);
+        }
+        config.check_critical_cfg_with(&cfg)?;
+    }
+    Ok(())
+}
+
+pub fn get_last_config(data_dir: &str) -> Option<TiKvConfig> {
+    let store_path = Path::new(data_dir);
+    let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
+    let mut v: Vec<String> = vec![];
+    if last_cfg_path.exists() {
+        let s = TiKvConfig::from_file(&last_cfg_path, Some(&mut v)).unwrap_or_else(|e| {
+            error!(
+                "invalid auto generated configuration file {}, err {}",
+                last_cfg_path.display(),
+                e
+            );
+            std::process::exit(1)
+        });
+        if !v.is_empty() {
+            info!("unrecognized in last config";
+                "config" => ?v,
+                "file" => last_cfg_path.display(),
+            );
+        }
+        return Some(s);
+    }
+    None
 }

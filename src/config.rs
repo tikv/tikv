@@ -91,7 +91,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MIB as usize;
 const LOCKCF_MAX_MEM: usize = GIB as usize;
 const RAFT_MIN_MEM: usize = 256 * MIB as usize;
 const RAFT_MAX_MEM: usize = 2 * GIB as usize;
-const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const TMP_CONFIG_FILE: &str = "tmp_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MIB as usize;
 
@@ -3281,10 +3281,13 @@ pub fn check_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // changes, user must guarantee relevant works have been done.
     if let Some(mut cfg) = get_last_config(&config.storage.data_dir) {
         cfg.compatible_adjust();
+        info!("check_critical_config finished compatible_adjust");
         if let Err(e) = cfg.validate() {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
+        info!("check_critical_config finished validate");
         config.check_critical_cfg_with(&cfg)?;
+        info!("check_critical_config finished check_critical_cfg_with");
     }
     Ok(())
 }
