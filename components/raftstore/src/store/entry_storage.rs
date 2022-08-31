@@ -153,7 +153,7 @@ impl EntryCache {
     ///    `start index of the cached entries - 1` when cache is not empty.
     ///
     /// Return true when entries are appended successfully.
-    fn appendleft(&mut self, entries: &[Entry]) -> bool {
+    fn appendleft(&mut self, region_id: u64, peer_id: u64, entries: &[Entry]) -> bool {
         if let Some(entry_last_index) = entries.last().map(|e| e.get_index()) {
             // Check if the entries is valid to append.
             let mut is_valid = true;
@@ -175,6 +175,14 @@ impl EntryCache {
                 let new_capacity = self.cache.capacity();
                 mem_size_change += Self::cache_vec_mem_size_change(new_capacity, old_capacity);
                 mem_size_change += self.shrink_if_necessary();
+
+                info!(
+                    "(this_pr) entry cache appendleft";
+                    "size" => mem_size_change,
+                    "entries_len" => entries.len(),
+                    "region_id" => region_id,
+                    "peer_id" => peer_id,
+                );
                 self.flush_mem_size_change(mem_size_change);
                 return true;
             }
@@ -1020,7 +1028,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     // Fill entry cache with entries.
     pub fn fill_entry_cache(&mut self, entries: Vec<Entry>) {
         // This should always succeed.
-        assert!(self.cache.appendleft(&entries));
+        assert!(self.cache.appendleft(self.region_id, self.peer_id, &entries));
     }
 
     pub fn compact_entry_cache(&mut self, idx: u64) {

@@ -2122,6 +2122,18 @@ where
                             "region_id" => self.region_id,
                         );
                     }
+
+                    if let Some(meta) = &self.pre_ack_transfer_leader_meta {
+                        let elapsed = meta.receive_time.saturating_elapsed_secs();
+                        info!(
+                            "(this_pr) become leader.";
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer_id(),
+                            "elapsed" => ?elapsed,
+                            "leader_id" => self.leader_id(),
+                        );
+                        self.pre_ack_transfer_leader_meta = None;
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -4449,6 +4461,7 @@ where
                         "(this_pr) entry cache already covers the min_matched";
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.get_id(),
+                        "min_matched" => min_matched,
                     );
                     return true;
                 }
@@ -4471,6 +4484,7 @@ where
                     "(this_pr) need not to fill entry cache";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
+                    "low" => low,
                 );
                 true
             } else {
@@ -4497,7 +4511,7 @@ where
                     false
                 } else {
                     // TODO(cosven): remove this log.
-                    info!(
+                    warn!(
                         "(this_pr) cache is filled unexpectedly";
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.get_id(),

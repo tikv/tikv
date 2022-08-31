@@ -1736,7 +1736,7 @@ where
                         }
                     }
                     self.fsm.peer.ack_transfer_leader_msg();
-                    self.fsm.peer.pre_ack_transfer_leader_meta = None;
+                    // self.fsm.peer.pre_ack_transfer_leader_meta = None;
                 }
                 // clean the async fetch result immediately if not used to free memory
                 self.fsm.peer.mut_store().update_async_fetch_res(low, None);
@@ -1749,6 +1749,15 @@ where
                 .raft_group
                 .mut_store()
                 .update_async_fetch_res(low, Some(res));
+
+            let first_index = self.fsm.peer.get_store().entry_cache_first_index().unwrap_or(0);
+            warn!(
+                "(this_pr) leader has a async fetch, maybe used for SendAppend";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "cache_first_index" => first_index,
+                "low" => low,
+            );
             self.fsm.peer.raft_group.on_entries_fetched(context);
             // clean the async fetch result immediately if not used to free memory
             self.fsm.peer.mut_store().update_async_fetch_res(low, None);
@@ -5995,6 +6004,7 @@ where
         if term != self.fsm.peer.term() {
             return;
         }
+
         // As the leader can propose the TransferLeader request successfully, the disk
         // of the leader is probably not full.
         self.fsm.peer.execute_transfer_leader(
