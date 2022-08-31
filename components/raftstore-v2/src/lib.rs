@@ -26,7 +26,7 @@
 
 mod batch;
 mod bootstrap;
-pub mod fsm;
+mod fsm;
 mod operation;
 mod raft;
 pub mod router;
@@ -36,3 +36,4 @@ pub(crate) use batch::StoreContext;
 pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
 pub use bootstrap::Bootstrap;
 pub use raftstore::{Error, Result};
+pub use fsm::StoreMeta;

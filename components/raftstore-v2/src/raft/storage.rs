@@ -57,6 +57,17 @@ pub struct Storage<ER> {
     logger: Logger,
 }
 
+impl<ER> Debug for Storage<ER> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Storage of [region {}] {}",
+            self.region().get_id(),
+            self.peer.get_id()
+        )
+    }
+}
+
 impl<ER> Storage<ER> {
     #[inline]
     pub fn entry_storage(&self) -> &EntryStorage<ER> {
@@ -86,16 +97,6 @@ impl<ER> Storage<ER> {
     #[inline]
     pub fn logger(&self) -> &Logger {
         &self.logger
-    }
-}
-
-impl<ER: RaftEngine> Debug for Storage<ER> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Storage")
-            .field("peer", &self.peer)
-            .field("region_state", &self.region_state)
-            .field("raft_state", &self.entry_storage.raft_state())
-            .finish()
     }
 }
 

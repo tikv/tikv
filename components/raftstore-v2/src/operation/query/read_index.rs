@@ -18,6 +18,7 @@ use raftstore::{
         msg::{ErrorCallback, ReadCallback},
         peer::{can_amend_read, propose_read_index, should_renew_lease, RequestInspector},
         read_queue::{ReadIndexContext, ReadIndexRequest},
+        util::LeaseState,
         ReadDelegate, ReadProgress, Transport,
     },
     Error,
@@ -107,21 +108,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        if self.leader_lease.is_suspect() {
-            let req = RaftCmdRequest::default();
-            if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
-                let (callback, _) = CmdResChannel::pair();
-                let p = Proposal {
-                    is_conf_change: false,
-                    index,
-                    term: self.term(),
-                    cb: callback,
-                    propose_time: Some(now),
-                    must_pass_epoch_check: false,
-                };
-                self.post_propose(poll_ctx, p);
-            }
-        }
+        // TODO:
+        // if self.leader_lease.is_suspect() {
+        // let req = RaftCmdRequest::default();
+        // if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
+        // let (callback, _) = CmdResChannel::pair();
+        // let p = Proposal {
+        // is_conf_change: false,
+        // index,
+        // term: self.term(),
+        // cb: callback,
+        // propose_time: Some(now),
+        // must_pass_epoch_check: false,
+        // };
+        //
+        // self.post_propose(poll_ctx, p);
+        // }
+        // }
         true
     }
 
@@ -299,5 +302,35 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "progress" => ?progress,
         );
         reader.update(progress);
+    }
+}
+
+impl<EK, ER> RequestInspector for Peer<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn has_applied_to_current_term(&mut self) -> bool {
+        self.raft_group.store().applied_term() == self.term()
+    }
+
+    fn inspect_lease(&mut self) -> LeaseState {
+        if !self.raft_group.raft.in_lease() {
+            return LeaseState::Suspect;
+        }
+        // None means now.
+        let state = self.leader_lease.inspect(None);
+        if LeaseState::Expired == state {
+            debug!(
+                self.logger,
+                "leader lease is expired, region_id {}, peer_id {}, lease {:?}",
+                self.region_id(),
+                self.peer_id(),
+                self.leader_lease,
+            );
+            // The lease is expired, call `expire` explicitly.
+            self.leader_lease.expire();
+        }
+        state
     }
 }

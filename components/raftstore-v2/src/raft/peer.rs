@@ -20,7 +20,7 @@ use raftstore::{
             RequestInspector,
         },
         read_queue::{ReadIndexQueue, ReadIndexRequest},
-        util::{Lease, LeaseState, RegionReadProgress},
+        util::{Lease, RegionReadProgress},
         worker::{LocalReadContext, ReadExecutor},
         Config, EntryStorage, RaftlogFetchTask, Transport,
     },
@@ -214,90 +214,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.raft_group.raft.raft_log.last_index() + 1
     }
 
-    // TODO: DiskFull
-    pub(crate) fn propose_normal<T: Transport>(
-        &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
-    ) -> Result<Either<u64, u64>> {
-        // TODO: add force leader check
-        // TODO: to handle AdminCmdType::RollbackMerge, AdminCmdType::PrepareMerge
-
-        poll_ctx.raft_metrics.propose.normal.inc();
-
-        if self.has_applied_to_current_term() {
-            // Only when applied index's term is equal to current leader's term, the
-            // information in epoch checker is up to date and can be used to check epoch.
-            if let Some(index) = self
-                .cmd_epoch_checker
-                .propose_check_epoch(&req, self.term())
-            {
-                return Ok(Either::Right(index));
-            }
-        } else if req.has_admin_request() {
-            // The admin request is rejected because it may need to update epoch checker
-            // which introduces an uncertainty and may breaks the correctness of epoch
-            // checker.
-            return Err(box_err!(
-                "{} peer has not applied to current term, applied_term {}, current_term {}",
-                &self.tag,
-                self.store_applied_term(),
-                self.term()
-            ));
-        }
-
-        // TODO: validate request for unexpected changes.
-        let ctx = match self.pre_propose(poll_ctx, &mut req) {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                // TODO: add PrepareMerge logging code
-                return Err(e);
-            }
-        };
-
-        let data = req.write_to_bytes()?;
-
-        // TODO: use local histogram metrics
-        PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
-
-        if data.len() as u64 > poll_ctx.cfg.raft_entry_max_size.0 {
-            error!(
-                self.logger,
-                "entry is too large";
-                "size" => data.len(),
-            );
-            return Err(Error::RaftEntryTooLarge {
-                region_id: self.region_id(),
-                entry_size: data.len() as u64,
-            });
-        }
-
-        fail_point!("raft_propose", |_| Ok(Either::Right(0)));
-        let propose_index = self.next_proposal_index();
-        self.raft_group.propose(ctx.to_vec(), data)?;
-        if self.next_proposal_index() == propose_index {
-            // The message is dropped silently, this usually due to leader absence
-            // or transferring leader. Both cases can be considered as NotLeader error.
-            return Err(Error::NotLeader(self.region_id(), None));
-        }
-
-        Ok(Either::Left(propose_index))
-    }
-
-    pub(crate) fn post_propose<T>(
-        &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
-        mut p: Proposal<CmdResChannel>,
-    ) {
-        // Try to renew leader lease on every consistent read/write request.
-        if poll_ctx.current_time.is_none() {
-            poll_ctx.current_time = Some(monotonic_raw_now());
-        }
-        p.propose_time = poll_ctx.current_time;
-
-        self.proposals.push(p);
-    }
-
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {
         self.raft_group.mut_store()
     }
@@ -444,36 +360,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn has_pending_merge_state(&self) -> bool {
         // TODOTODO
         false
-    }
-}
-
-impl<EK, ER> RequestInspector for Peer<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn has_applied_to_current_term(&mut self) -> bool {
-        self.raft_group.store().applied_term() == self.term()
-    }
-
-    fn inspect_lease(&mut self) -> LeaseState {
-        if !self.raft_group.raft.in_lease() {
-            return LeaseState::Suspect;
-        }
-        // None means now.
-        let state = self.leader_lease.inspect(None);
-        if LeaseState::Expired == state {
-            debug!(
-                self.logger,
-                "leader lease is expired, region_id {}, peer_id {}, lease {:?}",
-                self.region_id(),
-                self.peer_id(),
-                self.leader_lease,
-            );
-            // The lease is expired, call `expire` explicitly.
-            self.leader_lease.expire();
-        }
-        state
     }
 }
 
