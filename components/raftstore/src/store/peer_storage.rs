@@ -1154,6 +1154,17 @@ pub mod tests {
     const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
     const STALE_PEER_CHECK_TICK: usize = 1;
 
+    fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
+        let mut store_cfg = Config::default();
+        store_cfg.snap_apply_batch_size = ReadableSize(0);
+        store_cfg.region_worker_tick_interval =
+            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
+        store_cfg.use_delete_range = use_delete_range;
+        store_cfg.snap_generator_pool_size = 2;
+        Arc::new(VersionTrack::new(store_cfg))
+    }
+
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
@@ -1560,14 +1571,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = true;
-        store_cfg.snap_generator_pool_size = 2;
-        let cfg = Arc::new(VersionTrack::new(store_cfg));
+        let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
             mgr,
@@ -1714,14 +1718,7 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = true;
-        store_cfg.snap_generator_pool_size = 2;
-        let cfg = Arc::new(VersionTrack::new(store_cfg));
+        let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
             mgr,
@@ -1786,14 +1783,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = true;
-        store_cfg.snap_generator_pool_size = 2;
-        let cfg = Arc::new(VersionTrack::new(store_cfg));
+        let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s1.engines.kv.clone(),
             mgr,

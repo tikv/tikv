@@ -922,6 +922,17 @@ mod tests {
     const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
     const STALE_PEER_CHECK_TICK: usize = 1;
 
+    fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
+        let mut store_cfg = Config::default();
+        store_cfg.snap_apply_batch_size = ReadableSize(0);
+        store_cfg.region_worker_tick_interval =
+            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
+        store_cfg.use_delete_range = use_delete_range;
+        store_cfg.snap_generator_pool_size = 2;
+        Arc::new(VersionTrack::new(store_cfg))
+    }
+
     fn insert_range(
         pending_delete_ranges: &mut PendingDeleteRanges,
         id: u64,
@@ -1012,14 +1023,7 @@ mod tests {
         let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = false;
-        store_cfg.snap_generator_pool_size = 2;
-        let cfg = Arc::new(VersionTrack::new(store_cfg));
+        let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
@@ -1126,15 +1130,7 @@ mod tests {
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
-
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = false;
-        store_cfg.snap_generator_pool_size = 2;
-        let cfg = Arc::new(VersionTrack::new(store_cfg));
+        let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
@@ -1400,6 +1396,11 @@ mod tests {
         #[cfg(feature = "failpoints")]
         {
             engine.kv.compact_files_in_range(None, None, None).unwrap();
+            gen_and_apply_snap(7);
+            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            wait_apply_finish(&[7]);
+
+            engine.kv.compact_files_in_range(None, None, None).unwrap();
             fail::cfg("handle_new_pending_applies", "return").unwrap();
             gen_and_apply_snap(7);
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
@@ -1407,6 +1408,7 @@ mod tests {
             obs.apply_error.store(true, Ordering::SeqCst);
             fail::remove("handle_new_pending_applies");
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
+            // we meet a error from `post_apply_snapshot` when applying snap.
             must_not_finish(&[7]);
             obs.apply_error.store(false, Ordering::SeqCst);
         }
