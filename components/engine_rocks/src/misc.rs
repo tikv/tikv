@@ -29,17 +29,6 @@ impl RocksEngine {
     ) -> Result<()> {
         let mut ranges = ranges.to_owned();
         ranges.sort_by(|a, b| a.start_key.cmp(b.start_key));
-        let max_end_key = ranges
-            .iter()
-            .fold(ranges[0].end_key, |x, y| std::cmp::max(x, y.end_key));
-        let start = KeyBuilder::from_slice(ranges[0].start_key, 0, 0);
-        let end = KeyBuilder::from_slice(max_end_key, 0, 0);
-        let mut opts = IterOptions::new(Some(start), Some(end), false);
-        if self.is_titan() {
-            // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
-            // Titan to avoid referring to missing blob files.
-            opts.set_key_only(true);
-        }
 
         let mut writer_wrapper: Option<RocksSstWriter> = None;
         let mut data: Vec<Vec<u8>> = vec![];
@@ -55,7 +44,17 @@ impl RocksEngine {
             }
             last_end_key = Some(r.end_key.to_owned());
 
-            let mut it = self.iterator_opt(cf, opts.clone())?;
+            let mut opts = IterOptions::new(
+                Some(KeyBuilder::from_slice(r.start_key, 0, 0)),
+                Some(KeyBuilder::from_slice(r.end_key, 0, 0)),
+                false,
+            );
+            if self.is_titan() {
+                // Cause DeleteFilesInRange may expose old blob index keys, setting key only for
+                // Titan to avoid referring to missing blob files.
+                opts.set_key_only(true);
+            }
+            let mut it = self.iterator_opt(cf, opts)?;
             let mut it_valid = it.seek(r.start_key)?;
             while it_valid {
                 if it.key() >= r.end_key {
