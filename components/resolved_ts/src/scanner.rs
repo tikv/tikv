@@ -206,7 +206,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> ScannerPool<T, E> {
                 SignificantMsg::CaptureChange {
                     cmd: change_cmd,
                     region_epoch: task.region.get_region_epoch().clone(),
-                    callback: Callback::Read(Box::new(cb)),
+                    callback: Callback::read(Box::new(cb)),
                 },
             )?;
             let mut resp = box_try!(fut.await);
