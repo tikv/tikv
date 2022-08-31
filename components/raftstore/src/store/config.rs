@@ -146,7 +146,7 @@ pub struct Config {
 
     #[doc(hidden)]
     #[online_config(skip)]
-    pub clean_stale_tick_max: usize,
+    pub stale_peer_check_tick: usize,
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
@@ -351,7 +351,7 @@ impl Default for Config {
             } else {
                 ReadableDuration::millis(1000)
             },
-            clean_stale_tick_max: if cfg!(feature = "test") { 1 } else { 10 },
+            stale_peer_check_tick: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.

@@ -1564,7 +1564,7 @@ pub mod tests {
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
             ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = true;
         store_cfg.snap_generator_pool_size = 2;
         let cfg = Arc::new(VersionTrack::new(store_cfg));
@@ -1718,7 +1718,7 @@ pub mod tests {
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
             ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = true;
         store_cfg.snap_generator_pool_size = 2;
         let cfg = Arc::new(VersionTrack::new(store_cfg));
@@ -1790,7 +1790,7 @@ pub mod tests {
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
             ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = true;
         store_cfg.snap_generator_pool_size = 2;
         let cfg = Arc::new(VersionTrack::new(store_cfg));
