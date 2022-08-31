@@ -725,9 +725,7 @@ impl FlashbackState {
         }
         let ch = self.0.take().unwrap();
         match ch.send(true) {
-            Ok(_) => {
-                FLASHBACK_EVENT.finish_apply.inc();
-            }
+            Ok(_) => {}
             Err(e) => {
                 error!("Fail to notify flashback state"; "err" => ?e);
             }
@@ -2412,6 +2410,7 @@ where
 
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
+                        ctx.raft_metrics.invalid_proposal.flashback_wait_apply.inc();
                         self.maybe_finish_flashback_wait_apply();
                     }
                 }
@@ -3382,10 +3381,20 @@ where
             );
             None
         } else if self.force_leader.is_some() {
-            UNSAFE_RECOVERY_EVENT.force_leader.inc();
+            debug!(
+                "prevents renew lease while in force leader state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            ctx.raft_metrics.invalid_proposal.force_leader.inc();
             None
         } else if self.flashback_state.is_some() {
-            FLASHBACK_EVENT.wait_apply.inc();
+            debug!(
+                "prevents renew lease while in flashback state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            ctx.raft_metrics.invalid_proposal.flashback_wait_apply.inc();
             None
         } else {
             self.leader_lease.renew(ts);
@@ -4307,7 +4316,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
-            UNSAFE_RECOVERY_EVENT.force_leader.inc();
+            poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4983,7 +4992,6 @@ where
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
-        FLASHBACK_EVENT.wait_apply.inc();
         let mut finished = false;
         if self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index() {
             finished = true;

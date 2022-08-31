@@ -201,6 +201,8 @@ make_static_metric! {
         read_index_no_leader,
         region_not_initialized,
         is_applying_snapshot,
+        force_leader,
+        flashback_wait_apply,
     }
 
     pub label_enum RaftLogGcSkippedReason {
@@ -234,18 +236,6 @@ make_static_metric! {
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
         unable_to_split_cpu_top,
-    }
-
-    pub label_enum UnsafeRecoveryEventType {
-        // force leader.
-        force_leader,
-    }
-
-    pub label_enum FlashbackEventType {
-        prepare,
-        wait_apply,
-        finish_apply,
-        finish,
     }
 
     pub struct HibernatedPeerStateGauge: IntGauge {
@@ -283,15 +273,6 @@ make_static_metric! {
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
     }
-
-    pub struct UnsafeRecoveryEventCounterVec: IntCounter {
-        "type" => UnsafeRecoveryEventType,
-    }
-
-    pub struct FlashbackEventCounterVec: IntCounter {
-        "type" => FlashbackEventType,
-    }
-
 }
 
 lazy_static! {
@@ -795,22 +776,6 @@ lazy_static! {
     pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
         "tikv_raft_applying_sst",
         "Sum of applying sst.",
-        &["type"]
-    ).unwrap();
-
-    pub static ref UNSAFE_RECOVERY_EVENT: UnsafeRecoveryEventCounterVec =
-    register_static_int_counter_vec!(
-        UnsafeRecoveryEventCounterVec,
-        "tikv_unsafe_recovery_event",
-        "Unsafe recovery event",
-        &["type"]
-    ).unwrap();
-
-    pub static ref FLASHBACK_EVENT: FlashbackEventCounterVec =
-    register_static_int_counter_vec!(
-        FlashbackEventCounterVec,
-        "tikv_flashback_event",
-        "Flashback event",
         &["type"]
     ).unwrap();
 }

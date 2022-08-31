@@ -877,7 +877,7 @@ where
             return;
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
-            UNSAFE_RECOVERY_EVENT.force_leader.inc();
+            self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // For regions that lose quorum (or regions have force leader), whatever has
             // been proposed will be committed. Based on that fact, we simply use "last
             // index" here to avoid implementing another "wait commit" process.
@@ -930,19 +930,24 @@ where
     // finish. We place a flag in the request, which is checked when the
     // pre_propose_raft_command is called. Stopping tasks is done by applying
     // the flashback-only command in this way, But for RW local reads which need
-    // to be considered, we add a flag in readers to ignore local read.
+    // to be considered, we let the leader lease to None to ensure that local reads
+    // are not executed.
     fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
         info!(
             "prepare flashback";
             "region_id" => self.region().get_id(),
             "peer_id" => self.fsm.peer.peer_id(),
         );
-        FLASHBACK_EVENT.prepare.inc();
         if self.fsm.peer.flashback_state.is_some() {
             ch.send(false).unwrap();
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+        self.ctx
+            .raft_metrics
+            .invalid_proposal
+            .flashback_wait_apply
+            .inc();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
@@ -952,8 +957,8 @@ where
             "region_id" => self.region().get_id(),
             "peer_id" => self.fsm.peer.peer_id(),
         );
-        FLASHBACK_EVENT.finish.inc();
         self.fsm.peer.flashback_state.take();
+        self.try_renew_leader_lease("reset from flashback");
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -2209,6 +2214,11 @@ where
         }
         // TODO: combine recovery state and flashback state as a wait apply queue.
         if self.fsm.peer.flashback_state.is_some() {
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .flashback_wait_apply
+                .inc();
             self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
@@ -4780,7 +4790,11 @@ where
         // When in the flashback state, we should not allow any other request to be
         // proposed.
         if self.fsm.peer.flashback_state.is_some() {
-            FLASHBACK_EVENT.wait_apply.inc();
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .flashback_wait_apply
+                .inc();
             let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
             if !flags.contains(WriteBatchFlags::FLASHBACK) {
                 return Err(Error::FlashbackInProgress(self.region_id()));
@@ -4792,7 +4806,7 @@ where
         let request = msg.get_requests();
 
         if self.fsm.peer.force_leader.is_some() {
-            UNSAFE_RECOVERY_EVENT.force_leader.inc();
+            self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // in force leader state, forbid requests to make the recovery progress less
             // error-prone
             if !(msg.has_admin_request()

@@ -125,13 +125,7 @@ fn test_flahsback_for_read() {
     block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
 
     // read will be blocked
-    must_get_error_recovery_in_progress(
-        &mut cluster,
-        &region.clone(),
-        new_get_cf_cmd("write", b"k1"),
-    );
-    // read index will be blocked
-    must_get_error_recovery_in_progress(&mut cluster, &region, new_read_index_cmd());
+    must_get_error_recovery_in_progress(&mut cluster, &region, new_get_cf_cmd("write", b"k1"));
 
     // verify the read can be executed if add flashback flag in request's
     // header.
