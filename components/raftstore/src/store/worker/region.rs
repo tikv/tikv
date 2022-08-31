@@ -23,7 +23,9 @@ use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
-    box_err, box_try, defer, error, info, thd_name,
+    box_err, box_try,
+    config::VersionTrack,
+    defer, error, info, thd_name,
     time::Instant,
     warn,
     worker::{Runnable, RunnableWithTimer},
@@ -44,7 +46,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, SnapEntry, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -699,32 +701,30 @@ where
     pub fn new(
         engine: EK,
         mgr: SnapManager,
-        batch_size: usize,
-        region_worker_tick_interval: u64,
-        clean_stale_tick_max: usize,
-        use_delete_range: bool,
-        snap_generator_pool_size: usize,
+        cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
         pd_client: Option<Arc<T>>,
     ) -> Runner<EK, R, T> {
         Runner {
             pool: Builder::new(thd_name!("snap-generator"))
-                .max_thread_count(snap_generator_pool_size)
+                .max_thread_count(cfg.value().snap_generator_pool_size)
                 .build_future_pool(),
             ctx: SnapContext {
                 engine,
                 mgr,
-                batch_size,
-                use_delete_range,
+                batch_size: cfg.value().snap_apply_batch_size.0 as usize,
+                use_delete_range: cfg.value().use_delete_range,
                 pending_delete_ranges: PendingDeleteRanges::default(),
                 coprocessor_host,
                 router,
             },
             pending_applies: VecDeque::new(),
             clean_stale_tick: 0,
-            clean_stale_check_interval: Duration::from_millis(region_worker_tick_interval),
-            clean_stale_tick_max,
+            clean_stale_check_interval: Duration::from_millis(
+                cfg.value().region_worker_tick_interval.as_millis(),
+            ),
+            clean_stale_tick_max: cfg.value().clean_stale_tick_max,
             tiflash_stores: HashMap::default(),
             pd_client,
         }
@@ -902,7 +902,10 @@ mod tests {
     use pd_client::RpcClient;
     use protobuf::Message;
     use tempfile::Builder;
-    use tikv_util::worker::{LazyWorker, Worker};
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize},
+        worker::{LazyWorker, Worker},
+    };
 
     use super::*;
     use crate::{
@@ -1009,14 +1012,18 @@ mod tests {
         let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
+        let mut store_cfg = Config::default();
+        store_cfg.snap_apply_batch_size = ReadableSize(0);
+        store_cfg.region_worker_tick_interval =
+            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+        store_cfg.use_delete_range = false;
+        store_cfg.snap_generator_pool_size = 2;
+        let cfg = Arc::new(VersionTrack::new(store_cfg));
         let mut runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
-            0,
-            PENDING_APPLY_CHECK_INTERVAL,
-            STALE_PEER_CHECK_TICK,
-            false,
-            2,
+            cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<RpcClient>>::None,
@@ -1119,17 +1126,19 @@ mod tests {
         let mut worker = bg_worker.lazy_build("snap-manager");
         let sched = worker.scheduler();
         let (router, receiver) = mpsc::sync_channel(1);
-        let region_worker_tick_interval = PENDING_APPLY_CHECK_INTERVAL;
-        let clean_stale_tick_max = STALE_PEER_CHECK_TICK;
 
+        let mut store_cfg = Config::default();
+        store_cfg.snap_apply_batch_size = ReadableSize(0);
+        store_cfg.region_worker_tick_interval =
+            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
+        store_cfg.clean_stale_tick_max = STALE_PEER_CHECK_TICK;
+        store_cfg.use_delete_range = false;
+        store_cfg.snap_generator_pool_size = 2;
+        let cfg = Arc::new(VersionTrack::new(store_cfg));
         let runner = RegionRunner::new(
             engine.kv.clone(),
             mgr,
-            0,
-            region_worker_tick_interval,
-            clean_stale_tick_max,
-            true,
-            2,
+            cfg,
             host,
             router,
             Option::<Arc<RpcClient>>::None,
