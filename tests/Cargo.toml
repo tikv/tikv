@@ -74,6 +74,7 @@ portable = ["tikv/portable"]
 
 [dependencies]
 api_version = { path = "../components/api_version", default-features = false }
+async-trait = "0.1"
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
 collections = { path = "../components/collections" }

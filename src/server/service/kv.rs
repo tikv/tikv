@@ -951,7 +951,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         // so just send it as an command.
         if let Err(e) = self
             .ch
-            .send_command(cmd, Callback::Read(cb), RaftCmdExtraOpts::default())
+            .send_command(cmd, Callback::read(cb), RaftCmdExtraOpts::default())
         {
             // Retrun region error instead a gRPC error.
             let mut resp = ReadIndexResponse::default();
@@ -2080,20 +2080,22 @@ txn_command_future!(future_prewrite, PrewriteRequest, PrewriteResponse, (v, resp
     }
     resp.set_errors(extract_key_errors(v.map(|v| v.locks)).into());
 }});
-txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp, tracker) {
+txn_command_future!(future_acquire_pessimistic_lock, PessimisticLockRequest, PessimisticLockResponse, (v, resp, tracker) {{
     match v {
         Ok(Ok(res)) => {
             let (values, not_founds) = res.into_values_and_not_founds();
             resp.set_values(values.into());
             resp.set_not_founds(not_founds);
-            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
-                tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
-            });
         },
-        Err(e) | Ok(Err(e)) => resp.set_errors(vec![extract_key_error(&e)].into()),
+        Err(e) | Ok(Err(e)) =>  {
+            resp.set_errors(vec![extract_key_error(&e)].into())
+        },
     }
-});
+    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+        tracker.write_scan_detail(resp.mut_exec_details_v2().mut_scan_detail_v2());
+        tracker.write_write_detail(resp.mut_exec_details_v2().mut_write_detail());
+    });
+}});
 txn_command_future!(future_pessimistic_rollback, PessimisticRollbackRequest, PessimisticRollbackResponse, (v, resp) {
     resp.set_errors(extract_key_errors(v).into())
 });
