@@ -447,7 +447,7 @@ where
         let mut modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            engine.adjust_modify(&mut modifies);
+            engine.encode_in_place(&mut modifies);
             write_modifies(&kv_engine, modifies)?;
         }
         Ok(())
@@ -796,7 +796,7 @@ where
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.adjust_modify(&mut modifies);
+            engine.encode_in_place(&mut modifies);
             write_modifies(&kv_engine, modifies)?;
         }
         Ok(())
@@ -1519,7 +1519,7 @@ pub mod test_gc_worker {
             self.0.kv_engine()
         }
 
-        fn adjust_modify(&self, modifies: &mut Vec<Modify>) {
+        fn encode_in_place(&self, modifies: &mut Vec<Modify>) {
             for modify in modifies {
                 match modify {
                     Modify::Delete(_, ref mut key) => {

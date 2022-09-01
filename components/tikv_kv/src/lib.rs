@@ -267,10 +267,10 @@ pub trait Engine: Send + Clone + 'static {
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
-    /// Do some specialization encoding works on `modifies`s according to the
-    /// different implementation of `Engine` before flushing them to the
-    /// underlying kv engine.
-    fn adjust_modify(&self, _modifies: &mut Vec<Modify>) {}
+    /// Change the encoding of `Modify` so that they can be written to local
+    /// engine directly. After the method, `modifies` should not be passed to
+    /// any write methods of `Engine` trait any more.
+    fn encode_in_place(&self, _modifies: &mut Vec<Modify>) {}
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
