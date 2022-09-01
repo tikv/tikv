@@ -571,7 +571,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 if let Command::FlashbackToVersionReadPhase { .. } = task.cmd {
                     snap_ctx.for_flashback = true;
                 }
-
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
                 match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await

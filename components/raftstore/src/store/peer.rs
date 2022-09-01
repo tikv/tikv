@@ -2407,7 +2407,6 @@ where
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
-
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
                         self.maybe_finish_flashback_wait_apply();

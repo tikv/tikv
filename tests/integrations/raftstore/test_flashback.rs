@@ -138,8 +138,9 @@ fn test_flahsback_for_read() {
     multi_do_cmd(&mut cluster, new_get_cf_cmd("write", b"k1"));
 }
 
-// LocalReader will try to renew lease in advance,
-// but when enable flashback, will make lease at None and prevent renew lease.
+// LocalReader will attempt to renew the lease.
+// However, when flashback is enabled, it will make the lease None and prevent
+// renew lease.
 #[test]
 fn test_flahsback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
@@ -177,6 +178,21 @@ fn test_flahsback_for_local_read() {
         b"k1",
         Duration::from_secs(1),
     );
+
+    // Wait for the leader's lease to expire to ensure that a renew lease interval
+    // has elapsed.
+    std::thread::sleep(election_timeout * 2);
+    must_error_read_on_peer(
+        &mut cluster,
+        peer.clone(),
+        region.clone(),
+        b"k1",
+        Duration::from_secs(1),
+    );
+
+    // Also check read by propose was blocked
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    assert_eq!(state.get_last_index(), last_index);
 
     cluster.call_finish_flashback(region.get_id(), store_id);
 
