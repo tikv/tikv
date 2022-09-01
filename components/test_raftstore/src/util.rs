@@ -43,17 +43,17 @@ use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 pub use raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 use raftstore::{
-    store::{
-        fsm::{store::ApplyResNotifier, RaftRouter},
-        *,
-    },
+    store::{fsm::RaftRouter, *},
     RaftRouterCompactedEventSender, Result,
 };
 use rand::RngCore;
 use server::server::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
-use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
+use tikv_util::{
+    config::*, escape, sequence_number::Notifier as SeqnoNotifier, time::ThreadReadId,
+    worker::LazyWorker, HandyRwLock,
+};
 use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator, TestPdClient};
@@ -625,6 +625,14 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
+#[derive(Clone)]
+struct TestNotifier;
+
+impl SeqnoNotifier for TestNotifier {
+    fn notify_memtable_sealed(&self, _seqno: u64) {}
+    fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
+}
+
 #[allow(clippy::type_complexity)]
 pub fn create_test_engine(
     // TODO: pass it in for all cases.
@@ -636,7 +644,7 @@ pub fn create_test_engine(
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
-    Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
+    Option<FlushListener>,
 ) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
@@ -662,26 +670,25 @@ pub fn create_test_engine(
     if let Some(cache) = cache {
         builder = builder.block_cache(cache);
     }
-    let mut seqno_worker = None;
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
-            router: Mutex::new(router.clone()),
+            router: Mutex::new(router),
         }));
-        if cfg.raft_store.disable_kv_wal {
-            let worker = LazyWorker::new("seqno_relation");
-            let scheduler = worker.scheduler();
-            builder = builder.flush_listener(FlushListener::new(ApplyResNotifier::new(
-                router,
-                Some(scheduler),
-            )));
-            seqno_worker = Some(worker);
-        }
+        println!("disable kv wal: {}", cfg.raft_store.disable_kv_wal);
     }
+
+    let flush_listener = if cfg.raft_store.disable_kv_wal {
+        let listener = FlushListener::new(TestNotifier);
+        builder = builder.flush_listener(listener.clone());
+        Some(listener)
+    } else {
+        None
+    };
 
     let factory = builder.build();
     let engine = factory.create_shared_db().unwrap();
     let engines = Engines::new(engine, raft_engine);
-    (engines, key_manager, dir, sst_worker, seqno_worker)
+    (engines, key_manager, dir, sst_worker, flush_listener)
 }
 
 pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {

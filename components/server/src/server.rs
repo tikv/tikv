@@ -681,7 +681,7 @@ where
             let seqno_runner = SeqnoRelationRunner::new(
                 engines.store_meta.clone(),
                 ApplyResNotifier::new(self.router.clone(), Some(seqno_worker.scheduler())),
-                self.engines.as_ref().unwrap().engines.raft.clone(),
+                self.engines.as_ref().unwrap().engines.clone(),
             );
             seqno_worker.start(seqno_runner);
         }

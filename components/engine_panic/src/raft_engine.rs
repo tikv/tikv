@@ -1,6 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{
+    util::FlushedSeqno, Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch,
+    Result,
+};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
@@ -68,6 +71,10 @@ impl RaftEngineReadOnly for PanicEngine {
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<Option<RegionLocalState>> {
+        panic!()
+    }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
         panic!()
     }
 }
@@ -176,6 +183,10 @@ impl RaftEngine for PanicEngine {
     where
         F: FnMut(u64, &RegionSequenceNumberRelation),
     {
+        panic!()
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
         panic!()
     }
 }

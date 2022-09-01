@@ -1,6 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Engines, KvEngine, Mutable, RaftEngine, WriteBatch, CF_DEFAULT, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, Mutable, RaftEngine, RaftLogBatch, WriteBatch, CF_DEFAULT, CF_RAFT,
+};
 use kvproto::{
     metapb,
     raft_serverpb::{RaftLocalState, RegionLocalState, StoreIdent},
@@ -13,7 +15,7 @@ use super::{
     },
     util::new_peer,
 };
-use crate::Result;
+use crate::{store::peer_storage::write_initial_apply_state_raft, Result};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::default();
@@ -86,7 +88,9 @@ pub fn prepare_bootstrap_cluster(
     engines.sync_kv()?;
 
     let mut raft_wb = engines.raft.log_batch(1024);
+    raft_wb.put_region_state(region.get_id(), &state).unwrap();
     write_initial_raft_state(&mut raft_wb, region.get_id())?;
+    write_initial_apply_state_raft(&mut raft_wb, region.get_id())?;
     box_try!(engines.raft.consume(&mut raft_wb, true));
     Ok(())
 }

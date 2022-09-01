@@ -6,14 +6,17 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry};
-use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, Snapshot};
+use engine_traits::{
+    util::FlushedSeqno, Engines, KvEngine, RaftEngine, RaftLogBatch, Snapshot, DATA_CFS,
+};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RegionLocalState, RegionSequenceNumberRelation,
 };
+use once_cell::sync::OnceCell;
 use tikv_util::{
-    info,
+    error, info,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
-    worker::Runnable,
+    worker::{Runnable, Scheduler},
 };
 
 use super::metrics::*;
@@ -21,6 +24,7 @@ use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
     fsm::{store::ApplyResNotifier, ApplyNotifier, ApplyRes, ExecResult, StoreMeta},
     util::gc_seqno_relations,
+    worker::RaftlogGcTask,
 };
 
 const RAFT_WB_MAX_KEYS: usize = 256;
@@ -28,7 +32,8 @@ const RAFT_WB_MAX_KEYS: usize = 256;
 pub enum Task<S: Snapshot> {
     ApplyRes(Vec<ApplyRes<S>>),
     MemtableSealed(u64),
-    MemtableFlushed(u64),
+    MemtableFlushed { cf: String, seqno: u64 },
+    InitRaftlogGcScheduler(OnceCell<Scheduler<RaftlogGcTask>>),
 }
 
 impl<S: Snapshot> fmt::Display for Task<S> {
@@ -43,10 +48,14 @@ impl<S: Snapshot> fmt::Display for Task<S> {
                 .field("name", &"memtable_sealed")
                 .field("seqno", &seqno)
                 .finish(),
-            Task::MemtableFlushed(ref seqno) => de
+            Task::MemtableFlushed { ref cf, ref seqno } => de
                 .field("name", &"memtable_flushed")
+                .field("cf", &cf)
                 .field("seqno", &seqno)
                 .finish(),
+            Task::InitRaftlogGcScheduler(_) => {
+                de.field("name", &"init_raftlog_gc_scheduler").finish()
+            }
         }
     }
 }
@@ -61,28 +70,32 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     store_id: Option<u64>,
     store_meta: Arc<Mutex<StoreMeta>>,
     apply_res_notifier: ApplyResNotifier<EK, ER>,
-    raftdb: ER,
+    engines: Engines<EK, ER>,
     wb: ER::LogBatch,
     seqno_window: SequenceNumberWindow,
     inflight_seqno_relations: HashMap<u64, SeqnoRelation>,
-    last_flushed_seqno: u64,
+    last_persisted_seqno: u64,
+    flushed_seqno: FlushedSeqno,
+    raftlog_gc_scheduler: Option<OnceCell<Scheduler<RaftlogGcTask>>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     pub fn new(
         store_meta: Arc<Mutex<StoreMeta>>,
         apply_res_notifier: ApplyResNotifier<EK, ER>,
-        raftdb: ER,
+        engines: Engines<EK, ER>,
     ) -> Self {
         Runner {
             store_id: None,
             store_meta,
-            wb: raftdb.log_batch(RAFT_WB_MAX_KEYS),
-            raftdb,
+            wb: engines.raft.log_batch(RAFT_WB_MAX_KEYS),
+            flushed_seqno: FlushedSeqno::new(DATA_CFS, engines.kv.get_latest_sequence_number()),
+            engines,
             apply_res_notifier,
             seqno_window: SequenceNumberWindow::default(),
             inflight_seqno_relations: HashMap::default(),
-            last_flushed_seqno: 0,
+            last_persisted_seqno: 0,
+            raftlog_gc_scheduler: None,
         }
     }
 
@@ -95,7 +108,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     seqno: *seqno,
                     apply_state: res.apply_state.clone(),
                 };
-                let relations = match seqno.number.cmp(&self.last_flushed_seqno) {
+                let relations = match seqno.number.cmp(&self.last_persisted_seqno) {
                     cmp::Ordering::Less | cmp::Ordering::Equal => &mut sync_relations,
                     cmp::Ordering::Greater => &mut self.inflight_seqno_relations,
                 };
@@ -117,7 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             self.handle_sync_relations(sync_relations);
         }
 
-        self.raftdb.sync().unwrap();
+        self.engines.raft.sync().unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
 
         SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
@@ -126,23 +139,44 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     fn on_memtable_sealed(&mut self, seqno: u64) {
-        self.last_flushed_seqno = seqno;
+        self.last_persisted_seqno = seqno;
         let sync_relations = std::mem::take(&mut self.inflight_seqno_relations);
         self.handle_sync_relations(sync_relations);
     }
 
     // GC relations
-    fn on_memtable_flushed(&mut self, seqno: u64) {
-        gc_seqno_relations(seqno, &self.raftdb, &mut self.wb).unwrap();
-        if !self.wb.is_empty() {
-            self.raftdb
-                .consume_and_shrink(
-                    &mut self.wb,
-                    true,
-                    RAFT_WB_SHRINK_SIZE,
-                    RAFT_WB_DEFAULT_SIZE,
-                )
-                .unwrap();
+    fn on_memtable_flushed(&mut self, cf: &str, seqno: u64) {
+        let min_flushed = self.flushed_seqno.update(cf, seqno);
+        self.engines
+            .raft
+            .put_flushed_seqno(&self.flushed_seqno)
+            .unwrap();
+        if let Err(e) = self
+            .raftlog_gc_scheduler
+            .as_ref()
+            .unwrap()
+            .get()
+            .unwrap()
+            .schedule(RaftlogGcTask::MemtableFlushed {
+                cf: cf.to_string(),
+                seqno,
+            })
+        {
+            error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+        }
+        if let Some(min) = min_flushed {
+            gc_seqno_relations(min, &self.engines.raft, &mut self.wb).unwrap();
+            if !self.wb.is_empty() {
+                self.engines
+                    .raft
+                    .consume_and_shrink(
+                        &mut self.wb,
+                        true,
+                        RAFT_WB_SHRINK_SIZE,
+                        RAFT_WB_DEFAULT_SIZE,
+                    )
+                    .unwrap();
+            }
         }
     }
 
@@ -151,7 +185,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         let mut count = 0;
         let size = relations.len();
         for (region_id, r) in relations {
-            assert!(r.seqno.number <= self.last_flushed_seqno);
+            assert!(r.seqno.number <= self.last_persisted_seqno);
             self.seqno_window.push(r.seqno);
             relation.set_region_id(r.region_id);
             relation.set_apply_state(r.apply_state);
@@ -161,7 +195,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             if count % RAFT_WB_MAX_KEYS == 0 || count == size - 1 {
                 SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.wb.persist_size() as f64);
                 let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-                self.raftdb
+                self.engines
+                    .raft
                     .consume_and_shrink(
                         &mut self.wb,
                         false,
@@ -174,7 +209,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         if !self.wb.is_empty() {
             SEQNO_RELATIONS_WRITE_SIZE_HISTOGRAM.observe(self.wb.persist_size() as f64);
             let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-            self.raftdb
+            self.engines
+                .raft
                 .consume_and_shrink(
                     &mut self.wb,
                     false,
@@ -299,14 +335,17 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             }
         }
         let _timer = SEQNO_RELATIONS_WRITE_DURATION_HISTOGRAM.start_timer();
-        self.raftdb
-            .consume_and_shrink(
-                &mut self.wb,
-                false,
-                RAFT_WB_SHRINK_SIZE,
-                RAFT_WB_DEFAULT_SIZE,
-            )
-            .unwrap();
+        if !self.wb.is_empty() {
+            self.engines
+                .raft
+                .consume_and_shrink(
+                    &mut self.wb,
+                    false,
+                    RAFT_WB_SHRINK_SIZE,
+                    RAFT_WB_DEFAULT_SIZE,
+                )
+                .unwrap();
+        }
     }
 
     fn store_id(&mut self) -> Option<u64> {
@@ -324,7 +363,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
         match task {
             Task::ApplyRes(apply_res) => self.on_apply_res(apply_res),
             Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),
-            Task::MemtableFlushed(seqno) => self.on_memtable_flushed(seqno),
+            Task::MemtableFlushed { cf, seqno } => self.on_memtable_flushed(&cf, seqno),
+            Task::InitRaftlogGcScheduler(scheduler) => self.raftlog_gc_scheduler = Some(scheduler),
         }
     }
 }

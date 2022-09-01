@@ -4,9 +4,9 @@
 use std::{convert::TryInto, ops::Deref};
 
 use engine_traits::{
-    Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    util::FlushedSeqno, Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine,
+    RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable,
+    WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
@@ -182,6 +182,11 @@ impl RaftEngineReadOnly for RocksEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         let key = keys::apply_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
+        let value = self.get_value_cf(CF_DEFAULT, keys::FLUSHED_SEQNO_KEY)?;
+        Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
     }
 }
 
@@ -430,6 +435,11 @@ impl RaftEngine for RocksEngine {
             },
         )?;
         Ok(())
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
+        let result = serde_json::to_string(&flushed_seqno).unwrap();
+        self.put(keys::FLUSHED_SEQNO_KEY, result.as_bytes())
     }
 }
 

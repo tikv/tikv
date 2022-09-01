@@ -3848,6 +3848,7 @@ where
         mut err_resp: RaftCmdResponse,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
+        println!("read index: {:?}", req);
         if let Err(e) = self.pre_read_index() {
             debug!(
                 "prevents unsafe read index";
@@ -5510,6 +5511,7 @@ where
         _: Option<ThreadReadId>,
         _: &mut Option<LocalReadContext<'_, EK>>,
     ) -> Arc<EK::Snapshot> {
+        println!("get snapshot");
         Arc::new(self.engines.kv.snapshot())
     }
 }

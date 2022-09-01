@@ -12,7 +12,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
@@ -37,7 +37,7 @@ use raftstore::{
     store::{
         fsm::{
             create_raft_batch_system,
-            store::{ApplyResNotifier, StoreMeta, PENDING_MSG_CAP},
+            store::{StoreMeta, PENDING_MSG_CAP},
             RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
@@ -50,7 +50,7 @@ use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
-    worker::{LazyWorker, Scheduler},
+    worker::LazyWorker,
     HandyRwLock,
 };
 
@@ -77,7 +77,7 @@ pub trait Simulator {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -170,8 +170,8 @@ pub struct Cluster<T: Simulator> {
     pub sst_workers_map: HashMap<u64, usize>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
-    seqno_workers: Vec<Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
-    seqno_scheduler_map: HashMap<u64, Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>>>,
+    flush_listeners: Vec<Option<FlushListener>>,
+    flush_listeners_map: HashMap<u64, usize>,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -205,8 +205,8 @@ impl<T: Simulator> Cluster<T> {
             pd_client,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
-            seqno_workers: vec![],
-            seqno_scheduler_map: HashMap::default(),
+            flush_listeners: vec![],
+            flush_listeners_map: HashMap::default(),
         }
     }
 
@@ -239,16 +239,17 @@ impl<T: Simulator> Cluster<T> {
         assert!(self.engines.insert(node_id, engines).is_none());
         assert!(self.key_managers_map.insert(node_id, key_mgr).is_none());
         assert!(self.sst_workers_map.insert(node_id, offset).is_none());
+        assert!(self.flush_listeners_map.insert(node_id, offset).is_none());
     }
 
     fn create_engine(&mut self, router: Option<RaftRouter<RocksEngine, RaftTestEngine>>) {
-        let (engines, key_manager, dir, sst_worker, seqno_worker) =
+        let (engines, key_manager, dir, sst_worker, flush_listener) =
             create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
         self.sst_workers.push(sst_worker);
-        self.seqno_workers.push(seqno_worker);
+        self.flush_listeners.push(flush_listener);
     }
 
     pub fn create_engines(&mut self) {
@@ -278,13 +279,10 @@ impl<T: Simulator> Cluster<T> {
             let engines = self.dbs.last().unwrap().clone();
             let key_mgr = self.key_managers.last().unwrap().clone();
             let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
-            let seqno_worker = self.seqno_workers.last().unwrap().as_ref();
+            let flush_listener = self.flush_listeners.last().unwrap().clone();
 
             let props = GroupProperties::default();
             tikv_util::thread_group::set_properties(Some(props.clone()));
-
-            let apply_notifier =
-                ApplyResNotifier::new(router.clone(), seqno_worker.map(|w| w.scheduler()));
 
             let mut sim = self.sim.wl();
             let node_id = sim.run_node(
@@ -295,16 +293,16 @@ impl<T: Simulator> Cluster<T> {
                 key_mgr.clone(),
                 router,
                 system,
-                apply_notifier,
+                flush_listener,
             )?;
             self.group_props.insert(node_id, props);
             self.engines.insert(node_id, engines);
             self.store_metas.insert(node_id, store_meta);
             self.key_managers_map.insert(node_id, key_mgr);
-            self.seqno_scheduler_map
-                .insert(node_id, seqno_worker.map(|w| w.scheduler()));
             self.sst_workers_map
                 .insert(node_id, self.sst_workers.len() - 1);
+            self.flush_listeners_map
+                .insert(node_id, self.flush_listeners.len() - 1);
         }
         Ok(())
     }
@@ -348,7 +346,8 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let key_mgr = self.key_managers_map[&node_id].clone();
-        let seqno_scheduler = self.seqno_scheduler_map[&node_id].clone();
+        let offset = self.flush_listeners_map[&node_id];
+        let flush_listener = self.flush_listeners[offset].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
@@ -368,7 +367,6 @@ impl<T: Simulator> Cluster<T> {
         self.group_props.insert(node_id, props.clone());
         tikv_util::thread_group::set_properties(Some(props));
         debug!("calling run node"; "node_id" => node_id);
-        let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim.wl().run_node(
             node_id,
@@ -378,7 +376,7 @@ impl<T: Simulator> Cluster<T> {
             key_mgr,
             router,
             system,
-            apply_notifier,
+            flush_listener,
         )?;
         debug!("node {} started", node_id);
         Ok(())
@@ -661,6 +659,7 @@ impl<T: Simulator> Cluster<T> {
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
             self.sst_workers_map.insert(id, i);
+            self.flush_listeners_map.insert(id, i);
         }
 
         let mut region = metapb::Region::default();
@@ -695,6 +694,7 @@ impl<T: Simulator> Cluster<T> {
             self.key_managers_map
                 .insert(id, self.key_managers[i].clone());
             self.sst_workers_map.insert(id, i);
+            self.flush_listeners_map.insert(id, i);
         }
 
         for (&id, engines) in &self.engines {
@@ -751,6 +751,8 @@ impl<T: Simulator> Cluster<T> {
         self.key_managers_map.insert(node_id, key_mgr);
         self.sst_workers_map
             .insert(node_id, self.sst_workers.len() - 1);
+        self.flush_listeners_map
+            .insert(node_id, self.flush_listeners.len() - 1);
 
         self.run_node(node_id).unwrap();
         node_id
@@ -802,9 +804,6 @@ impl<T: Simulator> Cluster<T> {
         self.store_metas.clear();
         for sst_worker in self.sst_workers.drain(..) {
             sst_worker.stop_worker();
-        }
-        for seqno_worker in self.seqno_workers.drain(..).flatten() {
-            seqno_worker.stop_worker();
         }
         debug!("all nodes are shut down.");
     }

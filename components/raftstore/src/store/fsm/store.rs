@@ -30,7 +30,7 @@ use engine_traits::{
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::{SstMeta, SwitchMode},
     metapb::{self, Region, RegionEpoch},
@@ -60,6 +60,7 @@ use tikv_util::{
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
+    yatp_pool::{DefaultTicker, YatpPoolBuilder},
     Either, RingQueue,
 };
 use time::{self, Timespec};
@@ -416,10 +417,18 @@ where
         router: RaftRouter<EK, ER>,
         seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> ApplyResNotifier<EK, ER> {
+        let raftlog_gc_scheduler = OnceCell::new();
+        if let Some(scheduler) = seqno_scheduler.as_ref() {
+            if let Err(e) = scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(
+                raftlog_gc_scheduler.clone(),
+            )) {
+                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
+            }
+        }
         ApplyResNotifier {
             router,
             seqno_scheduler,
-            raftlog_gc_scheduler: OnceCell::new(),
+            raftlog_gc_scheduler,
         }
     }
 
@@ -501,20 +510,15 @@ where
         }
     }
 
-    fn notify_memtable_flushed(&self, seqno: u64) {
-        if let Some(scheduler) = self.raftlog_gc_scheduler.get() {
-            if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed(seqno)) {
-                warn!(
-                    "failed to schedule memtable seqno to raftlog gc worker";
-                    "err" => ?e,
-                );
-            }
-        }
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::MemtableFlushed(seqno))
+    fn notify_memtable_flushed(&self, cf: &str, seqno: u64) {
+        if let Err(e) =
+            self.seqno_scheduler
+                .as_ref()
+                .unwrap()
+                .schedule(SeqnoRelationTask::MemtableFlushed {
+                    cf: cf.to_string(),
+                    seqno,
+                })
         {
             warn!(
                 "failed to schedule memtable flushed seqno to seqno relation worker";
@@ -1198,15 +1202,22 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .iter()
                 .map(|cf| {
                     kv_engine
-                        .get_range_seqno_properties_cf(cf, b"", b"")
+                        .get_range_seqno_properties_cf(cf, DATA_MIN_KEY, DATA_MAX_KEY)
                         .unwrap()
-                        .map_or(0, |prop| prop.largest_seqno)
+                        .map_or(0, |prop| {
+                            println!("map cf {:?} to seqno {:?}", cf, prop);
+                            prop.largest_seqno
+                        })
                 })
                 .collect();
-            let min_cf_seqno = cf_seqnos.iter().copied().min().unwrap_or(0);
-            let max_cf_seqno = cf_seqnos.iter().copied().max().unwrap_or(0);
-            self.seqno_recover_range = Some(RangeInclusive::new(min_cf_seqno, max_cf_seqno));
-            let start_seqno = u64::max(seqno, min_cf_seqno);
+            let latest_seqno = kv_engine.get_latest_sequence_number();
+            println!(
+                "recover store from raftdb, seqno: {}, cf_seqno: {:?}, latest_seqno: {}",
+                seqno, cf_seqnos, latest_seqno
+            );
+            let start_seqno = cf_seqnos.iter().copied().min().unwrap_or(0).max(seqno);
+            let end_seqno = cf_seqnos.iter().copied().max().unwrap_or(latest_seqno);
+            self.seqno_recover_range = Some(RangeInclusive::new(start_seqno, end_seqno));
             let mut raft_wb = raft_engine.log_batch(0);
             gc_seqno_relations(start_seqno, &raft_engine, &mut raft_wb).unwrap();
             raft_engine.consume(&mut raft_wb, true).unwrap();
@@ -1611,11 +1622,13 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
-            None,
+            cfg.value().disable_kv_wal,
         );
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
+        apply_notifier.init_raftlog_gc_scheduler(raftlog_gc_scheduler.clone());
+
         let router_clone = self.router();
         let engines_clone = engines.clone();
         workers.purge_worker.spawn_interval_task(
@@ -1733,8 +1746,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
-
-        apply_notifier.init_raftlog_gc_scheduler(builder.raftlog_gc_scheduler.clone());
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
             Box::new(apply_notifier),
@@ -1790,6 +1801,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .spawn("apply".to_owned(), apply_poller_builder);
         if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
             self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
+        }
+        if raft_builder.cfg.value().disable_kv_wal {
+            let seqno = raft_builder.engines.kv.get_latest_sequence_number();
+            raft_builder
+                .engines
+                .raft
+                .put_recover_from_raft_db(seqno)
+                .unwrap();
         }
 
         let refresh_config_runner = RefreshConfigRunner::new(
@@ -1866,12 +1885,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .for_each_raft_group(&mut |region_id| {
                 if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
                     assert!(
-                        relation.get_sequence_number() <= *range.start(),
+                        relation.get_sequence_number() <= *range.end(),
                         "relation {:?}, range {:?}",
                         relation,
                         range
                     );
-
                     let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap();
                     let raft_state = engines.raft.get_raft_state(region_id).unwrap().unwrap();
                     let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
@@ -1897,46 +1915,58 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             })
             .unwrap();
 
-        while let Some((version, mut regions)) = recover_regions.pop_first() {
-            let mut regions_drainer = regions.drain();
-            while let Some((region_id, (raft_state, start, end))) = regions_drainer.next() {
-                let mut entries = vec![];
-                engines
-                    .raft
-                    .fetch_entries_to(region_id, start, end, None, &mut entries)
-                    .unwrap();
-                // TODO: Parallelize recovery.
-                let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                self.apply_router.schedule_task(
-                    region_id,
-                    ApplyTask::recover(
-                        region_id,
-                        raft_state.get_hard_state().term,
-                        raft_state.get_hard_state().commit,
-                        raft_state.get_hard_state().term,
-                        entries,
-                        Box::new(move |status| {
-                            tx.send(status).unwrap();
-                        }),
-                    ),
-                );
+        let pool = YatpPoolBuilder::new(DefaultTicker::default())
+            .name_prefix("recovery-")
+            .thread_count(4, 4, 4)
+            .build_single_level_pool();
+
+        while let Some((_, regions)) = recover_regions.pop_first() {
+            let results: Vec<_> = regions
+                .into_iter()
+                .map(|(region_id, (raft_state, start, end))| {
+                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                    let router = self.apply_router.clone();
+                    let raftdb = engines.raft.clone();
+                    let hard_state = raft_state.get_hard_state().clone();
+                    pool.spawn(async move {
+                        let mut entries = vec![];
+                        raftdb
+                            .fetch_entries_to(region_id, start, end + 1, None, &mut entries)
+                            .unwrap();
+                        router.schedule_task(
+                            region_id,
+                            ApplyTask::recover(
+                                region_id,
+                                hard_state.term,
+                                hard_state.commit,
+                                hard_state.term,
+                                entries,
+                                Box::new(move |status| {
+                                    tx.send(status).unwrap();
+                                }),
+                            ),
+                        );
+                    });
+                    (rx, region_id, raft_state, end)
+                })
+                .collect();
+            for (rx, region_id, raft_state, end) in results {
                 let status = rx.recv().unwrap();
                 match status {
                     RecoverStatus::VersionChanged {
                         new_version,
                         applied_index,
                     } => {
-                        recover_regions.insert(version, regions_drainer.collect());
                         let regions = recover_regions
                             .entry(new_version)
                             .or_insert_with(HashMap::default);
-                        regions.insert(region_id, (raft_state, applied_index + 1, end));
-                        break;
+                        regions.insert(region_id, (raft_state, applied_index + 1, end + 1));
                     }
                     RecoverStatus::Finished => info!("region {} recover finished", region_id),
                 }
             }
         }
+        engines.kv.flush_cfs(true).unwrap();
     }
 }
 

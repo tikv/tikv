@@ -13,7 +13,7 @@ use causal_ts::{tests::DummyRawTsTracker, CausalTsProvider};
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
@@ -40,8 +40,9 @@ use raftstore::{
             ApplyRouter, RaftBatchSystem, RaftRouter,
         },
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot,
+        SeqnoRelationRunner, SeqnoRelationTask, SnapManager, SnapManagerBuilder, SplitCheckRunner,
+        SplitConfigManager, StoreMetaDelegate,
     },
     Result,
 };
@@ -134,6 +135,7 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
+    seqno_worker: Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -266,7 +268,7 @@ impl ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
@@ -582,6 +584,19 @@ impl ServerCluster {
             max_unified_read_pool_thread_count,
             None,
         );
+        let mut seqno_worker = None;
+        let seqno_scheduler = flush_listener.map(|listener| {
+            let mut worker = LazyWorker::new("seqno-relation");
+            let scheduler = worker.scheduler();
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler.clone()));
+            let seqno_runner =
+                SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
+            listener.update_notifier(notifier);
+            println!("start seqno worker: {}", worker.start(seqno_runner));
+            seqno_worker = Some(worker);
+            scheduler
+        });
+        let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
         node.start(
             engines,
             simulate_trans.clone(),
@@ -629,6 +644,7 @@ impl ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
+                seqno_worker,
                 rsmeter_cleanup,
             },
         );
@@ -650,7 +666,7 @@ impl Simulator for ServerCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         dispatch_api_version!(
             cfg.storage.api_version(),
@@ -662,7 +678,7 @@ impl Simulator for ServerCluster {
                 key_manager,
                 router,
                 system,
-                apply_notifier,
+                flush_listener,
             )
         )
     }
@@ -685,6 +701,9 @@ impl Simulator for ServerCluster {
             meta.node.stop();
             // resolved ts worker started, let's stop it
             if let Some(worker) = meta.rts_worker {
+                worker.stop_worker();
+            }
+            if let Some(worker) = meta.seqno_worker {
                 worker.stop_worker();
             }
             (meta.rsmeter_cleanup)();

@@ -1131,6 +1131,23 @@ pub fn write_initial_apply_state<T: Mutable>(kv_wb: &mut T, region_id: u64) -> R
     Ok(())
 }
 
+pub fn write_initial_apply_state_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
+    region_id: u64,
+) -> Result<()> {
+    let mut apply_state = RaftApplyState::default();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_term(RAFT_INIT_LOG_TERM);
+
+    raft_wb.put_apply_state(region_id, &apply_state).unwrap();
+    Ok(())
+}
+
 pub fn write_peer_state<T: Mutable>(
     kv_wb: &mut T,
     region: &metapb::Region,

@@ -255,6 +255,9 @@
 #[macro_use(fail_point)]
 extern crate fail;
 
+#[macro_use]
+extern crate serde_derive;
+
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is
 // recommended that engines follow the same module layout.

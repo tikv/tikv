@@ -1,15 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    iter::FromIterator,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
-};
+use std::sync::{atomic::Ordering, Arc, Mutex};
 
-use collections::HashMap;
-use once_cell::sync::OnceCell;
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
 use tikv_util::{
@@ -21,32 +13,26 @@ use crate::RocksEngine;
 
 #[derive(Clone)]
 pub struct FlushListener {
-    notifier: Arc<Mutex<dyn Notifier>>,
+    notifier: Arc<Mutex<Box<dyn Notifier>>>,
     engine: Arc<Mutex<Option<RocksEngine>>>,
-    flushed_seqnos: Arc<OnceCell<HashMap<String, AtomicU64>>>,
 }
 
 impl FlushListener {
     pub fn new<N: Notifier + 'static>(notifier: N) -> Self {
         FlushListener {
-            notifier: Arc::new(Mutex::new(notifier)),
+            notifier: Arc::new(Mutex::new(Box::new(notifier))),
             engine: Arc::default(),
-            flushed_seqnos: Arc::new(OnceCell::new()),
         }
     }
 
     pub fn set_engine(&self, engine: RocksEngine) {
-        let db = engine.as_inner();
-        let cf_names = db.cf_names();
-        self.flushed_seqnos
-            .set(HashMap::from_iter(
-                cf_names
-                    .into_iter()
-                    .map(|name| (name.to_string(), AtomicU64::new(0))),
-            ))
-            .unwrap();
         let mut e = self.engine.lock().unwrap();
         *e = Some(engine);
+    }
+
+    pub fn update_notifier(&self, notifier: impl Notifier + 'static) {
+        let mut n = self.notifier.lock().unwrap();
+        *n = Box::new(notifier);
     }
 }
 
@@ -67,29 +53,9 @@ impl EventListener for FlushListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         let largest_seqno = info.largest_seqno();
         let cf = info.cf_name();
-        let flushed_seqnos = self.flushed_seqnos.get().unwrap();
-        let cf_flushed_seqno = flushed_seqnos.get(cf).unwrap();
-        let mut current = cf_flushed_seqno.load(Ordering::SeqCst);
-        while current < largest_seqno {
-            if let Err(cur) = cf_flushed_seqno.compare_exchange_weak(
-                current,
-                largest_seqno,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                current = cur;
-            }
-        }
-        let min_flushed_seqno = flushed_seqnos
-            .iter()
-            .map(|(_, seqno)| seqno.load(Ordering::SeqCst))
-            .min()
-            .unwrap();
-        if min_flushed_seqno == largest_seqno {
-            // notify raftlog GC worker to GC relations and raft logs
-            let notifier = self.notifier.lock().unwrap();
-            notifier.notify_memtable_flushed(largest_seqno);
-        }
+        // notify raftlog GC worker to GC relations and raft logs
+        let notifier = self.notifier.lock().unwrap();
+        notifier.notify_memtable_flushed(cf, largest_seqno);
         debug!("flush completed"; "seqno" => largest_seqno);
     }
 
@@ -130,7 +96,7 @@ mod tests {
 
     impl Notifier for TestNotifier {
         fn notify_memtable_sealed(&self, _seqno: u64) {}
-        fn notify_memtable_flushed(&self, _seqno: u64) {}
+        fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
     }
 
     #[test]
@@ -151,7 +117,6 @@ mod tests {
         )
         .unwrap();
         listener.set_engine(engine.clone());
-        let flushed_seqnos = listener.flushed_seqnos.get().unwrap();
         let mut batch = engine.write_batch();
         batch.put_cf(CF_DEFAULT, b"k", b"v").unwrap();
         let mut write_opts = WriteOptions::new();
@@ -161,11 +126,8 @@ mod tests {
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush_cfs(true).unwrap();
-        let flushed_max_seqno = flushed_seqnos.get(CF_DEFAULT).unwrap();
-        assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 3);
         let seq = batch.write_opt(&write_opts).unwrap();
         SYNCED_MAX_SEQUENCE_NUMBER.store(seq, Ordering::SeqCst);
         engine.flush_cfs(true).unwrap();
-        assert_eq!(flushed_max_seqno.load(Ordering::SeqCst), 4);
     }
 }

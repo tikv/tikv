@@ -10,9 +10,9 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result,
+    util::FlushedSeqno, CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt,
+    PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug, RaftEngineReadOnly,
+    RaftLogBatch as RaftLogBatchTrait, RaftLogGcTask, Result,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -350,7 +350,8 @@ const APPLY_STATE_KEY: &[u8] = &[0x04];
 const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
-const PENDING_REGION_STATE_KEY: &[u8] = &[0x03];
+const PENDING_REGION_STATE_KEY: &[u8] = &[0x08];
+const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
 
 fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
@@ -609,6 +610,11 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .get_message(raft_group_id, APPLY_STATE_KEY)
             .map_err(transfer_error)
     }
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
+        let value = self.0.get(STORE_STATE_ID, FLUSHED_SEQNO_KEY);
+        Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
+    }
 }
 
 impl RaftEngineDebug for RaftLogEngine {
@@ -791,6 +797,17 @@ impl RaftEngine for RaftLogEngine {
                 },
             )
             .map_err(transfer_error)
+    }
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()> {
+        let result = serde_json::to_string(&flushed_seqno).unwrap();
+        let mut batch = Self::LogBatch::default();
+        batch.0.put(
+            STORE_STATE_ID,
+            FLUSHED_SEQNO_KEY.to_vec(),
+            result.as_bytes().to_vec(),
+        );
+        Ok(())
     }
 }
 

@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlushListener, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt, Peekable};
 use kvproto::{
@@ -227,7 +227,7 @@ impl Simulator for NodeCluster {
         key_manager: Option<Arc<DataKeyManager>>,
         router: RaftRouter<RocksEngine, RaftTestEngine>,
         system: RaftBatchSystem<RocksEngine, RaftTestEngine>,
-        apply_notifier: ApplyResNotifier<RocksEngine, RaftTestEngine>,
+        flush_listener: Option<FlushListener>,
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -309,6 +309,18 @@ impl Simulator for NodeCluster {
             Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
+
+        let seqno_scheduler = flush_listener.map(|listener| {
+            let mut seqno_worker = LazyWorker::new("seqno_relation");
+            let scheduler = seqno_worker.scheduler();
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler.clone()));
+            let seqno_runner =
+                SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
+            listener.update_notifier(notifier);
+            seqno_worker.start(seqno_runner);
+            scheduler
+        });
+        let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
 
         node.try_bootstrap_store(engines.clone())?;
         node.start(

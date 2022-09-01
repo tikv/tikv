@@ -8,7 +8,7 @@ use kvproto::{
 };
 use raft::eraftpb::Entry;
 
-use crate::*;
+use crate::{util::FlushedSeqno, *};
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -33,6 +33,8 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         raft_group_id: u64,
         seqno: u64,
     ) -> Result<Option<RegionSequenceNumberRelation>>;
+
+    fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
@@ -164,6 +166,8 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, f: F) -> Result<()>
     where
         F: FnMut(u64, &RegionSequenceNumberRelation);
+
+    fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
