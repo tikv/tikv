@@ -32,9 +32,7 @@ use crate::{
     fsm::StoreMeta,
     raft::Peer,
     router::{
-        message::RaftRequest,
-        response_channel::{CmdResChannel, QueryResChannel, QueryResult, ReadResponse},
-        PeerMsg,
+        message::RaftRequest, CmdResChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
     },
     Result,
 };
@@ -55,7 +53,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let (id, dropped) = propose_read_index(&mut self.raft_group, request.as_ref(), None);
+        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
         if dropped && is_leader {
             // The message gets dropped silently, can't be handled anymore.
             notify_stale_req(self.term(), ch);
@@ -65,7 +63,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
-        self.push_pending_read(read, is_leader);
+        self.pending_reads.push_back(read, is_leader);
         debug!(
             self.logger,
             "request to get a read index";
@@ -94,7 +92,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
-            let commit_index = self.raft_group.store().commit_index();
+            let commit_index = self.storage().commit_index();
             if let Some(read) = self.pending_reads.back_mut() {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
@@ -249,7 +247,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         } else {
             self.pending_reads.advance_leader_reads(&self.tag, states);
             if let Some(propose_time) = self.pending_reads.last_ready().map(|r| r.propose_time) {
-                if !self.leader_lease.is_suspect() {
+                if !self.leader_lease_mut().is_suspect() {
                     self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
                 }
             }
@@ -283,9 +281,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ) {
             None
         } else {
-            self.leader_lease.renew(ts);
+            self.leader_lease_mut().renew(ts);
             let term = self.term();
-            self.leader_lease
+            self.leader_lease_mut()
                 .maybe_new_remote_lease(term)
                 .map(ReadProgress::leader_lease)
         };
@@ -302,7 +300,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove {
+        if self.pending_remove() {
             return;
         }
         debug!(
@@ -320,25 +318,25 @@ where
     ER: RaftEngine,
 {
     fn has_applied_to_current_term(&mut self) -> bool {
-        self.raft_group.store().applied_term() == self.term()
+        self.entry_storage().applied_term() == self.term()
     }
 
     fn inspect_lease(&mut self) -> LeaseState {
-        if !self.raft_group.raft.in_lease() {
+        if !self.raft_group().raft.in_lease() {
             return LeaseState::Suspect;
         }
         // None means now.
-        let state = self.leader_lease.inspect(None);
+        let state = self.leader_lease_mut().inspect(None);
         if LeaseState::Expired == state {
             debug!(
                 self.logger,
                 "leader lease is expired, region_id {}, peer_id {}, lease {:?}",
                 self.region_id(),
                 self.peer_id(),
-                self.leader_lease,
+                self.leader_lease(),
             );
             // The lease is expired, call `expire` explicitly.
-            self.leader_lease.expire();
+            self.leader_lease_mut().expire();
         }
         state
     }

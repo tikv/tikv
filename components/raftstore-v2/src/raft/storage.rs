@@ -186,11 +186,6 @@ impl<ER: RaftEngine> Storage<ER> {
     }
 
     #[inline]
-    pub fn applied_term(&self) -> u64 {
-        self.entry_storage.applied_term()
-    }
-
-    #[inline]
     pub fn commit_index(&self) -> u64 {
         self.raft_state().get_hard_state().get_commit()
     }

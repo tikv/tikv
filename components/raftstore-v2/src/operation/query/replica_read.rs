@@ -19,10 +19,7 @@ use txn_types::WriteBatchFlags;
 use crate::{
     batch::StoreContext,
     raft::Peer,
-    router::{
-        message::RaftRequest,
-        response_channel::{QueryResChannel, QueryResult, ReadResponse},
-    },
+    router::{message::RaftRequest, QueryResChannel, QueryResult, ReadResponse},
     Result,
 };
 
@@ -78,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-            let safe_ts = self.read_progress.safe_ts();
+            let safe_ts = self.read_progress().safe_ts();
             if safe_ts < read_ts {
                 warn!(
                     self.logger,

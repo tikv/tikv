@@ -43,7 +43,7 @@ const REGION_READ_PROGRESS_CAP: usize = 128;
 
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
-    pub(crate) raft_group: RawNode<Storage<ER>>,
+    raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
     /// peer list, for example, an isolated peer may need to send/receive
@@ -53,11 +53,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     has_ready: bool,
     pub(crate) logger: Logger,
     pub(crate) pending_reads: ReadIndexQueue<QueryResChannel>,
-    pub(crate) read_progress: Arc<RegionReadProgress>,
+    read_progress: Arc<RegionReadProgress>,
     pub(crate) tag: String,
 
-    pub(crate) leader_lease: Lease,
-    pub(crate) pending_remove: bool,
+    leader_lease: Lease,
+    pending_remove: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -178,8 +178,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn push_pending_read(&mut self, read: ReadIndexRequest<QueryResChannel>, is_leader: bool) {
-        self.pending_reads.push_back(read, is_leader);
+    pub fn read_progress(&self) -> &Arc<RegionReadProgress> {
+        &self.read_progress
+    }
+
+    #[inline]
+    pub fn leader_lease(&self) -> &Lease {
+        &self.leader_lease
+    }
+
+    #[inline]
+    pub fn leader_lease_mut(&mut self) -> &mut Lease {
+        &mut self.leader_lease
+    }
+
+    #[inline]
+    pub fn pending_remove(&self) -> bool {
+        self.pending_remove
     }
 
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {

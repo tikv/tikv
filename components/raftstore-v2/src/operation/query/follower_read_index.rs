@@ -19,7 +19,7 @@ use time::Timespec;
 use crate::{
     batch::StoreContext,
     raft::Peer,
-    router::{message::RaftRequest, response_channel::QueryResChannel},
+    router::{message::RaftRequest, QueryResChannel},
     Result,
 };
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {

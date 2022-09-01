@@ -3,7 +3,7 @@
 mod imp;
 mod internal_message;
 pub mod message;
-pub mod response_channel;
+mod response_channel;
 
 pub(crate) use self::internal_message::ApplyTask;
 pub use self::{
