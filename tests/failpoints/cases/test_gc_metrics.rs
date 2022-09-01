@@ -130,6 +130,7 @@ fn test_txn_mvcc_filtered() {
 
 #[test]
 fn test_txn_gc_keys_handled() {
+    let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
@@ -147,7 +148,7 @@ fn test_txn_gc_keys_handled() {
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(store_id).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -155,7 +156,7 @@ fn test_txn_gc_keys_handled() {
     r1.set_start_key(b"".to_vec());
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
-    r1.mut_peers()[0].set_store_id(1);
+    r1.mut_peers()[0].set_store_id(store_id);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
@@ -274,6 +275,7 @@ fn test_raw_mvcc_filtered() {
 
 #[test]
 fn test_raw_gc_keys_handled() {
+    let store_id = 1;
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
@@ -294,7 +296,7 @@ fn test_raw_gc_keys_handled() {
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(store_id).unwrap();
 
     let mut r1 = Region::default();
     r1.set_id(1);
@@ -302,12 +304,12 @@ fn test_raw_gc_keys_handled() {
     r1.set_start_key(b"".to_vec());
     r1.set_end_key(b"".to_vec());
     r1.mut_peers().push(Peer::default());
-    r1.mut_peers()[0].set_store_id(1);
+    r1.mut_peers()[0].set_store_id(store_id);
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
     let ri_provider = RegionInfoAccessor::new(&mut host);
-    let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
+    let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
     let kv_engine = engine.get_rocksdb();

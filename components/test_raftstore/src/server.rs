@@ -339,7 +339,7 @@ impl ServerCluster {
             Default::default(),
             Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(node_id).unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();

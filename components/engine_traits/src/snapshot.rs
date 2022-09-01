@@ -14,5 +14,7 @@ where
 {
     type E: KvEngine;
 
+    /// The returned engine is not reliable. It can only be used by write
+    /// purpose.
     fn inner_engine(&self) -> Self::E;
 }

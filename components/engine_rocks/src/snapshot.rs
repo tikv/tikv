@@ -39,8 +39,6 @@ impl RocksSnapshot {
 impl Snapshot for RocksSnapshot {
     type E = RocksEngine;
 
-    /// The returned engine is not reliable. It can only be used by write
-    /// purpose.
     #[inline]
     fn inner_engine(&self) -> Self::E {
         RocksEngine::from_db(self.db())

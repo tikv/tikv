@@ -294,7 +294,7 @@ fn test_auto_gc() {
             config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilderApiV1::from_engine(engine.clone())
                 .gc_config(config)
-                .build()
+                .build(*id)
                 .unwrap();
 
             (*id, storage)

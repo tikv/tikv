@@ -41,7 +41,7 @@ fn setup_cfg_controller(
         Default::default(),
         Arc::new(MockRegionInfoProvider::new(Vec::new())),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(0).unwrap();
 
     let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));

@@ -684,13 +684,11 @@ fn test_store_resolve_with_illegal_tso() {
 fn test_txn_store_gc() {
     let key = "k";
     let store = AssertionStorage::default();
-    let (mut cluster, raft_store) =
-        AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
+    let (cluster, raft_store) = AssertionStorageApiV1::new_raft_storage_with_store_count(3, key);
 
     let region = cluster.get_region(key.as_bytes());
-    let store_leader = cluster.leader_of_region(region.id).unwrap().store_id;
-    store.test_txn_store_gc(store_leader, key, region.clone());
-    raft_store.test_txn_store_gc(store_leader, key, region);
+    store.test_txn_store_gc(key, region.clone());
+    raft_store.test_txn_store_gc(key, region);
 }
 
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
@@ -713,7 +711,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
         store_id,
         ..Default::default()
     }]));
-    store.gc_ok(store_id, region, 30);
+    store.gc_ok(region, 30);
     for k in &keys {
         store.get_none(k.as_bytes(), 15);
     }

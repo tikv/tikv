@@ -307,7 +307,7 @@ fn test_gc_bypass_raft() {
         let mut region = cluster.get_region(b"a");
         region.set_start_key(b"k1".to_vec());
         region.set_end_key(b"k2".to_vec());
-        sync_gc(&gc_sched, store_id, region, 200.into()).unwrap();
+        sync_gc(&gc_sched, region, 200.into()).unwrap();
 
         let engine = cluster.engines.get(&store_id).unwrap();
         for &start_ts in &[10, 20, 30] {

@@ -484,6 +484,7 @@ mod tests {
     // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
+        let mock_store_id = 5;
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
             ..Default::default()
@@ -512,7 +513,7 @@ mod tests {
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(mock_store_id).unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -539,7 +540,6 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(

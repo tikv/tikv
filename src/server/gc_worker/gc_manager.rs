@@ -556,12 +556,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));
         debug!("trying gc"; "region_id" => region.id, "start_key" => &hex_start, "end_key" => &hex_end);
 
-        if let Err(e) = sync_gc(
-            &self.worker_scheduler,
-            self.cfg.self_store_id,
-            region,
-            self.curr_safe_point(),
-        ) {
+        if let Err(e) = sync_gc(&self.worker_scheduler, region, self.curr_safe_point()) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.
             warn!("failed gc"; "start_key" => &hex_start, "end_key" => &hex_end, "err" => ?e);

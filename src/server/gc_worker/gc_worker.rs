@@ -93,7 +93,6 @@ where
     E: KvEngine,
 {
     Gc {
-        store_id: u64,
         region: Region,
         safe_point: TimeStamp,
         callback: Callback<()>,
@@ -101,18 +100,15 @@ where
     GcKeys {
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        store_id: u64,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     },
     RawGcKeys {
         keys: Vec<Key>,
         safe_point: TimeStamp,
-        store_id: u64,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     },
     UnsafeDestroyRange {
         ctx: Context,
-        store_id: u64,
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
@@ -120,7 +116,6 @@ where
     },
     PhysicalScanLock {
         ctx: Context,
-        store_id: u64,
         max_ts: TimeStamp,
         start_key: Key,
         limit: usize,
@@ -208,6 +203,7 @@ where
     E: Engine,
     RR: RaftStoreRouter<E::Local>,
 {
+    store_id: u64,
     engine: E,
 
     raft_store_router: RR,
@@ -375,6 +371,7 @@ where
     RR: RaftStoreRouter<E::Local>,
 {
     pub fn new(
+        store_id: u64,
         engine: E,
         raft_store_router: RR,
         flow_info_sender: Sender<FlowInfo>,
@@ -387,6 +384,7 @@ where
             f64::INFINITY
         });
         Self {
+            store_id,
             engine,
             raft_store_router,
             flow_info_sender,
@@ -455,14 +453,14 @@ where
         Ok(())
     }
 
-    fn gc(&mut self, store_id: u64, region: Region, safe_point: TimeStamp) -> Result<()> {
+    fn gc(&mut self, region: Region, safe_point: TimeStamp) -> Result<()> {
         if !self.need_gc(region.get_start_key(), region.get_end_key(), safe_point) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
 
         let mut reader = MvccReader::new(
-            self.get_snapshot(store_id, &region)?,
+            self.get_snapshot(self.store_id, &region)?,
             Some(ScanMode::Forward),
             false,
         );
@@ -479,7 +477,7 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(store_id, keys, safe_point, Either::Left(region.clone()))?;
+            self.gc_keys(keys, safe_point, Either::Left(region.clone()))?;
         }
 
         self.mut_stats(GcKeyMode::txn).add(&reader.statistics);
@@ -494,11 +492,11 @@ where
 
     pub fn gc_keys(
         &mut self,
-        store_id: u64,
         keys: Vec<Key>,
         safe_point: TimeStamp,
         region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
     ) -> Result<(usize, usize)> {
+        let store_id = self.store_id;
         let count = keys.len();
         let range_start_key = keys.first().unwrap().clone();
         let range_end_key = {
@@ -520,7 +518,6 @@ where
             return Ok((handled_keys, wasted_keys));
         }
         let (mut reader, mut kv_engine) = self.create_reader(
-            store_id,
             count,
             &first_item.as_ref().unwrap().1,
             range_start_key.clone(),
@@ -533,7 +530,6 @@ where
         for (mut keys, ref region) in iters {
             if !first_iteration {
                 (reader, kv_engine) = self.create_reader(
-                    store_id,
                     count,
                     region,
                     range_start_key.clone(),
@@ -577,7 +573,6 @@ where
                 } else {
                     Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
                     (reader, kv_engine) = self.create_reader(
-                        store_id,
                         count,
                         region,
                         range_start_key.clone(),
@@ -594,14 +589,13 @@ where
 
     fn create_reader(
         &self,
-        store_id: u64,
         key_count: usize,
         region: &Region,
         range_start_key: Key,
         range_end_key: Key,
     ) -> Result<(MvccReader<E::Snap>, <E::Snap as Snapshot>::E)> {
         let (mut reader, kv_engine) = {
-            let snapshot = self.get_snapshot(store_id, region)?;
+            let snapshot = self.get_snapshot(self.store_id, region)?;
             let kv_engine = snapshot.inner_engine();
 
             if key_count <= 1 {
@@ -621,7 +615,6 @@ where
 
     fn raw_gc_keys(
         &mut self,
-        store_id: u64,
         keys: Vec<Key>,
         safe_point: TimeStamp,
         regions_provider: Arc<dyn RegionInfoProvider>,
@@ -640,21 +633,21 @@ where
         let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let mut iters =
-            get_keys_in_regions(store_id, keys, Either::Right(regions_provider))?.peekable();
+            get_keys_in_regions(self.store_id, keys, Either::Right(regions_provider))?.peekable();
 
         // First item is fetched to initialize the reader and kv_engine
         let first_item = iters.peek();
         if first_item.is_none() {
             return Ok((handled_keys, wasted_keys));
         }
-        let mut snapshot = self.get_snapshot(store_id, &first_item.as_ref().unwrap().1)?;
+        let mut snapshot = self.get_snapshot(self.store_id, &first_item.as_ref().unwrap().1)?;
         let mut kv_engine = snapshot.inner_engine();
 
         let mut first_iteration = true;
         let mut gc_info = GcInfo::default();
         for (mut keys, ref region) in iters {
             if !first_iteration {
-                snapshot = self.get_snapshot(store_id, region)?;
+                snapshot = self.get_snapshot(self.store_id, region)?;
                 kv_engine = snapshot.inner_engine();
             }
             first_iteration = false;
@@ -812,7 +805,6 @@ where
     fn unsafe_destroy_range(
         &self,
         ctx: &Context,
-        store_id: u64,
         start_key: &Key,
         end_key: &Key,
         regions_provider: Arc<dyn RegionInfoProvider>,
@@ -828,10 +820,10 @@ where
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
-        let region = seek_region(store_id, start_key.as_encoded(), regions_provider)?;
+        let region = seek_region(self.store_id, start_key.as_encoded(), regions_provider)?;
         // We only need to get a snapshot of any region as we just want the inner engine
         // of it which is the same for all regions.
-        let kv_engine = self.get_snapshot(store_id, &region)?.inner_engine();
+        let kv_engine = self.get_snapshot(self.store_id, &region)?.inner_engine();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is
@@ -915,7 +907,6 @@ where
     fn handle_physical_scan_lock(
         &self,
         _: &Context,
-        store_id: u64,
         max_ts: TimeStamp,
         start_key: &Key,
         limit: usize,
@@ -923,7 +914,7 @@ where
     ) -> Result<Vec<LockInfo>> {
         let regions = box_try!(regions_provider.get_regions_in_range(start_key.as_encoded(), &[]))
             .into_iter()
-            .filter(move |r| find_peer(r, store_id).is_some());
+            .filter(move |r| find_peer(r, self.store_id).is_some());
 
         let mut first_round = true;
         let mut locks = Vec::new();
@@ -936,7 +927,7 @@ where
                     Key::from_raw(region.get_start_key())
                 }
             };
-            let snap = self.get_snapshot(store_id, &region)?;
+            let snap = self.get_snapshot(self.store_id, &region)?;
             let mut reader = MvccReader::new(snap, Some(ScanMode::Forward), false);
             let (locks_this_region, _) = reader
                 .scan_locks(Some(&start_key), None, |l| l.ts <= max_ts, limit)
@@ -1023,12 +1014,11 @@ where
 
         match task {
             GcTask::Gc {
-                store_id,
                 region,
                 safe_point,
                 callback,
             } => {
-                let res = self.gc(store_id, region.clone(), safe_point);
+                let res = self.gc(region.clone(), safe_point);
                 update_metrics(res.is_err());
                 callback(res);
                 self.update_statistics_metrics(GcKeyMode::txn);
@@ -1043,17 +1033,11 @@ where
             GcTask::GcKeys {
                 keys,
                 safe_point,
-                store_id,
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.mut_stats(GcKeyMode::txn).write.seek_tombstone;
 
-                match self.gc_keys(
-                    store_id,
-                    keys,
-                    safe_point,
-                    Either::Right(region_info_provider),
-                ) {
+                match self.gc_keys(keys, safe_point, Either::Right(region_info_provider)) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
                             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -1076,10 +1060,9 @@ where
             GcTask::RawGcKeys {
                 keys,
                 safe_point,
-                store_id,
                 region_info_provider,
             } => {
-                match self.raw_gc_keys(store_id, keys, safe_point, region_info_provider) {
+                match self.raw_gc_keys(keys, safe_point, region_info_provider) {
                     Ok((handled, wasted)) => {
                         GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED
                             .with_label_values(&[STAT_RAW_KEYMODE])
@@ -1098,19 +1081,13 @@ where
             }
             GcTask::UnsafeDestroyRange {
                 ctx,
-                store_id,
                 start_key,
                 end_key,
                 callback,
                 region_info_provider,
             } => {
-                let res = self.unsafe_destroy_range(
-                    &ctx,
-                    store_id,
-                    &start_key,
-                    &end_key,
-                    region_info_provider,
-                );
+                let res =
+                    self.unsafe_destroy_range(&ctx, &start_key, &end_key, region_info_provider);
                 update_metrics(res.is_err());
                 callback(res);
                 slow_log!(
@@ -1122,7 +1099,6 @@ where
             }
             GcTask::PhysicalScanLock {
                 ctx,
-                store_id,
                 max_ts,
                 start_key,
                 limit,
@@ -1131,7 +1107,6 @@ where
             } => {
                 let res = self.handle_physical_scan_lock(
                     &ctx,
-                    store_id,
                     max_ts,
                     &start_key,
                     limit,
@@ -1194,14 +1169,12 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GcTask<impl KvEngine>>) -> Res
 /// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    store_id: u64,
     region: Region,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
         .schedule(GcTask::Gc {
-            store_id,
             region,
             safe_point,
             callback,
@@ -1212,15 +1185,13 @@ fn schedule_gc(
 /// Does GC synchronously.
 pub fn sync_gc(
     scheduler: &Scheduler<GcTask<impl KvEngine>>,
-    store_id: u64,
     region: Region,
     safe_point: TimeStamp,
 ) -> Result<()> {
-    wait_op!(|callback| schedule_gc(scheduler, store_id, region, safe_point, callback))
-        .unwrap_or_else(|| {
-            error!("failed to receive result of gc");
-            Err(box_err!("gc_worker: failed to receive result of gc"))
-        })
+    wait_op!(|callback| schedule_gc(scheduler, region, safe_point, callback)).unwrap_or_else(|| {
+        error!("failed to receive result of gc");
+        Err(box_err!("gc_worker: failed to receive result of gc"))
+    })
 }
 
 /// Used to schedule GC operations.
@@ -1364,8 +1335,9 @@ where
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<()> {
+    pub fn start(&mut self, store_id: u64) -> Result<()> {
         let runner = GcRunner::new(
+            store_id,
             self.engine.clone(),
             self.raft_store_router.clone(),
             self.flow_info_sender.take().unwrap(),
@@ -1405,16 +1377,9 @@ where
     }
 
     /// Only for tests.
-    pub fn gc(
-        &self,
-        store_id: u64,
-        region: Region,
-        safe_point: TimeStamp,
-        callback: Callback<()>,
-    ) -> Result<()> {
+    pub fn gc(&self, region: Region, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
         self.worker_scheduler
             .schedule(GcTask::Gc {
-                store_id,
                 region,
                 safe_point,
                 callback,
@@ -1431,7 +1396,6 @@ where
     pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
-        store_id: u64,
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
@@ -1446,7 +1410,6 @@ where
         self.worker_scheduler
             .schedule_force(GcTask::UnsafeDestroyRange {
                 ctx,
-                store_id,
                 start_key,
                 end_key,
                 callback,
@@ -1462,7 +1425,6 @@ where
     pub fn physical_scan_lock(
         &self,
         ctx: Context,
-        store_id: u64,
         max_ts: TimeStamp,
         start_key: Key,
         limit: usize,
@@ -1473,7 +1435,6 @@ where
         self.worker_scheduler
             .schedule(GcTask::PhysicalScanLock {
                 ctx,
-                store_id,
                 max_ts,
                 start_key,
                 limit,
@@ -1754,7 +1715,7 @@ mod tests {
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(store_id).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -1808,15 +1769,9 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| gc_worker.unsafe_destroy_range(
-            Context::default(),
-            store_id,
-            start_key,
-            end_key,
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
+            .unwrap()
+            .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -1940,19 +1895,12 @@ mod tests {
             FeatureGate::default(),
             Arc::new(MockRegionInfoProvider::new(vec![region])),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(store_id).unwrap();
 
         let physical_scan_lock = |max_ts: u64, start_key, limit| {
             let (cb, f) = paired_future_callback();
             gc_worker
-                .physical_scan_lock(
-                    Context::default(),
-                    store_id,
-                    max_ts.into(),
-                    start_key,
-                    limit,
-                    cb,
-                )
+                .physical_scan_lock(Context::default(), max_ts.into(), start_key, limit, cb)
                 .unwrap();
             block_on(f).unwrap()
         };
@@ -2009,6 +1957,7 @@ mod tests {
 
     #[test]
     fn test_gc_keys_with_region_info_provider() {
+        let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
@@ -2028,7 +1977,7 @@ mod tests {
             feature_gate,
             Arc::new(ri_provider.clone()),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(store_id).unwrap();
 
         let mut r1 = Region::default();
         r1.set_id(1);
@@ -2042,7 +1991,7 @@ mod tests {
         r2.set_start_key(format!("k{:02}", 20).into_bytes());
         r2.set_end_key(format!("k{:02}", 30).into_bytes());
         r2.mut_peers().push(Peer::default());
-        r2.mut_peers()[0].set_store_id(1);
+        r2.mut_peers()[0].set_store_id(store_id);
 
         let mut r3 = Region::default();
         r3.set_id(3);
@@ -2050,7 +1999,7 @@ mod tests {
         r3.set_start_key(format!("k{:02}", 30).into_bytes());
         r3.set_end_key(b"".to_vec());
         r3.mut_peers().push(Peer::default());
-        r3.mut_peers()[0].set_store_id(1);
+        r3.mut_peers()[0].set_store_id(store_id);
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
@@ -2108,12 +2057,14 @@ mod tests {
 
     #[test]
     fn test_gc_keys_statistics() {
+        let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
         let mut runner = GcRunner::new(
+            store_id,
             prefixed_engine.clone(),
             RaftStoreBlackHole,
             tx,
@@ -2129,7 +2080,7 @@ mod tests {
         r1.set_start_key(b"".to_vec());
         r1.set_end_key(b"".to_vec());
         r1.mut_peers().push(Peer::default());
-        r1.mut_peers()[0].set_store_id(1);
+        r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = RegionInfoAccessor::new(&mut host);
@@ -2152,7 +2103,6 @@ mod tests {
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.next, 0);
         runner
             .gc_keys(
-                1,
                 keys,
                 TimeStamp::new(200),
                 Either::Right(Arc::new(ri_provider)),
@@ -2164,6 +2114,7 @@ mod tests {
 
     #[test]
     fn test_raw_gc_keys() {
+        let store_id = 1;
         // init engine and gc runner
         let mut cfg = DbConfig::default();
         cfg.defaultcf.disable_auto_compactions = true;
@@ -2176,6 +2127,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
         let mut runner = GcRunner::new(
+            store_id,
             prefixed_engine.clone(),
             RaftStoreBlackHole,
             tx,
@@ -2191,7 +2143,7 @@ mod tests {
         r1.set_start_key(b"".to_vec());
         r1.set_end_key(b"".to_vec());
         r1.mut_peers().push(Peer::default());
-        r1.mut_peers()[0].set_store_id(1);
+        r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
@@ -2248,7 +2200,7 @@ mod tests {
             .collect();
 
         runner
-            .raw_gc_keys(1, to_gc_keys, TimeStamp::new(120), ri_provider)
+            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), ri_provider)
             .unwrap();
 
         assert_eq!(7, runner.mut_stats(GcKeyMode::raw).data.next);
@@ -2276,6 +2228,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
         let mut runner = GcRunner::new(
+            1,
             prefixed_engine.clone(),
             RaftStoreBlackHole,
             tx,
@@ -2310,7 +2263,6 @@ mod tests {
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         runner
             .gc_keys(
-                1,
                 vec![Key::from_raw(b"k2\x00")],
                 TimeStamp::new(200),
                 Either::Right(ri_provider.clone()),
@@ -2326,7 +2278,6 @@ mod tests {
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         runner
             .gc_keys(
-                1,
                 vec![Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Either::Right(ri_provider.clone()),
@@ -2342,7 +2293,6 @@ mod tests {
         assert_eq!(runner.mut_stats(GcKeyMode::txn).write.seek_tombstone, 0);
         runner
             .gc_keys(
-                1,
                 vec![Key::from_raw(b"k1"), Key::from_raw(b"k2")],
                 TimeStamp::new(200),
                 Either::Right(ri_provider.clone()),
@@ -2374,7 +2324,6 @@ mod tests {
             .seek_tombstone = 0;
         runner
             .gc_keys(
-                1,
                 vec![Key::from_raw(b"k2")],
                 safepoint.into(),
                 Either::Right(ri_provider),
@@ -2426,7 +2375,6 @@ mod tests {
             gc_worker
                 .scheduler()
                 .schedule(GcTask::Gc {
-                    store_id: 1,
                     region: region.clone(),
                     safe_point: TimeStamp::from(100),
                     callback: Box::new(|_res| {}),
@@ -2437,7 +2385,6 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         gc_worker
             .gc(
-                0,
                 Region::default(),
                 TimeStamp::from(1),
                 Box::new(move |res| {
@@ -2453,7 +2400,6 @@ mod tests {
         gc_worker
             .unsafe_destroy_range(
                 Context::default(),
-                store_id,
                 Key::from_raw(b"a"),
                 Key::from_raw(b"z"),
                 Box::new(move |res| {
@@ -2462,7 +2408,7 @@ mod tests {
             )
             .unwrap();
 
-        gc_worker.start().unwrap();
+        gc_worker.start(store_id).unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.

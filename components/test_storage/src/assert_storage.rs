@@ -30,7 +30,7 @@ impl Default for AssertionStorage<RocksEngine, ApiV1> {
     fn default() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::default().build().unwrap(),
+            store: SyncTestStorageBuilder::default().build(0).unwrap(),
         }
     }
 }
@@ -39,7 +39,7 @@ impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
     pub fn new() -> Self {
         AssertionStorage {
             ctx: Context::default(),
-            store: SyncTestStorageBuilder::new().build().unwrap(),
+            store: SyncTestStorageBuilder::new().build(0).unwrap(),
         }
     }
 }
@@ -66,11 +66,14 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         if leader.get_store_id() == self.ctx.get_peer().get_store_id() {
             return region;
         }
+        let store_id = leader.store_id;
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
         self.ctx.set_peer(leader);
-        self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
+        self.store = SyncTestStorageBuilder::from_engine(engine)
+            .build(store_id)
+            .unwrap();
         region
     }
 
@@ -208,12 +211,9 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
         mut region: metapb::Region,
         safe_point: impl Into<TimeStamp>,
     ) {
-        let leader_store = cluster.leader_of_region(region.id).unwrap().store_id;
         let safe_point = safe_point.into();
         for _ in 0..3 {
-            let ret = self
-                .store
-                .gc(leader_store, region, self.ctx.clone(), safe_point);
+            let ret = self.store.gc(region, self.ctx.clone(), safe_point);
             if ret.is_ok() {
                 return;
             }
@@ -807,9 +807,9 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, store_id: u64, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
+    pub fn gc_ok(&self, region: metapb::Region, safe_point: impl Into<TimeStamp>) {
         self.store
-            .gc(store_id, region, self.ctx.clone(), safe_point.into())
+            .gc(region, self.ctx.clone(), safe_point.into())
             .unwrap();
     }
 
@@ -1085,11 +1085,11 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
             .unwrap_err();
     }
 
-    pub fn test_txn_store_gc(&self, store_id: u64, key: &str, region: metapb::Region) {
+    pub fn test_txn_store_gc(&self, key: &str, region: metapb::Region) {
         let key_bytes = key.as_bytes();
         self.put_ok(key_bytes, b"v1", 5, 10);
         self.put_ok(key_bytes, b"v2", 15, 20);
-        self.gc_ok(store_id, region, 30);
+        self.gc_ok(region, 30);
         self.get_none(key_bytes, 15);
         self.get_ok(key_bytes, 25, b"v2");
     }
@@ -1102,7 +1102,7 @@ impl<E: Engine, F: KvFormat> AssertionStorage<E, F> {
         }
         self.delete_ok(&key, 1000, 1050);
         self.get_none(&key, 2000);
-        self.gc_ok(0, metapb::Region::default(), 2000);
+        self.gc_ok(metapb::Region::default(), 2000);
         self.get_none(&key, 3000);
     }
 }
