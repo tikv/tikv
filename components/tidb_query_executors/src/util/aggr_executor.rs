@@ -29,6 +29,7 @@
 
 use std::{convert::TryFrom, sync::Arc};
 
+use async_trait::async_trait;
 use tidb_query_aggr::*;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
@@ -202,10 +203,14 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     /// Returns partial results of aggregation if available and whether the
     /// source is drained
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
+    async fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
-        let src_result = self.entities.src.next_batch(crate::runner::BATCH_MAX_SIZE);
+        let src_result = self
+            .entities
+            .src
+            .next_batch(crate::runner::BATCH_MAX_SIZE)
+            .await;
 
         self.entities.context.warnings = src_result.warnings;
 
@@ -290,6 +295,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     }
 }
 
+#[async_trait]
 impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     for AggregationExecutor<Src, I>
 {
@@ -301,10 +307,10 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let result = self.handle_next_batch();
+        let result = self.handle_next_batch().await;
 
         match result {
             Err(e) => {
@@ -581,6 +587,7 @@ pub mod tests {
     fn test_agg_paging() {
         use std::sync::Arc;
 
+        use futures::executor::block_on;
         use tidb_query_datatype::expr::EvalConfig;
         use tidb_query_expr::RpnExpressionBuilder;
         use tipb::ExprType;
@@ -642,7 +649,7 @@ pub mod tests {
                 let src_exec = make_src_executor_2();
                 let mut exec = exec_builder(src_exec, Some(paging_size));
                 for nth_call in 0..call_num {
-                    let r = exec.next_batch(1);
+                    let r = block_on(exec.next_batch(1));
                     if nth_call == call_num - 1 {
                         assert!(r.is_drained.unwrap());
                     } else {
@@ -672,7 +679,7 @@ pub mod tests {
             let row_num = &expect_row_num2[test_case];
             let mut exec = exec_stream(make_src_executor_2(), Some(paging_size));
             for nth_call in 0..call_num {
-                let r = exec.next_batch(1);
+                let r = block_on(exec.next_batch(1));
                 if nth_call == call_num - 1 {
                     assert!(r.is_drained.unwrap());
                 } else {
