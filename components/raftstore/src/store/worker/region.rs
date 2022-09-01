@@ -420,14 +420,11 @@ where
             coprocessor_host: self.coprocessor_host.clone(),
         };
         s.apply(options)?;
-        match self
-            .coprocessor_host
-            .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
+        if let Err(e) =
+            self.coprocessor_host
+                .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
         {
-            Ok(_) => (),
-            Err(e) => {
-                return Err(box_err!("post apply snapshot error {:?}", e));
-            }
+            return Err(box_err!("post apply snapshot error {:?}", e));
         };
 
         let mut wb = self.engine.write_batch();

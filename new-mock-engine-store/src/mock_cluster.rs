@@ -199,9 +199,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             .as_mut()
             .unwrap()
             .engine_store_server_helper = engine_store_server_helper_ptr;
-        // TODO(tiflash) when we pre handle snap with observer, this is useless.
-        let mut node_cfg = node_cfg;
-        node_cfg.raft_store.engine_store_server_helper = engine_store_server_helper_ptr;
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
@@ -364,11 +361,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             let node_id = {
                 let mut sim = self.sim.wl();
                 let mut cfg = self.cfg.clone();
-                {
-                    // TODO(tiflash) remove this when we use observer to pre handle snap.
-                    cfg.raft_store.engine_store_server_helper =
-                        engines.kv.engine_store_server_helper;
-                }
                 // Like TiKVServer::init
                 sim.run_node(
                     0,
@@ -755,10 +747,6 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         let mut cfg = self.cfg.clone();
         if let Some(labels) = self.labels.get(&node_id) {
             cfg.server.labels = labels.to_owned();
-        }
-        {
-            // TODO(tiflash) remove this when we use observer to pre handle snap.
-            cfg.raft_store.engine_store_server_helper = engines.kv.engine_store_server_helper;
         }
         let store_meta = match self.store_metas.entry(node_id) {
             MapEntry::Occupied(o) => {

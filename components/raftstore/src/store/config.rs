@@ -49,9 +49,6 @@ with_prefix!(prefix_store "store-");
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
-    pub engine_store_server_helper: isize,
-
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
     #[online_config(skip)]
     pub prevote: bool,
@@ -314,7 +311,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            engine_store_server_helper: 0,
             prevote: true,
             raftdb_path: String::new(),
             capacity: ReadableSize(0),

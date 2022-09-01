@@ -757,14 +757,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
-        {
-            raftstore::engine_store_ffi::gen_engine_store_server_helper(
-                self.config.raft_store.engine_store_server_helper,
-            )
-            .set_store(node.store());
-            info!("set store {} to engine-store", node.id());
-        }
-
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
         let server = Server::new(
@@ -1139,9 +1131,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
-                raftstore::engine_store_ffi::gen_engine_store_server_helper(
-                    self.config.raft_store.engine_store_server_helper,
-                ),
+                raftstore::engine_store_ffi::gen_engine_store_server_helper(0),
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),
                 Arc::new(self.config.security.clone()),

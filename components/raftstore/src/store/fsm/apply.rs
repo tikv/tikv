@@ -366,8 +366,6 @@ struct ApplyContext<EK>
 where
     EK: KvEngine,
 {
-    pub engine_store_server_helper: &'static crate::engine_store_ffi::EngineStoreServerHelper,
-
     tag: String,
     timer: Option<Instant>,
     host: CoprocessorHost<EK>,
@@ -449,10 +447,6 @@ where
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
         ApplyContext {
-            engine_store_server_helper: crate::engine_store_ffi::gen_engine_store_server_helper(
-                cfg.engine_store_server_helper,
-            ),
-
             tag,
             timer: None,
             host,
@@ -1777,50 +1771,6 @@ where
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(())
-    }
-
-    fn handle_ingest_sst_for_engine_store(
-        &mut self,
-        ctx: &ApplyContext<EK>,
-        ssts: &Vec<SstMetaInfo>,
-    ) -> EngineStoreApplyRes {
-        let mut ssts_wrap = vec![];
-        let mut sst_views = vec![];
-
-        for sst in ssts {
-            let sst = &sst.meta;
-            if sst.get_cf_name() == CF_LOCK {
-                panic!("should not ingest sst of lock cf");
-            }
-
-            if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-                error!(
-                     "ingest fail";
-                     "region_id" => self.region_id(),
-                     "peer_id" => self.id(),
-                     "sst" => ?sst,
-                     "region" => ?&self.region,
-                     "err" => ?e
-                );
-                // This file is not valid, we can delete it here.
-                let _ = ctx.importer.delete(sst);
-                continue;
-            }
-
-            ssts_wrap.push((
-                ctx.importer.get_path(sst),
-                crate::engine_store_ffi::name_to_cf(sst.get_cf_name()),
-            ));
-        }
-
-        for (path, cf) in &ssts_wrap {
-            sst_views.push((path.to_str().unwrap().as_bytes(), *cf));
-        }
-
-        ctx.engine_store_server_helper.handle_ingest_sst(
-            sst_views,
-            RaftCmdHeader::new(self.region.get_id(), ctx.exec_log_index, ctx.exec_log_term),
-        )
     }
 
     fn handle_ingest_sst(

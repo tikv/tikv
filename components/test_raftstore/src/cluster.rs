@@ -346,10 +346,7 @@ impl<T: Simulator> Cluster<T> {
                 std::pin::Pin::new(&*engine_store_server_wrap),
             ));
 
-        // TODO(tiflash) Used by RegionRunner, to remove.
-        let mut node_cfg = self.cfg.clone();
-        let helper_sz = &*engine_store_server_helper as *const _ as isize;
-        node_cfg.raft_store.engine_store_server_helper = helper_sz;
+        let node_cfg = self.cfg.clone();
         let ffi_helper_set = FFIHelperSet {
             proxy,
             proxy_helper,
@@ -463,9 +460,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("calling run node"; "node_id" => node_id);
 
         let mut node_cfg = if self.ffi_helper_set.contains_key(&node_id) {
-            let mut node_cfg = self.cfg.clone();
-            node_cfg.raft_store.engine_store_server_helper =
-                &*self.ffi_helper_set[&node_id].engine_store_server_helper as *const _ as isize;
+            let node_cfg = self.cfg.clone();
             node_cfg
         } else {
             let (ffi_helper_set, node_cfg) = self.make_ffi_helper_set(

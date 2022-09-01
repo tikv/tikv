@@ -111,7 +111,8 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     proxy_config: ProxyConfig,
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
-    let mut tikv = TiKvServer::<CER>::init(config, proxy_config);
+    let engine_store_server_helper_ptr = engine_store_server_helper as *const _ as isize;
+    let mut tikv = TiKvServer::<CER>::init(config, proxy_config, engine_store_server_helper_ptr);
 
     // Must be called after `TiKvServer::init`.
     let memory_limit = tikv.config.memory_usage_limit.unwrap().0;
@@ -458,6 +459,7 @@ const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
 struct TiKvServer<ER: RaftEngine> {
     config: TiKvConfig,
     proxy_config: ProxyConfig,
+    engine_store_server_helper_ptr: isize,
     cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
@@ -501,7 +503,11 @@ type LocalServer<EK, ER> =
 type LocalRaftKv<EK, ER> = RaftKv<EK, ServerRaftStoreRouter<EK, ER>>;
 
 impl<ER: RaftEngine> TiKvServer<ER> {
-    fn init(mut config: TiKvConfig, proxy_config: ProxyConfig) -> TiKvServer<ER> {
+    fn init(
+        mut config: TiKvConfig,
+        proxy_config: ProxyConfig,
+        engine_store_server_helper_ptr: isize,
+    ) -> TiKvServer<ER> {
         tikv_util::thread_group::set_properties(Some(GroupProperties::default()));
         // It is okay use pd config and security config before `init_config`,
         // because these configs must be provided by command line, and only
@@ -556,6 +562,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         TiKvServer {
             config,
             proxy_config,
+            engine_store_server_helper_ptr,
             cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
@@ -1116,7 +1123,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
 
         {
             raftstore::engine_store_ffi::gen_engine_store_server_helper(
-                self.config.raft_store.engine_store_server_helper,
+                self.engine_store_server_helper_ptr,
             )
             .set_store(node.store());
             info!("set store {} to engine-store", node.id());
@@ -1508,7 +1515,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         if status_enabled {
             let mut status_server = match StatusServer::new(
                 raftstore::engine_store_ffi::gen_engine_store_server_helper(
-                    self.config.raft_store.engine_store_server_helper,
+                    self.engine_store_server_helper_ptr,
                 ),
                 self.config.server.status_thread_pool_size,
                 self.cfg_controller.take().unwrap(),

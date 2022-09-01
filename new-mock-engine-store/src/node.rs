@@ -236,8 +236,6 @@ impl Simulator<TiFlashEngine> for NodeCluster {
     ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         assert_ne!(engines.kv.engine_store_server_helper, 0);
-        // TODO(tiflash) can be remove when we pre handle snap outside.
-        assert_ne!(cfg.raft_store.engine_store_server_helper, 0);
 
         let pd_worker = LazyWorker::new("test-pd-worker");
 

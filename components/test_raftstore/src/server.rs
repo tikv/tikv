@@ -373,7 +373,7 @@ impl ServerCluster {
         let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
+        let lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let quota_limiter = Arc::new(QuotaLimiter::new(
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,

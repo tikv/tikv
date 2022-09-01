@@ -318,7 +318,6 @@ pub unsafe fn run_proxy(
     }
 
     // Used in pre-handle snapshot.
-    config.raft_store.engine_store_server_helper = engine_store_server_helper as *const _ as isize;
     if matches.is_present("only-decryption") {
         crate::run::run_tikv_only_decryption(config, proxy_config, engine_store_server_helper);
     } else {
