@@ -27,7 +27,6 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::{FeatureGate, PdClient};
-use protobuf::SingularPtrField;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoProvider},
     router::RaftStoreRouter,
@@ -363,14 +362,8 @@ fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     ctx.region_epoch = region.region_epoch.clone();
     ctx.stale_read = true;
 
-    let peers: Vec<_> = region
-        .peers
-        .iter()
-        .filter(|peer| peer.store_id == store_id)
-        .collect();
-
-    if peers.len() == 1 {
-        ctx.peer = SingularPtrField::some(peers[0].clone());
+    if let Some(peer) = region.peers.iter().find(|peer| peer.store_id == store_id) {
+        ctx.set_peer(peer.clone());
     }
 
     ctx

@@ -13,7 +13,7 @@ impl Snapshot for PanicSnapshot {
     type E = PanicEngine;
 
     fn inner_engine(&self) -> Self::E {
-        PanicEngine {}
+        PanicEngine
     }
 }
 
