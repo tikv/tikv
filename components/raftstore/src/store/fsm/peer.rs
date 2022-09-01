@@ -942,6 +942,7 @@ where
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+        self.fsm.peer.set_leader_lease_expire();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
@@ -952,7 +953,6 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
-        self.try_renew_leader_lease("reset from flashback");
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {

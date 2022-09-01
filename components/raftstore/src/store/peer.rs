@@ -5357,6 +5357,10 @@ where
         !has_overlapped_reads && !has_overlapped_writes
     }
 
+    pub fn set_leader_lease_expire(&mut self) {
+        self.leader_lease.expire();
+    }
+
     pub fn adjust_cfg_if_changed<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
         let raft_max_inflight_msgs = ctx.cfg.raft_max_inflight_msgs;
         if self.is_leader() && (raft_max_inflight_msgs != self.raft_max_inflight_msgs) {
