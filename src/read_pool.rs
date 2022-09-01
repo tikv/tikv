@@ -13,12 +13,11 @@ use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResul
 use prometheus::IntGauge;
 use thiserror::Error;
 use tikv_util::{
-    sys::SysQuota,
+    sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use time::Timespec;
 use tracker::TrackedFuture;
 use yatp::{
     metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
@@ -31,7 +30,7 @@ use crate::{
 };
 
 // the duration to check auto-scale unified-thread-pool's thread
-const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(5);
+const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(10);
 // consider scale up read pool size if the average thread cpu usage is higher
 // than this threahold.
 const READ_POOL_THREAD_HIGH_THREAHOLD: f64 = 0.8;
@@ -350,6 +349,7 @@ struct ReadPoolConfigRunner {
     sender: SyncSender<usize>,
     handle: ReadPoolHandle,
     cpu_time_tracker: ReadPoolCpuTimeTracker,
+    process_stats: ProcessStat,
     // configed thread pool size, it's the min thread count to be scale
     core_thread_count: usize,
     // the max thread count can be scaled
@@ -367,6 +367,7 @@ impl Runnable for ReadPoolConfigRunner {
                 if s != self.core_thread_count {
                     self.handle.scale_pool_size(s);
                     self.core_thread_count = s;
+                    self.cur_thread_count = s;
                     self.notify_pool_size_change(s);
                 }
             }
@@ -410,8 +411,18 @@ impl ReadPoolConfigRunner {
 
         let read_pool_cpu = self.cpu_time_tracker.prev_avg_cpu_used();
         let running_tasks = self.running_tasks();
+        let process_cpu = match self.process_stats.cpu_usage() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("fetch process cpu usage failed"; "err" => ?e);
+                return;
+            }
+        };
+        let cpu_quota = SysQuota::cpu_cores_quota();
 
         let new_thread_count = if self.cur_thread_count < self.max_thread_count
+            && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
+                < cpu_quota
             && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THREAHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
@@ -478,6 +489,7 @@ impl ReadPoolConfigManager {
             sender,
             handle,
             cpu_time_tracker: ReadPoolCpuTimeTracker::new(get_unified_read_pool_name()),
+            process_stats: ProcessStat::cur_proc_stat().unwrap(),
             core_thread_count: thread_count,
             cur_thread_count: thread_count,
             max_thread_count,
