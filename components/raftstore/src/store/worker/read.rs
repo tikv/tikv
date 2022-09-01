@@ -668,7 +668,6 @@ where
             }
         };
         // Return `None` if the read delegate is pending remove
-        // Or when enable flashback need to ignore local read
         rd.filter(|r| !r.pending_remove)
     }
 

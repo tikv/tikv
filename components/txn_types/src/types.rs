@@ -514,7 +514,7 @@ pub struct TxnExtra {
     // in the raft command request.
     pub one_pc: bool,
     // Marks that this transaction is a flashback transaction.
-    pub is_for_flashback: bool,
+    pub for_flashback: bool,
 }
 
 impl TxnExtra {

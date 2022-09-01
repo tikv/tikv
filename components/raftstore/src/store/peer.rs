@@ -5358,7 +5358,7 @@ where
     }
 
     pub fn set_leader_lease_expire(&mut self) {
-        self.leader_lease.expire();
+        self.leader_lease.expire_remote_lease();
     }
 
     pub fn adjust_cfg_if_changed<T>(&mut self, ctx: &PollContext<EK, ER, T>) {

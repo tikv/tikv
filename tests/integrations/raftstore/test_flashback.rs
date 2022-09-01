@@ -3,10 +3,7 @@
 use std::time::Duration;
 
 use futures::executor::block_on;
-use kvproto::{
-    metapb,
-    raft_cmdpb::{self, CmdType},
-};
+use kvproto::metapb;
 use test_raftstore::*;
 use txn_types::WriteBatchFlags;
 
@@ -142,74 +139,57 @@ fn test_flahsback_for_read() {
 }
 
 // LocalReader will try to renew lease in advance,
-// but when enable flashback, will make lease at None and prevent renew lease,
-// so the region should go to hibernate.
+// but when enable flashback, will make lease at None and prevent renew lease.
 #[test]
 fn test_flahsback_for_local_read() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_lease_read(&mut cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
+
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+
+    let node_id = 3u64;
+    let store_id = 3u64;
+    let peer = new_peer(store_id, node_id);
     cluster.run();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    cluster.must_transfer_leader(1, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+    let region = cluster.get_region(b"k1");
+    cluster.must_transfer_leader(region.get_id(), peer.clone());
 
-    // write for cluster
-    let value = vec![1_u8; 8096];
-    multi_do_cmd(&mut cluster, new_put_cf_cmd("write", b"k1", &value));
+    // check local read before prepare flashback
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    let last_index = state.get_last_index();
+    // Make sure the leader transfer procedure timeouts.
+    std::thread::sleep(election_timeout * 2);
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), b"k1", b"v1");
+    // Check the leader does a local read.
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    assert_eq!(state.get_last_index(), last_index);
 
-    let mut region = cluster.get_region(b"k1");
     // prepare for flashback
-    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), 1));
+    block_on(cluster.call_and_wait_prepare_flashback(region.get_id(), store_id));
 
-    // Force `peer` to become leader. will renew lease.
-    let node_id = 2;
-    let store_id = 2;
-    let peer = new_peer(store_id, node_id);
-
-    let admin_req = new_transfer_leader_cmd(peer);
-    let mut transfer_leader =
-        new_admin_request(region.get_id(), &region.take_region_epoch(), admin_req);
-    transfer_leader.mut_header().set_peer(new_peer(1, 1));
-    transfer_leader
-        .mut_header()
-        .set_flags(WriteBatchFlags::FLASHBACK.bits());
-    let resp = cluster
-        .call_command_on_leader(transfer_leader, Duration::from_secs(5))
-        .unwrap();
-    assert!(!resp.get_header().has_error());
-
-    // wait for transfer leader to complete, and will renew no lease.
-    sleep_ms(100);
-
-    // Snap
-    let mut request = raft_cmdpb::Request::default();
-    request.set_cmd_type(CmdType::Snap);
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![request],
-        false,
+    must_error_read_on_peer(
+        &mut cluster,
+        peer.clone(),
+        region.clone(),
+        b"k1",
+        Duration::from_secs(1),
     );
-    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
-    req.mut_header().set_peer(new_leader.unwrap());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
-    // where get the EpochNotMatch error.
-    assert!(resp.get_header().has_error());
 
-    // Get
-    let mut request = raft_cmdpb::Request::default();
-    request.set_cmd_type(CmdType::Get);
-    let mut req = new_request(
-        region.get_id(),
-        region.take_region_epoch(),
-        vec![request],
-        false,
-    );
-    let new_leader = cluster.query_leader(1, region.get_id(), Duration::from_secs(1));
-    req.mut_header().set_peer(new_leader.unwrap());
-    let resp = cluster.call_command(req, Duration::from_secs(5)).unwrap();
-    // where get the EpochNotMatch error.
-    assert!(resp.get_header().has_error());
+    cluster.call_finish_flashback(region.get_id(), store_id);
+
+    // check local read after finish flashback
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    let last_index = state.get_last_index();
+    // Make sure the leader transfer procedure timeouts.
+    std::thread::sleep(election_timeout * 2);
+    must_read_on_peer(&mut cluster, peer, region.clone(), b"k1", b"v1");
+
+    // Check the leader does a local read.
+    let state = cluster.raft_local_state(region.get_id(), store_id);
+    assert_eq!(state.get_last_index(), last_index);
 }
 
 #[test]

@@ -210,7 +210,7 @@ where
             flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
-        if ctx.is_for_flashback {
+        if ctx.for_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);
@@ -262,7 +262,7 @@ where
         if txn_extra.one_pc {
             flags |= WriteBatchFlags::ONE_PC.bits();
         }
-        if txn_extra.is_for_flashback {
+        if txn_extra.for_flashback {
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);

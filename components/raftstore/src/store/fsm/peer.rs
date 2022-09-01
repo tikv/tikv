@@ -942,6 +942,7 @@ where
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+        // Let the leader lease to None to ensure that local reads are not executed.
         self.fsm.peer.set_leader_lease_expire();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
