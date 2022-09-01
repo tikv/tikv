@@ -24,7 +24,7 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::oneshot::Sender;
-use getset::Getters;
+use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
@@ -733,7 +733,7 @@ impl FlashbackState {
     }
 }
 
-#[derive(Getters)]
+#[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -758,7 +758,7 @@ where
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
-    #[getset(get = "pub")]
+    #[getset(get = "pub", get_mut = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<Callback<EK::Snapshot>>,
     /// Threshold of long uncommitted proposals.
@@ -5354,10 +5354,6 @@ where
                 .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
         });
         !has_overlapped_reads && !has_overlapped_writes
-    }
-
-    pub fn set_leader_lease_expire(&mut self) {
-        self.leader_lease.expire_remote_lease();
     }
 
     pub fn adjust_cfg_if_changed<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
