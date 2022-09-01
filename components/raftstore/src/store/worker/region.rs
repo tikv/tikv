@@ -444,7 +444,7 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.clean_overlap_ranges(&start_key, &end_key)?;
+        self.clean_overlap_ranges(start_key, end_key)?;
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -500,8 +500,7 @@ where
             Ordering::SeqCst,
         );
         SNAP_COUNTER.apply.all.inc();
-        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        // let timer = apply_histogram.start_coarse_timer();
+
         let start = Instant::now();
 
         match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
@@ -528,27 +527,6 @@ where
             .apply
             .observe(start.saturating_elapsed_secs());
         let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
-    }
-
-    /// Tries to apply pending tasks if there is some.
-    fn handle_pending_applies(&mut self) {
-        fail_point!("apply_pending_snapshot", |_| {});
-        while !self.pending_applies.is_empty() {
-            // should not handle too many applies than the number of files that can be
-            // ingested. check level 0 every time because we can not make sure
-            // how does the number of level 0 files change.
-            if self.ingest_maybe_stall() {
-                break;
-            }
-            if let Some(Task::Apply {
-                region_id,
-                status,
-                peer_id,
-            }) = self.pending_applies.pop_front()
-            {
-                self.handle_apply(region_id, peer_id, status);
-            }
-        }
     }
 
     /// Tries to clean up files in pending ranges overlapping with the given
@@ -601,17 +579,18 @@ where
 
     /// Cleans up data in the given range and all pending ranges overlapping
     /// with it.
-    fn clean_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut start_key = start_key.to_owned();
-        let mut end_key = end_key.to_owned();
+    fn clean_overlap_ranges(&mut self, mut start_key: Vec<u8>, mut end_key: Vec<u8>) -> Result<()> {
         self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        let mut start_key = start_key.to_owned();
-        let mut end_key = end_key.to_owned();
+    fn insert_pending_delete_range(
+        &mut self,
+        region_id: u64,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) {
         self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
         info!("register deleting data in range";
             "region_id" => region_id,
@@ -623,6 +602,7 @@ where
             .insert(region_id, start_key, end_key, seq);
     }
 
+    /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
         if self.ingest_maybe_stall() {
@@ -749,6 +729,27 @@ where
         );
         Ok(())
     }
+
+    /// Tries to apply pending tasks if there is some.
+    fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
+        while !self.pending_applies.is_empty() {
+            // should not handle too many applies than the number of files that can be
+            // ingested. check level 0 every time because we can not make sure
+            // how does the number of level 0 files change.
+            if self.ingest_maybe_stall() {
+                break;
+            }
+            if let Some(Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            }) = self.pending_applies.pop_front()
+            {
+                self.handle_apply(region_id, peer_id, status);
+            }
+        }
+    }
 }
 
 impl<EK, R, T> Runnable for Runner<EK, R, T>
@@ -839,7 +840,7 @@ where
                 fail_point!("on_region_worker_destroy", true, |_| {});
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-                self.insert_pending_delete_range(region_id, &start_key, &end_key);
+                self.insert_pending_delete_range(region_id, start_key, end_key);
                 self.clean_stale_ranges();
             }
         }
