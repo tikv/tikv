@@ -3079,6 +3079,19 @@ pub struct Proposal<C> {
     pub must_pass_epoch_check: bool,
 }
 
+impl<C> Proposal<C> {
+    pub fn new(index: u64, term: u64, cb: C) -> Self {
+        Self {
+            index,
+            term,
+            cb,
+            propose_time: None,
+            must_pass_epoch_check: false,
+            is_conf_change: false,
+        }
+    }
+}
+
 impl<C> HeapSize for Proposal<C> {}
 
 pub struct Destroy {

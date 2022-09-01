@@ -223,11 +223,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn handle_raft_committed_entries<T>(
-        &self,
-        _ctx: &mut crate::batch::StoreContext<EK, ER, T>,
-        _take_committed_entries: Vec<raft::prelude::Entry>,
+        &mut self,
+        ctx: &mut crate::batch::StoreContext<EK, ER, T>,
+        committed_entries: Vec<raft::prelude::Entry>,
     ) {
-        unimplemented!()
+        // TODO: skip handling committed entries if a snapshot is being applied
+        // asynchronously.
+        if self.is_leader() {
+            // TODO: Update lease
+        }
+        self.schedule_apply_committed_entries(ctx, committed_entries);
     }
 
     /// Processing the ready of raft. A detail description of how it's handled
