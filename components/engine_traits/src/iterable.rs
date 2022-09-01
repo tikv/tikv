@@ -109,6 +109,14 @@ pub trait Iterator: Send {
     fn valid(&self) -> Result<bool>;
 }
 
+pub trait RefIterable {
+    type Iterator<'a>: Iterator
+    where
+        Self: 'a;
+
+    fn iter(&self, opts: IterOptions) -> Result<Self::Iterator<'_>>;
+}
+
 pub trait Iterable {
     type Iterator: Iterator;
 
@@ -131,10 +139,7 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
-        let end =
-            (!end_key.is_empty()).then(|| KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0));
-        let iter_opt = IterOptions::new(Some(start), end, fill_cache);
+        let iter_opt = iter_option(start_key, end_key, fill_cache);
         scan_impl(self.iterator_opt(cf, iter_opt)?, start_key, f)
     }
 
@@ -174,4 +179,16 @@ pub fn collect<I: Iterator>(mut it: I) -> Vec<(Vec<u8>, Vec<u8>)> {
         it_valid = it.next().unwrap();
     }
     v
+}
+
+/// Build an `IterOptions` using giving data key bound. Empty upper bound will
+/// be ignored.
+pub fn iter_option(lower_bound: &[u8], upper_bound: &[u8], fill_cache: bool) -> IterOptions {
+    let lower_bound = Some(KeyBuilder::from_slice(lower_bound, 0, 0));
+    let upper_bound = if upper_bound.is_empty() {
+        None
+    } else {
+        Some(KeyBuilder::from_slice(upper_bound, 0, 0))
+    };
+    IterOptions::new(lower_bound, upper_bound, fill_cache)
 }

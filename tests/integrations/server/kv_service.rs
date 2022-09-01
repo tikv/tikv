@@ -19,7 +19,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{self, *},
+    kvrpcpb::{self, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -666,7 +666,7 @@ fn test_split_region_impl<F: KvFormat>(is_raw_kv: bool) {
         .collect();
     assert_eq!(
         result_split_keys,
-        vec![b"b", b"c", b"d", b"e",]
+        vec![b"b", b"c", b"d", b"e"]
             .into_iter()
             .map(|k| encode_key(&k[..]))
             .collect::<Vec<_>>()
@@ -2073,7 +2073,7 @@ fn test_commands_write_detail() {
     mutation.set_op(Op::Put);
     mutation.set_value(v);
     prewrite_req.set_mutations(vec![mutation].into());
-    prewrite_req.set_is_pessimistic_lock(vec![true]);
+    prewrite_req.set_pessimistic_actions(vec![DoPessimisticCheck]);
     prewrite_req.set_context(ctx.clone());
     prewrite_req.set_primary_lock(k.clone());
     prewrite_req.set_start_version(20);
@@ -2147,4 +2147,41 @@ fn test_rpc_wall_time() {
                 > 0
         );
     }
+}
+
+#[test]
+fn test_pessimistic_lock_execution_tracking() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (k, v) = (b"k1".to_vec(), b"k2".to_vec());
+
+    // Add a prewrite lock.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 10);
+
+    let block_duration = Duration::from_millis(300);
+    let client_clone = client.clone();
+    let ctx_clone = ctx.clone();
+    let k_clone = k.clone();
+    let handle = thread::spawn(move || {
+        thread::sleep(block_duration);
+        must_kv_commit(&client_clone, ctx_clone, vec![k_clone], 10, 30, 30);
+    });
+
+    let resp = kv_pessimistic_lock(&client, ctx, vec![k], 20, 20, false);
+    assert!(
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos()
+            > 0,
+        "resp lock wait time={:?}, block_duration={:?}",
+        resp.get_exec_details_v2()
+            .get_write_detail()
+            .get_pessimistic_lock_wait_nanos(),
+        block_duration
+    );
+
+    handle.join().unwrap();
 }

@@ -8,10 +8,11 @@ use std::{
     mem,
     num::NonZeroU64,
     result,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
@@ -158,6 +159,7 @@ where
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -166,11 +168,12 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
             txn_extra_scheduler: None,
+            region_leaders,
         }
     }
 
@@ -213,7 +216,7 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
@@ -351,6 +354,14 @@ where
             }
         }
         write_modifies(&self.engine, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(RaftServerError::NotLeader(region_id, None).into()),
+        }
     }
 
     fn async_write(

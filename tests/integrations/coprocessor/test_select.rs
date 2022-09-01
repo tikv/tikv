@@ -19,7 +19,7 @@ use tikv::{
     server::Config,
     storage::TestEngineBuilder,
 };
-use tikv_util::codec::number::*;
+use tikv_util::{codec::number::*, config::ReadableSize};
 use tipb::{
     AnalyzeColumnsReq, AnalyzeReq, AnalyzeType, ChecksumRequest, Chunk, Expr, ExprType,
     ScalarFuncSig, SelectResponse,
@@ -61,10 +61,15 @@ fn test_select() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
+    let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
+    limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
     // for dag selection
     let req = DagSelect::from(&product).build();
     let mut resp = handle_select(&endpoint, req);
+    let mut total_chunk_size = 0;
+    for chunk in resp.get_chunks() {
+        total_chunk_size += chunk.get_rows_data().len();
+    }
     let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
@@ -76,6 +81,7 @@ fn test_select() {
         let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
+    assert_eq!(limiter.total_read_bytes_consumed(true), total_chunk_size); // the consume_sample is called due to read bytes quota
 }
 
 #[test]
@@ -89,7 +95,7 @@ fn test_batch_row_limit() {
     let batch_row_limit = 3;
     let chunk_datum_limit = batch_row_limit * 3; // we have 3 fields.
     let product = ProductTable::new();
-    let (_, endpoint) = {
+    let (_, endpoint, _) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
@@ -125,7 +131,7 @@ fn test_stream_batch_row_limit() {
 
     let product = ProductTable::new();
     let stream_row_limit = 2;
-    let (_, endpoint) = {
+    let (_, endpoint, _) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
@@ -198,7 +204,7 @@ fn test_select_after_lease() {
 
     let product = ProductTable::new();
     let (cluster, raft_engine, ctx) = new_raft_engine(1, "");
-    let (_, endpoint) =
+    let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     // Sleep until the leader lease is expired.
@@ -228,7 +234,7 @@ fn test_scan_detail() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = {
+    let (_, endpoint, _) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
@@ -1605,7 +1611,7 @@ fn test_key_is_locked_for_primary() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, false);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
 
     let req = DagSelect::from(&product).build();
     let resp = handle_request(&endpoint, req);
@@ -1623,7 +1629,7 @@ fn test_key_is_locked_for_index() {
     ];
 
     let product = ProductTable::new();
-    let (_, endpoint) = init_data_with_commit(&product, &data, false);
+    let (_, endpoint, _) = init_data_with_commit(&product, &data, false);
 
     let req = DagSelect::from_index(&product, &product["name"]).build();
     let resp = handle_request(&endpoint, req);
@@ -1700,7 +1706,7 @@ fn test_snapshot_failed() {
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) = init_data_with_engine_and_commit(ctx, raft_engine, &product, &[], true);
+    let (_, endpoint, _) = init_data_with_engine_and_commit(ctx, raft_engine, &product, &[], true);
 
     // Use an invalid context to make errors.
     let req = DagSelect::from(&product).build_with(Context::default(), &[0]);
@@ -1721,7 +1727,7 @@ fn test_cache() {
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) =
+    let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
     let req = DagSelect::from(&product).build_with(ctx, &[0]);
@@ -1796,7 +1802,7 @@ fn test_copr_bypass_or_access_locks() {
         (8, Some("name:8"), 8),
     ];
     // lock row 3, 4, 6
-    let (mut store, endpoint) = init_data_with_engine_and_commit(
+    let (mut store, endpoint, _) = init_data_with_engine_and_commit(
         Default::default(),
         store.get_engine(),
         &product,
@@ -1912,7 +1918,7 @@ fn test_rc_read() {
     ];
 
     // uncommitted lock to be ignored
-    let (store, _) = init_data_with_engine_and_commit(
+    let (store, ..) = init_data_with_engine_and_commit(
         Default::default(),
         store.get_engine(),
         &product,
@@ -1921,7 +1927,7 @@ fn test_rc_read() {
     );
 
     // committed lock to be read
-    let (mut store, endpoint) = init_data_with_engine_and_commit(
+    let (mut store, endpoint, _) = init_data_with_engine_and_commit(
         Default::default(),
         store.get_engine(),
         &product,
@@ -1970,7 +1976,7 @@ fn test_buckets() {
     let product = ProductTable::new();
     let (mut cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) =
+    let (_, endpoint, _) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
 
     let req = DagSelect::from(&product).build_with(ctx, &[0]);

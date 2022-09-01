@@ -9,7 +9,7 @@ use std::{
     vec::IntoIter,
 };
 
-use engine_traits::CfName;
+use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
@@ -75,10 +75,19 @@ impl<'a> ObserverContext<'a> {
     }
 }
 
+/// Context of a region provided for observers.
+#[derive(Default, Clone)]
 pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+}
+
+/// Context for exec observers of mutation to be applied to ApplyContext.
+pub struct ApplyCtxInfo<'a> {
+    pub pending_handle_ssts: &'a mut Option<Vec<SstMetaInfo>>,
+    pub delete_ssts: &'a mut Vec<SstMetaInfo>,
+    pub pending_delete_ssts: &'a mut Vec<SstMetaInfo>,
 }
 
 pub trait AdminObserver: Coprocessor {
@@ -115,6 +124,7 @@ pub trait AdminObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
@@ -154,6 +164,7 @@ pub trait QueryObserver: Coprocessor {
         _: &Cmd,
         _: &RaftApplyState,
         _: &RegionState,
+        _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
     }
@@ -168,6 +179,35 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call after applying sst file. Currently the content of the
     /// snapshot can't be passed to the observer.
     fn apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
+
+    /// Hook when receiving Task::Apply.
+    /// Should pass valid snapshot, the option is only for testing.
+    /// Notice that we can call `pre_apply_snapshot` to multiple snapshots at
+    /// the same time.
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _peer_id: u64,
+        _: &crate::store::SnapKey,
+        _: Option<&crate::store::Snapshot>,
+    ) {
+    }
+
+    /// Hook when the whole snapshot is applied.
+    /// Should pass valid snapshot, the option is only for testing.
+    fn post_apply_snapshot(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: u64,
+        _: &crate::store::SnapKey,
+        _snapshot: Option<&crate::store::Snapshot>,
+    ) {
+    }
+
+    /// We call pre_apply_snapshot only when one of the observer returns true.
+    fn should_pre_apply_snapshot(&self) -> bool {
+        false
+    }
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

@@ -17,7 +17,6 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
-#[cfg(feature = "failpoints")]
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::{HealthService, ServingStatus};
@@ -439,7 +438,6 @@ const DEFAULT_LOAD_BASE_SPLIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_COLLECT_TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn default_collect_tick_interval() -> Duration {
-    #[cfg(feature = "failpoints")]
     fail_point!("mock_collect_tick_interval", |_| {
         Duration::from_millis(1)
     });
@@ -447,9 +445,11 @@ fn default_collect_tick_interval() -> Duration {
 }
 
 fn config(interval: Duration) -> Duration {
-    #[cfg(feature = "failpoints")]
     fail_point!("mock_min_resolved_ts_interval", |_| {
         Duration::from_millis(50)
+    });
+    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
+        Duration::from_millis(0)
     });
     interval
 }
@@ -721,21 +721,18 @@ const HOTSPOT_REPORT_CAPACITY: usize = 1000;
 
 // TODO: support dynamic configure threshold in future.
 fn hotspot_key_report_threshold() -> u64 {
-    #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_KEY_RATE_THRESHOLD * 10
 }
 
 fn hotspot_byte_report_threshold() -> u64 {
-    #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_BYTE_RATE_THRESHOLD * 10
 }
 
 fn hotspot_query_num_report_threshold() -> u64 {
-    #[cfg(feature = "failpoints")]
     fail_point!("mock_hotspot_threshold", |_| { 0 });
 
     HOTSPOT_QUERY_RATE_THRESHOLD * 10

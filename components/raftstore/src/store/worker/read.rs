@@ -9,7 +9,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
@@ -26,7 +25,7 @@ use tikv_util::{
     codec::number::decode_u64,
     debug, error,
     lru::LruCache,
-    time::{monotonic_raw_now, Instant, ThreadReadId},
+    time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
 
@@ -213,7 +212,6 @@ pub struct LocalReadContext<'a, E>
 where
     E: KvEngine,
 {
-    metrics: &'a mut ReadMetrics,
     read_id: &'a mut ThreadReadId,
     snap_cache: &'a mut Box<Option<Arc<E::Snapshot>>>,
 }
@@ -397,7 +395,6 @@ impl ReadDelegate {
         &self,
         router: &dyn CasualRouter<EK>,
         ts: Timespec,
-        metrics: &mut ReadMetrics,
     ) {
         if !self
             .leader_lease
@@ -407,7 +404,7 @@ impl ReadDelegate {
         {
             return;
         }
-        metrics.renew_lease_advance += 1;
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         let region_id = self.region.get_id();
         if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {
             debug!(
@@ -418,18 +415,19 @@ impl ReadDelegate {
         }
     }
 
-    pub fn is_in_leader_lease(&self, ts: Timespec, metrics: &mut ReadMetrics) -> bool {
+    pub fn is_in_leader_lease(&self, ts: Timespec) -> bool {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
                 if lease.inspect(Some(ts)) == LeaseState::Valid {
                     return true;
                 } else {
-                    metrics.rejected_by_lease_expire += 1;
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().reject_reason.lease_expire.inc());
                     debug!("rejected by lease expire"; "tag" => &self.tag);
                 }
             } else {
-                metrics.rejected_by_term_mismatch += 1;
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.term_mismatch.inc());
                 debug!("rejected by term mismatch"; "tag" => &self.tag);
             }
         }
@@ -440,7 +438,6 @@ impl ReadDelegate {
     pub fn check_stale_read_safe<S: Snapshot>(
         &self,
         read_ts: u64,
-        metrics: &mut ReadMetrics,
     ) -> std::result::Result<(), ReadResponse<S>> {
         let safe_ts = self.read_progress.safe_ts();
         if safe_ts >= read_ts {
@@ -452,7 +449,7 @@ impl ReadDelegate {
             "safe ts" => safe_ts,
             "read ts" => read_ts
         );
-        metrics.rejected_by_safe_timestamp += 1;
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.safe_ts.inc());
         let mut response = cmd_resp::new_error(Error::DataIsNotReady {
             region_id: self.region.get_id(),
             peer_id: self.peer_id,
@@ -549,7 +546,6 @@ where
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
     kv_engine: E,
-    pub metrics: ReadMetrics,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
@@ -573,11 +569,12 @@ where
         read_context: &mut Option<LocalReadContext<'_, E>>,
     ) -> Arc<E::Snapshot> {
         let ctx = read_context.as_mut().unwrap();
-        ctx.metrics.local_executed_requests += 1;
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
         if let Some(ts) = create_time {
             if ts == *ctx.read_id {
                 if let Some(snap) = ctx.snap_cache.as_ref().as_ref() {
-                    ctx.metrics.local_executed_snapshot_cache_hit += 1;
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.inc());
                     return snap.clone();
                 }
             }
@@ -606,7 +603,6 @@ where
             snap_cache: Box::new(None),
             cache_read_id,
             store_id: Cell::new(None),
-            metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
     }
@@ -618,14 +614,14 @@ where
         match ProposalRouter::send(&self.router, cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
-                self.metrics.rejected_by_channel_full += 1;
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.channel_full.inc());
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 cmd = c;
             }
             Err(TrySendError::Disconnected(c)) => {
-                self.metrics.rejected_by_no_region += 1;
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
                 err.set_message(format!("region {} is missing", region_id));
                 err.mut_region_not_found().set_region_id(region_id);
                 cmd = c;
@@ -655,7 +651,7 @@ where
             Some(d) if !d.track_ver.any_new() => Some(d.clone()),
             _ => {
                 debug!("update local read delegate"; "region_id" => region_id);
-                self.metrics.rejected_by_cache_miss += 1;
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.cache_miss.inc());
 
                 let (meta_len, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
 
@@ -687,7 +683,7 @@ where
         let store_id = self.store_id.get().unwrap();
 
         if let Err(e) = util::check_store_id(req, store_id) {
-            self.metrics.rejected_by_store_id_mismatch += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.store_id_mismatch.inc());
             debug!("rejected by store id not match"; "err" => %e);
             return Err(e);
         }
@@ -697,7 +693,7 @@ where
         let delegate = match self.get_delegate(region_id) {
             Some(d) => d,
             None => {
-                self.metrics.rejected_by_no_region += 1;
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
                 debug!("rejected by no region"; "region_id" => region_id);
                 return Ok(None);
             }
@@ -707,7 +703,7 @@ where
 
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
-            self.metrics.rejected_by_peer_id_mismatch += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.peer_id_mismatch.inc());
             return Err(e);
         }
 
@@ -718,13 +714,13 @@ where
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
             );
-            self.metrics.rejected_by_term_mismatch += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.term_mismatch.inc());
             return Err(e);
         }
 
         // Check region epoch.
         if util::check_region_epoch(req, &delegate.region, false).is_err() {
-            self.metrics.rejected_by_epoch += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
             debug!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
@@ -732,7 +728,6 @@ where
 
         let mut inspector = Inspector {
             delegate: &delegate,
-            metrics: &mut self.metrics,
         };
         match inspector.inspect(req) {
             Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
@@ -766,14 +761,13 @@ where
                             }
                             None => monotonic_raw_now(),
                         };
-                        if !delegate.is_in_leader_lease(snapshot_ts, &mut self.metrics) {
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
 
                         delegate_ext = LocalReadContext {
-                            metrics: &mut self.metrics,
                             snap_cache: &mut self.snap_cache,
                             read_id: &mut self.cache_read_id,
                         };
@@ -782,27 +776,19 @@ where
                         let response =
                             delegate.execute(&req, &region, None, read_id, Some(delegate_ext));
                         // Try renew lease in advance
-
-                        delegate.maybe_renew_lease_advance(
-                            &self.router,
-                            snapshot_ts,
-                            &mut self.metrics,
-                        );
+                        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                         response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         assert!(read_ts > 0);
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
-                        {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;
                         }
 
                         delegate_ext = LocalReadContext {
-                            metrics: &mut self.metrics,
                             snap_cache: &mut self.snap_cache,
                             read_id: &mut self.cache_read_id,
                         };
@@ -814,13 +800,12 @@ where
 
                         // Double check in case `safe_ts` change after the first check and before
                         // getting snapshot
-                        if let Err(resp) =
-                            delegate.check_stale_read_safe(read_ts, &mut self.metrics)
-                        {
+                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
                             cb.invoke_read(resp);
                             return;
                         }
-                        self.metrics.local_executed_stale_read_requests += 1;
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
                         response
                     }
                     _ => unreachable!(),
@@ -863,7 +848,7 @@ where
         cb: Callback<E::Snapshot>,
     ) {
         self.propose_raft_command(read_id, req, cb);
-        self.metrics.maybe_flush();
+        maybe_tls_local_read_metrics_flush();
     }
 
     pub fn release_snapshot_cache(&mut self) {
@@ -884,7 +869,6 @@ where
             kv_engine: self.kv_engine.clone(),
             router: self.router.clone(),
             store_id: self.store_id.clone(),
-            metrics: Default::default(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
@@ -893,12 +877,11 @@ where
 }
 
 /// #[RaftstoreCommon]
-struct Inspector<'r, 'm> {
+struct Inspector<'r> {
     delegate: &'r ReadDelegate,
-    metrics: &'m mut ReadMetrics,
 }
 
-impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
+impl<'r> RequestInspector for Inspector<'r> {
     fn has_applied_to_current_term(&mut self) -> bool {
         if self.delegate.applied_term == self.delegate.term {
             true
@@ -911,7 +894,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             );
 
             // only for metric.
-            self.metrics.rejected_by_applied_term += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.applied_term.inc());
             false
         }
     }
@@ -923,142 +906,8 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
             LeaseState::Valid
         } else {
             debug!("rejected by leader lease"; "tag" => &self.delegate.tag);
-            self.metrics.rejected_by_no_lease += 1;
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_lease.inc());
             LeaseState::Expired
-        }
-    }
-}
-
-const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
-
-/// #[RaftstoreCommon]
-#[derive(Clone)]
-pub struct ReadMetrics {
-    pub local_executed_requests: u64,
-    pub local_executed_stale_read_requests: u64,
-    pub local_executed_snapshot_cache_hit: u64,
-    // TODO: record rejected_by_read_quorum.
-    pub rejected_by_store_id_mismatch: u64,
-    pub rejected_by_peer_id_mismatch: u64,
-    pub rejected_by_term_mismatch: u64,
-    pub rejected_by_lease_expire: u64,
-    pub rejected_by_no_region: u64,
-    pub rejected_by_no_lease: u64,
-    pub rejected_by_epoch: u64,
-    pub rejected_by_applied_term: u64,
-    pub rejected_by_channel_full: u64,
-    pub rejected_by_cache_miss: u64,
-    pub rejected_by_safe_timestamp: u64,
-    pub renew_lease_advance: u64,
-
-    pub last_flush_time: Instant,
-}
-
-impl Default for ReadMetrics {
-    fn default() -> ReadMetrics {
-        ReadMetrics {
-            local_executed_requests: 0,
-            local_executed_stale_read_requests: 0,
-            local_executed_snapshot_cache_hit: 0,
-            rejected_by_store_id_mismatch: 0,
-            rejected_by_peer_id_mismatch: 0,
-            rejected_by_term_mismatch: 0,
-            rejected_by_lease_expire: 0,
-            rejected_by_no_region: 0,
-            rejected_by_no_lease: 0,
-            rejected_by_epoch: 0,
-            rejected_by_applied_term: 0,
-            rejected_by_channel_full: 0,
-            rejected_by_cache_miss: 0,
-            rejected_by_safe_timestamp: 0,
-            renew_lease_advance: 0,
-            last_flush_time: Instant::now(),
-        }
-    }
-}
-
-impl ReadMetrics {
-    pub fn maybe_flush(&mut self) {
-        if self.last_flush_time.saturating_elapsed()
-            >= Duration::from_millis(METRICS_FLUSH_INTERVAL)
-        {
-            self.flush();
-            self.last_flush_time = Instant::now();
-        }
-    }
-
-    fn flush(&mut self) {
-        if self.rejected_by_store_id_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .store_id_mismatch
-                .inc_by(self.rejected_by_store_id_mismatch);
-            self.rejected_by_store_id_mismatch = 0;
-        }
-        if self.rejected_by_peer_id_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .peer_id_mismatch
-                .inc_by(self.rejected_by_peer_id_mismatch);
-            self.rejected_by_peer_id_mismatch = 0;
-        }
-        if self.rejected_by_term_mismatch > 0 {
-            LOCAL_READ_REJECT
-                .term_mismatch
-                .inc_by(self.rejected_by_term_mismatch);
-            self.rejected_by_term_mismatch = 0;
-        }
-        if self.rejected_by_lease_expire > 0 {
-            LOCAL_READ_REJECT
-                .lease_expire
-                .inc_by(self.rejected_by_lease_expire);
-            self.rejected_by_lease_expire = 0;
-        }
-        if self.rejected_by_no_region > 0 {
-            LOCAL_READ_REJECT
-                .no_region
-                .inc_by(self.rejected_by_no_region);
-            self.rejected_by_no_region = 0;
-        }
-        if self.rejected_by_no_lease > 0 {
-            LOCAL_READ_REJECT.no_lease.inc_by(self.rejected_by_no_lease);
-            self.rejected_by_no_lease = 0;
-        }
-        if self.rejected_by_epoch > 0 {
-            LOCAL_READ_REJECT.epoch.inc_by(self.rejected_by_epoch);
-            self.rejected_by_epoch = 0;
-        }
-        if self.rejected_by_applied_term > 0 {
-            LOCAL_READ_REJECT
-                .applied_term
-                .inc_by(self.rejected_by_applied_term);
-            self.rejected_by_applied_term = 0;
-        }
-        if self.rejected_by_channel_full > 0 {
-            LOCAL_READ_REJECT
-                .channel_full
-                .inc_by(self.rejected_by_channel_full);
-            self.rejected_by_channel_full = 0;
-        }
-        if self.rejected_by_safe_timestamp > 0 {
-            LOCAL_READ_REJECT
-                .safe_ts
-                .inc_by(self.rejected_by_safe_timestamp);
-            self.rejected_by_safe_timestamp = 0;
-        }
-        if self.local_executed_snapshot_cache_hit > 0 {
-            LOCAL_READ_EXECUTED_CACHE_REQUESTS.inc_by(self.local_executed_snapshot_cache_hit);
-            self.local_executed_snapshot_cache_hit = 0;
-        }
-        if self.local_executed_requests > 0 {
-            LOCAL_READ_EXECUTED_REQUESTS.inc_by(self.local_executed_requests);
-            self.local_executed_requests = 0;
-        }
-        if self.local_executed_stale_read_requests > 0 {
-            LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.inc_by(self.local_executed_stale_read_requests);
-            self.local_executed_stale_read_requests = 0;
-        }
-        if self.renew_lease_advance > 0 {
-            LOCAL_READ_RENEW_LEASE_ADVANCE_COUNTER.inc_by(self.renew_lease_advance);
-            self.renew_lease_advance = 0;
         }
     }
 }
@@ -1069,7 +918,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1167,7 +1016,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd.clone(),
-            Callback::Read(Box::new(|resp| {
+            Callback::read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         );
@@ -1234,8 +1083,14 @@ mod tests {
 
         // The region is not register yet.
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_no_region, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.no_region.get()),
+            1
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            1
+        );
         assert!(reader.delegates.get(&1).is_none());
 
         // Register region 1
@@ -1264,8 +1119,14 @@ mod tests {
 
         // The applied_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 2);
-        assert_eq!(reader.metrics.rejected_by_applied_term, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            2
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
+            1
+        );
 
         // Make the applied_term matches current term.
         let pg = Progress::applied_term(term6);
@@ -1274,14 +1135,17 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
-            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            3
+        );
 
         // Let's read.
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region1);
             })),
@@ -1291,7 +1155,10 @@ mod tests {
         // Wait for expiration.
         thread::sleep(Duration::seconds(1).to_std().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.rejected_by_lease_expire, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
+            1
+        );
 
         // Renew lease.
         lease.renew(monotonic_raw_now());
@@ -1305,14 +1172,20 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_store_id_mismatch, 1);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 3);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.store_id_mismatch.get()),
+            1
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            3
+        );
 
         // metapb::Peer id mismatch.
         let mut cmd_peer_id = cmd.clone();
@@ -1323,7 +1196,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -1332,7 +1205,10 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_peer_id_mismatch, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.peer_id_mismatch.get()),
+            1
+        );
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
@@ -1345,13 +1221,16 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
             })),
         );
-        assert_eq!(reader.metrics.rejected_by_term_mismatch, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.term_mismatch.get()),
+            1
+        );
 
         // Stale epoch.
         let mut epoch12 = epoch13;
@@ -1359,15 +1238,19 @@ mod tests {
         let mut cmd_epoch = cmd.clone();
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
-        assert_eq!(reader.metrics.rejected_by_epoch, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.epoch.get()),
+            1
+        );
 
         // Expire lease manually, and it can not be renewed.
-        let previous_lease_rejection = reader.metrics.rejected_by_lease_expire;
+        let previous_lease_rejection =
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get());
         lease.expire();
         lease.renew(monotonic_raw_now());
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(
-            reader.metrics.rejected_by_lease_expire,
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.lease_expire.get()),
             previous_lease_rejection + 1
         );
 
@@ -1376,7 +1259,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -1384,10 +1267,14 @@ mod tests {
         );
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        assert_eq!(reader.metrics.rejected_by_channel_full, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.channel_full.get()),
+            1
+        );
 
         // Reject by term mismatch in lease.
-        let previous_term_rejection = reader.metrics.rejected_by_term_mismatch;
+        let previous_term_rejection =
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.term_mismatch.get());
         let mut cmd9 = cmd.clone();
         cmd9.mut_header().set_term(term6 + 3);
         {
@@ -1404,7 +1291,7 @@ mod tests {
         reader.propose_raft_command(
             None,
             cmd9.clone(),
-            Callback::Read(Box::new(|resp| {
+            Callback::read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         );
@@ -1415,10 +1302,13 @@ mod tests {
             cmd9
         );
         assert_eq!(
-            reader.metrics.rejected_by_term_mismatch,
-            previous_term_rejection + 1,
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.term_mismatch.get()),
+            previous_term_rejection + 1
         );
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 4);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            4
+        );
 
         // Stale local ReadDelegate
         cmd.mut_header().set_term(term6 + 3);
@@ -1430,12 +1320,18 @@ mod tests {
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
         let task =
-            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
+            RaftCommand::<KvTestSnapshot>::new(cmd.clone(), Callback::read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_cache_miss, 5);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            5
+        );
 
         // Stale read
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 0);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
+            0
+        );
         read_progress.update_safe_ts(1, 1);
         assert_eq!(read_progress.safe_ts(), 1);
 
@@ -1449,20 +1345,26 @@ mod tests {
         cmd.mut_header().set_flag_data(data.into());
         let task = RaftCommand::<KvTestSnapshot>::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_data_is_not_ready());
                 assert!(resp.snapshot.is_none());
             })),
         );
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
+            1
+        );
 
         read_progress.update_safe_ts(1, 2);
         assert_eq!(read_progress.safe_ts(), 2);
-        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::Read(Box::new(move |_| {})));
+        let task = RaftCommand::<KvTestSnapshot>::new(cmd, Callback::read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.rejected_by_safe_timestamp, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
+            1
+        );
 
         // Remove invalid delegate
         let reader_clone = store_meta.lock().unwrap().readers.get(&1).unwrap().clone();
@@ -1556,7 +1458,7 @@ mod tests {
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        kv_engine.put_cf(CF_DEFAULT, b"a1", b"val1").unwrap();
+        kv_engine.put(b"a1", b"val1").unwrap();
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
@@ -1573,13 +1475,11 @@ mod tests {
         }
 
         let mut read_id = ThreadReadId::new();
-        let mut read_metrics = ReadMetrics::default();
         let mut snap_cache = Box::new(None);
 
         let read_id_copy = Some(read_id.clone());
 
         let mut read_context = Some(LocalReadContext {
-            metrics: &mut read_metrics,
             read_id: &mut read_id,
             snap_cache: &mut snap_cache,
         });
@@ -1589,20 +1489,30 @@ mod tests {
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         let (_, delegate) = store_meta.get_executor_and_len(2);
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
         let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
-        let val = snapshot.get_value(b"a1").unwrap().unwrap();
-        assert_eq!(b"val1", val.deref());
+        assert_eq!(
+            b"val1".to_vec(),
+            *snapshot.get_value(b"a1").unwrap().unwrap()
+        );
 
         assert!(snap_cache.as_ref().is_some());
-        assert_eq!(read_metrics.local_executed_requests, 2);
-        assert_eq!(read_metrics.local_executed_snapshot_cache_hit, 1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_requests.get()),
+            2
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            1
+        );
     }
 
     #[test]
@@ -1639,7 +1549,6 @@ mod tests {
 
         {
             let mut read_context = Some(LocalReadContext {
-                metrics: &mut reader.metrics,
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
             });
@@ -1650,13 +1559,15 @@ mod tests {
             }
         }
         // We should hit cache 9 times
-        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 9);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            9
+        );
 
         let read_id = Some(ThreadReadId::new());
 
         {
             let read_context = LocalReadContext {
-                metrics: &mut reader.metrics,
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
             };
@@ -1664,40 +1575,49 @@ mod tests {
             let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
         }
         // This time, we will miss the cache
-        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 9);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            9
+        );
 
         {
             let read_context = LocalReadContext {
-                metrics: &mut reader.metrics,
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
             };
             let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
             // We can hit it again.
-            assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
+            assert_eq!(
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+                10
+            );
         }
 
         reader.release_snapshot_cache();
         {
             let read_context = LocalReadContext {
-                metrics: &mut reader.metrics,
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
             };
             let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
         }
         // After release, we will mss the cache even with the prevsiou read_id.
-        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 10);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            10
+        );
 
         {
             let read_context = LocalReadContext {
-                metrics: &mut reader.metrics,
                 snap_cache: &mut reader.snap_cache,
                 read_id: &mut reader.cache_read_id,
             };
             let _ = delegate.get_snapshot(read_id, &mut Some(read_context));
         }
         // We can hit it again.
-        assert_eq!(reader.metrics.local_executed_snapshot_cache_hit, 11);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
+            11
+        );
     }
 }

@@ -18,7 +18,7 @@ pub struct ExecSummary {
 
 /// A trait for all execution summary collectors.
 pub trait ExecSummaryCollector: Send {
-    type DurationRecorder;
+    type DurationRecorder: Send;
 
     /// Creates a new instance with specified output slot index.
     fn new(output_index: usize) -> Self

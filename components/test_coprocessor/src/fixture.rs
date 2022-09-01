@@ -67,7 +67,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<E>, Endpoint<E>) {
+) -> (Store<E>, Endpoint<E>, Arc<QuotaLimiter>) {
     init_data_with_details(ctx, engine, tbl, vals, commit, &Config::default())
 }
 
@@ -78,7 +78,7 @@ pub fn init_data_with_details<E: Engine>(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
     cfg: &Config,
-) -> (Store<E>, Endpoint<E>) {
+) -> (Store<E>, Endpoint<E>, Arc<QuotaLimiter>) {
     let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine, DummyLockManager)
         .build()
         .unwrap();
@@ -103,21 +103,22 @@ pub fn init_data_with_details<E: Engine>(
         store.get_engine(),
     ));
     let cm = ConcurrencyManager::new(1.into());
+    let limiter = Arc::new(QuotaLimiter::default());
     let copr = Endpoint::new(
         cfg,
         pool.handle(),
         cm,
         ResourceTagFactory::new_for_test(),
-        Arc::new(QuotaLimiter::default()),
+        limiter.clone(),
     );
-    (store, copr)
+    (store, copr, limiter)
 }
 
 pub fn init_data_with_commit(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
-) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>) {
     let engine = TestEngineBuilder::new().build().unwrap();
     init_data_with_engine_and_commit(Context::default(), engine, tbl, vals, commit)
 }
@@ -128,5 +129,14 @@ pub fn init_with_data(
     tbl: &ProductTable,
     vals: &[(i64, Option<&str>, i64)],
 ) -> (Store<RocksEngine>, Endpoint<RocksEngine>) {
+    let (store, endpoint, _) = init_data_with_commit(tbl, vals, true);
+    (store, endpoint)
+}
+
+// Same as init_with_data except returned values include Arc<QuotaLimiter>
+pub fn init_with_data_ext(
+    tbl: &ProductTable,
+    vals: &[(i64, Option<&str>, i64)],
+) -> (Store<RocksEngine>, Endpoint<RocksEngine>, Arc<QuotaLimiter>) {
     init_data_with_commit(tbl, vals, true)
 }
