@@ -82,6 +82,8 @@ pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
     use kvproto::kvrpcpb::Context;
+    #[cfg(test)]
+    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -233,7 +235,7 @@ pub mod tests {
         must_get_rollback_protected(&engine, k, ts(11, 1), true);
 
         must_acquire_pessimistic_lock(&engine, k, k, ts(13, 1), ts(14, 1));
-        must_pessimistic_prewrite_put(&engine, k, v, k, ts(13, 1), ts(14, 1), true);
+        must_pessimistic_prewrite_put(&engine, k, v, k, ts(13, 1), ts(14, 1), DoPessimisticCheck);
         must_succeed(&engine, k, ts(13, 1), ts(120, 0));
         must_get_rollback_protected(&engine, k, ts(13, 1), true);
     }

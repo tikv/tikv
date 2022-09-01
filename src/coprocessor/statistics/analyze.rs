@@ -22,18 +22,14 @@ use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext},
     FieldTypeAccessor,
 };
-use tidb_query_executors::{
-    interface::BatchExecutor, runner::MAX_TIME_SLICE, BatchTableScanExecutor,
-};
+use tidb_query_executors::{interface::BatchExecutor, BatchTableScanExecutor};
 use tidb_query_expr::BATCH_MAX_SIZE;
 use tikv_alloc::trace::{MemoryTraceGuard, TraceEvent};
 use tikv_util::{
     metrics::{ThrottleType, NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC},
     quota_limiter::QuotaLimiter,
-    time::Instant,
 };
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use yatp::task::future::reschedule;
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
@@ -135,8 +131,6 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_width() as usize,
         );
         let mut fms = FmSketch::new(req.get_sketch_size() as usize);
-        let mut row_count = 0;
-        let mut time_slice_start = Instant::now();
         let mut topn_heap = BinaryHeap::new();
         // cur_val recording the current value's data and its counts when iterating
         // index's rows. Once we met a new value, the old value will be pushed
@@ -148,15 +142,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         } else {
             ANALYZE_VERSION_V1
         };
-        while let Some((key, _)) = scanner.next()? {
-            row_count += 1;
-            if row_count >= BATCH_MAX_SIZE {
-                if time_slice_start.saturating_elapsed() > MAX_TIME_SLICE {
-                    reschedule().await;
-                    time_slice_start = Instant::now();
-                }
-                row_count = 0;
-            }
+        while let Some((key, _)) = scanner.next().await? {
             let mut key = &key[..];
             if is_common_handle {
                 table::check_record_key(key)?;
@@ -382,19 +368,19 @@ impl<S: Snapshot> RowSampleBuilder<S> {
         use tidb_query_datatype::{codec::collation::Collator, match_template_collator};
 
         let mut is_drained = false;
-        let mut time_slice_start = Instant::now();
         let mut collector = self.new_collector();
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > MAX_TIME_SLICE {
-                reschedule().await;
-                time_slice_start = Instant::now();
-            }
-
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
+            let mut read_size: usize = 0;
             {
+                let result = {
+                    let (duration, res) = sample
+                        .observe_cpu_async(self.data.next_batch(BATCH_MAX_SIZE))
+                        .await;
+                    sample.add_cpu_time(duration);
+                    res
+                };
                 let _guard = sample.observe_cpu();
-                let result = self.data.next_batch(BATCH_MAX_SIZE);
                 is_drained = result.is_drained?;
 
                 let columns_slice = result.physical_columns.as_slice();
@@ -431,6 +417,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                         } else {
                             collation_key_vals.push(Vec::new());
                         }
+                        read_size += val.len();
                         column_vals.push(val);
                     }
                     collector.mut_base().count += 1;
@@ -444,6 +431,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
                 }
             }
 
+            sample.add_read_bytes(read_size);
             // Don't let analyze bandwidth limit the quota limiter, this is already limited
             // in rate limiter.
             let quota_delay = {
@@ -885,17 +873,11 @@ impl<S: Snapshot> SampleBuilder<S> {
             columns_without_handle_len
         ];
         let mut is_drained = false;
-        let mut time_slice_start = Instant::now();
         let mut common_handle_hist = Histogram::new(self.max_bucket_size);
         let mut common_handle_cms = CmSketch::new(self.cm_sketch_depth, self.cm_sketch_width);
         let mut common_handle_fms = FmSketch::new(self.max_fm_sketch_size);
         while !is_drained {
-            let time_slice_elapsed = time_slice_start.saturating_elapsed();
-            if time_slice_elapsed > MAX_TIME_SLICE {
-                reschedule().await;
-                time_slice_start = Instant::now();
-            }
-            let result = self.data.next_batch(BATCH_MAX_SIZE);
+            let result = self.data.next_batch(BATCH_MAX_SIZE).await;
             is_drained = result.is_drained?;
 
             let mut columns_slice = result.physical_columns.as_slice();

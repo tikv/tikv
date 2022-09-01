@@ -219,6 +219,19 @@ impl<'a> JsonRef<'a> {
             JsonType::String => false,
         }
     }
+
+    // Returns whether the two JsonRef references to the same
+    // json object.
+    //
+    // As the JsonRef exists and holds the reference to the Json
+    // , the `Vec` inside the Json cannot be changed, so comparing
+    // the pointer is enough to represent the reference equality.
+    //
+    // PartialEq and PartialCmp have been implemented for JsonRef
+    // to compare the value.
+    pub(crate) fn ref_eq(&self, other: &JsonRef<'a>) -> bool {
+        std::ptr::eq(self.value, other.value)
+    }
 }
 
 /// Json implements type json used in tikv by Binary Json.

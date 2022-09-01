@@ -65,12 +65,13 @@ use tikv_util::{
     Either,
 };
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 use txn_types::WriteBatchFlags;
 use uuid::Uuid;
 
 use super::{
     cmd_resp,
-    local_metrics::{RaftMetrics, RaftReadyMetrics, TimeTracker},
+    local_metrics::{RaftMetrics, TimeTracker},
     metrics::*,
     peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
     read_queue::{ReadIndexQueue, ReadIndexRequest},
@@ -100,14 +101,15 @@ use crate::{
             HeartbeatTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, ReadIndexContext, ReadResponse, TxnExt,
-        WriteCallback, RAFT_INIT_LOG_INDEX,
+        Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
+        ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000; // 1s
+const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
+// 1s
 const REGION_READ_PROGRESS_CAP: usize = 128;
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -143,7 +145,7 @@ impl<C: WriteCallback> ProposalQueue<C> {
             .and_then(|i| {
                 self.queue[i]
                     .cb
-                    .trackers()
+                    .write_trackers()
                     .map(|ts| (self.queue[i].term, ts))
             })
     }
@@ -1569,19 +1571,28 @@ where
         self.raft_group.snap()
     }
 
-    fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
-        metrics.message += ready.messages().len() as u64;
-        metrics.commit += ready.committed_entries().len() as u64;
-        metrics.append += ready.entries().len() as u64;
+    fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftMetrics) {
+        metrics.ready.message.inc_by(ready.messages().len() as u64);
+        metrics
+            .ready
+            .commit
+            .inc_by(ready.committed_entries().len() as u64);
+        metrics.ready.append.inc_by(ready.entries().len() as u64);
 
         if !ready.snapshot().is_empty() {
-            metrics.snapshot += 1;
+            metrics.ready.snapshot.inc();
         }
     }
 
-    fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftReadyMetrics) {
-        metrics.message += light_ready.messages().len() as u64;
-        metrics.commit += light_ready.committed_entries().len() as u64;
+    fn add_light_ready_metric(&self, light_ready: &LightReady, metrics: &mut RaftMetrics) {
+        metrics
+            .ready
+            .message
+            .inc_by(light_ready.messages().len() as u64);
+        metrics
+            .ready
+            .commit
+            .inc_by(light_ready.committed_entries().len() as u64);
     }
 
     #[inline]
@@ -1643,7 +1654,7 @@ where
                 {
                     let proposal = &self.proposals.queue[idx];
                     if term == proposal.term {
-                        for tracker in proposal.cb.trackers().iter().flat_map(|v| v.iter()) {
+                        for tracker in proposal.cb.write_trackers().iter().flat_map(|v| v.iter()) {
                             tracker.observe(std_now, &ctx.raft_metrics.wf_send_proposal, |t| {
                                 &mut t.metrics.wf_send_proposal_nanos
                             });
@@ -2490,12 +2501,12 @@ where
 
         let mut ready = self.raft_group.ready();
 
-        self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
+        self.add_ready_metric(&ready, &mut ctx.raft_metrics);
 
         // Update it after unstable entries pagination is introduced.
         debug_assert!(ready.entries().last().map_or_else(
             || true,
-            |entry| entry.index == self.raft_group.raft.raft_log.last_index()
+            |entry| entry.index == self.raft_group.raft.raft_log.last_index(),
         ));
         if self.memtrace_raft_entries != 0 {
             MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Sub(self.memtrace_raft_entries));
@@ -2642,7 +2653,7 @@ where
                     // needs to be persisted.
                     let mut light_rd = self.raft_group.advance_append(ready);
 
-                    self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+                    self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics);
 
                     if let Some(idx) = light_rd.commit_index() {
                         panic!(
@@ -3012,7 +3023,7 @@ where
         }
         self.mut_store().update_cache_persisted(persist_index);
 
-        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics.ready);
+        self.add_light_ready_metric(&light_rd, &mut ctx.raft_metrics);
 
         if let Some(commit_index) = light_rd.commit_index() {
             let pre_commit_index = self.get_store().commit_index();
@@ -3062,7 +3073,14 @@ where
             "peer_id" => self.peer.get_id(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
+        let time = monotonic_raw_now();
         for (req, cb, mut read_index) in read.take_cmds().drain(..) {
+            cb.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos =
+                        (time - read.propose_time).to_std().unwrap().as_nanos() as u64;
+                })
+            });
             // leader reports key is locked
             if let Some(locked) = read.locked.take() {
                 let mut response = raft_cmdpb::Response::default();
@@ -3397,7 +3415,7 @@ where
             return false;
         }
 
-        ctx.raft_metrics.propose.all += 1;
+        ctx.raft_metrics.propose.all.inc();
 
         let req_admin_cmd_type = if !req.has_admin_request() {
             None
@@ -3579,9 +3597,9 @@ where
 
             if peer.get_id() == self.peer_id()
                 && (change_type == ConfChangeType::RemoveNode
-                    // In Joint confchange, the leader is allowed to be DemotingVoter
-                    || (kind == ConfChangeKind::Simple
-                        && change_type == ConfChangeType::AddLearnerNode))
+                // In Joint confchange, the leader is allowed to be DemotingVoter
+                || (kind == ConfChangeKind::Simple
+                && change_type == ConfChangeType::AddLearnerNode))
                 && !ctx.cfg.allow_remove_leader()
             {
                 return Err(box_err!(
@@ -3730,7 +3748,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) {
-        ctx.raft_metrics.propose.local_read += 1;
+        ctx.raft_metrics.propose.local_read.inc();
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().commit_index())))
     }
 
@@ -3821,7 +3839,7 @@ where
                 "peer_id" => self.peer.get_id(),
                 "err" => ?e,
             );
-            poll_ctx.raft_metrics.propose.unsafe_read_index += 1;
+            poll_ctx.raft_metrics.propose.unsafe_read_index.inc();
             cmd_resp::bind_error(&mut err_resp, e);
             cb.report_error(err_resp);
             self.should_wake_up = true;
@@ -3873,7 +3891,11 @@ where
         // which would cause a long time waiting for a read response. Then we
         // should return an error directly in this situation.
         if !self.is_leader() && self.leader_id() == INVALID_ID {
-            poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
+            poll_ctx
+                .raft_metrics
+                .invalid_proposal
+                .read_index_no_leader
+                .inc();
             // The leader may be hibernated, send a message for trying to awaken the leader.
             if self.bcast_wake_up_time.is_none()
                 || self
@@ -3904,7 +3926,7 @@ where
             return false;
         }
 
-        poll_ctx.raft_metrics.propose.read_index += 1;
+        poll_ctx.raft_metrics.propose.read_index.inc();
         self.bcast_wake_up_time = None;
 
         let request = req
@@ -3916,7 +3938,7 @@ where
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
-            poll_ctx.raft_metrics.propose.dropped_read_index += 1;
+            poll_ctx.raft_metrics.propose.dropped_read_index.inc();
             return false;
         }
 
@@ -4264,7 +4286,7 @@ where
             return Err(Error::ProposalInMergingMode(self.region_id));
         }
 
-        poll_ctx.raft_metrics.propose.normal += 1;
+        poll_ctx.raft_metrics.propose.normal.inc();
 
         if self.has_applied_to_current_term() {
             // Only when applied index's term is equal to current leader's term, the
@@ -4425,7 +4447,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
-        ctx.raft_metrics.propose.transfer_leader += 1;
+        ctx.raft_metrics.propose.transfer_leader.inc();
 
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
         let prs = self.raft_group.raft.prs();
@@ -4544,7 +4566,7 @@ where
 
         self.check_conf_change(ctx, changes.as_ref(), &cc)?;
 
-        ctx.raft_metrics.propose.conf_change += 1;
+        ctx.raft_metrics.propose.conf_change.inc();
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data_size as f64);
         info!(
@@ -5402,6 +5424,8 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::ProposeNormal);
         }
 
+        fail_point!("perform_read_index", |_| Ok(RequestPolicy::ReadIndex));
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
@@ -5541,17 +5565,6 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 // The Raft message context for a MsgTransferLeader if it is a reply of a
 // TransferLeader command.
 pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
-
-/// A poor version of `Peer` to avoid port generic variables everywhere.
-pub trait AbstractPeer {
-    fn meta_peer(&self) -> &metapb::Peer;
-    fn group_state(&self) -> GroupState;
-    fn region(&self) -> &metapb::Region;
-    fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status<'_>;
-    fn raft_commit_index(&self) -> u64;
-    fn pending_merge_state(&self) -> Option<&MergeState>;
-}
 
 mod memtrace {
     use std::mem;

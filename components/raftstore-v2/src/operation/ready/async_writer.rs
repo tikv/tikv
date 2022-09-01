@@ -16,7 +16,7 @@ use slog::{warn, Logger};
 
 use crate::{
     batch::{StoreContext, StoreRouter},
-    PeerMsg,
+    router::PeerMsg,
 };
 
 #[derive(Debug)]
