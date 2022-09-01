@@ -136,7 +136,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 REGION_READ_PROGRESS_CAP,
                 tag.clone(),
             )),
-            tag: tag.clone(),
+            tag,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),

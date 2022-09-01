@@ -60,7 +60,6 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub write_senders: WriteSenders<EK, ER>,
     /// store meta
     pub store_meta: Arc<Mutex<StoreMeta<EK>>>,
-    pub current_time: Option<Timespec>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
@@ -83,7 +82,6 @@ impl<EK: KvEngine, ER: RaftEngine, T> StoreContext<EK, ER, T> {
             timer: SteadyTimer::default(),
             write_senders,
             store_meta,
-            current_time: None,
         }
     }
 }
