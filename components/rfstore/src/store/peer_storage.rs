@@ -517,6 +517,7 @@ impl PeerStorage {
         self.raft_state.last_index = last_index;
         self.raft_state.commit = last_index;
         self.raft_state.term = last_term;
+        self.raft_state.last_preprocessed_index = last_index;
         self.last_term = last_term;
         self.apply_state.applied_index = last_index;
         self.apply_state.applied_index_term = last_term;
@@ -569,6 +570,7 @@ fn init_raft_state(raft_engine: &rfengine::RfEngine, region: &metapb::Region) ->
         rs.last_index = RAFT_INIT_LOG_INDEX;
         rs.term = RAFT_INIT_LOG_TERM;
         rs.commit = RAFT_INIT_LOG_INDEX;
+        rs.last_preprocessed_index = RAFT_INIT_LOG_INDEX;
         let mut wb = rfengine::WriteBatch::new();
         wb.set_state(region.id, rs_key.chunk(), rs.marshal().chunk());
         raft_engine.write(wb)?;

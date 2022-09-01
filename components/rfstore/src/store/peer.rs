@@ -1479,6 +1479,7 @@ impl Peer {
                 let hard_state = self.raft_group.raft.hard_state();
                 let store = self.mut_store();
                 store.raft_state.set_hard_state(&hard_state);
+                store.raft_state.last_preprocessed_index = entry.index;
                 store.write_raft_state(ctx);
                 store.shard_meta = Some(new_meta.clone());
                 // PeerStore use the shard meta's version to persist raft state, since the
