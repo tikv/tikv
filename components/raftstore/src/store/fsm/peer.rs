@@ -1745,19 +1745,29 @@ where
                 self.fsm.peer.mut_store().clean_async_fetch_res(low);
             }
         } else {
+            let ents_len = match &res.ents {
+                Ok(ents) => ents.len(),
+                Err(_) => 0,
+            };
             self.fsm
                 .peer
                 .raft_group
                 .mut_store()
                 .update_async_fetch_res(low, Some(res));
 
-            let first_index = self.fsm.peer.get_store().entry_cache_first_index().unwrap_or(0);
+            let first_index = self
+                .fsm
+                .peer
+                .get_store()
+                .entry_cache_first_index()
+                .unwrap_or(0);
             warn!(
                 "(this_pr) leader has a async fetch, maybe used for SendAppend";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "cache_first_index" => first_index,
                 "low" => low,
+                "ents_len" => ents_len,
             );
             self.fsm.peer.raft_group.on_entries_fetched(context);
             // clean the async fetch result immediately if not used to free memory
@@ -5039,8 +5049,9 @@ where
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
         // it may keep growing.
-        let drop_cache_duration =
-            self.ctx.cfg.raft_heartbeat_interval() + self.ctx.cfg.raft_entry_cache_life_time.0;
+        let drop_cache_duration = self.ctx.cfg.raft_heartbeat_interval()
+            + self.ctx.cfg.raft_entry_cache_life_time.0
+            + Duration::from_secs(120);
         let cache_alive_limit = Instant::now() - drop_cache_duration;
 
         // Leader will replicate the compact log command to followers,
@@ -5088,6 +5099,30 @@ where
                 replicated_idx
             );
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
+        }
+
+        // Find why cache is gced.
+        if alive_cache_idx > replicated_idx {
+            warn!(
+                "(this_pr) compact entry cache, alive cache idx > replicated idx";
+                "alive_cache_idx" => alive_cache_idx,
+                "replicated_idx" => replicated_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "drop_cache_duration" => ?drop_cache_duration,
+            );
+
+            for (peer_id, _) in self.fsm.peer.raft_group.raft.prs().iter() {
+                if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
+                    if *last_heartbeat < cache_alive_limit {
+                        warn!(
+                            "(this_pr) peer is not alive";
+                            "last_heartbeat" => ?last_heartbeat.elapsed(),
+                            "peer_id" => peer_id,
+                        );
+                    }
+                }
+            }
         }
 
         // leader may call `get_term()` on the latest replicated index, so compact

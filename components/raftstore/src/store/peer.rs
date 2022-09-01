@@ -4470,14 +4470,14 @@ where
             }
 
             // TODO(cosven): no need to use two vars.
-            let mut low = min_matched;
+            let mut low = min_matched + 1;
             if min_matched < self.last_compacted_idx {
                 warn!(
                     "(this_pr) min matched is less than last compatecd";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
-                low = self.last_compacted_idx
+                low = self.last_compacted_idx + 1
             }
 
             if low >= high {
@@ -4490,6 +4490,7 @@ where
                 true
             } else {
                 // Fill entry cache.
+                // TODO(cosven): should check error type.
                 if self
                     .get_store()
                     .entries(low, high, u64::MAX, GetEntriesContext::empty(true))
