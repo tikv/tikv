@@ -345,7 +345,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
-const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x05];
+const RECOVER_STATE_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -473,6 +473,14 @@ impl RaftEngineReadOnly for RaftLogEngine {
         self.0
             .get_message(raft_group_id, APPLY_STATE_KEY)
             .map_err(transfer_error)
+    }
+
+    fn get_recover_state(&self) -> Result<Option<u64>> {
+        let seqno = self
+            .0
+            .get(STORE_STATE_ID, RECOVER_STATE_KEY)
+            .map(|v| u64::from_be_bytes(v.try_into().unwrap()));
+        Ok(seqno)
     }
 }
 
@@ -620,19 +628,11 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
-        let seqno = self
-            .0
-            .get(STORE_STATE_ID, RECOVER_FROM_RAFT_DB_KEY)
-            .map(|v| u64::from_be_bytes(v.try_into().unwrap()));
-        Ok(seqno)
-    }
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
+    fn put_recover_state(&self, seqno: u64) -> Result<()> {
         let mut batch = Self::LogBatch::default();
         batch.0.put(
             STORE_STATE_ID,
-            RECOVER_FROM_RAFT_DB_KEY.to_vec(),
+            RECOVER_STATE_KEY.to_vec(),
             u64::to_be_bytes(seqno).to_vec(),
         );
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;

@@ -153,6 +153,13 @@ impl RaftEngineReadOnly for RocksEngine {
         let key = keys::apply_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
     }
+
+    fn get_recover_state(&self) -> Result<Option<u64>> {
+        let seqno = self
+            .get_value(keys::RECOVER_STATE_KEY)?
+            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
+        Ok(seqno)
+    }
 }
 
 impl RaftEngineDebug for RocksEngine {
@@ -369,15 +376,8 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
-        let seqno = self
-            .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
-            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
-        Ok(seqno)
-    }
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
-        self.put(keys::RECOVER_FROM_RAFT_DB_KEY, &u64::to_be_bytes(seqno))
+    fn put_recover_state(&self, seqno: u64) -> Result<()> {
+        self.put(keys::RECOVER_STATE_KEY, &u64::to_be_bytes(seqno))
     }
 }
 

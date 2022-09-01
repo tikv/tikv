@@ -52,6 +52,10 @@ impl RaftEngineReadOnly for PanicEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         panic!()
     }
+
+    fn get_recover_state(&self) -> Result<Option<u64>> {
+        panic!()
+    }
 }
 
 impl RaftEngineDebug for PanicEngine {
@@ -146,11 +150,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
-        panic!()
-    }
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
+    fn put_recover_state(&self, seqno: u64) -> Result<()> {
         panic!()
     }
 }

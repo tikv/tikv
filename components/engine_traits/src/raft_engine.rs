@@ -19,6 +19,7 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn get_raft_state(&self, raft_group_id: u64) -> Result<Option<RaftLocalState>>;
     fn get_region_state(&self, raft_group_id: u64) -> Result<Option<RegionLocalState>>;
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>>;
+    fn get_recover_state(&self) -> Result<Option<u64>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
 
@@ -143,9 +144,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// replay raft logs.
     /// When kvdb's write-ahead-log is disabled, the sequence number of the last
     /// boot time is saved.
-    fn recover_from_raft_db(&self) -> Result<Option<u64>>;
-
-    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
+    fn put_recover_state(&self, seqno: u64) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
