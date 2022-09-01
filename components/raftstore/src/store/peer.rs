@@ -31,8 +31,8 @@ use kvproto::{
     pdpb::{self, PeerStats},
     raft_cmdpb::{
         self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
-        TransferLeaderResponse, ReadIndexResponse,
+        PutRequest, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request,
+        TransferLeaderRequest, TransferLeaderResponse,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,

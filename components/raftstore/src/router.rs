@@ -13,8 +13,8 @@ use crate::{
     store::{
         fsm::RaftRouter,
         transport::{CasualRouter, ProposalRouter, SignificantRouter},
-        CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg,
-        RaftCmdExtraOpts, RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
+        CachedReadDelegate, Callback, CasualMessage, LocalReader, PeerMsg, RaftCmdExtraOpts,
+        RaftCommand, SignificantMsg, StoreMetaDelegate, StoreMsg, StoreRouter,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -174,9 +174,8 @@ where
     ER: RaftEngine,
 {
     router: RaftRouter<EK, ER>,
-    local_reader: RefCell<
-        LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
-    >,
+    local_reader:
+        RefCell<LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>>,
 }
 
 impl<EK, ER> Clone for ServerRaftStoreRouter<EK, ER>
@@ -196,12 +195,7 @@ impl<EK: KvEngine, ER: RaftEngine> ServerRaftStoreRouter<EK, ER> {
     /// Creates a new router.
     pub fn new(
         router: RaftRouter<EK, ER>,
-        reader: LocalReader<
-            RaftRouter<EK, ER>,
-            EK,
-            CachedReadDelegate<EK>,
-            StoreMetaDelegate<EK>,
-        >,
+        reader: LocalReader<RaftRouter<EK, ER>, EK, CachedReadDelegate<EK>, StoreMetaDelegate<EK>>,
     ) -> ServerRaftStoreRouter<EK, ER> {
         let local_reader = RefCell::new(reader);
         ServerRaftStoreRouter {

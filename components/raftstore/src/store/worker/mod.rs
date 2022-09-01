@@ -35,7 +35,7 @@ pub use self::{
     },
     raftlog_gc::{Runner as RaftlogGcRunner, Task as RaftlogGcTask},
     read::{
-        CachedReadDelegate, LocalReadContext, LocalReaderCore, LocalReader,
+        CachedReadDelegate, LocalReadContext, LocalReader, LocalReaderCore,
         Progress as ReadProgress, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         StoreMetaDelegate, TrackVer,
     },
