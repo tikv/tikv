@@ -198,13 +198,13 @@ fn test_region_collection_find_region_by_key() {
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
-        let region = engine.find_region_by_key(b"").unwrap().unwrap();
+        let region = engine.find_region_by_key(b"").unwrap();
         assert_eq!(region, regions[0]);
 
-        let region = engine.find_region_by_key(b"k2").unwrap().unwrap();
+        let region = engine.find_region_by_key(b"k2").unwrap();
         assert_eq!(region, regions[1]);
 
-        let region = engine.find_region_by_key(b"k99").unwrap().unwrap();
+        let region = engine.find_region_by_key(b"k99").unwrap();
         assert_eq!(region, *regions.last().unwrap());
     }
 

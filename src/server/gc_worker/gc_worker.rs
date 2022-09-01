@@ -310,17 +310,9 @@ fn get_keys_in_regions(
                 let key = keys.first().unwrap().as_encoded();
                 let region = box_try!(region_provider.find_region_by_key(key));
 
-                if region.is_none() {
-                    // Return a empty iterator when region has not been found.
-                    return Ok(Box::new(KeysInRegions {
-                        keys: Vec::new().into_iter().peekable(),
-                        regions: Vec::new().into_iter().peekable(),
-                    }));
-                }
-
                 Ok(Box::new(KeysInRegions {
                     keys: keys.into_iter().peekable(),
-                    regions: vec![region.unwrap()].into_iter().peekable(),
+                    regions: vec![region].into_iter().peekable(),
                 }))
             }
         }
