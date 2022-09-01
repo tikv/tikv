@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use batch_system::Router;
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
@@ -43,37 +44,39 @@ use tikv_util::{
 };
 use time::Timespec;
 
-use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet};
+use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, StoreRouter};
 
 #[derive(Clone)]
-pub struct LocalReader<C, E, D, S>
+pub struct LocalReader<EK, ER, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
-    E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<E, Executor = D>,
+    EK: KvEngine,
+    ER: RaftEngine,
+    D: ReadExecutor<EK> + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<EK, Executor = D>,
 {
-    local_reader: LocalReaderCore<C, E, D, S>,
+    local_reader: LocalReaderCore<EK, D, S>,
+    router: StoreRouter<EK, ER>,
 }
 
-impl<C, E, D, S> LocalReader<C, E, D, S>
+impl<EK, ER, D, S> LocalReader<EK, ER, D, S>
 where
-    C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
-    E: KvEngine,
-    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<E, Executor = D> + Clone,
+    EK: KvEngine,
+    ER: RaftEngine,
+    D: ReadExecutor<EK> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<EK, Executor = D> + Clone,
 {
-    pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
+    pub fn new(kv_engine: EK, store_meta: S, router: StoreRouter<EK, ER>) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
-            local_reader: LocalReaderCore::new(kv_engine, store_meta, router),
+            local_reader: LocalReaderCore::new(kv_engine, store_meta),
+            router,
         }
     }
 
     fn try_get_snapshot(
-        &self,
+        &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
+    ) -> std::result::Result<Option<RegionSnapshot<EK::Snapshot>>, RaftCmdResponse> {
         match self.local_reader.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
@@ -86,17 +89,17 @@ where
                     let snap = delegate.get_region_snapshot(None, region, &mut None);
 
                     // Try renew lease in advance
-                    delegate.maybe_renew_lease_advance(self.local_reader.router(), snapshot_ts);
+                    delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
                     Ok(Some(snap))
                 }
                 RequestPolicy::StaleRead => {
                     let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe::<E>(read_ts)?;
+                    delegate.check_stale_read_safe::<EK>(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
                     let snap = delegate.get_region_snapshot(None, region, &mut None);
 
-                    delegate.check_stale_read_safe::<E>(read_ts)?;
+                    delegate.check_stale_read_safe::<EK>(read_ts)?;
 
                     // TLS_LOCAL_READ_METRICS.with(|m|
                     // m.borrow_mut().local_executed_stale_read_requests.inc());
@@ -120,17 +123,19 @@ where
     }
 
     pub async fn snapshot(
-        &self,
+        &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
+    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
+        let region_id = req.header.get_ref().region_id;
         loop {
             if let Some(snap) = self.try_get_snapshot(req.clone())? {
                 return Ok(snap);
             }
 
             // try to renew the lease
-            let (msg, sub) = PeerMsg::raft_query(req.clone());
-            unimplemented!();
+            let (msg, mut sub) = PeerMsg::raft_query(req.clone());
+            Router::send(&self.router, region_id, msg);
+            sub.result();
         }
     }
 }
@@ -303,7 +308,7 @@ mod tests {
             tablet1 = factory
                 .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet1.put(b"a1", b"val1").unwrap();
+            tablet1.put(&keys::data_key(b"a1"), b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
@@ -316,7 +321,7 @@ mod tests {
             tablet2 = factory
                 .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet2.put(b"a2", b"val2").unwrap();
+            tablet2.put(&keys::data_key(b"a2"), b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);
         }
@@ -325,7 +330,8 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_region_snapshot(None, &mut None);
+        let region = Region::default();
+        let snapshot = delegate.get_region_snapshot(None, delegate.region.clone(), &mut None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -335,7 +341,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_region_snapshot(None, &mut None);
+        let snapshot = delegate.get_region_snapshot(None, delegate.region.clone(), &mut None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()

@@ -1507,7 +1507,7 @@ mod tests {
             .unwrap();
         let kv_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
-        kv_engine.put(b"a1", b"val1").unwrap();
+        kv_engine.put(&keys::data_key(b"a1"), b"val1").unwrap();
         let store_meta =
             StoreMetaDelegate::new(Arc::new(Mutex::new(StoreMeta::new(0))), kv_engine.clone());
 
@@ -1537,7 +1537,8 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_region_snapshot(read_id_copy.clone(), &mut read_context);
+        let snapshot =
+            delegate.get_region_snapshot(read_id_copy.clone(), Arc::default(), &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1547,7 +1548,8 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_region_snapshot(read_id_copy, &mut read_context);
+        let snapshot =
+            delegate.get_region_snapshot(read_id_copy, Arc::default(), &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1597,11 +1599,15 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let mut read_context = Some(reader.local_reader.local_read_context());
+            let mut read_context = Some(reader.local_read_context());
 
             for _ in 0..10 {
                 // Different region id should reuse the cache
-                let _ = delegate.get_region_snapshot(read_id.clone(), &mut read_context);
+                let _ = delegate.get_region_snapshot(
+                    read_id.clone(),
+                    Arc::default(),
+                    &mut read_context,
+                );
             }
         }
         // We should hit cache 9 times
@@ -1613,9 +1619,13 @@ mod tests {
         let read_id = Some(ThreadReadId::new());
 
         {
-            let read_context = reader.local_reader.local_read_context();
+            let read_context = reader.local_read_context();
 
-            let _ = delegate.get_region_snapshot(read_id.clone(), &mut Some(read_context));
+            let _ = delegate.get_region_snapshot(
+                read_id.clone(),
+                Arc::default(),
+                &mut Some(read_context),
+            );
         }
         // This time, we will miss the cache
         assert_eq!(
@@ -1624,8 +1634,12 @@ mod tests {
         );
 
         {
-            let read_context = reader.local_reader.local_read_context();
-            let _ = delegate.get_region_snapshot(read_id.clone(), &mut Some(read_context));
+            let read_context = reader.local_read_context();
+            let _ = delegate.get_region_snapshot(
+                read_id.clone(),
+                Arc::default(),
+                &mut Some(read_context),
+            );
             // We can hit it again.
             assert_eq!(
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
@@ -1635,8 +1649,12 @@ mod tests {
 
         reader.release_snapshot_cache();
         {
-            let read_context = reader.local_reader.local_read_context();
-            let _ = delegate.get_region_snapshot(read_id.clone(), &mut Some(read_context));
+            let read_context = reader.local_read_context();
+            let _ = delegate.get_region_snapshot(
+                read_id.clone(),
+                Arc::default(),
+                &mut Some(read_context),
+            );
         }
         // After release, we will mss the cache even with the prevsiou read_id.
         assert_eq!(
@@ -1645,8 +1663,8 @@ mod tests {
         );
 
         {
-            let read_context = reader.local_reader.local_read_context();
-            let _ = delegate.get_region_snapshot(read_id, &mut Some(read_context));
+            let read_context = reader.local_read_context();
+            let _ = delegate.get_region_snapshot(read_id, Arc::default(), &mut Some(read_context));
         }
         // We can hit it again.
         assert_eq!(
