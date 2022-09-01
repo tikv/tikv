@@ -318,6 +318,44 @@ where
         }
     }
 
+    /// Generates the snapshot of the Region.
+    fn generate_snap(
+        ctx: &SnapGenContext<EK, R>,
+        region_id: u64,
+        last_applied_term: u64,
+        last_applied_state: RaftApplyState,
+        kv_snap: EK::Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
+        allow_multi_files_snapshot: bool,
+    ) -> Result<()> {
+        // do we need to check leader here?
+        let snap = box_try!(store::do_snapshot::<EK>(
+            ctx.mgr.clone(),
+            &ctx.engine,
+            kv_snap,
+            region_id,
+            last_applied_term,
+            last_applied_state,
+            for_balance,
+            allow_multi_files_snapshot,
+        ));
+        // Only enable the fail point when the region id is equal to 1, which is
+        // the id of bootstrapped region in tests.
+        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
+        if let Err(e) = notifier.try_send(snap) {
+            info!(
+                "failed to notify snap result, leadership may have changed, ignore error";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+        // The error can be ignored as snapshot will be sent in next heartbeat in the
+        // end.
+        let _ = ctx.router.send(region_id, CasualMessage::SnapshotGenerated);
+        Ok(())
+    }
+
     /// Handles the task of generating snapshot of the Region. It calls
     /// `generate_snap` to do the actual work.
     fn handle_gen(
@@ -365,143 +403,34 @@ where
             .observe(start.saturating_elapsed_secs());
     }
 
-    /// Generates the snapshot of the Region.
-    fn generate_snap(
-        ctx: &SnapGenContext<EK, R>,
-        region_id: u64,
-        last_applied_term: u64,
-        last_applied_state: RaftApplyState,
-        kv_snap: EK::Snapshot,
-        notifier: SyncSender<RaftSnapshot>,
-        for_balance: bool,
-        allow_multi_files_snapshot: bool,
-    ) -> Result<()> {
-        // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot::<EK>(
-            ctx.mgr.clone(),
-            &ctx.engine,
-            kv_snap,
-            region_id,
-            last_applied_term,
-            last_applied_state,
-            for_balance,
-            allow_multi_files_snapshot,
-        ));
-        // Only enable the fail point when the region id is equal to 1, which is
-        // the id of bootstrapped region in tests.
-        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
-        if let Err(e) = notifier.try_send(snap) {
-            info!(
-                "failed to notify snap result, leadership may have changed, ignore error";
-                "region_id" => region_id,
-                "err" => %e,
-            );
-        }
-        // The error can be ignored as snapshot will be sent in next heartbeat in the
-        // end.
-        let _ = ctx.router.send(region_id, CasualMessage::SnapshotGenerated);
-        Ok(())
+    fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
+        let region_key = keys::region_state_key(region_id);
+        let region_state: RegionLocalState =
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get region_state from {}",
+                        log_wrappers::Value::key(&region_key)
+                    ));
+                }
+            };
+        Ok(region_state)
     }
 
-    /// Tries to apply pending tasks if there is some.
-    fn handle_pending_applies(&mut self) {
-        fail_point!("apply_pending_snapshot", |_| {});
-        while !self.pending_applies.is_empty() {
-            // should not handle too many applies than the number of files that can be
-            // ingested. check level 0 every time because we can not make sure
-            // how does the number of level 0 files change.
-            if self.ingest_maybe_stall() {
-                break;
-            }
-            if let Some(Task::Apply {
-                region_id,
-                status,
-                peer_id,
-            }) = self.pending_applies.pop_front()
-            {
-                self.handle_apply(region_id, peer_id, status);
-            }
-        }
-    }
-
-    /// Tries to apply the snapshot of the specified Region. It calls
-    /// `apply_snap` to do the actual work.
-    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
-        let _ = status.compare_exchange(
-            JOB_STATUS_PENDING,
-            JOB_STATUS_RUNNING,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        SNAP_COUNTER.apply.all.inc();
-        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
-        // let timer = apply_histogram.start_coarse_timer();
-        let start = Instant::now();
-
-        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
-            Ok(()) => {
-                status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
-                SNAP_COUNTER.apply.success.inc();
-            }
-            Err(Error::Abort) => {
-                warn!("applying snapshot is aborted"; "region_id" => region_id);
-                assert_eq!(
-                    status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
-                    JOB_STATUS_CANCELLING
-                );
-                SNAP_COUNTER.apply.abort.inc();
-            }
-            Err(e) => {
-                error!(%e; "failed to apply snap!!!");
-                status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
-                SNAP_COUNTER.apply.fail.inc();
-            }
-        }
-
-        SNAP_HISTOGRAM
-            .apply
-            .observe(start.saturating_elapsed_secs());
-        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
-    }
-
-    /// Calls observer `pre_apply_snapshot` for every task.
-    /// Multiple task can be `pre_apply_snapshot` at the same time.
-    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
-        let (region_id, abort, peer_id) = match task {
-            Task::Apply {
-                region_id,
-                status,
-                peer_id,
-            } => (region_id, status.clone(), peer_id),
-            _ => panic!("invalid apply snapshot task"),
-        };
-
-        let region_state = self.region_state(*region_id)?;
-        let apply_state = self.apply_state(*region_id)?;
-
-        check_abort(&abort)?;
-
-        let term = apply_state.get_truncated_state().get_term();
-        let idx = apply_state.get_truncated_state().get_index();
-        let snap_key = SnapKey::new(*region_id, term, idx);
-        let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
-        if !s.exists() {
-            self.coprocessor_host.pre_apply_snapshot(
-                region_state.get_region(),
-                *peer_id,
-                &snap_key,
-                None,
-            );
-            return Err(box_err!("missing snapshot file {}", s.path()));
-        }
-        check_abort(&abort)?;
-        self.coprocessor_host.pre_apply_snapshot(
-            region_state.get_region(),
-            *peer_id,
-            &snap_key,
-            Some(&s),
-        );
-        Ok(())
+    fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
+        let state_key = keys::apply_state_key(region_id);
+        let apply_state: RaftApplyState =
+            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
+                Some(state) => state,
+                None => {
+                    return Err(box_err!(
+                        "failed to get apply_state from {}",
+                        log_wrappers::Value::key(&state_key)
+                    ));
+                }
+            };
+        Ok(apply_state)
     }
 
     /// Applies snapshot data of the Region.
@@ -561,6 +490,67 @@ where
         Ok(())
     }
 
+    /// Tries to apply the snapshot of the specified Region. It calls
+    /// `apply_snap` to do the actual work.
+    fn handle_apply(&mut self, region_id: u64, peer_id: u64, status: Arc<AtomicUsize>) {
+        let _ = status.compare_exchange(
+            JOB_STATUS_PENDING,
+            JOB_STATUS_RUNNING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        SNAP_COUNTER.apply.all.inc();
+        // let apply_histogram = SNAP_HISTOGRAM.with_label_values(&["apply"]);
+        // let timer = apply_histogram.start_coarse_timer();
+        let start = Instant::now();
+
+        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
+            Ok(()) => {
+                status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
+                SNAP_COUNTER.apply.success.inc();
+            }
+            Err(Error::Abort) => {
+                warn!("applying snapshot is aborted"; "region_id" => region_id);
+                assert_eq!(
+                    status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
+                    JOB_STATUS_CANCELLING
+                );
+                SNAP_COUNTER.apply.abort.inc();
+            }
+            Err(e) => {
+                error!(%e; "failed to apply snap!!!");
+                status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
+                SNAP_COUNTER.apply.fail.inc();
+            }
+        }
+
+        SNAP_HISTOGRAM
+            .apply
+            .observe(start.saturating_elapsed_secs());
+        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
+    }
+
+    /// Tries to apply pending tasks if there is some.
+    fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
+        while !self.pending_applies.is_empty() {
+            // should not handle too many applies than the number of files that can be
+            // ingested. check level 0 every time because we can not make sure
+            // how does the number of level 0 files change.
+            if self.ingest_maybe_stall() {
+                break;
+            }
+            if let Some(Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            }) = self.pending_applies.pop_front()
+            {
+                self.handle_apply(region_id, peer_id, status);
+            }
+        }
+    }
+
     /// Tries to clean up files in pending ranges overlapping with the given
     /// bounds. These pending ranges will be removed, and the given bounds will
     /// be updated to include them. Caller must ensure the remaining keys in
@@ -609,6 +599,15 @@ where
         }
     }
 
+    /// Cleans up data in the given range and all pending ranges overlapping
+    /// with it.
+    fn clean_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let mut start_key = start_key.to_owned();
+        let mut end_key = end_key.to_owned();
+        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+    }
+
     /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
         let mut start_key = start_key.to_owned();
@@ -622,15 +621,6 @@ where
         let seq = self.engine.get_latest_sequence_number();
         self.pending_delete_ranges
             .insert(region_id, start_key, end_key, seq);
-    }
-
-    /// Cleans up data in the given range and all pending ranges overlapping
-    /// with it.
-    fn clean_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut start_key = start_key.to_owned();
-        let mut end_key = end_key.to_owned();
-        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
     }
 
     fn clean_stale_ranges(&mut self) {
@@ -687,36 +677,6 @@ where
         }
     }
 
-    fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
-        let region_key = keys::region_state_key(region_id);
-        let region_state: RegionLocalState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &region_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get region_state from {}",
-                        log_wrappers::Value::key(&region_key)
-                    ));
-                }
-            };
-        Ok(region_state)
-    }
-
-    fn apply_state(&self, region_id: u64) -> Result<RaftApplyState> {
-        let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState =
-            match box_try!(self.engine.get_msg_cf(CF_RAFT, &state_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get apply_state from {}",
-                        log_wrappers::Value::key(&state_key)
-                    ));
-                }
-            };
-        Ok(apply_state)
-    }
-
     /// Checks the number of files at level 0 to avoid write stall after
     /// ingesting sst. Returns true if the ingestion causes write stall.
     fn ingest_maybe_stall(&self) -> bool {
@@ -747,6 +707,46 @@ where
             box_try!(self.engine.delete_ranges_cf(cf, strategy, ranges));
         }
 
+        Ok(())
+    }
+
+    /// Calls observer `pre_apply_snapshot` for every task.
+    /// Multiple task can be `pre_apply_snapshot` at the same time.
+    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
+        let (region_id, abort, peer_id) = match task {
+            Task::Apply {
+                region_id,
+                status,
+                peer_id,
+            } => (region_id, status.clone(), peer_id),
+            _ => panic!("invalid apply snapshot task"),
+        };
+
+        let region_state = self.region_state(*region_id)?;
+        let apply_state = self.apply_state(*region_id)?;
+
+        check_abort(&abort)?;
+
+        let term = apply_state.get_truncated_state().get_term();
+        let idx = apply_state.get_truncated_state().get_index();
+        let snap_key = SnapKey::new(*region_id, term, idx);
+        let s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        if !s.exists() {
+            self.coprocessor_host.pre_apply_snapshot(
+                region_state.get_region(),
+                *peer_id,
+                &snap_key,
+                None,
+            );
+            return Err(box_err!("missing snapshot file {}", s.path()));
+        }
+        check_abort(&abort)?;
+        self.coprocessor_host.pre_apply_snapshot(
+            region_state.get_region(),
+            *peer_id,
+            &snap_key,
+            Some(&s),
+        );
         Ok(())
     }
 }
