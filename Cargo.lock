@@ -2627,7 +2627,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#a0f02b6efcee6112bdc313988bf6c0ae3f83c07d"
+source = "git+https://github.com/pingcap/kvproto.git#9cc5e1ddfda3aec6eddfc09de1d0072ebbd7bb21"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4213,6 +4213,7 @@ dependencies = [
  "test_util",
  "tikv_util",
  "time",
+ "tracker",
  "txn_types",
 ]
 
@@ -5759,6 +5760,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "arrow",
+ "async-trait",
  "batch-system",
  "byteorder",
  "causal_ts",
@@ -5905,9 +5907,11 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "byteorder",
  "derive_more",
  "error_code",
+ "futures 0.3.15",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5917,6 +5921,7 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "time",
+ "yatp",
 ]
 
 [[package]]
@@ -5963,6 +5968,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "codec",
  "collections",
  "fail",
@@ -6324,6 +6330,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
+ "pin-project",
  "procfs",
  "procinfo",
  "prometheus",
