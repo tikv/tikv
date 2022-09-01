@@ -153,14 +153,6 @@ impl<'a> PartialOrd for JsonRef<'a> {
             };
         }
 
-        let left_data = self.as_f64();
-        let right_data = right.as_f64();
-        // tidb treats boolean as integer, but boolean is different from integer in
-        // JSON. so we need convert them to same type and then compare.
-        if let (Ok(left), Ok(right)) = (left_data, right_data) {
-            return left.partial_cmp(&right);
-        }
-
         if precedence_diff > 0 {
             Some(Ordering::Greater)
         } else {
@@ -278,8 +270,8 @@ mod tests {
         let test_cases = vec![
             ("1.5", "2"),
             ("1.5", "false"),
-            ("true", "1.5"),
-            ("true", "2"),
+            ("1.5", "true"),
+            ("2", "true"),
             ("null", r#"{"a": "b"}"#),
             ("2", r#""hello, world""#),
             (r#""hello, world""#, r#"{"a": "b"}"#),
@@ -292,7 +284,5 @@ mod tests {
             let right: Json = right_str.parse().unwrap();
             assert!(left < right);
         }
-
-        assert_eq!(Json::from_i64(2).unwrap(), Json::from_bool(false).unwrap());
     }
 }
