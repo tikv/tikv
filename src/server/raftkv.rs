@@ -211,10 +211,6 @@ where
             header.set_flag_data(data.into());
         }
         if ctx.is_for_flashback {
-            let mut data = [0u8; 8];
-            (&mut data[..])
-                .encode_u64(ctx.start_ts.into_inner())
-                .unwrap();
             flags |= WriteBatchFlags::FLASHBACK.bits();
         }
         header.set_flags(flags);

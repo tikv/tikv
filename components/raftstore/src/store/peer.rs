@@ -2410,7 +2410,6 @@ where
 
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
-                        ctx.raft_metrics.invalid_proposal.flashback_wait_apply.inc();
                         self.maybe_finish_flashback_wait_apply();
                     }
                 }
@@ -3386,7 +3385,6 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            ctx.raft_metrics.invalid_proposal.force_leader.inc();
             None
         } else if self.flashback_state.is_some() {
             debug!(
@@ -3394,7 +3392,6 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            ctx.raft_metrics.invalid_proposal.flashback_wait_apply.inc();
             None
         } else {
             self.leader_lease.renew(ts);
@@ -4992,12 +4989,12 @@ where
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
-        let mut finished = false;
-        if self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index() {
-            finished = true;
-        }
+        let finished =
+            self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index();
         if finished {
-            self.flashback_state.as_mut().unwrap().finish_wait_apply();
+            if let Some(flashback_state) = self.flashback_state.as_mut() {
+                flashback_state.finish_wait_apply();
+            }
         }
     }
 }

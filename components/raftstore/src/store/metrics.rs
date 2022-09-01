@@ -202,7 +202,7 @@ make_static_metric! {
         region_not_initialized,
         is_applying_snapshot,
         force_leader,
-        flashback_wait_apply,
+        flashback,
     }
 
     pub label_enum RaftLogGcSkippedReason {

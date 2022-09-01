@@ -877,7 +877,6 @@ where
             return;
         }
         let target_index = if self.fsm.peer.force_leader.is_some() {
-            self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // For regions that lose quorum (or regions have force leader), whatever has
             // been proposed will be committed. Based on that fact, we simply use "last
             // index" here to avoid implementing another "wait commit" process.
@@ -943,11 +942,6 @@ where
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
-        self.ctx
-            .raft_metrics
-            .invalid_proposal
-            .flashback_wait_apply
-            .inc();
         self.fsm.peer.maybe_finish_flashback_wait_apply();
     }
 
@@ -2214,11 +2208,6 @@ where
         }
         // TODO: combine recovery state and flashback state as a wait apply queue.
         if self.fsm.peer.flashback_state.is_some() {
-            self.ctx
-                .raft_metrics
-                .invalid_proposal
-                .flashback_wait_apply
-                .inc();
             self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
@@ -4790,11 +4779,7 @@ where
         // When in the flashback state, we should not allow any other request to be
         // proposed.
         if self.fsm.peer.flashback_state.is_some() {
-            self.ctx
-                .raft_metrics
-                .invalid_proposal
-                .flashback_wait_apply
-                .inc();
+            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
             let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
             if !flags.contains(WriteBatchFlags::FLASHBACK) {
                 return Err(Error::FlashbackInProgress(self.region_id()));
