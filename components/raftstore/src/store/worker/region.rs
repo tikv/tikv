@@ -206,21 +206,27 @@ impl PendingDeleteRanges {
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean
     /// the overlapping range.
-    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
-        if !self.find_overlap_ranges(start_key, end_key).is_empty() {
+    fn insert(
+        &mut self,
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        stale_sequence: u64,
+    ) {
+        if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
                 region_id,
-                log_wrappers::Value::key(start_key),
-                log_wrappers::Value::key(end_key),
+                log_wrappers::Value::key(&start_key),
+                log_wrappers::Value::key(&end_key),
             );
         }
         let info = StalePeerInfo {
             region_id,
-            end_key: end_key.to_owned(),
+            end_key,
             stale_sequence,
         };
-        self.ranges.insert(start_key.to_owned(), info);
+        self.ranges.insert(start_key, info);
     }
 
     /// Gets all stale ranges info.
@@ -262,11 +268,11 @@ where
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
-    // Ranges that should be destroyed. Each range also carries a sequence number.
-    // We can assume there will be no reader (snapshot) newer than that sequence number.
-    // However, it's possible that an old reader is still referencing some data in these ranges.
+    // Ranges that should be destroyed eventually. Each range carries a sequence number. We can
+    // assume there will be no reader (snapshot) newer than that sequence number. That being
+    // said, it's possible that an old reader is still referencing some data in these ranges.
     // To protect this assumption, before a new snapshot is applied, the overlapping pending ranges
-    // must first be consumed (data in them deleted).
+    // must first be consumed (data in them fully deleted).
     pending_delete_ranges: PendingDeleteRanges,
 
     engine: EK,
@@ -556,19 +562,11 @@ where
         Ok(())
     }
 
-    /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        info!("register deleting data in range";
-            "region_id" => region_id,
-            "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
-        );
-        let seq = self.engine.get_latest_sequence_number();
-        self.pending_delete_ranges
-            .insert(region_id, start_key, end_key, seq);
-    }
-
-    fn clean_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+    /// Tries to clean up files in pending ranges overlapping with the given
+    /// bounds. These pending ranges will be removed, and the given bounds will
+    /// be updated to include them. Caller must ensure the remaining keys in
+    /// these ranges will be deleted properly.
+    fn clean_overlap_ranges_fast(&mut self, start_key: &mut Vec<u8>, end_key: &mut Vec<u8>) {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
@@ -582,14 +580,20 @@ where
                 .unwrap_or(u64::MAX);
             let df_ranges: Vec<_> = overlap_ranges
                 .iter()
-                .filter_map(|(region_id, start_key, end_key, stale_sequence)| {
+                .filter_map(|(region_id, cur_start, cur_end, stale_sequence)| {
                     info!(
                         "delete data in range because of overlap"; "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(start_key),
-                        "end_key" => log_wrappers::Value::key(end_key)
+                        "start_key" => log_wrappers::Value::key(cur_start),
+                        "end_key" => log_wrappers::Value::key(cur_end)
                     );
+                    if *start_key > *cur_start {
+                        *start_key = cur_start.clone();
+                    }
+                    if *end_key < *cur_end {
+                        *end_key = cur_end.clone();
+                    }
                     if *stale_sequence < oldest_sequence {
-                        Some(Range::new(start_key, end_key))
+                        Some(Range::new(cur_start, cur_end))
                     } else {
                         SNAP_COUNTER_VEC
                             .with_label_values(&["overlap", "not_delete_files"])
@@ -604,7 +608,30 @@ where
                     error!("failed to delete files in range"; "err" => %e);
                 });
         }
-        self.delete_all_in_range(&[Range::new(start_key, end_key)])
+    }
+
+    /// Inserts a new pending range, and it will be cleaned up with some delay.
+    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
+        let mut start_key = start_key.to_owned();
+        let mut end_key = end_key.to_owned();
+        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
+        info!("register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Value::key(&start_key),
+            "end_key" => log_wrappers::Value::key(&end_key),
+        );
+        let seq = self.engine.get_latest_sequence_number();
+        self.pending_delete_ranges
+            .insert(region_id, start_key, end_key, seq);
+    }
+
+    /// Cleans up data in the given range and all pending ranges overlapping
+    /// with it.
+    fn clean_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let mut start_key = start_key.to_owned();
+        let mut end_key = end_key.to_owned();
+        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
     }
 
     fn clean_stale_ranges(&mut self) {
@@ -886,7 +913,12 @@ mod tests {
         e: &str,
         stale_sequence: u64,
     ) {
-        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), stale_sequence);
+        pending_delete_ranges.insert(
+            id,
+            s.as_bytes().to_owned(),
+            e.as_bytes().to_owned(),
+            stale_sequence,
+        );
     }
 
     #[test]
