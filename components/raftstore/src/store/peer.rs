@@ -3139,7 +3139,6 @@ where
         !self.unpersisted_readies.is_empty()
     }
 
-    // TODO: response_read
     fn response_read<T>(
         &self,
         read: &mut ReadIndexRequest<Callback<EK::Snapshot>>,

@@ -8,7 +8,7 @@ pub mod local_metrics;
 pub mod memory;
 pub mod metrics;
 pub mod msg;
-pub mod peer;
+mod peer;
 mod read_queue;
 pub mod region_meta;
 pub mod transport;
@@ -52,7 +52,10 @@ pub use self::{
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
-    peer::{Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
+    peer::{
+        can_amend_read, get_sync_log_from_request, propose_read_index, should_renew_lease, Peer,
+        PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
+    },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,

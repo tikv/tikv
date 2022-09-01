@@ -407,6 +407,7 @@ impl ReadCallback for QueryResChannel {
 }
 
 pub type QueryResSubscriber = BaseSubscriber<QueryResult>;
+
 impl fmt::Debug for QueryResChannel {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "QueryResChannel")

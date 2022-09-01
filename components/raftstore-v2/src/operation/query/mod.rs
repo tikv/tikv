@@ -16,12 +16,8 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
-        cmd_resp,
-        peer::{RequestInspector, RequestPolicy},
-        region_meta::RegionMeta,
-        util,
-        util::LeaseState,
-        GroupState, ReadCallback,
+        cmd_resp, region_meta::RegionMeta, util, util::LeaseState, GroupState, ReadCallback,
+        RequestInspector, RequestPolicy,
     },
     Error, Result,
 };

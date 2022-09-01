@@ -451,22 +451,6 @@ impl<EK: KvEngine, ER: RaftEngine> StoreRouter<EK, ER> {
     pub fn logger(&self) -> &Logger {
         &self.logger
     }
-
-    #[inline]
-    pub fn send_read_command(
-        &self,
-        cmd: RaftRequest<QueryResChannel>,
-    ) -> std::result::Result<(), TrySendError<RaftRequest<QueryResChannel>>> {
-        let region_id = cmd.request.get_header().get_region_id();
-        match self.send(region_id, PeerMsg::RaftQuery(cmd)) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => Err(TrySendError::Full(cmd)),
-            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
-                Err(TrySendError::Disconnected(cmd))
-            }
-            _ => unreachable!(),
-        }
-    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Deref for StoreRouter<EK, ER> {

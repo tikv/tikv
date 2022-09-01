@@ -15,12 +15,9 @@ use raftstore::{
     store::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        peer::{
-            get_sync_log_from_request, CmdEpochChecker, ProposalContext, ProposalQueue,
-            RequestInspector,
-        },
         util::{Lease, RegionReadProgress},
-        Config, EntryStorage, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest, Transport,
+        Config, EntryStorage, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest, RequestInspector,
+        Transport,
     },
     Error,
 };
@@ -61,10 +58,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     pub(crate) leader_lease: Lease,
     pub(crate) pending_remove: bool,
-
-    /// Check whether this proposal can be proposed based on its epoch.
-    cmd_epoch_checker: CmdEpochChecker<QueryResChannel>,
-    proposals: ProposalQueue<CmdResChannel>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -149,8 +142,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 cfg.renew_leader_lease_advance_duration(),
             ),
             pending_remove: false,
-            cmd_epoch_checker: Default::default(),
-            proposals: ProposalQueue::new(tag),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -189,23 +180,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn push_pending_read(&mut self, read: ReadIndexRequest<QueryResChannel>, is_leader: bool) {
         self.pending_reads.push_back(read, is_leader);
-    }
-
-    fn pre_propose<T: Transport>(
-        &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
-        req: &mut RaftCmdRequest,
-    ) -> Result<ProposalContext> {
-        // TODO: coprocessor_host.pre_propose;
-        // poll_ctx.coprocessor_host.pre_propose(self.region(), req)?;
-        let mut ctx = ProposalContext::empty();
-
-        if get_sync_log_from_request(req) {
-            ctx.insert(ProposalContext::SYNC_LOG);
-        }
-
-        // TODO: to handle AdminCmdType such as split, merge.
-        Ok(ctx)
     }
 
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {

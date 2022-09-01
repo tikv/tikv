@@ -12,13 +12,14 @@ use raft::Ready;
 use raftstore::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp,
+        can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, Proposal},
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        peer::{can_amend_read, propose_read_index, should_renew_lease, RequestInspector},
-        util::LeaseState,
-        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, Transport,
+        propose_read_index, should_renew_lease,
+        util::{check_region_epoch, LeaseState},
+        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, RequestInspector,
+        Transport,
     },
     Error,
 };
@@ -33,6 +34,7 @@ use crate::{
     router::{
         message::RaftRequest,
         response_channel::{CmdResChannel, QueryResChannel, QueryResult, ReadResponse},
+        PeerMsg,
     },
     Result,
 };
@@ -153,19 +155,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         read_cmd: RaftRequest<QueryResChannel>,
     ) {
         let mut err = errorpb::Error::default();
-        let read_ch = match ctx.router.send_read_command(read_cmd) {
+        let region_id = read_cmd.request.get_header().get_region_id();
+        let read_ch = match ctx.router.send(region_id, PeerMsg::RaftQuery(read_cmd)) {
             Ok(()) => return,
-            Err(TrySendError::Full(cmd)) => {
+            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => {
                 err.set_message(RAFTSTORE_IS_BUSY.to_owned());
                 err.mut_server_is_busy()
                     .set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 cmd.ch
             }
-            Err(TrySendError::Disconnected(cmd)) => {
+            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
                 err.set_message(format!("region {} is missing", self.region_id()));
                 err.mut_region_not_found().set_region_id(self.region_id());
                 cmd.ch
             }
+            _ => unreachable!(),
         };
         let mut resp = RaftCmdResponse::default();
         resp.mut_header().set_error(err);
@@ -211,8 +215,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                     _ => {}
                 }
-                let read_resp = ReadResponse::new(read_index.unwrap_or(0));
-                ch.set_result(QueryResult::Read(read_resp));
+                let region = self.region().clone();
+                let read_resp = if let Err(e) = check_region_epoch(&req, &region, true) {
+                    debug!(self.logger, "epoch not match"; "err" => ?e);
+                    let mut response = cmd_resp::new_error(e);
+                    cmd_resp::bind_term(&mut response, self.term());
+                    QueryResult::Response(response)
+                } else {
+                    let read_resp = ReadResponse::new(read_index.unwrap_or(0));
+                    QueryResult::Read(read_resp)
+                };
+
+                ch.set_result(read_resp);
             }
         }
     }

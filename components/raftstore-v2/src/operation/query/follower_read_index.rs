@@ -8,8 +8,7 @@ use raftstore::{
         cmd_resp,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        peer::propose_read_index,
-        Transport,
+        propose_read_index, Transport,
     },
     Error,
 };
