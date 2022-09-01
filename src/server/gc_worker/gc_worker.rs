@@ -519,7 +519,7 @@ where
         if first_item.is_none() {
             return Ok((handled_keys, wasted_keys));
         }
-        let (mut reader, mut kv_engine) = self.get_reader_and_kv_engine(
+        let (mut reader, mut kv_engine) = self.create_reader(
             store_id,
             count,
             &first_item.as_ref().unwrap().1,
@@ -532,7 +532,7 @@ where
         let mut gc_info = GcInfo::default();
         for (mut keys, ref region) in iters {
             if !first_iteration {
-                (reader, kv_engine) = self.get_reader_and_kv_engine(
+                (reader, kv_engine) = self.create_reader(
                     store_id,
                     count,
                     region,
@@ -576,7 +576,7 @@ where
                     gc_info = GcInfo::default();
                 } else {
                     Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
-                    (reader, kv_engine) = self.get_reader_and_kv_engine(
+                    (reader, kv_engine) = self.create_reader(
                         store_id,
                         count,
                         region,
@@ -592,7 +592,7 @@ where
         Ok((handled_keys, wasted_keys))
     }
 
-    fn get_reader_and_kv_engine(
+    fn create_reader(
         &self,
         store_id: u64,
         key_count: usize,
