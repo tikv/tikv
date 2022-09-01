@@ -369,20 +369,15 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn recover_from_raft_db(&self) -> Result<bool> {
-        let recover_from_raftdb = matches!(self
+    fn recover_from_raft_db(&self) -> Result<Option<u64>> {
+        let seqno = self
             .get_value(keys::RECOVER_FROM_RAFT_DB_KEY)?
-            .map(|v| u8::from_be_bytes(v.deref().try_into().unwrap())),
-            Some(val) if val == 1);
-        Ok(recover_from_raftdb)
+            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
+        Ok(seqno)
     }
 
-    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()> {
-        let recover_from_raft_db = if recover_from_raft_db { 1 } else { 0 };
-        self.put(
-            keys::RECOVER_FROM_RAFT_DB_KEY,
-            &u8::to_be_bytes(recover_from_raft_db),
-        )
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()> {
+        self.put(keys::RECOVER_FROM_RAFT_DB_KEY, &u64::to_be_bytes(seqno))
     }
 }
 

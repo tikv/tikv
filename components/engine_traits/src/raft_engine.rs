@@ -141,11 +141,11 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     /// Indicate whether region states should be recovered from raftdb and
     /// replay raft logs.
-    /// Generally it would be true when write-ahead-log of kvdb was disabled
-    /// before.
-    fn recover_from_raft_db(&self) -> Result<bool>;
+    /// When kvdb's write-ahead-log is disabled, the sequence number of the last
+    /// boot time is saved.
+    fn recover_from_raft_db(&self) -> Result<Option<u64>>;
 
-    fn put_recover_from_raft_db(&self, recover_from_raft_db: bool) -> Result<()>;
+    fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
 }
 
 pub trait RaftLogBatch: Send {
