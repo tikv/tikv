@@ -1689,7 +1689,9 @@ where
             // the needed entry cache is filled.
             if let Some(meta) = &self.fsm.peer.pre_ack_transfer_leader_meta {
                 let high = meta.high;
-                let ents_last = res.ents.as_ref().unwrap().last().map(|e| e.index).unwrap();
+
+                // TODO(cosven): the ents may be Err, such as Store(Compact).
+                //let ents_last = res.ents.as_ref().unwrap().last().map(|e| e.index).unwrap();
                 self.fsm
                     .peer
                     .raft_group
@@ -1706,7 +1708,7 @@ where
                         "peer_id" => self.fsm.peer_id(),
                         "elapsed" => ?elapsed,
                         "high" => high,
-                        "ents_last" => ents_last,
+                        //"ents_last" => ents_last,
                     );
                     PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM.observe(elapsed);
                     match self.fsm.peer.get_store().entries(
@@ -1726,13 +1728,14 @@ where
                             );
                             self.fsm.peer.mut_store().fill_entry_cache(entries);
                         }
-                        Err(_) => {
+                        Err(e) => {
                             warn!(
                                 "(this_pr) entry cache is still not filled, ack anyway.";
                                 "low" => low,
                                 "region_id" => self.region_id(),
                                 "peer_id" => self.fsm.peer_id(),
                                 "high" => high,
+                                "err" => ?e,
                             )
                         }
                     }
