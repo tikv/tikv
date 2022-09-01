@@ -5113,10 +5113,15 @@ where
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "drop_cache_duration" => ?drop_cache_duration,
+
+                "applied_index" => applied_idx,
+                "first_index" => first_idx,
+                "last_index" => last_idx,
+                "truncated_index" => truncated_idx,
             );
 
-            for (peer_id, _) in self.fsm.peer.raft_group.raft.prs().iter() {
-                if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
+            for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+                let has_heartbeat = if let Some(last_heartbeat) = self.fsm.peer.peer_heartbeats.get(peer_id) {
                     if *last_heartbeat < cache_alive_limit {
                         warn!(
                             "(this_pr) peer is not alive";
@@ -5124,16 +5129,32 @@ where
                             "peer_id" => peer_id,
                         );
                     }
-                }
+                    true
+                } else {
+                    false
+                };
+
+                info!(
+                    "(this_pr) progress of peer";
+                    "target_peer_id" => peer_id,
+                    "region_id" => self.fsm.region_id(),
+                    "has_heartbeat" => has_heartbeat,
+                    "matched" => p.matched,
+                );
             }
         }
 
-        // leader may call `get_term()` on the latest replicated index, so compact
-        // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
-        self.fsm
+        // TODO(cosven): a better way to check.
+        // Maybe a follower is alive, but it does not send heartbeat currently.
+        if replicated_idx > 0 {
+            // leader may call `get_term()` on the latest replicated index, so compact
+            // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
+            self.fsm
             .peer
             .mut_store()
             .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
+        }
+
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);
             if !self.fsm.peer.get_store().is_entry_cache_empty() {
