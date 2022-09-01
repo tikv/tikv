@@ -1396,11 +1396,6 @@ mod tests {
         #[cfg(feature = "failpoints")]
         {
             engine.kv.compact_files_in_range(None, None, None).unwrap();
-            gen_and_apply_snap(7);
-            thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
-            wait_apply_finish(&[7]);
-
-            engine.kv.compact_files_in_range(None, None, None).unwrap();
             fail::cfg("handle_new_pending_applies", "return").unwrap();
             gen_and_apply_snap(7);
             thread::sleep(Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL * 2));
