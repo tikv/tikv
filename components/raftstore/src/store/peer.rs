@@ -8,6 +8,7 @@ use std::{
     fmt, mem,
     sync::{
         atomic::{AtomicUsize, Ordering},
+        mpsc::SyncSender,
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -601,6 +602,43 @@ impl UnsafeRecoveryExecutePlanSyncer {
         *self.abort.lock().unwrap() = true;
     }
 }
+// Syncer only send to leader in 2nd BR restore
+#[derive(Clone, Debug)]
+pub struct RecoveryWaitApplySyncer {
+    _closure: Arc<InvokeClosureOnDrop>,
+    abort: Arc<Mutex<bool>>,
+}
+
+impl RecoveryWaitApplySyncer {
+    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
+        let thread_safe_router = Mutex::new(sender);
+        let abort = Arc::new(Mutex::new(false));
+        let abort_clone = abort.clone();
+        let closure = InvokeClosureOnDrop(Box::new(move || {
+            info!("region {} wait apply finished", region_id);
+            if *abort_clone.lock().unwrap() {
+                warn!("wait apply aborted");
+                return;
+            }
+            let router_ptr = thread_safe_router.lock().unwrap();
+
+            (*router_ptr)
+                .send(region_id)
+                .map_err(|_| {
+                    warn!("reply waitapply states failure.");
+                })
+                .unwrap();
+        }));
+        RecoveryWaitApplySyncer {
+            _closure: Arc::new(closure),
+            abort,
+        }
+    }
+
+    pub fn abort(&self) {
+        *self.abort.lock().unwrap() = true;
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
@@ -685,7 +723,17 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
-pub enum UnsafeRecoveryState {
+pub enum RecoveryState {
+    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
+    // and force forward to last index once follower appended and then it also is checked
+    // every time this peer applies a the last index, if the last index is met, this state is
+    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
+    // the next step of recovery process.
+    WaitLogApplyToLast {
+        target_index: u64,
+        syncer: RecoveryWaitApplySyncer,
+    },
+
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
     // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
@@ -886,7 +934,7 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
-    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    pub recovery_state: Option<RecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1017,7 +1065,7 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
-            unsafe_recovery_state: None,
+            recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2374,9 +2422,9 @@ where
                         self.raft_group.store().region(),
                     );
 
-                    if self.unsafe_recovery_state.is_some() {
+                    if self.recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
-                        self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
+                        self.recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
@@ -4926,23 +4974,28 @@ where
         )
     }
 
-    pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
-            &self.unsafe_recovery_state
-        {
-            if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                if self.is_force_leader() {
-                    info!(
-                        "Unsafe recovery, finish wait apply";
+    pub fn recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        match &self.recovery_state {
+            Some(RecoveryState::WaitApply { target_index, .. })
+            | Some(RecoveryState::WaitLogApplyToLast { target_index, .. }) => {
+                if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                    if self.is_force_leader() {
+                        info!("Unsafe recovery, finish wait apply";);
+                    } else {
+                        info!("snapshot recovery, finish wait apply");
+                    }
+
+                    info!("wait apply finished info";
                         "region_id" => self.region().get_id(),
                         "peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
                     );
+                    self.recovery_state = None;
                 }
-                self.unsafe_recovery_state = None;
             }
+            Some(_) | None => {}
         }
     }
 }
@@ -5565,17 +5618,6 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 // The Raft message context for a MsgTransferLeader if it is a reply of a
 // TransferLeader command.
 pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
-
-/// A poor version of `Peer` to avoid port generic variables everywhere.
-pub trait AbstractPeer {
-    fn meta_peer(&self) -> &metapb::Peer;
-    fn group_state(&self) -> GroupState;
-    fn region(&self) -> &metapb::Region;
-    fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status<'_>;
-    fn raft_commit_index(&self) -> u64;
-    fn pending_merge_state(&self) -> Option<&MergeState>;
-}
 
 mod memtrace {
     use std::mem;
