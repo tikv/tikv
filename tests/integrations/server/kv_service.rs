@@ -718,6 +718,33 @@ fn test_mvcc_flashback_block_rw() {
     fail::remove("skip_finish_flashback_to_version");
 }
 
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_block_scheduling() {
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
+    // Flashback
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.version = 0;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(flashback_resp.get_error().is_empty());
+    // Try to transfer leader.
+    let transfer_leader_resp = cluster.try_transfer_leader(1, new_peer(2, 2));
+    assert!(
+        transfer_leader_resp
+            .get_header()
+            .get_error()
+            .has_recovery_in_progress()
+    );
+    fail::remove("skip_finish_flashback_to_version");
+}
+
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
 #[test]
