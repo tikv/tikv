@@ -76,31 +76,47 @@ impl Scheduler {
             10,
             "failed to promote learner",
         );
+        let mut old_leader = Peer::default();
+        let mut to_remove = Peer::default();
         must_wait(
             || {
                 block_on(self.pd.get_region_leader_by_id(region_id))
                     .unwrap()
                     .map(|(region, leader)| {
-                        let to_remove = region
+                        old_leader = leader.clone();
+                        let target = region
                             .peers
                             .iter()
                             .find(|peer| peer.id != leader.id)
                             .unwrap();
-                        self.pd.try_remove_peer(region_id, to_remove.clone());
-                        try_wait(
-                            || {
-                                let region = block_on(self.pd.get_region_by_id(region_id))
-                                    .unwrap()
-                                    .unwrap();
-                                region.get_peers().len() == 3
-                            },
-                            3,
-                        )
+                        to_remove = target.clone();
+                        to_remove.id != old_leader.id
                     })
                     .unwrap_or(false)
             },
+            10,
+            "failed to get target peer",
+        );
+        must_wait(
+            || {
+                self.pd.try_transfer_leader(region_id, old_leader.clone());
+                self.pd.try_remove_peer(region_id, to_remove.clone());
+                try_wait(
+                    || {
+                        let region = block_on(self.pd.get_region_by_id(region_id))
+                            .unwrap()
+                            .unwrap();
+                        region.get_peers().len() == 3
+                    },
+                    3,
+                )
+            },
             15,
-            "failed to remove peer",
+            format!(
+                "failed to remove peer id {} region id {} leader id {}",
+                to_remove.id, region_id, old_leader.id
+            )
+            .as_str(),
         );
     }
 
