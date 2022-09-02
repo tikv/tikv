@@ -1722,7 +1722,7 @@ fn future_flashback_to_version<
             Ok(_) => f.await?,
         };
         fail_point!("skip_finish_flashback_to_version", |_| {
-            return Ok(FlashbackToVersionResponse::default());
+            Ok(FlashbackToVersionResponse::default())
         });
         // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
         // flashback has been finished.

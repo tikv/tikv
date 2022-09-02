@@ -668,7 +668,7 @@ fn test_mvcc_flashback() {
     assert!(!flashback_resp.has_region_error());
     assert!(flashback_resp.get_error().is_empty());
     // Should not meet the lock and can not get the latest data any more.
-    must_kv_read_equal(&client, ctx.clone(), k.clone(), b"value@1".to_vec(), ts);
+    must_kv_read_equal(&client, ctx, k, b"value@1".to_vec(), ts);
 }
 
 #[test]
@@ -712,8 +712,8 @@ fn test_mvcc_flashback_block_rw() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
-    let prewrite_resp = try_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), 1);
+    mutation.set_value(v);
+    let prewrite_resp = try_kv_prewrite(&client, ctx, vec![mutation], k, 1);
     assert!(prewrite_resp.get_region_error().has_recovery_in_progress());
     fail::remove("skip_finish_flashback_to_version");
 }
@@ -725,7 +725,7 @@ fn test_mvcc_flashback_block_scheduling() {
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
-    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.set_context(ctx);
     flashback_to_version_req.version = 0;
     flashback_to_version_req.start_key = b"a".to_vec();
     flashback_to_version_req.end_key = b"z".to_vec();
