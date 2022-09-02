@@ -539,32 +539,23 @@ impl SstImporter {
             key_to_bound(range_end)
         };
 
-        fn encode_prefix(prefix: &[u8]) -> Vec<u8> {
-            let ungrouped_len = prefix.len() % 8;
-            let encoded = encode_bytes(&prefix[..prefix.len() - ungrouped_len]);
-            let mut key = encoded[..encoded.len() - 9].to_vec();
-            key.extend_from_slice(&prefix[prefix.len() - ungrouped_len..]);
-            key
-        }
-
-        let new_region_prefix = encode_prefix(&new_prefix);
-        let old_region_prefix = encode_prefix(&old_prefix);
-
         let range_start = keys::rewrite::rewrite_prefix_of_start_bound(
-            &new_region_prefix,
-            &old_region_prefix,
+            &new_prefix,
+            &old_prefix,
             range_start_bound,
         )
+        .map(keys::rewrite::encode_bound)
         .map_err(|_| Error::WrongKeyPrefix {
             what: "SST start range",
             key: range_start.to_vec(),
             prefix: new_prefix.to_vec(),
         })?;
         let range_end = keys::rewrite::rewrite_prefix_of_end_bound(
-            &new_region_prefix,
-            &old_region_prefix,
+            &new_prefix,
+            &old_prefix,
             range_end_bound,
         )
+        .map(keys::rewrite::encode_bound)
         .map_err(|_| Error::WrongKeyPrefix {
             what: "SST end range",
             key: range_end.to_vec(),

@@ -6,6 +6,8 @@
 
 use std::ops::Bound::{self, *};
 
+use tikv_util::codec::bytes::encode_bytes;
+
 /// An error indicating the key cannot be rewritten because it does not start
 /// with the given prefix.
 #[derive(PartialEq, Debug, Clone)]
@@ -46,6 +48,14 @@ pub fn rewrite_prefix_of_end_key(
     }
 
     Ok(super::next_key(new_prefix))
+}
+
+pub fn encode_bound(bound: Bound<Vec<u8>>) -> Bound<Vec<u8>> {
+    match bound {
+        Included(k) => Included(encode_bytes(&k)),
+        Excluded(k) => Excluded(encode_bytes(&k)),
+        Unbounded => Unbounded,
+    }
 }
 
 pub fn rewrite_prefix_of_start_bound(
@@ -110,7 +120,7 @@ mod tests {
             rewrite_prefix(b"t234", b"t567", b"t567890"),
             Err(WrongPrefix),
         );
-        assert_eq!(rewrite_prefix(b"t123", b"t567", b"t124"), Err(WrongPrefix),);
+        assert_eq!(rewrite_prefix(b"t123", b"t567", b"t124"), Err(WrongPrefix), );
     }
 
     #[test]
@@ -212,7 +222,7 @@ mod tests {
                 b"\xff\xfe",
                 b"\xff\xff",
                 Included(b"\xff\xfe"),
-                Excluded(b"\xff\xff")
+                Excluded(b"\xff\xff"),
             ),
             Ok((Included(b"\xff\xff".to_vec()), Unbounded)),
         );
@@ -221,7 +231,7 @@ mod tests {
                 b"\xff\xfe",
                 b"\xff\xff",
                 Excluded(b"\xff\xfe"),
-                Excluded(b"\xff\xff")
+                Excluded(b"\xff\xff"),
             ),
             Ok((Excluded(b"\xff\xff".to_vec()), Unbounded)),
         );
@@ -230,7 +240,7 @@ mod tests {
                 b"\xff\xfe",
                 b"\xff\xff",
                 Included(b"\xff\xfe"),
-                Included(b"\xff\xff")
+                Included(b"\xff\xff"),
             ),
             Err(WrongPrefix),
         );
