@@ -240,7 +240,7 @@ impl MvccRaw {
 // Return regions that keys are related to.
 fn get_regions_for_gc(
     store_id: u64,
-    keys: &Vec<Key>,
+    keys: &[Key],
     region_provider: Arc<dyn RegionInfoProvider>,
 ) -> Result<Vec<Region>> {
     assert!(!keys.is_empty());
@@ -250,14 +250,14 @@ fn get_regions_for_gc(
         let end = keys.last().unwrap().as_encoded();
         let regions = box_try!(region_provider.get_regions_in_range(start, end))
             .into_iter()
-            .filter(move |r| find_peer(r, store_id).is_some())
+            .filter(|r| find_peer(r, store_id).is_some())
             .peekable()
             .collect();
 
         Ok(regions)
     } else {
         // We only have one key.
-        let key = keys.first().unwrap().as_encoded();
+        let key = keys[0].as_encoded();
         let region = box_try!(region_provider.find_region_by_key(key));
         if find_peer(&region, store_id).is_none() {
             return Ok(Vec::new());
@@ -293,7 +293,7 @@ fn seek_region(
     store_id: u64,
     key: &[u8],
     region_provider: Arc<dyn RegionInfoProvider>,
-) -> Result<Region> {
+) -> Result<Option<Region>> {
     let (tx, rx) = mpsc::channel();
     box_try!(region_provider.seek_region(
         key,
@@ -308,10 +308,7 @@ fn seek_region(
         }),
     ));
 
-    match box_try!(rx.recv()) {
-        Some(region) => Ok(region),
-        None => unreachable!(),
-    }
+    Ok(box_try!(rx.recv()))
 }
 
 fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
@@ -472,21 +469,19 @@ where
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut regions = match region_or_provider {
-            Either::Left(region) => vec![region].into_iter().peekable(),
-            Either::Right(region_provider) => get_regions_for_gc(store_id, &keys, region_provider)?
-                .into_iter()
-                .peekable(),
+        let regions = match region_or_provider {
+            Either::Left(region) => vec![region],
+            Either::Right(region_provider) => get_regions_for_gc(store_id, &keys, region_provider)?,
         };
 
         // First item is fetched to initialize the reader and kv_engine
-        let region = regions.peek();
-        if region.is_none() {
+        if regions.is_empty() {
             return Ok((handled_keys, wasted_keys));
         }
+        let region = &regions[0];
         let (mut reader, mut kv_engine) = self.create_reader(
             count,
-            region.unwrap(),
+            region,
             range_start_key.clone(),
             range_end_key.clone(),
         )?;
@@ -495,7 +490,7 @@ where
         let mut txn = Self::new_txn();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
-        for region in regions {
+        for region in regions.into_iter() {
             if !first_iteration {
                 (reader, kv_engine) = self.create_reader(
                     count,
@@ -792,7 +787,7 @@ where
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
-        let region = seek_region(self.store_id, start_key.as_encoded(), regions_provider)?;
+        let Some(region) = seek_region(self.store_id, start_key.as_encoded(), regions_provider)? else {return Ok(());};
         // We only need to get a snapshot of any region as we just want the inner engine
         // of it which is the same for all regions.
         let kv_engine = self.get_snapshot(self.store_id, &region)?.inner_engine();
