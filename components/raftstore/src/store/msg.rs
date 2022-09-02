@@ -7,6 +7,7 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use futures::channel::oneshot::Sender;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -458,6 +459,8 @@ where
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     RecoveryWaitApply(RecoveryWaitApplySyncer),
+    PrepareFlashback(Sender<bool>),
+    FinishFlashback,
 }
 
 /// Message that will be sent to a peer.

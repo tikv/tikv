@@ -107,6 +107,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
 
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
+        write_data.extra.for_flashback = true;
         Ok(WriteResult {
             ctx: self.ctx.clone(),
             to_be_write: write_data,
