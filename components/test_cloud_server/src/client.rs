@@ -22,7 +22,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use pd_client::PdClient;
-use rfstore::store::{PeerTag, RegionIDVer};
+use rfstore::store::RegionIDVer;
 use test_raftstore::TestPdClient;
 use tikv::storage::mvcc::TimeStamp;
 use tikv_util::{
@@ -140,17 +140,16 @@ impl ClusterClient {
         ts: TimeStamp,
     ) {
         let region_id = id_ver.id();
-        let mut store_id = 0;
+        let mut store_id_errors = vec![];
         let start_time = Instant::now();
         let timeout = Duration::from_secs(15);
-        let mut last_err = "".to_string();
         while start_time.saturating_elapsed() < timeout {
             let ctx = self.new_rpc_ctx(region_id);
             if ctx.get_region_epoch().get_version() != id_ver.ver() {
                 self.kv_prewrite(muts, pk, ts);
                 return;
             }
-            store_id = ctx.get_peer().get_store_id();
+            let store_id = ctx.get_peer().get_store_id();
             let kv_client = self.get_kv_client(store_id);
             let mut prewrite_req = PrewriteRequest::default();
             prewrite_req.set_context(ctx);
@@ -161,7 +160,7 @@ impl ClusterClient {
             prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
             let result = kv_client.kv_prewrite(&prewrite_req);
             if result.is_err() {
-                last_err = format!("{:?}", result.unwrap_err());
+                store_id_errors.push((store_id, format!("{:?}", result.unwrap_err())));
                 sleep(Duration::from_millis(100));
                 self.update_cache_by_id(region_id, None);
                 continue;
@@ -170,7 +169,7 @@ impl ClusterClient {
             if resp.has_region_error() {
                 let region_err = resp.get_region_error();
                 if self.handle_retryable_error(region_id, region_err) {
-                    last_err = format!("{:?}", region_err);
+                    store_id_errors.push((store_id, format!("{:?}", region_err)));
                     continue;
                 }
                 if self.handle_region_epoch_not_match(region_err) {
@@ -182,9 +181,9 @@ impl ClusterClient {
             return;
         }
         panic!(
-            "{} prewrite failed {}",
-            PeerTag::new(store_id, id_ver),
-            last_err
+            "{} prewrite failed {:?}",
+            region_id,
+            store_id_errors,
         );
     }
 
@@ -203,17 +202,16 @@ impl ClusterClient {
         commit_ts: TimeStamp,
     ) {
         let region_id = id_ver.id();
-        let mut store_id = 0;
+        let mut store_id_errors = vec![];
         let start_time = Instant::now();
         let timeout = Duration::from_secs(15);
-        let mut last_err = "".to_string();
         while start_time.saturating_elapsed() < timeout {
             let ctx = self.new_rpc_ctx(region_id);
             if ctx.get_region_epoch().get_version() != id_ver.ver() {
                 self.kv_commit(keys, start_ts, commit_ts);
                 return;
             }
-            store_id = ctx.get_peer().get_store_id();
+            let store_id = ctx.get_peer().get_store_id();
             let kv_client = self.get_kv_client(store_id);
             let mut commit_req = CommitRequest::default();
             commit_req.set_context(ctx);
@@ -222,7 +220,7 @@ impl ClusterClient {
             commit_req.commit_version = commit_ts.into_inner();
             let result = kv_client.kv_commit(&commit_req);
             if result.is_err() {
-                last_err = format!("{:?}", result.unwrap_err());
+                store_id_errors.push((store_id, format!("{:?}", result.unwrap_err())));
                 sleep(Duration::from_millis(100));
                 self.update_cache_by_id(region_id, None);
                 continue;
@@ -231,7 +229,7 @@ impl ClusterClient {
             if commit_resp.has_region_error() {
                 let region_err = commit_resp.get_region_error();
                 if self.handle_retryable_error(region_id, region_err) {
-                    last_err = format!("{:?}", region_err);
+                    store_id_errors.push((store_id, format!("{:?}", region_err)));
                     continue;
                 }
                 if self.handle_region_epoch_not_match(region_err) {
@@ -243,9 +241,9 @@ impl ClusterClient {
             return;
         }
         panic!(
-            "{} commit failed {}",
-            PeerTag::new(store_id, id_ver),
-            last_err
+            "{} commit failed {:?}",
+            region_id,
+            store_id_errors,
         );
     }
 
@@ -443,12 +441,11 @@ impl ClusterClient {
         let start_time = Instant::now();
         let timeout = Duration::from_secs(15);
         let mut region_id = 0;
-        let mut store_id = 0;
-        let mut last_err = "".to_string();
+        let mut store_id_errors = vec![];
         while start_time.saturating_elapsed() < timeout {
             region_id = self.get_region_id(key);
             let ctx = self.new_rpc_ctx(region_id);
-            store_id = ctx.get_peer().get_store_id();
+            let store_id = ctx.get_peer().get_store_id();
             let client = self.get_kv_client(store_id);
             let mut get_req = GetRequest::default();
             get_req.set_context(ctx);
@@ -456,14 +453,14 @@ impl ClusterClient {
             get_req.set_version(u64::MAX);
             let result = client.kv_get(&get_req);
             if result.is_err() {
-                last_err = format!("{:?}", result.unwrap_err());
+                store_id_errors.push((store_id, format!("{:?}", result.unwrap_err())));
                 sleep(Duration::from_millis(100));
                 continue;
             }
             let mut resp = result.unwrap();
             if resp.has_region_error() {
                 let region_err = resp.get_region_error();
-                last_err = format!("{:?}", region_err);
+                store_id_errors.push((store_id, format!("{:?}", region_err)));
                 if self.handle_retryable_error(region_id, region_err) {
                     continue;
                 }
@@ -483,11 +480,10 @@ impl ClusterClient {
             return resp.take_value();
         }
         panic!(
-            "{}:{} failed to get key {:?}, last error {}, put elapsed {:?}",
-            store_id,
+            "region {} failed to get key {:?}, errors {:?}, put elapsed {:?}",
             region_id,
             key,
-            last_err,
+            store_id_errors,
             put_time.saturating_elapsed(),
         );
     }
