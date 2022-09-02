@@ -54,9 +54,9 @@ pub struct Storage<ER> {
     entry_storage: EntryStorage<ER>,
     peer: metapb::Peer,
     region_state: RegionLocalState,
-    /// Whether the state has been persisted before. If the peer is created by
-    /// replication, then persisted is false. We need to persist all the
-    /// states no matter whether they are changed.
+    /// Whether states has been persisted before. If a peer is just created by
+    /// by messages, it has not persisted any states, we need to persist them
+    /// at least once dispite whether the state changes since create.
     ever_persisted: bool,
     logger: Logger,
 }
@@ -236,6 +236,10 @@ impl<ER: RaftEngine> Storage<ER> {
 
     pub fn ever_persisted(&self) -> bool {
         self.ever_persisted
+    }
+
+    pub fn set_ever_persisted(&mut self) {
+        self.ever_persisted = true;
     }
 }
 

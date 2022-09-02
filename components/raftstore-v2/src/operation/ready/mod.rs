@@ -379,6 +379,7 @@ impl<ER: RaftEngine> Storage<ER> {
             let mut extra_states = ExtraStates::new(self.apply_state().clone());
             extra_states.set_region_state(self.region_state().clone());
             write_task.extra_write.set_v2(extra_states);
+            self.set_ever_persisted();
         }
     }
 }

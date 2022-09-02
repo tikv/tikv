@@ -34,9 +34,11 @@ use crate::{
 /// destroying asynchronously during handling ready. After the asynchronously
 /// destroying is finished, it becomes `Destroyed`.
 pub enum DestroyProgress {
+    /// Alive means destroy is not triggered at all. It's the same as None for
+    /// `Option<DestroyProgress>`. Not using Option to avoid unwrap everywhere.
     Alive,
-    // If the destroy is triggered by message, then the message will be used for
-    // creating new peer immediately.
+    /// If the destroy is triggered by message, then the message will be used
+    /// for creating new peer immediately.
     WaitReady(Option<Box<RaftMessage>>),
     Destroying(Option<Box<RaftMessage>>),
     Destroyed,
@@ -217,7 +219,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// 3. Applied a conf remove self command.
     /// In all cases, the peer will be destroyed asynchronousely in next
     /// handle_raft_ready.
-    /// `triggered_msg` will be sent to stor fsm after destroy is finished.
+    /// `triggered_msg` will be sent to store fsm after destroy is finished.
     /// Should set the message only when the target peer is supposed to be
     /// created afterward.
     pub fn mark_for_destroy(&mut self, triggered_msg: Option<Box<RaftMessage>>) {
@@ -273,7 +275,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         info!(self.logger, "peer destroyed");
         ctx.router.close(self.region_id());
         if let Some(msg) = self.destroy_progress_mut().finish() {
-            // It's a best effort.
+            // The message will be dispatched to store fsm, which will create a
+            // new peer. Ignore error as it's just a best effort.
             let _ = ctx.router.send_raft_message(msg);
         }
         // TODO: close apply mailbox.
