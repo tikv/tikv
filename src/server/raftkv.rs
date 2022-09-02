@@ -459,6 +459,9 @@ where
                     cb(Ok(s))
                 }
                 Err(e) => {
+                    ASYNC_REQUESTS_FAIL_DURATIONS_VEC
+                        .snapshot
+                        .observe(begin_instant.saturating_elapsed_secs());
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
                     cb(Err(e))

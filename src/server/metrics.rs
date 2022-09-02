@@ -495,6 +495,13 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
+    pub static ref ASYNC_REQUESTS_FAIL_DURATIONS: HistogramVec = register_histogram_vec!(
+        "tikv_storage_engine_async_request_fail_duration_seconds",
+        "Bucketed histogram of processing successful asynchronous requests.",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -502,6 +509,8 @@ lazy_static! {
         auto_flush_from!(ASYNC_REQUESTS_COUNTER, AsyncRequestsCounterVec);
     pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec =
         auto_flush_from!(ASYNC_REQUESTS_DURATIONS, AsyncRequestsDurationVec);
+    pub static ref ASYNC_REQUESTS_FAIL_DURATIONS_VEC: AsyncRequestsDurationVec =
+        auto_flush_from!(ASYNC_REQUESTS_FAIL_DURATIONS, AsyncRequestsDurationVec);
 }
 
 struct LocalRequestSourceMetrics {
