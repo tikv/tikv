@@ -778,7 +778,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
                     if RangeKey::from_start_key(region_info.region.get_start_key().to_vec())
                         > end_key
                     {
-                        break;
+                        continue;
                     }
                     tx.send(region_info.region.clone()).unwrap();
                 }
@@ -788,7 +788,6 @@ impl RegionInfoProvider for MockRegionInfoProvider {
         for region in rx {
             regions.push(region);
         }
-
         Ok(regions)
     }
 
@@ -800,6 +799,19 @@ impl RegionInfoProvider for MockRegionInfoProvider {
         });
         callback(&mut iter);
         Ok(())
+    }
+
+    fn find_region_by_key(&self, key: &[u8]) -> Result<Region> {
+        let region_infos = self.0.lock().unwrap();
+        let key = RangeKey::from_start_key(key.to_vec());
+        region_infos
+            .iter()
+            .find(|region_info| {
+                RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= key
+                    && key < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+            })
+            .map(|region_info| region_info.region.clone())
+            .ok_or(box_err!("Not found region containing {:?}", key))
     }
 }
 
@@ -1405,6 +1417,7 @@ mod tests {
                     assert!(iter.next().unwrap().region.id == 1);
                     assert!(iter.next().unwrap().region.id == 2);
                     assert!(iter.next().unwrap().region.id == 3);
+                    assert!(iter.next().is_none());
                 }),
             )
             .unwrap();
@@ -1416,6 +1429,7 @@ mod tests {
                 Box::new(|iter| {
                     assert!(iter.next().unwrap().region.id == 2);
                     assert!(iter.next().unwrap().region.id == 3);
+                    assert!(iter.next().is_none());
                 }),
             )
             .unwrap();

@@ -166,11 +166,7 @@ where
                 region, safe_point, ..
             } => f
                 .debug_struct("Gc")
-                .field(
-                    "start_key",
-                    &log_wrappers::Value::key(region.get_start_key()),
-                )
-                .field("end_key", &log_wrappers::Value::key(region.get_end_key()))
+                .field("region", region)
                 .field("safe_point", safe_point)
                 .finish(),
             GcTask::GcKeys { .. } => f.debug_struct("GcKeys").finish(),
@@ -241,74 +237,33 @@ impl MvccRaw {
     }
 }
 
-struct KeysInRegions<R: Iterator<Item = Region>> {
-    keys: Peekable<IntoIter<Key>>,
-    regions: Peekable<R>,
-}
-
-impl<R: Iterator<Item = Region>> Iterator for KeysInRegions<R> {
-    type Item = (Box<dyn Iterator<Item = Key>>, Region);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let region = self.regions.peek()?.clone();
-        let mut keys = Vec::new();
-
-        loop {
-            let key = self.keys.peek();
-            if key.is_none() {
-                if keys.is_empty() {
-                    return None;
-                }
-                break;
-            }
-            let key = key.unwrap().as_encoded().as_slice();
-
-            if key < region.get_start_key() {
-                self.keys.next();
-            } else if region.get_end_key().is_empty() || key < region.get_end_key() {
-                keys.push(self.keys.next().unwrap());
-            } else {
-                self.regions.next();
-                break;
-            }
-        }
-
-        Some((Box::new(keys.into_iter()), region))
-    }
-}
-
 // Return regions that keys are related to.
-// If `region_or_provider` is Region, it means all keys are located in the same
-// region. If `region_or_provider` is RegionInfoProvider, then we should find
-// all regions of thoes keys.
 fn get_regions_for_gc(
     store_id: u64,
     keys: &Vec<Key>,
-    region_or_provider: Either<Region, Arc<dyn RegionInfoProvider>>,
+    region_provider: Arc<dyn RegionInfoProvider>,
 ) -> Result<Vec<Region>> {
     assert!(!keys.is_empty());
 
-    match region_or_provider {
-        Either::Left(region) => Ok(vec![region]),
-        Either::Right(region_provider) => {
-            if keys.len() >= 2 {
-                let start = keys.first().unwrap().as_encoded();
-                let end = keys.last().unwrap().as_encoded();
-                let regions = box_try!(region_provider.get_regions_in_range(start, end))
-                    .into_iter()
-                    .filter(move |r| find_peer(r, store_id).is_some())
-                    .peekable()
-                    .collect();
+    if keys.len() >= 2 {
+        let start = keys.first().unwrap().as_encoded();
+        let end = keys.last().unwrap().as_encoded();
+        let regions = box_try!(region_provider.get_regions_in_range(start, end))
+            .into_iter()
+            .filter(move |r| find_peer(r, store_id).is_some())
+            .peekable()
+            .collect();
 
-                Ok(regions)
-            } else {
-                // We only have one key.
-                let key = keys.first().unwrap().as_encoded();
-                let region = box_try!(region_provider.find_region_by_key(key));
-
-                Ok(vec![region])
-            }
+        Ok(regions)
+    } else {
+        // We only have one key.
+        let key = keys.first().unwrap().as_encoded();
+        let region = box_try!(region_provider.find_region_by_key(key));
+        if find_peer(&region, store_id).is_none() {
+            return Ok(Vec::new());
         }
+
+        Ok(vec![region])
     }
 }
 
@@ -517,9 +472,12 @@ where
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut regions = get_regions_for_gc(store_id, &keys, region_or_provider)?
-            .into_iter()
-            .peekable();
+        let mut regions = match region_or_provider {
+            Either::Left(region) => vec![region].into_iter().peekable(),
+            Either::Right(region_provider) => get_regions_for_gc(store_id, &keys, region_provider)?
+                .into_iter()
+                .peekable(),
+        };
 
         // First item is fetched to initialize the reader and kv_engine
         let region = regions.peek();
@@ -643,10 +601,9 @@ where
 
         let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut regions =
-            get_regions_for_gc(self.store_id, &keys, Either::Right(regions_provider))?
-                .into_iter()
-                .peekable();
+        let mut regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?
+            .into_iter()
+            .peekable();
 
         // First item is fetched to initialize the reader and kv_engine
         let region = regions.peek();
@@ -1658,6 +1615,64 @@ mod tests {
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
+
+    #[test]
+    fn test_get_regions_for_gc() {
+        fn init_region(
+            start_key: &[u8],
+            end_key: &[u8],
+            region_id: u64,
+            store_id: Option<u64>,
+        ) -> Region {
+            let start_key = Key::from_encoded(start_key.to_vec());
+            let end_key = Key::from_encoded(end_key.to_vec());
+            let mut region = Region::default();
+            region.set_start_key(start_key.as_encoded().clone());
+            region.set_end_key(end_key.as_encoded().clone());
+            region.id = region_id;
+            if let Some(store_id) = store_id {
+                region.mut_peers().push(Peer::default());
+                region.mut_peers()[0].set_store_id(store_id);
+            }
+            region
+        }
+
+        let store_id = 1;
+
+        let r1 = init_region(b"", b"k10", 1, None);
+        let r2 = init_region(b"k20", b"k30", 2, Some(store_id));
+        let r3 = init_region(b"k30", b"", 3, Some(store_id));
+
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![
+            r1,
+            r2.clone(),
+            r3.clone(),
+        ]));
+
+        let keys = vec![Key::from_encoded(b"k05".to_vec())];
+        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        // store id not match
+        assert!(regions.is_empty());
+
+        let keys = vec![
+            Key::from_encoded(b"k05".to_vec()),
+            Key::from_encoded(b"k10".to_vec()),
+            Key::from_encoded(b"k25".to_vec()),
+        ];
+        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        let rs = vec![r2.clone()];
+        assert_eq!(regions, rs);
+
+        let keys = vec![
+            Key::from_encoded(b"k05".to_vec()),
+            Key::from_encoded(b"k10".to_vec()),
+            Key::from_encoded(b"k25".to_vec()),
+            Key::from_encoded(b"k35".to_vec()),
+        ];
+        let regions = get_regions_for_gc(store_id, &keys, ri_provider).unwrap();
+        let rs = vec![r2, r3];
+        assert_eq!(regions, rs);
+    }
 
     /// Assert the data in `storage` is the same as `expected_data`. Keys in
     /// `expected_data` should be encoded form without ts.
