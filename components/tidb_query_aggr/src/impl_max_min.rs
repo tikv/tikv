@@ -62,7 +62,9 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         assert_eq!(root_expr.get_tp(), E::TP);
-        let eval_type = box_try!(EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()));
+        let eval_type = box_try!(EvalType::try_from(
+            exp.ret_field_type(src_schema).as_accessor().tp()
+        ));
         let is_unsigned = exp
             .ret_field_type(src_schema)
             .as_accessor()
