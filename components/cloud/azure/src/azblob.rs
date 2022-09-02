@@ -607,7 +607,7 @@ impl BlobStorage for AzureStorage {
     }
 
     fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
-        self.get_range(name, Some(off..len))
+        self.get_range(name, Some(off..off + len))
     }
 }
 
