@@ -201,6 +201,8 @@ make_static_metric! {
         read_index_no_leader,
         region_not_initialized,
         is_applying_snapshot,
+        force_leader,
+        flashback,
     }
 
     pub label_enum RaftLogGcSkippedReason {
@@ -271,7 +273,6 @@ make_static_metric! {
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
     }
-
 }
 
 lazy_static! {
