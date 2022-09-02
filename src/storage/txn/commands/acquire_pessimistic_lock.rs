@@ -150,6 +150,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 old_values: self.old_values,
                 // One pc status is unkown AcquirePessimisticLock stage.
                 one_pc: false,
+                for_flashback: false,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)
