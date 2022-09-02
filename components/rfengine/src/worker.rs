@@ -148,6 +148,7 @@ impl Worker {
     }
 
     fn compact(&mut self, epoch_idx: usize) -> Result<()> {
+        assert!(self.epoches[epoch_idx].has_wal_file);
         let epoch_id = self.epoches[epoch_idx].id;
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
@@ -184,6 +185,7 @@ impl Worker {
         if let Err(e) = self.recycle_wal_file(epoch_id) {
             warn!("{}: failed to recycle wal file", engine_id; "epoch_id" => epoch_id, "err" => %e);
         }
+        self.epoches[epoch_idx].has_wal_file = false;
         Ok(())
     }
 
@@ -255,6 +257,9 @@ impl Worker {
         let mut retain_cnt = 0;
         let engine_id = self.get_engine_id();
         for ep in &mut self.epoches {
+            if ep.has_wal_file {
+                break;
+            }
             let mut raft_log_files = ep.raft_log_files.lock().unwrap();
             if let Some((first, end)) = raft_log_files.get(&region_id) {
                 if *end <= truncated_index {
@@ -345,15 +350,15 @@ impl RlogHeader {
 
     pub(crate) fn decode(mut buf: &[u8]) -> Result<Self> {
         if buf.len() < Self::len() {
-            return Err(Error::Corruption("states header mismatch".to_owned()));
+            return Err(Error::Corruption("rlog header mismatch".to_owned()));
         }
         let magic_number = buf.get_u64_le();
         if magic_number != RLOG_MAGIC_NUMBER {
-            return Err(Error::Corruption("states magic number mismatch".to_owned()));
+            return Err(Error::Corruption("rlog magic number mismatch".to_owned()));
         }
         let version = buf.get_u64_le();
         if version != StatesVersion::V1 as u64 {
-            return Err(Error::Corruption("states version mismatch".to_owned()));
+            return Err(Error::Corruption("rlog version mismatch".to_owned()));
         }
         Ok(Self {
             version: RlogVersion::V1,

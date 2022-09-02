@@ -49,6 +49,9 @@ impl Epoch {
     }
 
     pub(crate) fn add_file(&mut self, filename: PathBuf) -> Result<()> {
+        if self.has_wal_file {
+            return Ok(());
+        }
         let extention = filename.extension().unwrap();
         if extention == "wal" {
             self.has_wal_file = true;
@@ -112,9 +115,9 @@ impl RfEngine {
             for (k, (first, end)) in raft_log_files.iter() {
                 self.load_raft_log_file(ep.id, *k, *first, *end)?;
             }
-        }
-        if ep.has_state_file {
-            self.load_state_file(ep.id)?;
+            if ep.has_state_file {
+                self.load_state_file(ep.id)?;
+            }
         }
         Ok(wal_off)
     }
