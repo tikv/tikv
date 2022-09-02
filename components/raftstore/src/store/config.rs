@@ -31,9 +31,6 @@ lazy_static! {
     .unwrap();
 }
 
-// used to periodically check whether we should delete a stale peer's range in
-// region runner
-
 with_prefix!(prefix_apply "apply-");
 with_prefix!(prefix_store "store-");
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
@@ -140,10 +137,13 @@ pub struct Config {
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
+    // used to periodically check whether schedule pending applies in region runner
     #[doc(hidden)]
     #[online_config(skip)]
     pub region_worker_tick_interval: ReadableDuration,
 
+    // used to periodically check whether we should delete a stale peer's range in
+    // region runner
     #[doc(hidden)]
     #[online_config(skip)]
     pub stale_peer_check_tick: usize,
