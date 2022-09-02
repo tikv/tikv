@@ -12,30 +12,7 @@ use clap::{App, Arg, ArgMatches};
 use tikv::config::TiKvConfig;
 use tikv_util::config::ReadableDuration;
 
-use crate::{
-    fatal,
-    setup::{ensure_no_unrecognized_config, overwrite_config_with_cmd_args},
-};
-
-// Not the same as TiKV
-pub const TIFLASH_DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20170";
-pub const TIFLASH_DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20292";
-
-fn make_tikv_config() -> TiKvConfig {
-    let mut default = TiKvConfig::default();
-    setup_default_tikv_config(&mut default);
-    default
-}
-
-pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
-    default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
-    default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
-    default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
-    default.raft_store.region_worker_tick_interval = ReadableDuration::millis(500);
-    let stale_peer_check_tick =
-        (10_000 / default.raft_store.region_worker_tick_interval.as_millis()) as usize;
-    default.raft_store.stale_peer_check_tick = stale_peer_check_tick;
-}
+use crate::{config::make_tikv_config, fatal, setup::overwrite_config_with_cmd_args};
 
 /// Generate default TiKvConfig, but with some Proxy's default values.
 pub fn gen_tikv_config(

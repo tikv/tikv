@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-/// Provides profilers for TiKV.
 pub mod profile;
 pub mod region_meta;
 use std::{
@@ -77,7 +76,6 @@ struct LogLevelRequest {
 }
 
 pub struct StatusServer<E, R> {
-    engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -89,53 +87,12 @@ pub struct StatusServer<E, R> {
     _snap: PhantomData<E>,
 }
 
-impl StatusServer<(), ()> {
-    #[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
-    fn extract_thread_name(thread_name: &str) -> String {
-        lazy_static! {
-            static ref THREAD_NAME_RE: Regex =
-                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
-            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
-        }
-
-        THREAD_NAME_RE
-            .captures(thread_name)
-            .and_then(|cap| {
-                cap.name("thread_name").map(|thread_name| {
-                    THREAD_NAME_REPLACE_SEPERATOR_RE
-                        .replace_all(thread_name.as_str(), "-")
-                        .into_owned()
-                })
-            })
-            .unwrap_or_else(|| thread_name.to_owned())
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
-        move |frames| {
-            let name = Self::extract_thread_name(&frames.thread_name);
-            frames.thread_name = name;
-        }
-    }
-
-    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-    where
-        T: Into<Body>,
-    {
-        Response::builder()
-            .status(status_code)
-            .body(message.into())
-            .unwrap()
-    }
-}
-
 impl<E, R> StatusServer<E, R>
 where
     E: 'static,
     R: 'static + Send,
 {
     pub fn new(
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
         status_thread_pool_size: usize,
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
@@ -152,7 +109,6 @@ where
 
         let (tx, rx) = oneshot::channel::<()>();
         Ok(StatusServer {
-            engine_store_server_helper,
             thread_pool,
             tx,
             rx: Some(rx),
@@ -284,7 +240,6 @@ where
     async fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
     ) -> hyper::Result<Response<Body>> {
         let mut full = false;
         if let Some(query) = req.uri().query() {
@@ -305,33 +260,12 @@ where
             // Filter hidden config
             serde_json::to_string(&cfg_controller.get_current().get_encoder())
         };
-
-        let engine_store_config = engine_store_server_helper.get_config(full);
-        let engine_store_config =
-            unsafe { String::from_utf8_unchecked(engine_store_config) }.parse::<toml::Value>();
-
-        let engine_store_config = match engine_store_config {
-            Ok(c) => serde_json::to_string(&c),
-            Err(_) => {
-                return Ok(StatusServer::err_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal Server Error: fail to parse config from engine-store",
-                ));
-            }
-        };
-
-        Ok(match (encode_res, engine_store_config) {
-            (Ok(json), Ok(store_config)) => Response::builder()
+        Ok(match encode_res {
+            Ok(json) => Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(format!(
-                    "{{\"raftstore-proxy\":{},\"engine-store\":{}}}",
-                    json, store_config,
-                )))
+                .body(Body::from(json))
                 .unwrap(),
-            _ => StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal Server Error",
-            ),
+            Err(_) => make_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
         })
     }
 
@@ -375,24 +309,6 @@ where
                 format!("failed to decode, error: {:?}", e),
             ),
         })
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub async fn dump_rsprof(seconds: u64, frequency: i32) -> pprof::Result<pprof::Report> {
-        let guard = pprof::ProfilerGuardBuilder::default()
-            .frequency(frequency)
-            .blocklist(&["libc", "libgcc", "pthread"])
-            .build()?;
-        info!(
-            "start profiling {} seconds with frequency {} /s",
-            seconds, frequency
-        );
-        let timer = GLOBAL_TIMER_HANDLE.clone();
-        let _ = Compat01As03::new(timer.delay(Instant::now() + Duration::from_secs(seconds))).await;
-        guard
-            .report()
-            .frames_post_processor(StatusServer::frames_post_processor())
-            .build()
     }
 
     async fn update_config_from_toml_file(
@@ -579,44 +495,6 @@ where
         }
     }
 
-    pub async fn handle_http_request(
-        req: Request<Body>,
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
-    ) -> hyper::Result<Response<Body>> {
-        let (head, body) = req.into_parts();
-        let body = hyper::body::to_bytes(body).await;
-
-        match body {
-            Ok(s) => {
-                let res = engine_store_server_helper.handle_http_request(
-                    head.uri.path(),
-                    head.uri.query(),
-                    &s,
-                );
-                if res.status != raftstore::engine_store_ffi::HttpRequestStatus::Ok {
-                    return Ok(StatusServer::err_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "engine-store fails to build response".to_string(),
-                    ));
-                }
-
-                let data = res.res.view.to_slice().to_vec();
-
-                match Response::builder().body(hyper::Body::from(data)) {
-                    Ok(resp) => Ok(resp),
-                    Err(err) => Ok(StatusServer::err_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("fails to build response: {}", err),
-                    )),
-                }
-            }
-            Err(err) => Ok(StatusServer::err_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("fails to build response: {}", err),
-            )),
-        }
-    }
-
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -627,7 +505,6 @@ where
         let security_config = self.security_config.clone();
         let cfg_controller = self.cfg_controller.clone();
         let router = self.router.clone();
-        let engine_store_server_helper = self.engine_store_server_helper;
         let store_path = self.store_path.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
@@ -687,8 +564,7 @@ where
                             //     Self::dump_heap_prof_to_resp(req).await
                             // }
                             (Method::GET, "/config") => {
-                                Self::get_config(req, &cfg_controller, engine_store_server_helper)
-                                    .await
+                                Self::get_config(req, &cfg_controller).await
                             }
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
@@ -716,13 +592,6 @@ where
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await
                             }
-
-                            (Method::GET, path)
-                                if engine_store_server_helper.check_http_uri_available(path) =>
-                            {
-                                Self::handle_http_request(req, engine_store_server_helper).await
-                            }
-
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }
                     }
@@ -1427,7 +1296,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_arch = "x86_64")]
     fn test_pprof_profile_service() {
         let _test_guard = TEST_PROFILE_MUTEX.lock().unwrap();
         let mut status_server = StatusServer::new(

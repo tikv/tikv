@@ -10,12 +10,28 @@ use std::{
 use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
-pub use server::setup::{ensure_no_unrecognized_config, initial_logger, initial_metric};
+pub use server::setup::initial_logger;
 use tikv::config::{MetricConfig, TiKvConfig};
 use tikv_util::{self, config, logger};
 
 use crate::config::{validate_and_persist_config, ProxyConfig};
 pub use crate::fatal;
+
+#[allow(dead_code)]
+pub fn initial_metric(cfg: &MetricConfig) {
+    tikv_util::metrics::monitor_process()
+        .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
+    tikv_util::metrics::monitor_threads("")
+        .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
+    tikv_util::metrics::monitor_allocator_stats("")
+        .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
+
+    if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
+        return;
+    }
+
+    warn!("metrics push is not supported any more.");
+}
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(

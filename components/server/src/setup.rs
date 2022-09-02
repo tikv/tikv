@@ -220,9 +220,9 @@ pub fn initial_logger(config: &TiKvConfig) {
 pub fn initial_metric(cfg: &MetricConfig) {
     tikv_util::metrics::monitor_process()
         .unwrap_or_else(|e| fatal!("failed to start process monitor: {}", e));
-    tikv_util::metrics::monitor_threads("")
+    tikv_util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start thread monitor: {}", e));
-    tikv_util::metrics::monitor_allocator_stats("")
+    tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {

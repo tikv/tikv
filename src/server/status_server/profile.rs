@@ -313,11 +313,9 @@ mod test_utils {
     pub fn activate_prof() -> ProfResult<()> {
         Ok(())
     }
-
     pub fn deactivate_prof() -> ProfResult<()> {
         Ok(())
     }
-
     pub fn dump_prof(_: &str) -> ProfResult<()> {
         Ok(())
     }

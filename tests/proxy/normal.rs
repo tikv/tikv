@@ -37,12 +37,10 @@ use pd_client::PdClient;
 use proxy_server::{
     config::{
         address_proxy_config, ensure_no_common_unrecognized_keys, get_last_config,
-        validate_and_persist_config,
+        make_tikv_config, setup_default_tikv_config, validate_and_persist_config,
+        TIFLASH_DEFAULT_LISTENING_ADDR, TIFLASH_DEFAULT_STATUS_ADDR,
     },
-    proxy::{
-        gen_tikv_config, setup_default_tikv_config, TIFLASH_DEFAULT_LISTENING_ADDR,
-        TIFLASH_DEFAULT_STATUS_ADDR,
-    },
+    proxy::gen_tikv_config,
     run::run_tikv_proxy,
 };
 use raft::eraftpb::MessageType;
@@ -281,7 +279,7 @@ mod config {
         assert_eq!(unknown.unwrap_err(), "nosense, rocksdb.z");
 
         // Need run this test with ENGINE_LABEL_VALUE=tiflash, otherwise will fatal exit.
-        std::fs::remove_file(
+        let _ = std::fs::remove_file(
             PathBuf::from_str(&config.storage.data_dir)
                 .unwrap()
                 .join(LAST_CONFIG_FILE),
@@ -296,14 +294,24 @@ mod config {
     #[test]
     fn test_validate_config() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
-        let text = "memory-usage-high-water=0.65\n[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
+        let text = "[raftstore.aaa]\nbbb=2\n[server]\nengine-addr=\"1.2.3.4:5\"\n[raftstore]\nsnap-handle-pool-size=4\nstale-peer-check-tick=9999\n[nosense]\nfoo=2\n[rocksdb]\nmax-open-files = 111\nz=1";
         write!(file, "{}", text).unwrap();
         let path = file.path();
         let tmp_store_folder = tempfile::TempDir::new().unwrap();
         let tmp_last_config_path = tmp_store_folder.path().join(LAST_CONFIG_FILE);
         std::fs::copy(path, tmp_last_config_path.as_path()).unwrap();
-        std::fs::copy(path, "./last_ttikv.toml").unwrap();
         get_last_config(tmp_store_folder.path().to_str().unwrap());
+
+        let mut unrecognized_keys: Vec<String> = vec![];
+        let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        assert_eq!(config.raft_store.stale_peer_check_tick, 9999);
+        address_proxy_config(&mut config);
+        let stale_peer_check_tick =
+            (10_000 / config.raft_store.region_worker_tick_interval.as_millis()) as usize;
+        assert_eq!(
+            config.raft_store.stale_peer_check_tick,
+            stale_peer_check_tick
+        );
     }
 
     #[test]
@@ -966,6 +974,7 @@ mod ingest {
         };
         (dir, importer)
     }
+
     fn make_sst(
         cluster: &Cluster<NodeCluster>,
         region_id: u64,
