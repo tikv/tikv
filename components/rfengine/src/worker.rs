@@ -219,7 +219,7 @@ impl Worker {
     fn write_raft_log_file(&mut self, epoch_idx: usize, region_batch: RegionBatch) -> Result<()> {
         let epoch_id = self.epoches[epoch_idx].id;
         let first = region_batch.raft_logs.front().unwrap().index;
-        let end = region_batch.raft_logs.back().unwrap().index + 1;
+        let end = region_batch.raft_logs.back().unwrap().index;
         let filename = raft_log_file_name(
             self.dir.as_path(),
             epoch_id,
