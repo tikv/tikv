@@ -448,6 +448,9 @@ fn config(interval: Duration) -> Duration {
     fail_point!("mock_min_resolved_ts_interval", |_| {
         Duration::from_millis(50)
     });
+    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
+        Duration::from_millis(0)
+    });
     interval
 }
 

@@ -26,8 +26,8 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockRes>,
-        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} | {:?}",
-        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, ctx),
+        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
+        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -47,6 +47,7 @@ command! {
             min_commit_ts: TimeStamp,
             old_values: OldValues,
             check_existence: bool,
+            lock_only_if_exists: bool,
         }
 }
 
@@ -110,6 +111,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 self.check_existence,
                 self.min_commit_ts,
                 need_old_value,
+                self.lock_only_if_exists,
             ) {
                 Ok((val, old_value)) => {
                     if self.return_values || self.check_existence {
@@ -148,6 +150,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
                 old_values: self.old_values,
                 // One pc status is unkown AcquirePessimisticLock stage.
                 one_pc: false,
+                for_flashback: false,
             };
             let write_data = WriteData::new(txn.into_modifies(), extra);
             (pr, write_data, rows, ctx, None)

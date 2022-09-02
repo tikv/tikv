@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use async_trait::async_trait;
 use tidb_query_common::storage::IntervalRange;
 use tidb_query_datatype::{
     codec::{batch::LazyBatchColumnVec, data_type::VectorValue},
@@ -28,6 +29,7 @@ impl MockExecutor {
     }
 }
 
+#[async_trait]
 impl BatchExecutor for MockExecutor {
     type StorageStats = ();
 
@@ -35,7 +37,7 @@ impl BatchExecutor for MockExecutor {
         &self.schema
     }
 
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         self.results.next().unwrap()
     }
 
@@ -73,6 +75,7 @@ impl MockScanExecutor {
     }
 }
 
+#[async_trait]
 impl BatchExecutor for MockScanExecutor {
     type StorageStats = ();
 
@@ -80,7 +83,7 @@ impl BatchExecutor for MockScanExecutor {
         &self.schema
     }
 
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let real_scan_rows = std::cmp::min(scan_rows, self.rows.len());
         // just one column
         let mut res_col = Vec::new();

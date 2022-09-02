@@ -5,6 +5,7 @@
 
 //! Batch executor common structures.
 
+use async_trait::async_trait;
 pub use tidb_query_common::execute_stats::{
     ExecSummaryCollector, ExecuteStats, WithSummaryCollector,
 };
@@ -16,6 +17,7 @@ use tipb::FieldType;
 
 /// The interface for pull-based executors. It is similar to the Volcano
 /// Iterator model, but pulls data in batch and stores data by column.
+#[async_trait]
 pub trait BatchExecutor: Send {
     type StorageStats;
 
@@ -26,7 +28,7 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is
     /// no more result. See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
     /// Collects execution statistics (including but not limited to metrics and
     /// execution summaries) accumulated during execution and prepares for
@@ -68,6 +70,7 @@ pub trait BatchExecutor: Send {
     }
 }
 
+#[async_trait]
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     type StorageStats = T::StorageStats;
 
@@ -75,8 +78,8 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows).await
     }
 
     fn collect_exec_stats(&mut self, dest: &mut ExecuteStats) {
@@ -96,6 +99,7 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     }
 }
 
+#[async_trait]
 impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
     for WithSummaryCollector<C, T>
 {
@@ -105,9 +109,9 @@ impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
         self.inner.schema()
     }
 
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_iterate();
-        let result = self.inner.next_batch(scan_rows);
+        let result = self.inner.next_batch(scan_rows).await;
         self.summary_collector
             .on_finish_iterate(timer, result.logical_rows.len());
         result

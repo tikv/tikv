@@ -23,7 +23,8 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use getset::Getters;
+use futures::channel::oneshot::Sender;
+use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
@@ -706,7 +707,33 @@ pub enum UnsafeRecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-#[derive(Getters)]
+// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
+// it is checked every time this peer applies a new entry or a snapshot,
+// if the latest committed index is met, the syncer will be called to notify the
+// result.
+#[derive(Debug)]
+pub struct FlashbackState(Option<Sender<bool>>);
+
+impl FlashbackState {
+    pub fn new(ch: Sender<bool>) -> Self {
+        FlashbackState(Some(ch))
+    }
+
+    pub fn finish_wait_apply(&mut self) {
+        if self.0.is_none() {
+            return;
+        }
+        let ch = self.0.take().unwrap();
+        match ch.send(true) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Fail to notify flashback state"; "err" => ?e);
+            }
+        }
+    }
+}
+
+#[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -731,7 +758,7 @@ where
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
-    #[getset(get = "pub")]
+    #[getset(get = "pub", get_mut = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<Callback<EK::Snapshot>>,
     /// Threshold of long uncommitted proposals.
@@ -887,6 +914,7 @@ where
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
     pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    pub flashback_state: Option<FlashbackState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1018,6 +1046,7 @@ where
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
+            flashback_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2378,6 +2407,10 @@ where
                         debug!("unsafe recovery finishes applying a snapshot");
                         self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
+                    if self.flashback_state.is_some() {
+                        debug!("flashback finishes applying a snapshot");
+                        self.maybe_finish_flashback_wait_apply();
+                    }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
                 // come from the ready but comes from the unfinished snapshot task
@@ -3352,6 +3385,13 @@ where
                 "peer_id" => self.peer.get_id(),
             );
             None
+        } else if self.flashback_state.is_some() {
+            debug!(
+                "prevents renew lease while in flashback state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            None
         } else {
             self.leader_lease.renew(ts);
             let term = self.term();
@@ -4272,6 +4312,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
+            poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4945,6 +4986,16 @@ where
             }
         }
     }
+
+    pub fn maybe_finish_flashback_wait_apply(&mut self) {
+        let finished =
+            self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index();
+        if finished {
+            if let Some(flashback_state) = self.flashback_state.as_mut() {
+                flashback_state.finish_wait_apply();
+            }
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -5565,17 +5616,6 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 // The Raft message context for a MsgTransferLeader if it is a reply of a
 // TransferLeader command.
 pub const TRANSFER_LEADER_COMMAND_REPLY_CTX: &[u8] = &[1];
-
-/// A poor version of `Peer` to avoid port generic variables everywhere.
-pub trait AbstractPeer {
-    fn meta_peer(&self) -> &metapb::Peer;
-    fn group_state(&self) -> GroupState;
-    fn region(&self) -> &metapb::Region;
-    fn apply_state(&self) -> &RaftApplyState;
-    fn raft_status(&self) -> raft::Status<'_>;
-    fn raft_commit_index(&self) -> u64;
-    fn pending_merge_state(&self) -> Option<&MergeState>;
-}
 
 mod memtrace {
     use std::mem;

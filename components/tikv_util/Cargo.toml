@@ -36,6 +36,7 @@ num-traits = "0.2"
 num_cpus = "1"
 online_config = { path = "../online_config" }
 openssl = "0.10"
+pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
