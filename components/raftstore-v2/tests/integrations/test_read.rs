@@ -8,15 +8,11 @@ use kvproto::{
     raft_cmdpb::{CmdType, GetRequest, RaftCmdRequest, ReadIndexRequest, Request, StatusCmdType},
 };
 use raftstore::store::util::new_peer;
-use tikv_util::{
-    codec::number::NumberEncoder,
-    thread_group::{set_properties, GroupProperties},
-};
+use tikv_util::codec::number::NumberEncoder;
 use txn_types::WriteBatchFlags;
 
 #[test]
 fn test_read_index() {
-    set_properties(Some(GroupProperties::default()));
     let (_node, _transport, router) = super::setup_default_cluster();
 
     let region_id = 2;
@@ -50,7 +46,6 @@ fn test_read_index() {
 
 #[test]
 fn test_read_stale() {
-    set_properties(Some(GroupProperties::default()));
     let (_node, _transport, router) = super::setup_default_cluster();
 
     let mut req = RaftCmdRequest::default();

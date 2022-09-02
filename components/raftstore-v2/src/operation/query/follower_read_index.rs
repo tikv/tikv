@@ -54,7 +54,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
     ) {
-        while let Some(mut read) = self.pending_reads.pop_front() {
+        while let Some(mut read) = self.pending_reads_mut().pop_front() {
             // The response of this read index request is lost, but we need it for
             // the memory lock checking result. Resend the request.
             if let Some(read_index) = read.addition_request.take() {
@@ -83,7 +83,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 self.response_replica_read(&mut read, ctx);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
-                self.pending_reads.push_front(read);
+                self.pending_reads_mut().push_front(read);
                 break;
             }
         }

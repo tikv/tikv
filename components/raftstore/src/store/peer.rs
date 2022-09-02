@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    Engines, KvEngine, PerfContext, RaftEngine, WriteBatch, WriteOptions, CF_LOCK,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_LOCK,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -277,19 +277,19 @@ pub struct CheckTickResult {
     reason: &'static str,
 }
 
-pub struct ProposedAdminCmd<C: ErrorCallback> {
+pub struct ProposedAdminCmd<S: Snapshot> {
     cmd_type: AdminCmdType,
     epoch_state: AdminCmdEpochState,
     index: u64,
-    cbs: Vec<C>,
+    cbs: Vec<Callback<S>>,
 }
 
-impl<C: ErrorCallback> ProposedAdminCmd<C> {
+impl<S: Snapshot> ProposedAdminCmd<S> {
     fn new(
         cmd_type: AdminCmdType,
         epoch_state: AdminCmdEpochState,
         index: u64,
-    ) -> ProposedAdminCmd<C> {
+    ) -> ProposedAdminCmd<S> {
         ProposedAdminCmd {
             cmd_type,
             epoch_state,
@@ -299,16 +299,16 @@ impl<C: ErrorCallback> ProposedAdminCmd<C> {
     }
 }
 
-pub struct CmdEpochChecker<C: ErrorCallback> {
+struct CmdEpochChecker<S: Snapshot> {
     // Although it's a deque, because of the characteristics of the settings from
     // `admin_cmd_epoch_lookup`, the max size of admin cmd is 2, i.e. split/merge and change
     // peer.
-    proposed_admin_cmd: VecDeque<ProposedAdminCmd<C>>,
+    proposed_admin_cmd: VecDeque<ProposedAdminCmd<S>>,
     term: u64,
 }
 
-impl<C: ErrorCallback> Default for CmdEpochChecker<C> {
-    fn default() -> CmdEpochChecker<C> {
+impl<S: Snapshot> Default for CmdEpochChecker<S> {
+    fn default() -> CmdEpochChecker<S> {
         CmdEpochChecker {
             proposed_admin_cmd: VecDeque::new(),
             term: 0,
@@ -316,7 +316,7 @@ impl<C: ErrorCallback> Default for CmdEpochChecker<C> {
     }
 }
 
-impl<C: ErrorCallback + std::fmt::Debug> CmdEpochChecker<C> {
+impl<S: Snapshot> CmdEpochChecker<S> {
     fn maybe_update_term(&mut self, term: u64) {
         assert!(term >= self.term);
         if term > self.term {
@@ -334,7 +334,7 @@ impl<C: ErrorCallback + std::fmt::Debug> CmdEpochChecker<C> {
     ///
     /// Returns None if passing the epoch check, otherwise returns a index which
     /// is the last admin cmd index conflicted with this proposal.
-    pub fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
+    fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
         self.maybe_update_term(term);
         let (check_ver, check_conf_ver) = if !req.has_admin_request() {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
@@ -410,7 +410,7 @@ impl<C: ErrorCallback + std::fmt::Debug> CmdEpochChecker<C> {
         }
     }
 
-    fn attach_to_conflict_cmd(&mut self, index: u64, cb: C) {
+    fn attach_to_conflict_cmd(&mut self, index: u64, cb: Callback<S>) {
         if let Some(cmd) = self
             .proposed_admin_cmd
             .iter_mut()
@@ -427,7 +427,7 @@ impl<C: ErrorCallback + std::fmt::Debug> CmdEpochChecker<C> {
     }
 }
 
-impl<C: ErrorCallback> Drop for CmdEpochChecker<C> {
+impl<S: Snapshot> Drop for CmdEpochChecker<S> {
     fn drop(&mut self) {
         if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
             for mut state in self.proposed_admin_cmd.drain(..) {
@@ -601,8 +601,8 @@ pub fn can_amend_read<I: RequestInspector, C>(
     req: &RaftCmdRequest,
     lease_state: LeaseState,
     max_lease: TimeDuration,
+    now: Timespec,
 ) -> bool {
-    let now = monotonic_raw_now();
     match lease_state {
         // Here combine the new read request with the previous one even if the lease expired
         // is ok because in this case, the previous read index must be sent out with a valid
@@ -932,7 +932,7 @@ where
     pub txn_ext: Arc<TxnExt>,
 
     /// Check whether this proposal can be proposed based on its epoch.
-    cmd_epoch_checker: CmdEpochChecker<Callback<EK::Snapshot>>,
+    cmd_epoch_checker: CmdEpochChecker<EK::Snapshot>,
 
     // disk full peer set.
     pub disk_full_peers: DiskFullPeers,
@@ -1024,7 +1024,7 @@ where
             raft_group,
             raft_max_inflight_msgs: cfg.raft_max_inflight_msgs,
             proposals: ProposalQueue::new(tag.clone()),
-            pending_reads: Default::default(),
+            pending_reads: ReadIndexQueue::new(tag.clone()),
             long_uncommitted_threshold: cfg.long_uncommitted_base_threshold.0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
@@ -3290,7 +3290,7 @@ where
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(&self.tag, states);
+            self.pending_reads.advance_leader_reads(states);
             propose_time = self.pending_reads.last_ready().map(|r| r.propose_time);
             if self.ready_to_handle_read() {
                 while let Some(mut read) = self.pending_reads.pop_front() {
@@ -3911,6 +3911,7 @@ where
                 &req,
                 lease_state,
                 poll_ctx.cfg.raft_store_max_leader_lease(),
+                now,
             ) {
                 // Must use the commit index of `PeerStorage` instead of the commit index
                 // in raft-rs which may be greater than the former one.

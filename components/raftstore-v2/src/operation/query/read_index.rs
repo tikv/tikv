@@ -63,7 +63,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
-        self.pending_reads.push_back(read, is_leader);
+        self.pending_reads_mut().push_back(read, is_leader);
         debug!(
             self.logger,
             "request to get a read index";
@@ -84,16 +84,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) -> bool {
         let lease_state = self.inspect_lease();
         if can_amend_read::<Peer<EK, ER>, QueryResChannel>(
-            self.pending_reads.back(),
+            self.pending_reads().back(),
             &req,
             lease_state,
             poll_ctx.cfg.raft_store_max_leader_lease(),
+            now,
         ) {
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
-            let commit_index = self.storage().commit_index();
-            if let Some(read) = self.pending_reads.back_mut() {
+            let commit_index = self.storage().entry_storage().commit_index();
+            if let Some(read) = self.pending_reads_mut().back_mut() {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
                 read.push_command(req, ch, commit_index);
@@ -242,16 +243,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // NOTE: there could still be some pending reads proposed by the peer when it
             // was leader. They will be cleared in `clear_uncommitted_on_role_change` later
             // in the function.
-            self.pending_reads.advance_replica_reads(states);
+            self.pending_reads_mut().advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else {
-            self.pending_reads.advance_leader_reads(&self.tag, states);
-            if let Some(propose_time) = self.pending_reads.last_ready().map(|r| r.propose_time) {
+            self.pending_reads_mut().advance_leader_reads(states);
+            if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time) {
                 if !self.leader_lease_mut().is_suspect() {
                     self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
                 }
             }
-            while let Some(mut read) = self.pending_reads.pop_front() {
+            while let Some(mut read) = self.pending_reads_mut().pop_front() {
                 self.response_read(&mut read, ctx);
             }
         }
@@ -261,7 +262,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads.clear_uncommitted_on_role_change(term);
+            self.pending_reads_mut()
+                .clear_uncommitted_on_role_change(term);
         }
     }
 
@@ -300,9 +302,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
-        if self.pending_remove() {
-            return;
-        }
         debug!(
             self.logger,
             "update read progress";

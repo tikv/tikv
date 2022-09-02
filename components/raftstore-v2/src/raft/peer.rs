@@ -52,12 +52,10 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) async_writer: AsyncWriter<EK, ER>,
     has_ready: bool,
     pub(crate) logger: Logger,
-    pub(crate) pending_reads: ReadIndexQueue<QueryResChannel>,
+    pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
-    pub(crate) tag: String,
 
     leader_lease: Lease,
-    pending_remove: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -129,19 +127,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             async_writer: AsyncWriter::new(region_id, peer_id),
             logger,
             peer_cache: vec![],
-            pending_reads: Default::default(),
+            pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
                 applied_index,
                 REGION_READ_PROGRESS_CAP,
-                tag.clone(),
+                tag,
             )),
-            tag,
             leader_lease: Lease::new(
                 cfg.raft_store_max_leader_lease(),
                 cfg.renew_leader_lease_advance_duration(),
             ),
-            pending_remove: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -193,12 +189,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn pending_remove(&self) -> bool {
-        self.pending_remove
-    }
-
     pub fn storage_mut(&mut self) -> &mut Storage<ER> {
         self.raft_group.mut_store()
+    }
+
+    #[inline]
+    pub fn pending_reads(&self) -> &ReadIndexQueue<QueryResChannel> {
+        &self.pending_reads
+    }
+
+    #[inline]
+    pub fn pending_reads_mut(&mut self) -> &mut ReadIndexQueue<QueryResChannel> {
+        &mut self.pending_reads
     }
 
     #[inline]

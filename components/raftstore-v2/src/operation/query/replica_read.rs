@@ -82,7 +82,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     "read rejected by safe timestamp";
                     "safe ts" => safe_ts,
                     "read ts" => read_ts,
-                    "tag" => &self.tag,
                 );
                 let mut response = cmd_resp::new_error(Error::DataIsNotReady {
                     region_id: region.get_id(),

@@ -184,11 +184,6 @@ impl<ER: RaftEngine> Storage<ER> {
     pub fn is_initialized(&self) -> bool {
         self.region_state.get_tablet_index() != 0
     }
-
-    #[inline]
-    pub fn commit_index(&self) -> u64 {
-        self.raft_state().get_hard_state().get_commit()
-    }
 }
 
 impl<ER: RaftEngine> raft::Storage for Storage<ER> {
