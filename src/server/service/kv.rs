@@ -1721,6 +1721,9 @@ fn future_flashback_to_version<
             Err(e) => Err(e),
             Ok(_) => f.await?,
         };
+        fail_point!("skip_finish_flashback_to_version", |_| {
+            return Ok(FlashbackToVersionResponse::default());
+        });
         // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
         // flashback has been finished.
         raft_router_clone.significant_send(region_id, SignificantMsg::FinishFlashback)?;
