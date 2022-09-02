@@ -93,11 +93,11 @@ impl<T> Ord for TimeoutTask<T> {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer();
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer("timer");
 }
 
 /// Create a global timer with specific thread name.
-pub fn start_global_timer_with_name(name: &str) -> Handle {
+pub fn start_global_timer(name: &str) -> Handle {
     let (tx, rx) = mpsc::channel();
     let props = crate::thread_group::current_properties();
     Builder::new()
@@ -113,10 +113,6 @@ pub fn start_global_timer_with_name(name: &str) -> Handle {
         })
         .unwrap();
     rx.recv().unwrap()
-}
-
-fn start_global_timer() -> Handle {
-    start_global_timer_with_name("timer")
 }
 
 /// A struct that marks the *zero* time.

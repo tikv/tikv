@@ -1159,7 +1159,7 @@ pub mod tests {
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
             ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
+        store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = use_delete_range;
         store_cfg.snap_generator_pool_size = 2;
         Arc::new(VersionTrack::new(store_cfg))

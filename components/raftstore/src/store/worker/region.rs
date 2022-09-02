@@ -687,7 +687,7 @@ where
     pending_applies: VecDeque<Task<EK::Snapshot>>,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
-    stale_peer_check_tick: usize,
+    clean_stale_ranges_tick: usize,
     tiflash_stores: HashMap<u64, bool>,
     pd_client: Option<Arc<T>>,
 }
@@ -724,7 +724,7 @@ where
             clean_stale_check_interval: Duration::from_millis(
                 cfg.value().region_worker_tick_interval.as_millis(),
             ),
-            stale_peer_check_tick: cfg.value().stale_peer_check_tick,
+            clean_stale_ranges_tick: cfg.value().clean_stale_ranges_tick,
             tiflash_stores: HashMap::default(),
             pd_client,
         }
@@ -869,7 +869,7 @@ where
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
-        if self.clean_stale_tick >= self.stale_peer_check_tick {
+        if self.clean_stale_tick >= self.clean_stale_ranges_tick {
             self.ctx.clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
@@ -927,7 +927,7 @@ mod tests {
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
             ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.stale_peer_check_tick = STALE_PEER_CHECK_TICK;
+        store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
         store_cfg.use_delete_range = use_delete_range;
         store_cfg.snap_generator_pool_size = 2;
         Arc::new(VersionTrack::new(store_cfg))
