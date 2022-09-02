@@ -37,6 +37,7 @@ impl<'a> JsonRef<'a> {
                 .map_or(PRECEDENCE_NULL, |_| PRECEDENCE_BOOLEAN),
             JsonType::I64 | JsonType::U64 | JsonType::Double => PRECEDENCE_NUMBER,
             JsonType::String => PRECEDENCE_STRING,
+            JsonType::Opaque => PRECEDENCE_OPAQUE,
         }
     }
 
@@ -139,6 +140,15 @@ impl<'a> PartialOrd for JsonRef<'a> {
                         }
                     }
                     Some(left_count.cmp(&right_count))
+                }
+                JsonType::Opaque => {
+                    if let (Ok(left), Ok(right)) =
+                        (self.get_opaque_bytes(), right.get_opaque_bytes())
+                    {
+                        left.partial_cmp(right)
+                    } else {
+                        return None;
+                    }
                 }
             };
         }

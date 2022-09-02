@@ -90,11 +90,12 @@ use super::super::{datum::Datum, Error, Result};
 use crate::{
     codec::{
         convert::ConvertTo,
-        data_type::{Decimal, Real},
+        data_type::{BytesRef, Decimal, Real},
         mysql,
         mysql::{Duration, Time, TimeType},
     },
     expr::EvalContext,
+    FieldTypeTp,
 };
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
@@ -109,6 +110,10 @@ pub enum JsonType {
     U64 = 0x0a,
     Double = 0x0b,
     String = 0x0c,
+
+    // It's a special value for the compatibility with MySQL.
+    // It will store the raw buffer containing unexpected type (e.g. Binary).
+    Opaque = 0x0d,
 }
 
 impl TryFrom<u8> for JsonType {
@@ -206,6 +211,20 @@ impl<'a> JsonRef<'a> {
         Ok(str::from_utf8(self.get_str_bytes()?)?)
     }
 
+    // Returns the opaque value in bytes
+    pub(crate) fn get_opaque_bytes(&self) -> Result<&'a [u8]> {
+        assert_eq!(self.type_code, JsonType::Opaque);
+        let val = self.value();
+        let (str_len, len_len) = NumberCodec::try_decode_var_u64(&val[1..])?;
+        Ok(&val[(len_len + 1)..len_len + 1 + str_len as usize])
+    }
+
+    pub(crate) fn get_opaque_type(&self) -> Result<FieldTypeTp> {
+        assert_eq!(self.type_code, JsonType::Opaque);
+        let val = self.value();
+        FieldTypeTp::from_u8(val[0]).ok_or(box_err!("invalid opaque type code"))
+    }
+
     // Return whether the value is zero.
     // https://dev.mysql.com/doc/refman/8.0/en/json.html#Converting%20between%20JSON%20and%20non-JSON%20values
     pub(crate) fn is_zero(&self) -> bool {
@@ -217,6 +236,7 @@ impl<'a> JsonRef<'a> {
             JsonType::U64 => self.get_u64() == 0,
             JsonType::Double => self.get_double() == 0f64,
             JsonType::String => false,
+            JsonType::Opaque => false,
         }
     }
 
@@ -282,6 +302,12 @@ impl Json {
         let mut value = vec![];
         value.write_json_str(s)?;
         Ok(Self::new(JsonType::String, value))
+    }
+
+    pub fn from_opaque(typ: FieldTypeTp, bytes: BytesRef<'_>) -> Result<Self> {
+        let mut value = vec![];
+        value.write_json_opaque(typ, bytes)?;
+        Ok(Self::new(JsonType::Opaque, value))
     }
 
     /// Creates a `literal` JSON from a `bool`
@@ -414,7 +440,7 @@ impl<'a> ConvertTo<f64> for JsonRef<'a> {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let d = match self.get_type() {
-            JsonType::Array | JsonType::Object => ctx
+            JsonType::Array | JsonType::Object | JsonType::Opaque => ctx
                 .handle_truncate_err(Error::truncated_wrong_val("Float", self.to_string()))
                 .map(|_| 0f64)?,
             JsonType::U64 => self.get_u64() as f64,
