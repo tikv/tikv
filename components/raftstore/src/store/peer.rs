@@ -5963,7 +5963,7 @@ mod tests {
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
 
-        let mut epoch_checker = CmdEpochChecker::<Callback<KvTestSnapshot>>::default();
+        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
 
         assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
         assert_eq!(epoch_checker.term, 10);
