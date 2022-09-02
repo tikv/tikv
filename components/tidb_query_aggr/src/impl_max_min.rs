@@ -62,8 +62,7 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         assert_eq!(root_expr.get_tp(), E::TP);
-        let eval_type =
-            EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();
+        let eval_type = box_try!(EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()));
         let is_unsigned = exp
             .ret_field_type(src_schema)
             .as_accessor()
@@ -950,6 +949,21 @@ mod tests {
             .unwrap();
 
         let src_schema = [FieldTypeTp::LongLong.into()];
+        let mut schema = vec![];
+        let mut exp = vec![];
+        let mut ctx = EvalContext::default();
+        AggrFnDefinitionParserExtremum::<Max>::new()
+            .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_illegal_request_of_set() {
+        let expr = ExprDefBuilder::aggr_func(ExprType::Max, FieldTypeTp::Set) // Expect Set
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Set))
+            .build();
+
+        let src_schema = [FieldTypeTp::Set.into()];
         let mut schema = vec![];
         let mut exp = vec![];
         let mut ctx = EvalContext::default();
