@@ -79,19 +79,10 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.hibernate_regions = false;
 
     // disable auto compactions during the restore
-    // config.rocksdb.defaultcf.disable_auto_compactions = true;
-    // config.rocksdb.writecf.disable_auto_compactions = true;
-    // config.rocksdb.lockcf.disable_auto_compactions = true;
-    // config.rocksdb.raftcf.disable_auto_compactions = true;
-
-    // TODO: in recovery mode, rocksdb may need a optimize for data write, the way
-    // we done bellow does not work in rocksdb.
-    config.rocksdb.defaultcf.level0_stop_writes_trigger = Some(12800);
-    config.rocksdb.defaultcf.level0_slowdown_writes_trigger = Some(6400);
-    config.rocksdb.writecf.level0_stop_writes_trigger = Some(12800);
-    config.rocksdb.writecf.level0_slowdown_writes_trigger = Some(6400);
-    config.rocksdb.lockcf.level0_stop_writes_trigger = Some(12800);
-    config.rocksdb.lockcf.level0_slowdown_writes_trigger = Some(6400);
+    config.rocksdb.defaultcf.disable_auto_compactions = true;
+    config.rocksdb.writecf.disable_auto_compactions = true;
+    config.rocksdb.lockcf.disable_auto_compactions = true;
+    config.rocksdb.raftcf.disable_auto_compactions = true;
 
     config.rocksdb.max_background_jobs = 32;
     // disable resolve ts during the recovery

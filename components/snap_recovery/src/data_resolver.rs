@@ -164,7 +164,7 @@ impl LockResolverWorker {
     pub fn cleanup_lock(&mut self, wb: &mut RocksWriteBatchVec) -> Result<bool> {
         let mut key_count: u64 = 0;
         while self.lock_iter.valid().unwrap() {
-            wb.delete_cf(CF_LOCK, self.lock_iter.key());
+            box_try!(wb.delete_cf(CF_LOCK, self.lock_iter.key()));
             self.lock_iter.next().unwrap();
             key_count += 1;
         }

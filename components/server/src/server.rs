@@ -292,7 +292,11 @@ where
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
             // connect_to_pd_cluster retreived the cluster id from pd
             let cluster_id = config.server.cluster_id.clone();
-            snap_recovery::init_cluster::start_recovery(config.clone(), cluster_id, pd_client.clone());
+            snap_recovery::init_cluster::start_recovery(
+                config.clone(),
+                cluster_id,
+                pd_client.clone(),
+            );
         }
 
         // Initialize and check config

@@ -7,7 +7,7 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Iterable, Peekable, RaftEngine, CF_RAFT};
+use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Iterable, Peekable, RaftEngine, CF_RAFT};
 use futures::{
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
@@ -24,10 +24,12 @@ use kvproto::{
 };
 use raftstore::{
     router::RaftStoreRouter,
-    //    store::peer::{RecoveryLeaderWaitApplySyncer, RecoveryFollowerWaitApplySyncer},
-    store::fsm::RaftRouter,
-    store::msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
-    store::transport::SignificantRouter,
+    store::{
+        fsm::RaftRouter,
+        msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
+        transport::SignificantRouter,
+        RecoveryWaitApplySyncer,
+    },
 };
 use thiserror::Error;
 
@@ -139,6 +141,28 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         }
     }
 
+    fn set_db_options(&self, cf_name: &str) -> Result<()> {
+        let level0_stop_writes_trigger: u32 = 1 << 30;
+        let level0_slowdown_writes_trigger: u32 = 1 << 30;
+        let opts = [
+            (
+                "level0_stop_writes_trigger".to_owned(),
+                level0_stop_writes_trigger.to_string(),
+            ),
+            (
+                "level0_slowdown_writes_trigger".to_owned(),
+                level0_slowdown_writes_trigger.to_string(),
+            ),
+        ];
+
+        let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        self.engines
+            .kv
+            .set_options_cf(cf_name, tmp_opts.as_slice())
+            .unwrap();
+        Ok(())
+    }
+
     // the function is to read region meta from rocksdb and raft engine
     fn get_local_region_meta(&self) -> Vec<RegionMeta> {
         // read the local region info
@@ -222,12 +246,11 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // trigger closure to send finish info back.
     fn wait_apply_last(&self, sender: SyncSender<u64>) {
         // PR https://github.com/tikv/tikv/pull/13374
-        // let wait_apply =
-        // RecoveryFollowerWaitApplySyncer::new(sender.clone());
+        let wait_apply = RecoveryWaitApplySyncer::new(0, sender.clone());
         // ensure recovery cmd be executed so the leader apply to last index
-        // self.router.broadcast_normal(|| {
-        //     PeerMsg::SignificantMsg(SignificantMsg::RecoveryFollowerWaitApply(wait_apply.clone()))
-        // });
+        self.router.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::RecoveryWaitApply(wait_apply.clone()))
+        });
     }
 }
 
@@ -239,6 +262,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         mut sink: ServerStreamingSink<RegionMeta>,
     ) {
         let region_meta = self.get_local_region_meta();
+        let db = self.engines.kv.clone();
+        for cf_name in db.cf_names() {
+            self.set_db_options(cf_name).expect("set db option failure");
+        }
+
         let task = async move {
             let mut metas = stream::iter(
                 region_meta
@@ -312,9 +340,13 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
                 let (tx, rx) = sync_channel::<u64>(1);
-                // let wait_apply = RecoveryLeaderWaitApplySyncer::new(region_id, tx.clone());
-                // raft_router.significant_send(region_id,
-                // SignificantMsg::RecoveryLeaderWaitApply(wait_apply.clone())).unwrap();
+                let wait_apply = RecoveryWaitApplySyncer::new(region_id, tx.clone());
+                raft_router
+                    .significant_send(
+                        region_id,
+                        SignificantMsg::RecoveryWaitApply(wait_apply.clone()),
+                    )
+                    .unwrap();
                 rx_apply.push(Some(rx));
             }
 

@@ -79,11 +79,10 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult,
-            RecoveryWaitApplySyncer, RecoveryState,
-            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
-            TRANSFER_LEADER_COMMAND_REPLY_CTX,
+            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, RecoveryState,
+            RecoveryWaitApplySyncer, StaleState, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryWaitApplySyncer, TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
         transport::Transport,
@@ -1357,9 +1356,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::RecoveryWaitApply(syncer) => {
-                self.on_recovery_wait_apply(syncer)
-            }
+            SignificantMsg::RecoveryWaitApply(syncer) => self.on_recovery_wait_apply(syncer),
         }
     }
 

@@ -31,9 +31,9 @@ use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        RecoveryWaitApplySyncer,
-        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+        RecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+        UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
