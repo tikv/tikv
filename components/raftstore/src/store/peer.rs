@@ -5029,13 +5029,13 @@ where
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
                 if self.is_force_leader() {
                     info!(
-                        "Unsafe recovery, finish wait apply";
-                        "region_id" => self.region().get_id(),
-                         "peer_id" => self.peer_id(),
-                         "target_index" => target_index,
-                         "applied" =>  self.raft_group.raft.raft_log.applied,
-                         "force" => force,
-                     );
+                       "Unsafe recovery, finish wait apply";
+                       "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_index" => target_index,
+                        "applied" =>  self.raft_group.raft.raft_log.applied,
+                        "force" => force,
+                    );
                 }
                 self.unsafe_recovery_state = None;
             }
@@ -5046,17 +5046,17 @@ where
         if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
             &self.snapshot_recovery_state
         {
-                if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                    info!("snapshot recovery wait apply finished";
-                        "region_id" => self.region().get_id(),
-                        "peer_id" => self.peer_id(),
-                        "target_index" => target_index,
-                        "applied" =>  self.raft_group.raft.raft_log.applied,
-                        "force" => force,
-                    );
-                    self.snapshot_recovery_state = None;
-                }
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                info!("snapshot recovery wait apply finished";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                );
+                self.snapshot_recovery_state = None;
             }
+        }
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {

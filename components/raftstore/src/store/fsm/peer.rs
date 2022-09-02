@@ -81,9 +81,9 @@ use crate::{
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
-            SnapshotRecoveryWaitApplySyncer, SnapshotRecoveryState, UnsafeRecoveryState,
-            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
-            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+            SnapshotRecoveryState, SnapshotRecoveryWaitApplySyncer, StaleState,
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
@@ -792,12 +792,13 @@ where
             );
 
             if !*failed.lock().unwrap() {
-                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
-                    syncer,
-                    failed_voters,
-                    target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                    demote_after_exit: true,
-                });
+                self.fsm.peer.unsafe_recovery_state =
+                    Some(UnsafeRecoveryState::DemoteFailedVoters {
+                        syncer,
+                        failed_voters,
+                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        demote_after_exit: true,
+                    });
             }
         } else {
             self.unsafe_recovery_demote_failed_voters(syncer, failed_voters);
@@ -830,12 +831,13 @@ where
             }));
             self.propose_raft_command_internal(req, callback, DiskFullOpt::AllowedOnAlmostFull);
             if !*failed.lock().unwrap() {
-                self.fsm.peer.unsafe_recovery_state = Some(UnsafeRecoveryState::DemoteFailedVoters {
-                    syncer,
-                    failed_voters: vec![], // No longer needed since here.
-                    target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
-                    demote_after_exit: false,
-                });
+                self.fsm.peer.unsafe_recovery_state =
+                    Some(UnsafeRecoveryState::DemoteFailedVoters {
+                        syncer,
+                        failed_voters: vec![], // No longer needed since here.
+                        target_index: self.fsm.peer.raft_group.raft.raft_log.last_index(),
+                        demote_after_exit: false,
+                    });
             }
         } else {
             warn!(
@@ -2238,7 +2240,9 @@ where
         }
 
         if self.fsm.peer.snapshot_recovery_state.is_some() {
-            self.fsm.peer.snapshot_recovery_maybe_finish_wait_apply(false);
+            self.fsm
+                .peer
+                .snapshot_recovery_maybe_finish_wait_apply(false);
         }
     }
 
