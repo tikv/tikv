@@ -200,14 +200,20 @@ where
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
+        let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
                 .unwrap();
-            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
+        if ctx.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -251,9 +257,14 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
+        let mut flags = 0;
         if txn_extra.one_pc {
-            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+            flags |= WriteBatchFlags::ONE_PC.bits();
         }
+        if txn_extra.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);

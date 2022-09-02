@@ -107,6 +107,17 @@ impl<'a> Serialize for JsonRef<'a> {
                 }
                 tup.end()
             }
+            JsonType::Opaque => {
+                let bytes = self
+                    .get_opaque_bytes()
+                    .map_err(|_| SerError::custom("invalid opaque value"))?;
+                let typ = self
+                    .get_opaque_type()
+                    .map_err(|_| SerError::custom("invalid opaque type code"))?;
+
+                let str = format!("base64:type{}:{}", typ, base64::encode(bytes));
+                serializer.serialize_str(&str)
+            }
         }
     }
 }

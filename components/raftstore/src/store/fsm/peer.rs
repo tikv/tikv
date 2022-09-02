@@ -21,6 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use futures::channel::oneshot::Sender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
@@ -33,8 +34,8 @@ use kvproto::{
         StatusCmdType, StatusResponse,
     },
     raft_serverpb::{
-        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
-        RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+        ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftMessage, RaftSnapshotData,
+        RaftTruncatedState, RegionLocalState,
     },
     replication_modepb::{DrAutoSyncState, ReplicationMode},
 };
@@ -79,11 +80,12 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
+            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
+        region_meta::RegionMeta,
         transport::Transport,
         util,
         util::{is_learner, KeysInfoFormatter, LeaseState},
@@ -92,8 +94,8 @@ use crate::{
             GcSnapshotTask, RaftlogFetchTask, RaftlogGcTask, ReadDelegate, ReadProgress,
             RegionTask, SplitCheckTask,
         },
-        AbstractPeer, CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg,
-        PeerTick, ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
         SignificantMsg, SnapKey, StoreMsg, WriteCallback,
     },
     Error, Result,
@@ -922,6 +924,38 @@ where
         syncer.report_for_self(self_report);
     }
 
+    // Call msg PrepareFlashback to stop the scheduling and RW tasks.
+    // Once called, it will wait for the channel's notification in FlashbackState to
+    // finish. We place a flag in the request, which is checked when the
+    // pre_propose_raft_command is called. Stopping tasks is done by applying
+    // the flashback-only command in this way, But for RW local reads which need
+    // to be considered, we let the leader lease to None to ensure that local reads
+    // are not executed.
+    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
+        info!(
+            "prepare flashback";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        if self.fsm.peer.flashback_state.is_some() {
+            ch.send(false).unwrap();
+            return;
+        }
+        self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+        // Let the leader lease to None to ensure that local reads are not executed.
+        self.fsm.peer.leader_lease_mut().expire_remote_lease();
+        self.fsm.peer.maybe_finish_flashback_wait_apply();
+    }
+
+    fn on_finish_flashback(&mut self) {
+        info!(
+            "finish flashback";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        self.fsm.peer.flashback_state.take();
+    }
+
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -1001,7 +1035,24 @@ where
             CasualMessage::ForceCompactRaftLogs => {
                 self.on_raft_gc_log_tick(true);
             }
-            CasualMessage::AccessPeer(cb) => cb(self.fsm as &mut dyn AbstractPeer),
+            CasualMessage::AccessPeer(cb) => {
+                let peer = &self.fsm.peer;
+                let store = peer.get_store();
+                let mut local_state = RegionLocalState::default();
+                local_state.set_region(store.region().clone());
+                if let Some(s) = &peer.pending_merge_state {
+                    local_state.set_merge_state(s.clone());
+                }
+                if store.is_applying_snapshot() {
+                    local_state.set_state(PeerState::Applying);
+                }
+                cb(RegionMeta::new(
+                    &local_state,
+                    store.apply_state(),
+                    self.fsm.hibernate_state.group_state(),
+                    peer.raft_group.status(),
+                ))
+            }
             CasualMessage::QueryRegionLeaderResp { region, leader } => {
                 // the leader already updated
                 if self.fsm.peer.raft_group.raft.leader_id != raft::INVALID_ID
@@ -1317,6 +1368,8 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
+            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
+            SignificantMsg::FinishFlashback => self.on_finish_flashback(),
         }
     }
 
@@ -2153,6 +2206,10 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
+        }
+        // TODO: combine recovery state and flashback state as a wait apply queue.
+        if self.fsm.peer.flashback_state.is_some() {
+            self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
 
@@ -3754,8 +3811,13 @@ where
             // New peer derive write flow from parent region,
             // this will be used by balance write flow.
             new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            new_peer.peer.last_compacted_idx =
-                new_peer.apply_state().get_truncated_state().get_index() + 1;
+            new_peer.peer.last_compacted_idx = new_peer
+                .peer
+                .get_store()
+                .apply_state()
+                .get_truncated_state()
+                .get_index()
+                + 1;
             let campaigned = new_peer.peer.maybe_campaign(is_leader);
             new_peer.has_ready |= campaigned;
 
@@ -4714,12 +4776,23 @@ where
             return Ok(Some(resp));
         }
 
-        // Check whether the store has the right peer to handle the request.
         let region_id = self.region_id();
+        // When in the flashback state, we should not allow any other request to be
+        // proposed.
+        if self.fsm.peer.flashback_state.is_some() {
+            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
+            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
+            if !flags.contains(WriteBatchFlags::FLASHBACK) {
+                return Err(Error::FlashbackInProgress(self.region_id()));
+            }
+        }
+
+        // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
         if self.fsm.peer.force_leader.is_some() {
+            self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // in force leader state, forbid requests to make the recovery progress less
             // error-prone
             if !(msg.has_admin_request()
@@ -6217,30 +6290,6 @@ where
         }
 
         Ok(resp)
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> AbstractPeer for PeerFsm<EK, ER> {
-    fn meta_peer(&self) -> &metapb::Peer {
-        &self.peer.peer
-    }
-    fn group_state(&self) -> GroupState {
-        self.hibernate_state.group_state()
-    }
-    fn region(&self) -> &metapb::Region {
-        self.peer.raft_group.store().region()
-    }
-    fn apply_state(&self) -> &RaftApplyState {
-        self.peer.raft_group.store().apply_state()
-    }
-    fn raft_status(&self) -> raft::Status<'_> {
-        self.peer.raft_group.status()
-    }
-    fn raft_commit_index(&self) -> u64 {
-        self.peer.raft_group.store().commit_index()
-    }
-    fn pending_merge_state(&self) -> Option<&MergeState> {
-        self.peer.pending_merge_state.as_ref()
     }
 }
 

@@ -1,16 +1,20 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 
 use cpu_time::ThreadTime;
 use futures::compat::Future01CompatExt;
 use online_config::{ConfigChange, ConfigManager};
+use pin_project::pin_project;
 
 use super::{
     config::{ReadableDuration, ReadableSize},
@@ -110,7 +114,19 @@ impl<'a> Sample {
         }
     }
 
-    fn add_cpu_time(&mut self, time: Duration) {
+    /// Record thread cpu time in async manner. The function creates a future
+    /// that can track the cpu time used during the future's poll, caller
+    /// should explicitly call `add_cpu_time` after the future is ready.
+    pub fn observe_cpu_async<F: Future>(&self, f: F) -> CpuObserveFuture<F> {
+        CpuObserveFuture {
+            enabled: self.enable_cpu_limit,
+            total_duration: Duration::ZERO,
+            timer: None,
+            delegate: f,
+        }
+    }
+
+    pub fn add_cpu_time(&mut self, time: Duration) {
         self.cpu_time += time;
     }
 }
@@ -125,6 +141,37 @@ impl<'a> Drop for CpuObserveGuard<'a> {
         if let Some(timer) = self.timer {
             self.sample.add_cpu_time(timer.elapsed());
         }
+    }
+}
+
+/// CpuObserveFuture is a future that used to track thread cpu time.
+#[pin_project]
+pub struct CpuObserveFuture<F> {
+    enabled: bool,
+    total_duration: Duration,
+    timer: Option<ThreadTime>,
+    #[pin]
+    delegate: F,
+}
+
+// `ThreadTime` is not Send, but is safe here because we only use it duration
+// each poll.
+unsafe impl<F: Future + Send> Send for CpuObserveFuture<F> {}
+
+impl<F: Future> Future for CpuObserveFuture<F> {
+    type Output = (Duration, F::Output);
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        if *this.enabled {
+            *this.timer = Some(ThreadTime::now());
+        }
+        let res = this.delegate.poll(cx);
+        if let Some(timer) = this.timer {
+            *this.total_duration += timer.elapsed();
+        }
+        let dur = *this.total_duration;
+        res.map(|r| (dur, r))
     }
 }
 
