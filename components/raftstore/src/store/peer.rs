@@ -605,12 +605,12 @@ impl UnsafeRecoveryExecutePlanSyncer {
 }
 // Syncer only send to leader in 2nd BR restore
 #[derive(Clone, Debug)]
-pub struct RecoveryWaitApplySyncer {
+pub struct SnapshotRecoveryWaitApplySyncer {
     _closure: Arc<InvokeClosureOnDrop>,
     abort: Arc<Mutex<bool>>,
 }
 
-impl RecoveryWaitApplySyncer {
+impl SnapshotRecoveryWaitApplySyncer {
     pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
@@ -630,7 +630,7 @@ impl RecoveryWaitApplySyncer {
                 })
                 .unwrap();
         }));
-        RecoveryWaitApplySyncer {
+        SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
         }
@@ -724,7 +724,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
-pub enum RecoveryState {
+pub enum SnapshotRecoveryState {
     // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
     // and force forward to last index once follower appended and then it also is checked
     // every time this peer applies a the last index, if the last index is met, this state is
@@ -732,9 +732,11 @@ pub enum RecoveryState {
     // the next step of recovery process.
     WaitLogApplyToLast {
         target_index: u64,
-        syncer: RecoveryWaitApplySyncer,
+        syncer: SnapshotRecoveryWaitApplySyncer,
     },
+}
 
+pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
     // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
@@ -961,8 +963,9 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
-    pub recovery_state: Option<RecoveryState>,
+    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
     pub flashback_state: Option<FlashbackState>,
+    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1093,8 +1096,9 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
-            recovery_state: None,
+            unsafe_recovery_state: None,
             flashback_state: None,
+            snapshot_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2451,13 +2455,17 @@ where
                         self.raft_group.store().region(),
                     );
 
-                    if self.recovery_state.is_some() {
+                    if self.unsafe_recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
-                        self.recovery_maybe_finish_wait_apply(/* force= */ false);
+                        self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
                     }
                     if self.flashback_state.is_some() {
                         debug!("flashback finishes applying a snapshot");
                         self.maybe_finish_flashback_wait_apply();
+                    }
+                    if self.snapshot_recovery_state.is_some() {
+                        debug!("snapshot recovery finishes applying a snapshot");
+                        self.snapshot_recovery_maybe_finish_wait_apply(false);
                     }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
@@ -5014,30 +5022,41 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
+    pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
+            &self.unsafe_recovery_state
+        {
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                if self.is_force_leader() {
+                    info!(
+                        "Unsafe recovery, finish wait apply";
+                        "region_id" => self.region().get_id(),
+                         "peer_id" => self.peer_id(),
+                         "target_index" => target_index,
+                         "applied" =>  self.raft_group.raft.raft_log.applied,
+                         "force" => force,
+                     );
+                }
+                self.unsafe_recovery_state = None;
+            }
+        }
+    }
 
-    pub fn recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        match &self.recovery_state {
-            Some(RecoveryState::WaitApply { target_index, .. })
-            | Some(RecoveryState::WaitLogApplyToLast { target_index, .. }) => {
+    pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
+            &self.snapshot_recovery_state
+        {
                 if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                    if self.is_force_leader() {
-                        info!("Unsafe recovery, finish wait apply";);
-                    } else {
-                        info!("snapshot recovery, finish wait apply");
-                    }
-
-                    info!("wait apply finished info";
+                    info!("snapshot recovery wait apply finished";
                         "region_id" => self.region().get_id(),
                         "peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
                     );
-                    self.recovery_state = None;
+                    self.snapshot_recovery_state = None;
                 }
             }
-            Some(_) | None => {}
-        }
     }
 
     pub fn maybe_finish_flashback_wait_apply(&mut self) {
