@@ -5928,6 +5928,7 @@ dependencies = [
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "bitfield",
  "bitflags",
  "boolinator",
