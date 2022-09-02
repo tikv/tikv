@@ -17,8 +17,8 @@ use kvproto::{
     kvrpcpb::{ApiVersion, Context, KeyRange, LockInfo},
     metapb,
 };
-use protobuf::RepeatedField;
 use rand::random;
+use test_raftstore::new_peer;
 use test_storage::*;
 use tikv::{
     coprocessor::checksum_crc64_xor,
@@ -707,10 +707,7 @@ pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) 
 
     let store_id = 1;
     let mut region = metapb::Region::default();
-    region.set_peers(RepeatedField::from_vec(vec![metapb::Peer {
-        store_id,
-        ..Default::default()
-    }]));
+    region.mut_peers().push(new_peer(store_id, 0));
     store.gc_ok(region, 30);
     for k in &keys {
         store.get_none(k.as_bytes(), 15);

@@ -1628,7 +1628,6 @@ mod tests {
         kvrpcpb::{ApiVersion, Op},
         metapb::Peer,
     };
-    use protobuf::RepeatedField;
     use raft::StateRole;
     use raftstore::{
         coprocessor::{
@@ -1636,6 +1635,7 @@ mod tests {
             RegionChangeEvent,
         },
         router::RaftStoreBlackHole,
+        store::util::new_peer,
     };
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
@@ -1707,19 +1707,11 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
 
         let mut region1 = Region::default();
-        region1.set_peers(RepeatedField::from_vec(vec![Peer {
-            store_id,
-            id: 1,
-            ..Default::default()
-        }]));
+        region1.mut_peers().push(new_peer(store_id, 1));
         region1.set_end_key(split_key.to_vec());
 
         let mut region2 = Region::default();
-        region2.set_peers(RepeatedField::from_vec(vec![Peer {
-            store_id,
-            id: 2,
-            ..Default::default()
-        }]));
+        region2.mut_peers().push(new_peer(store_id, 2));
         region2.set_start_key(split_key.to_vec());
 
         let mut gc_worker = GcWorker::new(
@@ -1898,10 +1890,7 @@ mod tests {
         .unwrap();
         let (tx, _rx) = mpsc::channel();
         let mut region = Region::default();
-        region.set_peers(RepeatedField::from_vec(vec![Peer {
-            store_id,
-            ..Default::default()
-        }]));
+        region.mut_peers().push(new_peer(store_id, 0));
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             RaftStoreBlackHole,
@@ -2370,11 +2359,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
 
         let mut region = Region::default();
-        region.set_peers(RepeatedField::from_vec(vec![Peer {
-            store_id: 1,
-            id: 1,
-            ..Default::default()
-        }]));
+        region.mut_peers().push(new_peer(store_id, 1));
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
@@ -2442,7 +2427,7 @@ mod tests {
             region
         }
 
-        fn generate_keys(start: u64, end: u64) -> Peekable<IntoIter<Key>> {
+        fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
                 .into_iter()
                 .map(|i| {
@@ -2450,83 +2435,47 @@ mod tests {
                     Key::from_raw(key.as_bytes())
                 })
                 .collect::<Vec<_>>()
-                .into_iter()
-                .peekable()
         }
-
-        fn assert_equal(
-            iter1: Box<dyn Iterator<Item = Key>>,
-            iter2: Box<dyn Iterator<Item = Key>>,
-        ) {
-            for (k1, k2) in iter1.zip(iter2) {
-                assert_eq!(k1, k2);
-            }
-        }
-
-        // k01 .. k07
-        let keys = generate_keys(1, 7);
 
         // One region cover all keys
-        let regions = vec![init_region(b"k01", b"k07")];
-        let mut keys_in_regions = KeysInRegions {
-            keys: keys.clone(),
-            regions: regions.into_iter().peekable(),
-        };
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert!(region.id == 1);
-        assert_equal(iter, Box::new(keys.clone()));
+        let keys = generate_keys(1, 4);
+        let region = init_region(b"k01", b"k04");
+        let mut iter = keys.clone().into_iter().peekable();
+        let ks = get_keys_in_region(&mut iter, &region);
+        assert!(iter.peek().is_none());
+        assert_eq!(ks, keys);
 
         // More than one regions cover all keys
-        let regions = vec![
-            init_region(b"k01", b"k02"),
-            init_region(b"k02", b"k04"),
-            init_region(b"k04", b"k07"),
-        ];
-        let mut keys_in_regions = KeysInRegions {
-            keys: keys.clone(),
-            regions: regions.into_iter().peekable(),
-        };
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert_eq!(1, region.id);
-        assert_equal(iter, Box::new(generate_keys(1, 2)));
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert_eq!(2, region.id);
-        assert_equal(iter, Box::new(generate_keys(2, 4)));
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert_eq!(3, region.id);
-        assert_equal(iter, Box::new(generate_keys(4, 7)));
-        assert!(keys_in_regions.next().is_none());
+        let keys = generate_keys(1, 9);
+        let region1 = init_region(b"k01", b"k04");
+        let region2 = init_region(b"k04", b"k06");
+        let region3 = init_region(b"k06", b"k09");
+        let mut iter = keys.into_iter().peekable();
+        let ks = get_keys_in_region(&mut iter, &region1);
+        assert_eq!(ks, generate_keys(1, 4));
+        let ks = get_keys_in_region(&mut iter, &region2);
+        assert_eq!(ks, generate_keys(4, 6));
+        let ks = get_keys_in_region(&mut iter, &region3);
+        assert_eq!(ks, generate_keys(6, 9));
+        assert!(iter.peek().is_none());
 
         // Cover partial keys
-        let regions = vec![
-            init_region(b"k00", b"k03", 1),
-            init_region(b"k05", b"k010", 2),
-        ];
-        let mut keys_in_regions = KeysInRegions {
-            keys: keys.clone(),
-            regions: regions.into_iter().peekable(),
-        };
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert_eq!(1, region.id);
-        assert_equal(iter, Box::new(generate_keys(1, 3)));
-        let (iter, region) = keys_in_regions.next().unwrap();
-        assert_eq!(2, region.id);
-        assert_equal(iter, Box::new(generate_keys(5, 7)));
-        assert!(keys_in_regions.next().is_none());
+        let keys = generate_keys(1, 9);
+        let region1 = init_region(b"k01", b"k04");
+        let region2 = init_region(b"k06", b"k09");
+        let mut iter = keys.into_iter().peekable();
+        let ks = get_keys_in_region(&mut iter, &region1);
+        assert_eq!(ks, generate_keys(1, 4));
+        let ks = get_keys_in_region(&mut iter, &region2);
+        assert_eq!(ks, generate_keys(6, 9));
+        assert!(iter.peek().is_none());
 
         // No key
-        let regions = vec![init_region(b"k00", b"k03", 1)];
-        let mut keys_in_regions = KeysInRegions {
-            keys: Vec::new().into_iter().peekable(),
-            regions: regions.into_iter().peekable(),
-        };
-        assert!(keys_in_regions.next().is_none());
-
-        // No region
-        let mut keys_in_regions = KeysInRegions {
-            keys,
-            regions: Vec::new().into_iter().peekable(),
-        };
-        assert!(keys_in_regions.next().is_none());
+        let keys = generate_keys(1, 9);
+        let region = init_region(b"k11", b"k20");
+        let mut iter = keys.into_iter().peekable();
+        let ks = get_keys_in_region(&mut iter, &region);
+        assert!(iter.peek().is_none());
+        assert!(ks.is_empty());
     }
 }

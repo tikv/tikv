@@ -6,10 +6,7 @@ use std::{
     time::Duration,
 };
 
-use kvproto::{
-    kvrpcpb::Op,
-    metapb::{Peer, Region},
-};
+use kvproto::metapb::{Peer, Region};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::store::Callback;
@@ -528,48 +525,4 @@ fn test_stale_read_during_merging_2() {
     value.unwrap_err();
 
     fail::remove(leader_commit_prepare_merge_fp);
-}
-
-#[test]
-fn test_stale_read_with_ts0() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-    cluster.cfg.resolved_ts.enable = true;
-    cluster.run();
-
-    let leader = new_peer(1, 1);
-    cluster.must_transfer_leader(1, leader.clone());
-    let mut leader_client = PeerClient::new(&cluster, 1, leader);
-
-    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
-
-    // Set the `stale_read` flag
-    leader_client.ctx.set_stale_read(true);
-    follower_client2.ctx.set_stale_read(true);
-
-    let commit_ts1 = leader_client.must_kv_write(
-        &pd_client,
-        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
-        b"key1".to_vec(),
-    );
-
-    let commit_ts2 = leader_client.must_kv_write(
-        &pd_client,
-        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
-        b"key1".to_vec(),
-    );
-
-    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
-    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
-    assert!(
-        follower_client2
-            .kv_read(b"key1".to_vec(), 0)
-            .region_error
-            .into_option()
-            .unwrap()
-            .not_leader
-            .is_some()
-    );
-    assert!(leader_client.kv_read(b"key1".to_vec(), 0).not_found);
 }
