@@ -245,8 +245,8 @@ mod tests {
         Storage, TestStorageBuilderApiV1,
     };
 
-    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-        storage: &Storage<E, L, F, TP>,
+    fn prewrite_data<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Ts>,
         primary: Vec<u8>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         start_ts: u64,
@@ -277,8 +277,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn rollback_data<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-        storage: &Storage<E, L, F, TP>,
+    fn rollback_data<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Ts>,
         data: Vec<Vec<u8>>,
         start_ts: u64,
     ) {
@@ -300,8 +300,8 @@ mod tests {
         rx.recv().unwrap();
     }
 
-    fn write_data<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-        storage: &Storage<E, L, F, TP>,
+    fn write_data<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+        storage: &Storage<E, L, F, Ts>,
         data: Vec<(Vec<u8>, Vec<u8>)>,
         ts: u64,
     ) {

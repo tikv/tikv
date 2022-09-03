@@ -156,7 +156,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// that multiple versions can be saved at the same time. Raw operations use raw
 /// keys, which are saved directly to the engine without memcomparable- encoding
 /// and appending timestamp.
-pub struct Storage<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> {
+pub struct Storage<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -179,7 +179,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider 
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<TP>>,
+    causal_ts_provider: Option<Arc<Ts>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -190,8 +190,8 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider 
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1, causal_ts::tests::TestProvider>;
 
-impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Clone
-    for Storage<E, L, F, TP>
+impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Clone
+    for Storage<E, L, F, Ts>
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -217,8 +217,8 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Clo
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Drop
-    for Storage<E, L, F, TP>
+impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Drop
+    for Storage<E, L, F, Ts>
 {
     #[inline]
     fn drop(&mut self) {
@@ -251,7 +251,7 @@ macro_rules! check_key_size {
     };
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Storage<E, L, F, TP> {
+impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Storage<E, L, F, Ts> {
     /// Create a `Storage` from given engine.
     pub fn from_engine<R: FlowStatsReporter>(
         engine: E,
@@ -265,7 +265,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Sto
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<TP>>,
+        causal_ts_provider: Option<Arc<Ts>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1850,7 +1850,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Sto
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<TP>>) -> Result<Option<TimeStamp>> {
+    fn get_causal_ts(ts_provider: &Option<Arc<Ts>>) -> Result<Option<TimeStamp>> {
         if let Some(p) = ts_provider {
             match p.get_ts() {
                 Ok(ts) => Ok(Some(ts)),
@@ -1862,13 +1862,17 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Sto
     }
 
     async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<TP>>,
+        ts_provider: &Option<Arc<Ts>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
         let ts = Self::get_causal_ts(ts_provider)?;
         if let Some(ts) = ts {
             let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
-            // lock with ts encoded key to avoid collision, ts is used to get min_ts in cdc.
+            // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
+            // conflict with TiDB & TxnKV keys, and ts to avoid collision with
+            // other raw write requests. ts in lock value to used by CDC which
+            // get maximum resolved-ts from concurrency_manager.
+            // global_min_lock_ts
             let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
             let key_guard = concurrency_manager.lock_key(&encode_key).await;
             let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
@@ -1908,6 +1912,8 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Sto
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            // get new ts after get key_guard to avoid cdc register_min_ts_event
+            // use a smaller ts then ts used here.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
@@ -2611,10 +2617,10 @@ impl<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static> Sto
         let sched = self.get_scheduler();
         let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            // Raw atomic cmds have two locks, one is CM and the other is txn latch,
-            // Now, cm lock key with ts encoded, so it will not really lock the key.
-            // TODO: Merge the two locks into one to simplify the process, same to other
-            // atomic cmd.
+            // Raw atomic cmds have two locks, one is concurrency_manager and the other is
+            // txn latch, Now, concurrency_manager lock key with ts encoded, it
+            // will not really lock the key. TODO: Merge the two locks into one
+            // to simplify the process, same to other raw atomic commands.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return cb(Err(e));
@@ -3304,9 +3310,9 @@ pub mod test_util {
         E: Engine,
         L: LockManager,
         F: KvFormat,
-        TP: CausalTsProvider + 'static,
+        Ts: CausalTsProvider + 'static,
     >(
-        storage: &Storage<E, L, F, TP>,
+        storage: &Storage<E, L, F, Ts>,
         key: Key,
         start_ts: u64,
         for_update_ts: u64,
@@ -5498,9 +5504,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_put<F: KvFormat, TP: CausalTsProvider>(
+    fn run_raw_batch_put<F: KvFormat, Ts: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F, TP>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, Ts>,
         ctx: Context,
         kvpairs: Vec<KvPair>,
         ttls: Vec<u64>,
@@ -5699,9 +5705,9 @@ mod tests {
         }
     }
 
-    fn run_raw_batch_delete<F: KvFormat, TP: CausalTsProvider>(
+    fn run_raw_batch_delete<F: KvFormat, Ts: CausalTsProvider>(
         for_cas: bool,
-        storage: &Storage<RocksEngine, DummyLockManager, F, TP>,
+        storage: &Storage<RocksEngine, DummyLockManager, F, Ts>,
         ctx: Context,
         keys: Vec<Vec<u8>>,
         cb: Callback<()>,

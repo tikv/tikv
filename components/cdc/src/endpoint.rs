@@ -1147,8 +1147,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
             let min_ts_pd = match causal_ts_provider {
-                // if causal_ts_provider is not none, it means in apiv2 mode, and causal_ts_provider
-                // cache tso which is used in raw storage, use same ts source here.
+                // TiKV API v2 is enabled when causal_ts_provider is Some.
+                // In this scenario, get TSO from causal_ts_provider to make sure that
+                // RawKV write requests will get larger TSO after this point.
                 Some(provider) => provider.get_ts().unwrap_or_default(),
                 None => pd_client.get_tso().await.unwrap_or_default(),
             };

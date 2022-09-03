@@ -69,7 +69,7 @@ pub trait RequestHandler: Send {
     }
 
     /// Processes current request and produces streaming responses.
-    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+    async fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
         panic!("streaming request is not supported for this handler");
     }
 

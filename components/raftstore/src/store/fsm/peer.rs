@@ -21,6 +21,7 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
+use futures::channel::oneshot::Sender;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
@@ -79,8 +80,8 @@ use crate::{
         metrics::*,
         msg::{Callback, ExtCallback, InspectedRaftMessage},
         peer::{
-            ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
-            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+            ConsistencyState, FlashbackState, ForceLeaderState, Peer, PersistSnapshotResult,
+            StaleState, UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
             UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
@@ -923,6 +924,38 @@ where
         syncer.report_for_self(self_report);
     }
 
+    // Call msg PrepareFlashback to stop the scheduling and RW tasks.
+    // Once called, it will wait for the channel's notification in FlashbackState to
+    // finish. We place a flag in the request, which is checked when the
+    // pre_propose_raft_command is called. Stopping tasks is done by applying
+    // the flashback-only command in this way, But for RW local reads which need
+    // to be considered, we let the leader lease to None to ensure that local reads
+    // are not executed.
+    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
+        info!(
+            "prepare flashback";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        if self.fsm.peer.flashback_state.is_some() {
+            ch.send(false).unwrap();
+            return;
+        }
+        self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
+        // Let the leader lease to None to ensure that local reads are not executed.
+        self.fsm.peer.leader_lease_mut().expire_remote_lease();
+        self.fsm.peer.maybe_finish_flashback_wait_apply();
+    }
+
+    fn on_finish_flashback(&mut self) {
+        info!(
+            "finish flashback";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        self.fsm.peer.flashback_state.take();
+    }
+
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
         match msg {
             CasualMessage::SplitRegion {
@@ -1335,6 +1368,8 @@ where
             SignificantMsg::UnsafeRecoveryFillOutReport(syncer) => {
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
+            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
+            SignificantMsg::FinishFlashback => self.on_finish_flashback(),
         }
     }
 
@@ -2171,6 +2206,10 @@ where
         }
         if self.fsm.peer.unsafe_recovery_state.is_some() {
             self.check_unsafe_recovery_state();
+        }
+        // TODO: combine recovery state and flashback state as a wait apply queue.
+        if self.fsm.peer.flashback_state.is_some() {
+            self.fsm.peer.maybe_finish_flashback_wait_apply();
         }
     }
 
@@ -4737,12 +4776,23 @@ where
             return Ok(Some(resp));
         }
 
-        // Check whether the store has the right peer to handle the request.
         let region_id = self.region_id();
+        // When in the flashback state, we should not allow any other request to be
+        // proposed.
+        if self.fsm.peer.flashback_state.is_some() {
+            self.ctx.raft_metrics.invalid_proposal.flashback.inc();
+            let flags = WriteBatchFlags::from_bits_truncate(msg.get_header().get_flags());
+            if !flags.contains(WriteBatchFlags::FLASHBACK) {
+                return Err(Error::FlashbackInProgress(self.region_id()));
+            }
+        }
+
+        // Check whether the store has the right peer to handle the request.
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
         if self.fsm.peer.force_leader.is_some() {
+            self.ctx.raft_metrics.invalid_proposal.force_leader.inc();
             // in force leader state, forbid requests to make the recovery progress less
             // error-prone
             if !(msg.has_admin_request()

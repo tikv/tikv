@@ -53,7 +53,7 @@ pub fn create_raft_storage<
     EK,
     R: FlowStatsReporter,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
@@ -66,8 +66,8 @@ pub fn create_raft_storage<
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<TP>>,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, F, TP>>
+    causal_ts_provider: Option<Arc<Ts>>,
+) -> Result<Storage<RaftKv<EK, S>, LockManager, F, Ts>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,

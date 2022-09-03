@@ -7,6 +7,7 @@ use api_version::KvFormat;
 use causal_ts::CausalTsProvider;
 use fail::fail_point;
 use futures::{
+    channel::oneshot,
     compat::Future01CompatExt,
     future::{self, Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -32,7 +33,7 @@ use raftstore::{
     store::{
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::RAFT_ENTRIES_CACHES_GAUGE,
-        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts,
+        Callback, CasualMessage, CheckLeaderTask, RaftCmdExtraOpts, SignificantMsg,
     },
     DiscardReason, Error as RaftStoreError, Result as RaftStoreResult,
 };
@@ -75,13 +76,13 @@ pub struct Service<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 > {
     store_id: u64,
     /// Used to handle requests related to GC.
     gc_worker: GcWorker<E, T>,
     // For handling KV requests.
-    storage: Storage<E, L, F, TP>,
+    storage: Storage<E, L, F, Ts>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
     // For handling corprocessor v2 requests.
@@ -108,8 +109,8 @@ impl<
     E: Engine + Clone,
     L: LockManager + Clone,
     F: KvFormat,
-    TP: CausalTsProvider,
-> Clone for Service<T, E, L, F, TP>
+    Ts: CausalTsProvider,
+> Clone for Service<T, E, L, F, Ts>
 {
     fn clone(&self) -> Self {
         Service {
@@ -134,13 +135,13 @@ impl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
-> Service<T, E, L, F, TP>
+    Ts: CausalTsProvider + 'static,
+> Service<T, E, L, F, Ts>
 {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         store_id: u64,
-        storage: Storage<E, L, F, TP>,
+        storage: Storage<E, L, F, Ts>,
         gc_worker: GcWorker<E, T>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
@@ -246,8 +247,8 @@ impl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
-> Tikv for Service<T, E, L, F, TP>
+    Ts: CausalTsProvider + 'static,
+> Tikv for Service<T, E, L, F, Ts>
 {
     handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
     handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
@@ -416,6 +417,37 @@ impl<
             sink.fail(e)
                 .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
         );
+    }
+
+    fn kv_flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let begin_instant = Instant::now();
+
+        let source = req.mut_context().take_request_source();
+        let resp = future_flashback_to_version(&self.storage, &self.ch, req);
+        let task = async move {
+            let resp = resp.await?;
+            let elapsed = begin_instant.saturating_elapsed();
+            sink.success(resp).await?;
+            GRPC_MSG_HISTOGRAM_STATIC
+                .kv_flashback_to_version
+                .observe(elapsed.as_secs_f64());
+            record_request_source_metrics(source, elapsed);
+            ServerResult::Ok(())
+        }
+        .map_err(|e| {
+            log_net_error!(e, "kv rpc failed";
+                "request" => stringify!($fn_name)
+            );
+            GRPC_MSG_FAIL_COUNTER.kv_flashback_to_version.inc();
+        })
+        .map(|_| ());
+
+        ctx.spawn(task);
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, mut req: Request, sink: UnarySink<Response>) {
@@ -1044,6 +1076,7 @@ impl<
         let copr_v2 = self.copr_v2.clone();
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
+        let ch = self.ch.clone();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -1060,6 +1093,7 @@ impl<
                     id,
                     req,
                     &tx,
+                    &ch,
                 );
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1261,19 +1295,21 @@ fn response_batch_commands_request<F, T>(
 }
 
 fn handle_batch_commands_request<
+    T: RaftStoreRouter<E::Local> + 'static,
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
     batcher: &mut Option<ReqBatcher>,
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     copr: &Endpoint<E>,
     copr_v2: &coprocessor_v2::Endpoint,
     peer: &str,
     id: u64,
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
+    ch: &T,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
@@ -1376,6 +1412,7 @@ fn handle_batch_commands_request<
         ResolveLock, future_resolve_lock(storage), kv_resolve_lock;
         Gc, future_gc(), kv_gc;
         DeleteRange, future_delete_range(storage), kv_delete_range;
+        FlashbackToVersion, future_flashback_to_version(storage, ch), kv_flashback_to_version;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1449,8 +1486,8 @@ async fn future_handle_empty(
     Ok(res)
 }
 
-fn future_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_get<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1498,8 +1535,8 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'st
     }
 }
 
-fn future_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_scan<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: ScanRequest,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1546,8 +1583,8 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 's
     }
 }
 
-fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: BatchGetRequest,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1597,8 +1634,8 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider
     }
 }
 
-fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: ScanLockRequest,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
@@ -1640,8 +1677,8 @@ async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     ))))
 }
 
-fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<DeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1668,8 +1705,60 @@ fn future_delete_range<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvi
     }
 }
 
-fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_flashback_to_version<
+    T: RaftStoreRouter<E::Local> + 'static,
+    E: Engine,
+    L: LockManager,
+    F: KvFormat,
+    Ts: CausalTsProvider + 'static,
+>(
+    storage: &Storage<E, L, F, Ts>,
+    raft_router: &T,
+    req: FlashbackToVersionRequest,
+) -> impl Future<Output = ServerResult<FlashbackToVersionResponse>> {
+    let storage_clone = storage.clone();
+    let raft_router_clone = raft_router.clone();
+    async move {
+        // Send a `SignificantMsg::PrepareFlashback` to prepare the raftstore for the
+        // later flashback. This will first block all scheduling, read and write
+        // operations and then wait for the latest Raft log to be applied before
+        // we start the flashback command.
+        let region_id = req.get_context().get_region_id();
+        let (result_tx, result_rx) = oneshot::channel();
+        raft_router_clone
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))?;
+        if !result_rx.await? {
+            return Err(Error::Other(box_err!(
+                "failed to prepare the region {} for flashback",
+                region_id
+            )));
+        }
+        let (cb, f) = paired_future_callback();
+        let res = storage_clone.sched_txn_command(req.into(), cb);
+        // Avoid crossing `.await` to bypass the `Send` constraint.
+        drop(storage_clone);
+        let v = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
+        fail_point!("skip_finish_flashback_to_version", |_| {
+            Ok(FlashbackToVersionResponse::default())
+        });
+        // Send a `SignificantMsg::FinishFlashback` to notify the raftstore that the
+        // flashback has been finished.
+        raft_router_clone.significant_send(region_id, SignificantMsg::FinishFlashback)?;
+        let mut resp = FlashbackToVersionResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else if let Err(e) = v {
+            resp.set_error(format!("{}", e));
+        }
+        Ok(resp)
+    }
+}
+
+fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawGetRequest,
 ) -> impl Future<Output = ServerResult<RawGetResponse>> {
     let v = storage.raw_get(req.take_context(), req.take_cf(), req.take_key());
@@ -1690,8 +1779,8 @@ fn future_raw_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider +
     }
 }
 
-fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Output = ServerResult<RawBatchGetResponse>> {
     let keys = req.take_keys().into();
@@ -1709,8 +1798,8 @@ fn future_raw_batch_get<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProv
     }
 }
 
-fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawPutRequest,
 ) -> impl Future<Output = ServerResult<RawPutResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1749,8 +1838,8 @@ fn future_raw_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider +
     }
 }
 
-fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Output = ServerResult<RawBatchPutResponse>> {
     let cf = req.take_cf();
@@ -1798,8 +1887,8 @@ fn future_raw_batch_put<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProv
     }
 }
 
-fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_delete<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1829,9 +1918,9 @@ fn future_raw_batch_delete<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Output = ServerResult<RawBatchDeleteResponse>> {
     let cf = req.take_cf();
@@ -1859,8 +1948,8 @@ fn future_raw_batch_delete<
     }
 }
 
-fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawScanRequest,
 ) -> impl Future<Output = ServerResult<RawScanResponse>> {
     let end_key = if req.get_end_key().is_empty() {
@@ -1890,8 +1979,8 @@ fn future_raw_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider 
     }
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_batch_scan<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Output = ServerResult<RawBatchScanResponse>> {
     let v = storage.raw_batch_scan(
@@ -1919,9 +2008,9 @@ fn future_raw_delete_range<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Output = ServerResult<RawDeleteRangeResponse>> {
     let (cb, f) = paired_future_callback();
@@ -1952,9 +2041,9 @@ fn future_raw_get_key_ttl<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawGetKeyTtlRequest,
 ) -> impl Future<Output = ServerResult<RawGetKeyTtlResponse>> {
     let v = storage.raw_get_key_ttl(req.take_context(), req.take_cf(), req.take_key());
@@ -1979,9 +2068,9 @@ fn future_raw_compare_and_swap<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawCasRequest,
 ) -> impl Future<Output = ServerResult<RawCasResponse>> {
     let (cb, f) = paired_future_callback();
@@ -2024,8 +2113,8 @@ fn future_raw_compare_and_swap<
     }
 }
 
-fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-    storage: &Storage<E, L, F, TP>,
+fn future_raw_checksum<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    storage: &Storage<E, L, F, Ts>,
     mut req: RawChecksumRequest,
 ) -> impl Future<Output = ServerResult<RawChecksumResponse>> {
     let f = storage.raw_checksum(
@@ -2065,10 +2154,10 @@ fn future_raw_coprocessor<
     E: Engine,
     L: LockManager,
     F: KvFormat,
-    TP: CausalTsProvider + 'static,
+    Ts: CausalTsProvider + 'static,
 >(
     copr_v2: &coprocessor_v2::Endpoint,
-    storage: &Storage<E, L, F, TP>,
+    storage: &Storage<E, L, F, Ts>,
     req: RawCoprocessorRequest,
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = copr_v2.handle_request(storage, req);
@@ -2077,8 +2166,8 @@ fn future_raw_coprocessor<
 
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) $prelude: stmt; ($v: ident, $resp: ident, $tracker: ident) { $else_branch: expr }) => {
-        fn $fn_name<E: Engine, L: LockManager, F: KvFormat, TP: CausalTsProvider + 'static>(
-            storage: &Storage<E, L, F, TP>,
+        fn $fn_name<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+            storage: &Storage<E, L, F, Ts>,
             $req: $req_ty,
         ) -> impl Future<Output = ServerResult<$resp_ty>> {
             $prelude
