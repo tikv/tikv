@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
+use arc_swap::ArcSwap;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
@@ -96,7 +97,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     bg_worker: Worker,
     health_service: Option<HealthService>,
     // Store zone information for follower replication.
-    zone_info: RwLock<Arc<HashMap<u64, String>>>,
+    zone_info: ArcSwap<HashMap<u64, String>>,
     zone_label_key: String,
 }
 
@@ -154,7 +155,7 @@ where
         }
         store.set_labels(labels.into());
 
-        let zone_info = RwLock::new(Arc::new(HashMap::default()));
+        let zone_info = ArcSwap::from(Arc::new(HashMap::default()));
 
         Node {
             cluster_id: cfg.cluster_id,
@@ -500,6 +501,8 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
+        let g = self.zone_info.load();
+        let zone_info = ArcSwap::from(Arc::clone(&*g));
 
         self.system.spawn(
             store,
@@ -510,7 +513,7 @@ where
             snap_mgr,
             pd_worker,
             store_meta,
-            RwLock::new(Arc::clone(&self.zone_info.read().unwrap())),
+            zone_info,
             coprocessor_host,
             importer,
             split_check_scheduler,

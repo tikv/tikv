@@ -1608,7 +1608,8 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
-        let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+        // let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+        let zone_info = ctx.zone_info.load();
         let leader_az = zone_info.get(&self.peer.store_id);
         for mut msg in msgs {
             let msg_type = msg.get_message().get_msg_type();
@@ -1705,12 +1706,12 @@ where
         for idx in group {
             let peer_id = msgs[*idx].get_to();
             let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
-            if self.raft_group.is_recent_active(peer_id)
-                && self.raft_group.get_next_idx(peer_id).unwrap() > next_idx
+            if self.raft_group.raft.is_recent_active(peer_id)
+                && self.raft_group.raft.get_next_idx(peer_id).unwrap() > next_idx
                 && is_voter
             {
                 agent_id = Some(peer_id);
-                next_idx = self.raft_group.get_next_idx(peer_id).unwrap();
+                next_idx = self.raft_group.raft.get_next_idx(peer_id).unwrap();
             }
         }
         agent_id
@@ -1722,6 +1723,12 @@ where
         msgs: &mut [eraftpb::Message],
         discard: &mut HashSet<usize>,
     ) {
+        if group.len() >= 3 {
+            return;
+        }
+        if group.len() <= 2 {
+            return;
+        }
         // If no appropriate agent, do not use follower replication.
         if let Some(agent_id) = self.assign_zone_agent(group, msgs) {
             let mut forwards: Vec<Forward> = Vec::new();
@@ -1763,14 +1770,16 @@ where
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
 
-        if self.follower_repl() {
+        if self.follower_repl() && self.raft_group.raft.is_leader() {
             // Group MsgAppend by AZ.
             let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
-            let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+            // let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
+            let zone_info = ctx.zone_info.load();
             let leader_store_id = self.peer.get_store_id();
             let leader_zone = zone_info.get(&leader_store_id);
             // Record message that should be discarded after merge_msg_append.
             let mut discard: HashSet<usize> = HashSet::default();
+            let mut skip = vec![false; msgs.len()];
 
             // Filter MsgAppend.
             for (pos, msg) in msgs.iter().enumerate() {
@@ -1804,7 +1813,7 @@ where
             // Filter unnecessary MsgAppend and build raft messages.
             let mut pos: usize = 0;
             for msg in msgs {
-                if discard.contains(&pos) {
+                if skip[pos] {
                     continue;
                 }
                 if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
