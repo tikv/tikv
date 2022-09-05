@@ -574,7 +574,7 @@ where
             })
             .collect();
         self.engine
-            .delete_ranges(DeleteStrategy::DeleteFiles, &df_ranges)
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &df_ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -638,7 +638,7 @@ where
             .collect();
 
         self.engine
-            .delete_ranges(DeleteStrategy::DeleteFiles, &ranges)
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -647,7 +647,7 @@ where
             return;
         }
         self.engine
-            .delete_ranges(DeleteStrategy::DeleteBlobs, &ranges)
+            .delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
             });

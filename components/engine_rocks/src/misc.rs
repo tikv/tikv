@@ -370,7 +370,7 @@ mod tests {
         wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges(strategy, ranges).unwrap();
+        db.delete_ranges_cfs(strategy, ranges).unwrap();
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
@@ -508,9 +508,9 @@ mod tests {
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges(DeleteStrategy::DeleteFiles, &[Range::new(b"k2", b"k4")])
+        db.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[Range::new(b"k2", b"k4")])
             .unwrap();
-        db.delete_ranges(DeleteStrategy::DeleteBlobs, &[Range::new(b"k2", b"k4")])
+        db.delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &[Range::new(b"k2", b"k4")])
             .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
@@ -555,7 +555,7 @@ mod tests {
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        db.delete_ranges(
+        db.delete_ranges_cfs(
             DeleteStrategy::DeleteByRange,
             &[Range::new(b"kabcdefg2", b"kabcdefg4")],
         )
