@@ -189,7 +189,8 @@ impl TestSuiteBuilder {
                 env,
                 sim.security_mgr.clone(),
                 MemoryQuota::new(usize::MAX),
-                None,
+                sim.get_causal_ts_provider(*id)
+                    .map(|p| p as Arc<dyn CausalTsProvider>),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);

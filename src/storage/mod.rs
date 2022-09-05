@@ -1865,6 +1865,11 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
         ts_provider: &Option<Arc<Ts>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
+        // NOTE: the ts cannot be reused as timestamp of data key.
+        // There is a little chance that CDC will acquired a timestamp for resolved-ts
+        // just between the Self::get_causal_ts & concurrency_manager.lock_key,
+        // which violate the constraint that resolve-ts should not be larger
+        // than timestamp of captured data.
         let ts = Self::get_causal_ts(ts_provider)?;
         if let Some(ts) = ts {
             let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
@@ -1911,8 +1916,6 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
-            // get new ts after get key_guard to avoid cdc register_min_ts_event
-            // use a smaller ts then ts used here.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
@@ -2616,10 +2619,12 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
         let sched = self.get_scheduler();
         let concurrency_manager = self.get_concurrency_manager();
         self.sched_raw_command(CMD, async move {
-            // Raw atomic cmds have two locks, one is concurrency_manager and the other is
-            // txn latch, Now, concurrency_manager lock key with ts encoded, it
-            // will not really lock the key. TODO: Merge the two locks into one
-            // to simplify the process, same to other raw atomic commands.
+            // Raw atomic cmd has two locks, one is concurrency_manager and the other is txn
+            // latch. Now, concurrency_manager lock key with ts encoded, it aims
+            // to "lock" resolved-ts to be less than its timestamp, rather than
+            // to "lock" other concurrent requests. TODO: Merge the two locks
+            // into one to simplify the process. Same to other raw atomic
+            // commands.
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return cb(Err(e));
@@ -2628,7 +2633,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = ts {
                 return cb(Err(e));
             }
-            // do not encode ts here as RawCompareAndSwap use key to gen lock.
+            // Do NOT encode ts here as RawCompareAndSwap use key to gen lock.
             let key = F::encode_raw_key_owned(key, None);
             let cmd = RawCompareAndSwap::new(
                 cf,
@@ -2682,7 +2687,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = ts {
                 return callback(Err(e));
             }
-            // donot encode ts here as RawAtomicStore use key to gen lock
+            // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = Self::raw_batch_put_requests_to_modifies(cf, pairs, ttls, None);
             let cmd = RawAtomicStore::new(cf, modifies, ts.unwrap(), ctx);
             Self::sched_raw_atomic_command(
@@ -2719,7 +2724,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = ts {
                 return callback(Err(e));
             }
-            // donot encode ts here as RawAtomicStore use key to gen lock
+            // Do NOT encode ts here as RawAtomicStore use key to gen lock
             let modifies = keys
                 .into_iter()
                 .map(|k| Self::raw_delete_request_to_modify(cf, k, None))
@@ -3400,6 +3405,7 @@ mod tests {
             mpsc::{channel, Sender},
             Arc,
         },
+        thread,
         time::Duration,
     };
 
@@ -5165,6 +5171,13 @@ mod tests {
                 block_on(storage.raw_get(ctx.clone(), "".to_string(), k)).unwrap(),
             );
         }
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
     }
 
     #[test]
@@ -5347,6 +5360,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // Assert key "a" has gone
         expect_none(
@@ -5365,6 +5385,13 @@ mod tests {
                 .unwrap();
             rx.recv().unwrap();
         }
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // Assert now no key remains
         for kv in &test_data {
@@ -5549,6 +5576,13 @@ mod tests {
         )
         .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // Verify pairs one by one
         for (key, val, _) in &test_data {
@@ -5757,6 +5791,13 @@ mod tests {
         )
         .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // Assert "b" and "d" are gone
         expect_value(
@@ -5788,6 +5829,13 @@ mod tests {
         )
         .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // Assert no key remains
         for (k, _) in test_data {
@@ -6576,6 +6624,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // expect "v2"
         expect_value(
@@ -6607,6 +6662,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // "v3" -> "v4"
         let expected = (Some(b"v3".to_vec()), true);
@@ -6648,6 +6710,13 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            storage
+                .get_concurrency_manager()
+                .global_min_lock_ts()
+                .is_none()
+        );
 
         // expect "v"
         expect_value(

@@ -130,6 +130,11 @@ mod tests {
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
+        let mut ts = if F::TAG == kvproto::kvrpcpb::ApiVersion::V2 {
+            Some(TimeStamp::from(100))
+        } else {
+            None
+        };
 
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
@@ -138,13 +143,14 @@ mod tests {
             b"v1".to_vec(),
             0,
             F::TAG,
-            None,
+            ts,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
         assert!(prev_val.is_none());
         assert!(succeed);
 
+        ts = ts.map(|t| t.next());
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
             encoded_key.clone(),
@@ -152,13 +158,14 @@ mod tests {
             b"v2".to_vec(),
             1,
             F::TAG,
-            None,
+            ts,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm.clone(), cmd).unwrap();
         assert_eq!(prev_val, Some(b"v1".to_vec()));
         assert!(!succeed);
 
+        ts = ts.map(|t| t.next());
         let cmd = RawCompareAndSwap::new(
             CF_DEFAULT,
             encoded_key,
@@ -166,7 +173,7 @@ mod tests {
             b"v3".to_vec(),
             2,
             F::TAG,
-            None,
+            ts,
             Context::default(),
         );
         let (prev_val, succeed) = sched_command(&engine, cm, cmd).unwrap();
