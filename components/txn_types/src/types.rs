@@ -119,6 +119,12 @@ impl Key {
         self
     }
 
+    /// Appending a `u64` timestamp to input key.
+    #[inline]
+    pub fn append_ts_inplace(&mut self, ts: TimeStamp) {
+        self.0.encode_u64_desc(ts.into_inner()).unwrap();
+    }
+
     /// Gets the timestamp contained in this key.
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped
@@ -700,6 +706,32 @@ mod tests {
         ];
         for (old_value, v) in cases {
             assert_eq!(old_value.resolved(), v);
+        }
+    }
+
+    #[test]
+    fn test_append_ts() {
+        let cases = vec![
+            (
+                Key::from_encoded(b"abc".to_vec()),
+                TimeStamp::from(100),
+                Key::from_encoded(vec![
+                    b'a', b'b', b'c', 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x9B,
+                ]),
+            ),
+            (
+                Key::from_raw(b"z"),
+                TimeStamp::from(1000),
+                Key::from_encoded(vec![
+                    b'z', 0, 0, 0, 0, 0, 0, 0, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFC, 0x17,
+                ]),
+            ),
+        ];
+        for (key, ts, key_with_ts) in cases {
+            assert_eq!(key.clone().append_ts(ts), key_with_ts);
+            let mut another_key = key.clone();
+            another_key.append_ts_inplace(ts);
+            assert_eq!(another_key, key_with_ts);
         }
     }
 }
