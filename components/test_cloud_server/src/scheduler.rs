@@ -99,7 +99,25 @@ impl Scheduler {
         );
         must_wait(
             || {
-                self.pd.try_transfer_leader(region_id, old_leader.clone());
+                let target_is_leader = block_on(self.pd.get_region_leader_by_id(region_id))
+                    .unwrap()
+                    .map(|(_, leader)| {
+                        leader.id == to_remove.id
+                    })
+                    .unwrap_or(false);
+                if target_is_leader {
+                    self.pd.try_transfer_leader(region_id, old_leader.clone());
+                    if !try_wait(|| {
+                        block_on(self.pd.get_region_leader_by_id(region_id))
+                            .unwrap()
+                            .map(|(_, leader)| {
+                                leader.id != to_remove.id
+                            })
+                            .unwrap_or(false)
+                    }, 3) {
+                        return false
+                    }
+                }
                 self.pd.try_remove_peer(region_id, to_remove.clone());
                 try_wait(
                     || {
