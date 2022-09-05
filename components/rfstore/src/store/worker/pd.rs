@@ -995,8 +995,9 @@ impl Runnable for PdRunner {
                         let cpu_time_duration = Duration::from_millis(
                             self.region_cpu_records.remove(&region_id).unwrap_or(0) as u64,
                         );
-                        let interval_second =
-                            unix_secs_now.into_inner() - last_report_ts.into_inner();
+                        let interval_second = unix_secs_now
+                            .into_inner()
+                            .saturating_sub(last_report_ts.into_inner());
                         // Keep consistent with the calculation of cpu_usages in a store heartbeat.
                         // See components/tikv_util/src/metrics/threads_linux.rs for more details.
                         (interval_second > 0)
