@@ -255,6 +255,8 @@ pub struct SnapContext<'a> {
     // `key_ranges` is used in replica read. It will send to
     // the leader via raft "read index" to check memory locks.
     pub key_ranges: Vec<KeyRange>,
+    // Marks that this read is a FlashbackToVersionReadPhase.
+    pub for_flashback: bool,
 }
 
 /// Engine defines the common behaviour for a storage engine type.
@@ -271,6 +273,11 @@ pub trait Engine: Send + Clone + 'static {
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
+
+    /// Precheck request which has write with it's context.
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        Ok(())
+    }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, write_cb: Callback<()>) -> Result<()>;
 

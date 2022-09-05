@@ -472,10 +472,17 @@ where
     }
 }
 
+pub fn call_option_inner(inner: &Inner) -> CallOption {
+    inner
+        .target_info()
+        .call_option()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT))
+}
+
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &Client, mut retry: usize, func: F) -> Result<R>
 where
-    F: Fn(&PdClientStub) -> GrpcResult<R>,
+    F: Fn(&PdClientStub, CallOption) -> GrpcResult<R>,
 {
     loop {
         let ret = {
@@ -483,8 +490,12 @@ where
             // thread which may hold the read lock and wait for PD client thread
             // completing the request and the PD client thread which may block
             // on acquiring the write lock.
-            let client_stub = client.inner.rl().client_stub.clone();
-            func(&client_stub).map_err(Error::Grpc)
+            let (client_stub, option) = {
+                let inner = client.inner.rl();
+                (inner.client_stub.clone(), call_option_inner(&inner))
+            };
+
+            func(&client_stub, option).map_err(Error::Grpc)
         };
         match ret {
             Ok(r) => {
@@ -585,6 +596,12 @@ impl PdConnector {
                 .keepalive_timeout(Duration::from_secs(3));
             self.security_mgr.connect(cb, addr_trim)
         };
+        fail_point!("cluster_id_is_not_ready", |_| {
+            Ok((
+                PdClientStub::new(channel.clone()),
+                GetMembersResponse::default(),
+            ))
+        });
         let client = PdClientStub::new(channel);
         let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
         let response = client
@@ -597,6 +614,13 @@ impl PdConnector {
         }
     }
 
+    // load_members returns the PD members by calling getMember, there are two
+    // abnormal scenes for the reponse:
+    // 1. header has an error: the PD is not ready to serve.
+    // 2. cluster id is zero: etcd start server but the follower did not get
+    // cluster id yet.
+    // In this case, load_members should return an error, so the client
+    // will not update client address.
     pub async fn load_members(&self, previous: &GetMembersResponse) -> Result<GetMembersResponse> {
         let previous_leader = previous.get_leader();
         let members = previous.get_members();
@@ -611,18 +635,30 @@ impl PdConnector {
             for ep in m.get_client_urls() {
                 match self.connect(ep.as_str()).await {
                     Ok((_, r)) => {
-                        let new_cluster_id = r.get_header().get_cluster_id();
-                        if new_cluster_id == cluster_id {
-                            // check whether the response have leader info, otherwise continue to
-                            // loop the rest members
-                            if r.has_leader() {
-                                return Ok(r);
-                            }
+                        let header = r.get_header();
+                        // Try next follower endpoint if the cluster has not ready since this pr:
+                        // pd#5412.
+                        if let Err(e) = check_resp_header(header) {
+                            error!("connect pd failed";"endpoints" => ep, "error" => ?e);
                         } else {
-                            panic!(
-                                "{} no longer belongs to cluster {}, it is in {}",
-                                ep, cluster_id, new_cluster_id
-                            );
+                            let new_cluster_id = header.get_cluster_id();
+                            // it is new cluster if the new cluster id is zero.
+                            if cluster_id == 0 || new_cluster_id == cluster_id {
+                                // check whether the response have leader info, otherwise continue
+                                // to loop the rest members
+                                if r.has_leader() {
+                                    return Ok(r);
+                                }
+                            // Try next endpoint if PD server returns the
+                            // cluster id is zero without any error.
+                            } else if new_cluster_id == 0 {
+                                error!("{} connect success, but cluster id is not ready", ep);
+                            } else {
+                                panic!(
+                                    "{} no longer belongs to cluster {}, it is in {}",
+                                    ep, cluster_id, new_cluster_id
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -812,11 +848,12 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::IncompatibleVersion => Err(Error::Incompatible),
         ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
-        ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::GlobalConfigNotFound => {
             Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
         }
         ErrorType::Ok => Ok(()),
+        ErrorType::DuplicatedEntry | ErrorType::EntryNotFound => Err(box_err!(err.get_message())),
+        ErrorType::Unknown => Err(box_err!(err.get_message())),
     }
 }
 

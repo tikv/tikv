@@ -8,10 +8,11 @@ use std::{
     mem,
     num::NonZeroU64,
     result,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
+use collections::HashSet;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
@@ -158,6 +159,7 @@ where
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
+    region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
 
 impl<E, S> RaftKv<E, S>
@@ -166,11 +168,12 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router,
             engine,
             txn_extra_scheduler: None,
+            region_leaders,
         }
     }
 
@@ -198,14 +201,20 @@ where
         cb: Callback<CmdRes<E::Snapshot>>,
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
+        let mut flags = 0;
         if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
             let mut data = [0u8; 8];
             (&mut data[..])
                 .encode_u64(ctx.start_ts.into_inner())
                 .unwrap();
-            header.set_flags(WriteBatchFlags::STALE_READ.bits());
+            flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
         }
+        if ctx.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
+
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
@@ -213,7 +222,7 @@ where
             .read(
                 ctx.read_id,
                 cmd,
-                StoreCallback::Read(Box::new(move |resp| {
+                StoreCallback::read(Box::new(move |resp| {
                     cb(on_read_result(resp).map_err(Error::into));
                 })),
             )
@@ -249,9 +258,14 @@ where
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
         let txn_extra = batch.extra;
         let mut header = self.new_request_header(ctx);
+        let mut flags = 0;
         if txn_extra.one_pc {
-            header.set_flags(WriteBatchFlags::ONE_PC.bits());
+            flags |= WriteBatchFlags::ONE_PC.bits();
         }
+        if txn_extra.for_flashback {
+            flags |= WriteBatchFlags::FLASHBACK.bits();
+        }
+        header.set_flags(flags);
 
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
@@ -351,6 +365,14 @@ where
             }
         }
         write_modifies(&self.engine, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
+        let region_id = ctx.get_region_id();
+        match self.region_leaders.read().unwrap().get(&region_id) {
+            Some(_) => Ok(()),
+            None => Err(RaftServerError::NotLeader(region_id, None).into()),
+        }
     }
 
     fn async_write(

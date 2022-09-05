@@ -13,6 +13,7 @@
 
 use std::{
     cmp,
+    collections::HashMap,
     convert::TryFrom,
     env, fmt,
     net::SocketAddr,
@@ -573,6 +574,7 @@ where
                 ),
             ),
             engines.kv.clone(),
+            self.region_info_accessor.region_leaders(),
         );
 
         self.engines = Some(TikvEngines {
@@ -1279,12 +1281,19 @@ where
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
         let engines_info_clone = engines_info.clone();
+
+        // region_id -> (suffix, tablet)
+        // `update` of EnginesResourceInfo is called perodically which needs this map
+        // for recording the latest tablet for each region.
+        // `cached_latest_tablets` is passed to `update` to avoid memory
+        // allocation each time when calling `update`.
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         self.background_worker
             .spawn_interval_task(DEFAULT_METRICS_FLUSH_INTERVAL, move || {
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                engines_info_clone.update(now);
+                engines_info_clone.update(now, &mut cached_latest_tablets);
             });
         if let Some(limiter) = get_io_rate_limiter() {
             limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
@@ -1685,13 +1694,15 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
                 self.config.storage.block_cache.shared,
             )),
         );
-        self.tablet_factory = Some(factory);
+        self.tablet_factory = Some(factory.clone());
         engines
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
         let engines_info = Arc::new(EnginesResourceInfo::new(
-            &engines, 180, // max_samples_to_preserve
+            factory,
+            engines.raft.as_rocks_engine().cloned(),
+            180, // max_samples_to_preserve
         ));
 
         (engines, engines_info)
@@ -1841,7 +1852,7 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
 }
 
 pub struct EnginesResourceInfo {
-    kv_engine: RocksEngine,
+    tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -1850,20 +1861,24 @@ pub struct EnginesResourceInfo {
 impl EnginesResourceInfo {
     const SCALE_FACTOR: u64 = 100;
 
-    fn new<CER: ConfiguredRaftEngine>(
-        engines: &Engines<RocksEngine, CER>,
+    fn new(
+        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
+        raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
-        let raft_engine = engines.raft.as_rocks_engine().cloned();
         EnginesResourceInfo {
-            kv_engine: engines.kv.clone(),
+            tablet_factory,
             raft_engine,
             latest_normalized_pending_bytes: AtomicU32::new(0),
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
         }
     }
 
-    pub fn update(&self, _now: Instant) {
+    pub fn update(
+        &self,
+        _now: Instant,
+        cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
+    ) {
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1884,9 +1899,39 @@ impl EnginesResourceInfo {
         if let Some(raft_engine) = &self.raft_engine {
             fetch_engine_cf(raft_engine, CF_DEFAULT, &mut normalized_pending_bytes);
         }
-        for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
-            fetch_engine_cf(&self.kv_engine, cf, &mut normalized_pending_bytes);
+
+        self.tablet_factory
+            .for_each_opened_tablet(
+                &mut |id, suffix, db: &RocksEngine| match cached_latest_tablets.entry(id) {
+                    collections::HashMapEntry::Occupied(mut slot) => {
+                        if slot.get().0 < suffix {
+                            slot.insert((suffix, db.clone()));
+                        }
+                    }
+                    collections::HashMapEntry::Vacant(slot) => {
+                        slot.insert((suffix, db.clone()));
+                    }
+                },
+            );
+
+        // todo(SpadeA): Now, there's a potential race condition problem where the
+        // tablet could be destroyed after the clone and before the fetching
+        // which could result in programme panic. It's okay now as the single global
+        // kv_engine will not be destroyed in normal operation and v2 is not
+        // ready for operation. Furthermore, this race condition is general to v2 as
+        // tablet clone is not a case exclusively happened here. We should
+        // propose another PR to tackle it such as destory tablet lazily in a GC
+        // thread.
+
+        for (_, (_, tablet)) in cached_latest_tablets.iter() {
+            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+                fetch_engine_cf(tablet, cf, &mut normalized_pending_bytes);
+            }
         }
+
+        // Clear ensures that these tablets are not hold forever.
+        cached_latest_tablets.clear();
+
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
@@ -1912,5 +1957,95 @@ impl IoBudgetAdjustor for EnginesResourceInfo {
         // The target global write flow slides between Bandwidth / 2 and Bandwidth.
         let score = 0.5 + score / 2.0;
         (total_budgets as f32 * score) as usize
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{
+        collections::HashMap,
+        sync::{atomic::Ordering, Arc},
+    };
+
+    use engine_rocks::{raw::Env, RocksEngine};
+    use engine_traits::{
+        FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
+    };
+    use tempfile::Builder;
+    use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
+    use tikv_util::{config::ReadableSize, time::Instant};
+
+    use super::EnginesResourceInfo;
+
+    #[test]
+    fn test_engines_resource_info_update() {
+        let mut config = TikvConfig::default();
+        config.rocksdb.defaultcf.disable_auto_compactions = true;
+        config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
+        let env = Arc::new(Env::default());
+        let path = Builder::new().prefix("test-update").tempdir().unwrap();
+
+        let builder = KvEngineFactoryBuilder::new(env, &config, path.path());
+        let factory = builder.build_v2();
+
+        for i in 1..6 {
+            let _ = factory
+                .open_tablet(i, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+        }
+
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_cache_only(true))
+            .unwrap();
+        // Prepare some data for two tablets of the same region. So we can test whether
+        // we fetch the bytes from the latest one.
+        for i in 1..21 {
+            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            if i % 2 == 0 {
+                tablet.flush_cf(CF_DEFAULT, true).unwrap();
+            }
+        }
+        let old_pending_compaction_bytes = tablet
+            .get_cf_pending_compaction_bytes(CF_DEFAULT)
+            .unwrap()
+            .unwrap();
+
+        let tablet = factory
+            .open_tablet(1, Some(20), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        for i in 1..11 {
+            tablet.put_cf(CF_DEFAULT, b"key", b"val").unwrap();
+            if i % 2 == 0 {
+                tablet.flush_cf(CF_DEFAULT, true).unwrap();
+            }
+        }
+        let new_pending_compaction_bytes = tablet
+            .get_cf_pending_compaction_bytes(CF_DEFAULT)
+            .unwrap()
+            .unwrap();
+
+        assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
+
+        let engines_info = Arc::new(EnginesResourceInfo::new(Arc::new(factory), None, 10));
+
+        let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
+        engines_info.update(Instant::now(), &mut cached_latest_tablets);
+
+        // The memory allocation should be reserved
+        assert!(cached_latest_tablets.capacity() >= 5);
+        // The tablet cache should be cleared
+        assert!(cached_latest_tablets.is_empty());
+
+        // The latest_normalized_pending_bytes should be equal to the pending compaction
+        // bytes of tablet_1_20
+        assert_eq!(
+            (new_pending_compaction_bytes * 100) as u32,
+            engines_info
+                .latest_normalized_pending_bytes
+                .load(Ordering::Relaxed)
+        );
     }
 }

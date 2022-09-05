@@ -73,7 +73,8 @@ use super::metrics::*;
 use crate::{
     bytes_capacity,
     coprocessor::{
-        Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel, RegionState,
+        ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
+        RegionState,
     },
     store::{
         cmd_resp,
@@ -82,7 +83,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, PeerMsg, ReadResponse, SignificantMsg},
+        msg::{Callback, ErrorCallback, PeerMsg, ReadResponse, SignificantMsg},
         peer::Peer,
         peer_storage::{write_initial_apply_state, write_peer_state},
         util,
@@ -90,7 +91,7 @@ use crate::{
             admin_cmd_epoch_lookup, check_region_epoch, compare_region_epoch, is_learner,
             ChangePeerI, ConfChangeKind, KeysInfoFormatter, LatencyInspector,
         },
-        Config, RegionSnapshot, RegionTask,
+        Config, RegionSnapshot, RegionTask, WriteCallback,
     },
     Error, Result,
 };
@@ -100,20 +101,14 @@ const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
-pub struct PendingCmd<S>
-where
-    S: Snapshot,
-{
+pub struct PendingCmd<C> {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback<S>>,
+    pub cb: Option<C>,
 }
 
-impl<S> PendingCmd<S>
-where
-    S: Snapshot,
-{
-    fn new(index: u64, term: u64, cb: Callback<S>) -> PendingCmd<S> {
+impl<C> PendingCmd<C> {
+    fn new(index: u64, term: u64, cb: C) -> PendingCmd<C> {
         PendingCmd {
             index,
             term,
@@ -122,10 +117,7 @@ where
     }
 }
 
-impl<S> Drop for PendingCmd<S>
-where
-    S: Snapshot,
-{
+impl<C> Drop for PendingCmd<C> {
     fn drop(&mut self) {
         if self.cb.is_some() {
             safe_panic!(
@@ -137,10 +129,7 @@ where
     }
 }
 
-impl<S> Debug for PendingCmd<S>
-where
-    S: Snapshot,
-{
+impl<C> Debug for PendingCmd<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -152,30 +141,24 @@ where
     }
 }
 
-impl<S: Snapshot> HeapSize for PendingCmd<S> {}
+impl<C> HeapSize for PendingCmd<C> {}
 
 /// Commands waiting to be committed and applied.
 #[derive(Debug)]
-pub struct PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    normals: VecDeque<PendingCmd<S>>,
-    conf_change: Option<PendingCmd<S>>,
+pub struct PendingCmdQueue<C> {
+    normals: VecDeque<PendingCmd<C>>,
+    conf_change: Option<PendingCmd<C>>,
 }
 
-impl<S> PendingCmdQueue<S>
-where
-    S: Snapshot,
-{
-    fn new() -> PendingCmdQueue<S> {
+impl<C> PendingCmdQueue<C> {
+    fn new() -> PendingCmdQueue<C> {
         PendingCmdQueue {
             normals: VecDeque::new(),
             conf_change: None,
         }
     }
 
-    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<S>> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd<C>> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
@@ -190,18 +173,18 @@ where
         })
     }
 
-    fn append_normal(&mut self, cmd: PendingCmd<S>) {
+    fn append_normal(&mut self, cmd: PendingCmd<C>) {
         self.normals.push_back(cmd);
     }
 
-    fn take_conf_change(&mut self) -> Option<PendingCmd<S>> {
+    fn take_conf_change(&mut self) -> Option<PendingCmd<C>> {
         // conf change will not be affected when changing between follower and leader,
         // so there is no need to check term.
         self.conf_change.take()
     }
 
     // TODO: seems we don't need to separate conf change from normal entries.
-    fn set_conf_change(&mut self, cmd: PendingCmd<S>) {
+    fn set_conf_change(&mut self, cmd: PendingCmd<C>) {
         self.conf_change = Some(cmd);
     }
 }
@@ -408,6 +391,11 @@ where
     /// never apply again at first, then we can delete the ssts files.
     delete_ssts: Vec<SstMetaInfo>,
 
+    /// A self-defined engine may be slow to ingest ssts.
+    /// It may move some elements of `delete_ssts` into `pending_delete_ssts` to
+    /// delay deletion. Otherwise we may lost data.
+    pending_delete_ssts: Vec<SstMetaInfo>,
+
     /// The priority of this Handler.
     priority: Priority,
     /// Whether to yield high-latency operation to low-priority handler.
@@ -465,6 +453,7 @@ where
             perf_context: engine.get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply),
             yield_duration: cfg.apply_yield_duration.0,
             delete_ssts: vec![],
+            pending_delete_ssts: vec![],
             store_id,
             pending_create_peers,
             priority,
@@ -533,14 +522,14 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb().write_opt(&write_opts).unwrap_or_else(|e| {
+            self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
                 .iter()
-                .flat_map(|(cb, _)| cb.get_trackers())
+                .flat_map(|(cb, _)| cb.write_trackers())
                 .flat_map(|trackers| trackers.iter().map(|t| t.as_tracker_token()))
                 .flatten()
                 .collect();
@@ -579,7 +568,7 @@ where
         // Invoke callbacks
         let now = std::time::Instant::now();
         for (cb, resp) in cb_batch.drain(..) {
-            for tracker in cb.get_trackers().iter().flat_map(|v| *v) {
+            for tracker in cb.write_trackers().iter().flat_map(|v| *v) {
                 tracker.observe(now, &self.apply_time, |t| &mut t.metrics.apply_time_nanos);
             }
             cb.invoke_with_response(resp);
@@ -668,7 +657,7 @@ where
 }
 
 /// Calls the callback of `cmd` when the Region is removed.
-fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl Snapshot>) {
+fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl ErrorCallback>) {
     debug!(
         "region is removed, notify commands";
         "region_id" => region_id,
@@ -679,10 +668,10 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd<impl 
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_req_region_removed(region_id: u64, cb: impl ErrorCallback) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
 /// Calls the callback of `cmd` when it can not be processed further.
@@ -690,7 +679,7 @@ fn notify_stale_command(
     region_id: u64,
     peer_id: u64,
     term: u64,
-    mut cmd: PendingCmd<impl Snapshot>,
+    mut cmd: PendingCmd<impl ErrorCallback>,
 ) {
     info!(
         "command is stale, skip";
@@ -702,15 +691,15 @@ fn notify_stale_command(
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req(term: u64, cb: impl ErrorCallback) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
-pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: Callback<impl Snapshot>) {
+pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback) {
     let mut resp = cmd_resp::err_resp(Error::StaleCommand, term);
     resp.mut_header().mut_error().set_message(msg);
-    cb.invoke_with_response(resp);
+    cb.report_error(resp);
 }
 
 /// Checks if a write is needed to be issued before handling the command.
@@ -877,7 +866,7 @@ where
     pending_remove: bool,
 
     /// The commands waiting to be committed and applied
-    pending_cmds: PendingCmdQueue<EK::Snapshot>,
+    pending_cmds: PendingCmdQueue<Callback<EK::Snapshot>>,
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
@@ -1244,7 +1233,6 @@ where
             .applied_batch
             .push(cmd_cb, cmd, &self.observe_info, self.region_id());
         if should_write {
-            debug!("persist data and apply state"; "region_id" => self.region_id(), "peer_id" => self.id(), "state" => ?self.apply_state);
             apply_ctx.commit(self);
         }
         exec_result
@@ -1323,6 +1311,22 @@ where
         self.applied_term = term;
 
         let cmd = Cmd::new(index, term, req.clone(), resp.clone());
+        let (modified_region, mut pending_handle_ssts) = match exec_result {
+            ApplyResult::Res(ref e) => match e {
+                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
+                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
+                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+        let mut apply_ctx_info = ApplyCtxInfo {
+            pending_handle_ssts: &mut pending_handle_ssts,
+            delete_ssts: &mut ctx.delete_ssts,
+            pending_delete_ssts: &mut ctx.pending_delete_ssts,
+        };
         let should_write = ctx.host.post_exec(
             &self.region,
             &cmd,
@@ -1330,18 +1334,25 @@ where
             &RegionState {
                 peer_id: self.id(),
                 pending_remove: self.pending_remove,
-                modified_region: match exec_result {
-                    ApplyResult::Res(ref e) => match e {
-                        ExecResult::SplitRegion { ref derived, .. } => Some(derived.clone()),
-                        ExecResult::PrepareMerge { ref region, .. } => Some(region.clone()),
-                        ExecResult::CommitMerge { ref region, .. } => Some(region.clone()),
-                        ExecResult::RollbackMerge { ref region, .. } => Some(region.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                },
+                modified_region,
             },
+            &mut apply_ctx_info,
         );
+        match pending_handle_ssts {
+            None => (),
+            Some(mut v) => {
+                if !v.is_empty() {
+                    // All elements in `pending_handle_ssts` should be moved into either
+                    // `delete_ssts` or `pending_delete_ssts`, once handled by by any of the
+                    // `post_exec` observers. So a non-empty
+                    // `pending_handle_ssts` here indicates no `post_exec` handled.
+                    ctx.delete_ssts.append(&mut v);
+                }
+                RAFT_APPLYING_SST_GAUGE
+                    .with_label_values(&["pending_delete"])
+                    .set(ctx.pending_delete_ssts.len() as i64);
+            }
+        }
 
         if let ApplyResult::Res(ref exec_result) = exec_result {
             match *exec_result {
@@ -1564,7 +1575,6 @@ where
                 };
                 dont_delete_ingested_sst_fp();
             }
-            ctx.delete_ssts.append(&mut ssts.clone());
             ApplyResult::Res(ExecResult::IngestSst { ssts })
         } else {
             ApplyResult::None
@@ -2946,10 +2956,7 @@ pub fn compact_raft_log(
     Ok(())
 }
 
-pub struct Apply<S>
-where
-    S: Snapshot,
-{
+pub struct Apply<C> {
     pub peer_id: u64,
     pub region_id: u64,
     pub term: u64,
@@ -2957,11 +2964,11 @@ where
     pub commit_term: u64,
     pub entries: SmallVec<[CachedEntries; 1]>,
     pub entries_size: usize,
-    pub cbs: Vec<Proposal<S>>,
+    pub cbs: Vec<Proposal<C>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
 }
 
-impl<S: Snapshot> Apply<S> {
+impl<C: WriteCallback> Apply<C> {
     pub(crate) fn new(
         peer_id: u64,
         region_id: u64,
@@ -2969,9 +2976,9 @@ impl<S: Snapshot> Apply<S> {
         commit_index: u64,
         commit_term: u64,
         entries: Vec<Entry>,
-        cbs: Vec<Proposal<S>>,
+        cbs: Vec<Proposal<C>>,
         buckets: Option<Arc<BucketMeta>>,
-    ) -> Apply<S> {
+    ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
             entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
@@ -2993,7 +3000,7 @@ impl<S: Snapshot> Apply<S> {
     pub fn on_schedule(&mut self, metrics: &RaftMetrics) {
         let now = std::time::Instant::now();
         for cb in &mut self.cbs {
-            if let Callback::Write { trackers, .. } = &mut cb.cb {
+            if let Some(trackers) = cb.cb.write_trackers_mut() {
                 for tracker in trackers {
                     tracker.observe(now, &metrics.store_time, |t| {
                         t.metrics.write_instant = Some(now);
@@ -3007,7 +3014,7 @@ impl<S: Snapshot> Apply<S> {
         }
     }
 
-    fn try_batch(&mut self, other: &mut Apply<S>) -> bool {
+    fn try_batch(&mut self, other: &mut Apply<C>) -> bool {
         assert_eq!(self.region_id, other.region_id);
         assert_eq!(self.peer_id, other.peer_id);
         if self.entries_size + other.entries_size <= MAX_APPLY_BATCH_SIZE {
@@ -3061,21 +3068,18 @@ impl Registration {
 }
 
 #[derive(Debug)]
-pub struct Proposal<S>
-where
-    S: Snapshot,
-{
+pub struct Proposal<C> {
     pub is_conf_change: bool,
     pub index: u64,
     pub term: u64,
-    pub cb: Callback<S>,
+    pub cb: C,
     /// `propose_time` is set to the last time when a peer starts to renew
     /// lease.
     pub propose_time: Option<Timespec>,
     pub must_pass_epoch_check: bool,
 }
 
-impl<S: Snapshot> HeapSize for Proposal<S> {}
+impl<C> HeapSize for Proposal<C> {}
 
 pub struct Destroy {
     region_id: u64,
@@ -3224,7 +3228,7 @@ where
 {
     Apply {
         start: Instant,
-        apply: Apply<EK::Snapshot>,
+        apply: Apply<Callback<EK::Snapshot>>,
     },
     Registration(Registration),
     LogsUpToDate(CatchUpLogs),
@@ -3245,7 +3249,7 @@ impl<EK> Msg<EK>
 where
     EK: KvEngine,
 {
-    pub fn apply(apply: Apply<EK::Snapshot>) -> Msg<EK> {
+    pub fn apply(apply: Apply<Callback<EK::Snapshot>>) -> Msg<EK> {
         Msg::Apply {
             start: Instant::now(),
             apply,
@@ -3381,7 +3385,11 @@ where
 
     /// Handles apply tasks, and uses the apply delegate to handle the committed
     /// entries.
-    fn handle_apply(&mut self, apply_ctx: &mut ApplyContext<EK>, mut apply: Apply<EK::Snapshot>) {
+    fn handle_apply(
+        &mut self,
+        apply_ctx: &mut ApplyContext<EK>,
+        mut apply: Apply<Callback<EK::Snapshot>>,
+    ) {
         if apply_ctx.timer.is_none() {
             apply_ctx.timer = Some(Instant::now_coarse());
         }
@@ -3455,12 +3463,12 @@ where
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.
-    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<EK::Snapshot>>) {
+    fn append_proposal(&mut self, props_drainer: Drain<'_, Proposal<Callback<EK::Snapshot>>>) {
         let (region_id, peer_id) = (self.delegate.region_id(), self.delegate.id());
         let propose_num = props_drainer.len();
         if self.delegate.stopped {
             for p in props_drainer {
-                let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                let cmd = PendingCmd::new(p.index, p.term, p.cb);
                 notify_stale_command(region_id, peer_id, self.delegate.term, cmd);
             }
             return;
@@ -3594,19 +3602,21 @@ where
         }
     }
 
-    #[allow(unused_mut, clippy::redundant_closure_call)]
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext<EK>, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
-        let mut need_sync = apply_ctx
+        let need_sync = apply_ctx
             .apply_res
             .iter()
             .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_flush_applied_index != applied_index;
-        (|| fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true }))();
-        if need_sync {
+        let force_sync_fp = || {
+            fail_point!("apply_on_handle_snapshot_sync", |_| true);
+            false
+        };
+        if need_sync || force_sync_fp() {
             if apply_ctx.timer.is_none() {
                 apply_ctx.timer = Some(Instant::now_coarse());
             }
@@ -3760,7 +3770,7 @@ where
                     for tracker in apply
                         .cbs
                         .iter()
-                        .flat_map(|p| p.cb.get_trackers())
+                        .flat_map(|p| p.cb.write_trackers())
                         .flat_map(|ts| ts.iter().flat_map(|t| t.as_tracker_token()))
                     {
                         GLOBAL_TRACKERS.with_tracker(tracker, |t| {
@@ -4161,7 +4171,7 @@ where
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {
-                            let cmd = PendingCmd::<EK::Snapshot>::new(p.index, p.term, p.cb);
+                            let cmd = PendingCmd::new(p.index, p.term, p.cb);
                             notify_region_removed(apply.region_id, apply.peer_id, cmd);
                         }
                     }
@@ -4293,14 +4303,11 @@ mod memtrace {
         pub merge_yield: usize,
     }
 
-    impl<S> HeapSize for PendingCmdQueue<S>
-    where
-        S: Snapshot,
-    {
+    impl<C> HeapSize for PendingCmdQueue<C> {
         fn heap_size(&self) -> usize {
             // Some fields of `PendingCmd` are on stack, but ignore them because they are
             // just some small boxed closures.
-            self.normals.capacity() * mem::size_of::<PendingCmd<S>>()
+            self.normals.capacity() * mem::size_of::<PendingCmd<C>>()
         }
     }
 
@@ -4612,7 +4619,7 @@ mod tests {
         index: u64,
         term: u64,
         cb: Callback<S>,
-    ) -> Proposal<S> {
+    ) -> Proposal<Callback<S>> {
         Proposal {
             is_conf_change,
             index,
@@ -4623,13 +4630,13 @@ mod tests {
         }
     }
 
-    fn apply<S: Snapshot>(
+    fn apply<C: WriteCallback>(
         peer_id: u64,
         region_id: u64,
         term: u64,
         entries: Vec<Entry>,
-        cbs: Vec<Proposal<S>>,
-    ) -> Apply<S> {
+        cbs: Vec<Proposal<C>>,
+    ) -> Apply<C> {
         let (commit_index, commit_term) = entries
             .last()
             .map(|e| (e.get_index(), e.get_term()))
@@ -4813,7 +4820,7 @@ mod tests {
         system.shutdown();
     }
 
-    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<S> {
+    fn cb<S: Snapshot>(idx: u64, term: u64, tx: Sender<RaftCmdResponse>) -> Proposal<Callback<S>> {
         proposal(
             false,
             idx,
@@ -4965,6 +4972,10 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        delay_remove_ssts: Arc<AtomicBool>,
+        last_delete_sst_count: Arc<AtomicU64>,
+        last_pending_delete_sst_count: Arc<AtomicU64>,
+        last_pending_handle_sst_count: Arc<AtomicU64>,
     }
 
     impl Coprocessor for ApplyObserver {}
@@ -4977,6 +4988,43 @@ mod tests {
         fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
+
+        fn post_exec_query(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: &Cmd,
+            _: &RaftApplyState,
+            _: &RegionState,
+            apply_info: &mut ApplyCtxInfo<'_>,
+        ) -> bool {
+            match apply_info.pending_handle_ssts {
+                Some(v) => {
+                    // If it is a ingest sst
+                    let mut ssts = std::mem::take(v);
+                    assert_ne!(ssts.len(), 0);
+                    if self.delay_remove_ssts.load(Ordering::SeqCst) {
+                        apply_info.pending_delete_ssts.append(&mut ssts);
+                    } else {
+                        apply_info.delete_ssts.append(&mut ssts);
+                    }
+                }
+                None => (),
+            }
+            self.last_delete_sst_count
+                .store(apply_info.delete_ssts.len() as u64, Ordering::SeqCst);
+            self.last_pending_delete_sst_count.store(
+                apply_info.pending_delete_ssts.len() as u64,
+                Ordering::SeqCst,
+            );
+            self.last_pending_handle_sst_count.store(
+                match apply_info.pending_handle_ssts {
+                    Some(ref v) => v.len() as u64,
+                    None => 0,
+                },
+                Ordering::SeqCst,
+            );
+            false
+        }
     }
 
     impl AdminObserver for ApplyObserver {
@@ -4986,6 +5034,7 @@ mod tests {
             cmd: &Cmd,
             _: &RaftApplyState,
             region_state: &RegionState,
+            _: &mut ApplyCtxInfo<'_>,
         ) -> bool {
             let request = cmd.request.get_admin_request();
             match request.get_cmd_type() {
@@ -5662,11 +5711,13 @@ mod tests {
     #[test]
     fn test_exec_observer() {
         let (_path, engine) = create_tmp_engine("test-exec-observer");
-        let (_import_dir, importer) = create_tmp_importer("test-exec-observer");
+        let (import_dir, importer) = create_tmp_importer("test-exec-observer");
         let mut host = CoprocessorHost::<KvTestEngine>::default();
         let obs = ApplyObserver::default();
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
+        host.registry
+            .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
@@ -5680,7 +5731,7 @@ mod tests {
             sender,
             region_scheduler,
             coprocessor_host: host,
-            importer,
+            importer: importer.clone(),
             engine: engine.clone(),
             router: router.clone(),
             store_id: 1,
@@ -5781,7 +5832,7 @@ mod tests {
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.apply_state.get_applied_index(), index_id);
         assert_eq!(apply_res.applied_term, 1);
-        let (_, r8) = if let ExecResult::SplitRegion {
+        let (r1, r8) = if let ExecResult::SplitRegion {
             regions,
             derived: _,
             new_split_regions: _,
@@ -5811,6 +5862,48 @@ mod tests {
             .unwrap()
             .unwrap_or_default();
         assert_eq!(apply_res.apply_state, state);
+
+        // Phase 3: we test if we can delay deletion of some sst files.
+        let r1_epoch = r1.get_region_epoch();
+        index_id += 1;
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"2")];
+        let sst_path = import_dir.path().join("test.sst");
+        let (mut meta, data) = gen_sst_file_with_kvs(&sst_path, &kvs);
+        meta.set_region_id(1);
+        meta.set_region_epoch(r1_epoch.clone());
+        let mut file = importer.create(&meta).unwrap();
+        file.append(&data).unwrap();
+        file.finish().unwrap();
+        let src = sst_path.clone();
+        let dst = file.get_import_path().save.to_str().unwrap();
+        std::fs::copy(src, dst).unwrap();
+        assert!(sst_path.as_path().exists());
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+
+        obs.delay_remove_ssts.store(true, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
+
+        index_id += 1;
+        let ingestsst = EntryBuilder::new(index_id, 1)
+            .ingest_sst(&meta)
+            .epoch(r1_epoch.get_conf_ver(), r1_epoch.get_version())
+            .build();
+        obs.delay_remove_ssts.store(false, Ordering::SeqCst);
+        router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![ingestsst], vec![])));
+        let apply_res = fetch_apply_res(&rx);
+        assert_eq!(apply_res.exec_res.len(), 1);
+        assert_eq!(obs.last_pending_handle_sst_count.load(Ordering::SeqCst), 0);
+        assert_eq!(obs.last_delete_sst_count.load(Ordering::SeqCst), 1);
+        assert_eq!(obs.last_pending_delete_sst_count.load(Ordering::SeqCst), 1);
 
         system.shutdown();
     }
@@ -5892,7 +5985,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<KvTestSnapshot>| {
                     assert!(!resp.response.get_header().has_error());
                     assert!(resp.snapshot.is_some());
                     let snap = resp.snapshot.unwrap();
@@ -5961,7 +6054,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(2, observe_handle),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(
                         resp.response
                             .get_header()
@@ -6133,7 +6226,7 @@ mod tests {
             Msg::Change {
                 region_epoch: region_epoch.clone(),
                 cmd: ChangeObserver::from_cdc(1, observe_handle.clone()),
-                cb: Callback::Read(Box::new(|resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(|resp: ReadResponse<_>| {
                     assert!(!resp.response.get_header().has_error(), "{:?}", resp);
                     assert!(resp.snapshot.is_some());
                 })),
@@ -6288,7 +6381,7 @@ mod tests {
             Msg::Change {
                 region_epoch,
                 cmd: ChangeObserver::from_cdc(1, observe_handle),
-                cb: Callback::Read(Box::new(move |resp: ReadResponse<_>| {
+                cb: Callback::read(Box::new(move |resp: ReadResponse<_>| {
                     assert!(
                         resp.response.get_header().get_error().has_epoch_not_match(),
                         "{:?}",
@@ -6307,7 +6400,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
         });
         res.unwrap_err();
     }
@@ -6315,7 +6408,7 @@ mod tests {
     #[test]
     fn pending_cmd_leak_dtor_not_abort() {
         let res = panic_hook::recover_safe(|| {
-            let _cmd = PendingCmd::<KvTestSnapshot>::new(1, 1, Callback::None);
+            let _cmd = PendingCmd::new(1, 1, Callback::<KvTestSnapshot>::None);
             panic!("Don't abort");
             // It would abort and fail if there was a double-panic in PendingCmd
             // dtor.
