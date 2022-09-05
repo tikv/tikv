@@ -2845,7 +2845,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         drop(meta);
 
-        if let Err(e) = self.ctx.engines.kv.delete_all_in_range(
+        if let Err(e) = self.ctx.engines.kv.delete_ranges(
             DeleteStrategy::DeleteByKey,
             &[Range::new(&start_key, &end_key)],
         ) {

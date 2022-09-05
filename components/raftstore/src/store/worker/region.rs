@@ -530,57 +530,61 @@ where
     }
 
     /// Tries to clean up files in pending ranges overlapping with the given
-    /// bounds. These pending ranges will be removed, and the given bounds will
-    /// be updated to include them. Caller must ensure the remaining keys in
-    /// these ranges will be deleted properly.
-    fn clean_overlap_ranges_fast(&mut self, start_key: &mut Vec<u8>, end_key: &mut Vec<u8>) {
+    /// bounds. These pending ranges will be removed. Returns an updated range
+    /// that also includes these ranges. Caller must ensure the remaining keys
+    /// in the returning range will be deleted properly.
+    fn clean_overlap_ranges_roughly(
+        &mut self,
+        mut start_key: Vec<u8>,
+        mut end_key: Vec<u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         let overlap_ranges = self
             .pending_delete_ranges
-            .drain_overlap_ranges(start_key, end_key);
-        if !overlap_ranges.is_empty() {
-            CLEAN_COUNTER_VEC
-                .with_label_values(&["overlap-with-apply"])
-                .inc();
-            let oldest_sequence = self
-                .engine
-                .get_oldest_snapshot_sequence_number()
-                .unwrap_or(u64::MAX);
-            let df_ranges: Vec<_> = overlap_ranges
-                .iter()
-                .filter_map(|(region_id, cur_start, cur_end, stale_sequence)| {
-                    info!(
-                        "delete data in range because of overlap"; "region_id" => region_id,
-                        "start_key" => log_wrappers::Value::key(cur_start),
-                        "end_key" => log_wrappers::Value::key(cur_end)
-                    );
-                    if *start_key > *cur_start {
-                        *start_key = cur_start.clone();
-                    }
-                    if *end_key < *cur_end {
-                        *end_key = cur_end.clone();
-                    }
-                    if *stale_sequence < oldest_sequence {
-                        Some(Range::new(cur_start, cur_end))
-                    } else {
-                        SNAP_COUNTER_VEC
-                            .with_label_values(&["overlap", "not_delete_files"])
-                            .inc();
-                        None
-                    }
-                })
-                .collect();
-            self.engine
-                .delete_all_in_range(DeleteStrategy::DeleteFiles, &df_ranges)
-                .unwrap_or_else(|e| {
-                    error!("failed to delete files in range"; "err" => %e);
-                });
+            .drain_overlap_ranges(&start_key, &end_key);
+        if overlap_ranges.is_empty() {
+            return (start_key, end_key);
         }
+        CLEAN_COUNTER_VEC.with_label_values(&["overlap"]).inc();
+        let oldest_sequence = self
+            .engine
+            .get_oldest_snapshot_sequence_number()
+            .unwrap_or(u64::MAX);
+        let df_ranges: Vec<_> = overlap_ranges
+            .iter()
+            .filter_map(|(region_id, cur_start, cur_end, stale_sequence)| {
+                info!(
+                    "delete data in range because of overlap"; "region_id" => region_id,
+                    "start_key" => log_wrappers::Value::key(cur_start),
+                    "end_key" => log_wrappers::Value::key(cur_end)
+                );
+                if &start_key > cur_start {
+                    start_key = cur_start.clone();
+                }
+                if &end_key < cur_end {
+                    end_key = cur_end.clone();
+                }
+                if *stale_sequence < oldest_sequence {
+                    Some(Range::new(cur_start, cur_end))
+                } else {
+                    SNAP_COUNTER_VEC
+                        .with_label_values(&["overlap", "not_delete_files"])
+                        .inc();
+                    None
+                }
+            })
+            .collect();
+        self.engine
+            .delete_ranges(DeleteStrategy::DeleteFiles, &df_ranges)
+            .unwrap_or_else(|e| {
+                error!("failed to delete files in range"; "err" => %e);
+            });
+        (start_key, end_key)
     }
 
     /// Cleans up data in the given range and all pending ranges overlapping
     /// with it.
-    fn clean_overlap_ranges(&mut self, mut start_key: Vec<u8>, mut end_key: Vec<u8>) -> Result<()> {
-        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
+    fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
     }
 
@@ -588,10 +592,10 @@ where
     fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
-        mut start_key: Vec<u8>,
-        mut end_key: Vec<u8>,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
     ) {
-        self.clean_overlap_ranges_fast(&mut start_key, &mut end_key);
+        let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
         info!("register deleting data in range";
             "region_id" => region_id,
             "start_key" => log_wrappers::Value::key(&start_key),
@@ -634,7 +638,7 @@ where
             .collect();
 
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteFiles, &ranges)
+            .delete_ranges(DeleteStrategy::DeleteFiles, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete files in range"; "err" => %e);
             });
@@ -643,7 +647,7 @@ where
             return;
         }
         self.engine
-            .delete_all_in_range(DeleteStrategy::DeleteBlobs, &ranges)
+            .delete_ranges(DeleteStrategy::DeleteBlobs, &ranges)
             .unwrap_or_else(|e| {
                 error!("failed to delete blobs in range"; "err" => %e);
             });
