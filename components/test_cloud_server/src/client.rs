@@ -180,11 +180,7 @@ impl ClusterClient {
             }
             return;
         }
-        panic!(
-            "{} prewrite failed {:?}",
-            region_id,
-            store_id_errors,
-        );
+        panic!("{} prewrite failed {:?}", region_id, store_id_errors,);
     }
 
     pub fn kv_commit(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
@@ -240,11 +236,7 @@ impl ClusterClient {
             }
             return;
         }
-        panic!(
-            "{} commit failed {:?}",
-            region_id,
-            store_id_errors,
-        );
+        panic!("{} commit failed {:?}", region_id, store_id_errors,);
     }
 
     fn group_mutations_by_region(

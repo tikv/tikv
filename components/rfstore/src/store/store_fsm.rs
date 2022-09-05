@@ -975,6 +975,10 @@ impl<'a> StoreMsgHandler<'a> {
         self.ctx.peers.get(&region_id).unwrap().clone()
     }
 
+    fn try_get_peer(&mut self, region_id: u64) -> Option<PeerStates> {
+        self.ctx.peers.get(&region_id).cloned()
+    }
+
     fn on_split_region(&mut self, regions: Vec<metapb::Region>) {
         fail_point!("on_split", self.ctx.store_id() == 3, |_| { None });
         let derived = regions.last().unwrap().clone();
@@ -1438,14 +1442,24 @@ impl<'a> StoreMsgHandler<'a> {
     }
 
     fn on_apply_result(&mut self, region_id: u64, peer_id: u64) -> Option<u64> {
-        if !self.peer_exists(region_id, peer_id) {
+        let peer = self.try_get_peer(region_id);
+        if peer.is_none() {
             let peer_tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, 0));
             warn!("{} apply result peer doesn't exist", peer_tag);
             return None;
         }
-        let peer = self.get_peer(region_id);
+        let peer = peer.unwrap();
         let (apply_results, is_applying_snapshot) = {
             let mut peer_fsm = peer.peer_fsm.lock().unwrap();
+            let current_peer_id = peer_fsm.peer_id();
+            if peer_id != current_peer_id {
+                let tag = peer_fsm.peer.tag();
+                warn!(
+                    "{} apply result peer id {} doesn't match current id {}",
+                    tag, peer_id, current_peer_id
+                );
+                return None;
+            }
             (
                 std::mem::take(&mut peer_fsm.peer.pending_apply_results),
                 peer_fsm.peer.is_applying_snapshot(),
@@ -1493,15 +1507,6 @@ impl<'a> StoreMsgHandler<'a> {
             .peer
             .handle_raft_ready(&mut self.ctx.raft_ctx, None);
         self.maybe_apply(region_id)
-    }
-
-    fn peer_exists(&mut self, region_id: u64, peer_id: u64) -> bool {
-        self.ctx
-            .store_meta
-            .regions
-            .get(&region_id)
-            .map(|region| region.get_peers().iter().any(|p| p.id == peer_id))
-            .unwrap_or(false)
     }
 
     fn on_dependents_empty(&mut self, region_id: u64) {
