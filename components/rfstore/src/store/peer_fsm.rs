@@ -334,6 +334,9 @@ impl<'a> PeerMsgHandler<'a> {
             );
             return;
         }
+        if self.peer.is_applying_snapshot() {
+            return;
+        }
         fail_point!("on_apply_res", |_| {});
         if !self.fsm.peer.pending_apply_results.is_empty() {
             // Apply results should be handled in order but there is a pending one, so

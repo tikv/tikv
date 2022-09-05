@@ -1444,13 +1444,18 @@ impl<'a> StoreMsgHandler<'a> {
             return None;
         }
         let peer = self.get_peer(region_id);
-        let apply_results = {
+        let (apply_results, is_applying_snapshot) = {
             let mut peer_fsm = peer.peer_fsm.lock().unwrap();
-            std::mem::take(&mut peer_fsm.peer.pending_apply_results)
+            (
+                std::mem::take(&mut peer_fsm.peer.pending_apply_results),
+                peer_fsm.peer.is_applying_snapshot(),
+            )
         };
-        if apply_results.is_empty() {
+        if apply_results.is_empty() || is_applying_snapshot {
             // The apply_results can be empty if a uninitialized peer received gc message and later
             // replaced by split.
+            //
+            // The apply result is stale if the peer is applying snapshot.
             return None;
         }
         for mut apply_result in apply_results {
