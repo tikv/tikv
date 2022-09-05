@@ -30,6 +30,8 @@ define_error_codes!(
     DEADLINE_EXCEEDED => ("DeadlineExceeded", "", ""),
     PENDING_PREPARE_MERGE => ("PendingPrepareMerge", "", ""),
     RECOVERY_IN_PROGRESS => ("RecoveryInProgress", "", ""),
+    // TODO: add FLASHBACK in errorpb
+    FLASHBACK_IN_PROGRESS => ("RecoveryInProgress", "", ""),
 
     SNAP_ABORT => ("SnapAbort", "", ""),
     SNAP_TOO_MANY => ("SnapTooMany", "", ""),

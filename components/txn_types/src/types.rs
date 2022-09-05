@@ -513,6 +513,8 @@ pub struct TxnExtra {
     // Marks that this transaction is a 1PC transaction. RaftKv should set this flag
     // in the raft command request.
     pub one_pc: bool,
+    // Marks that this transaction is a flashback transaction.
+    pub for_flashback: bool,
 }
 
 impl TxnExtra {
@@ -537,6 +539,8 @@ bitflags! {
         /// Indicates this request is a transfer leader command that needs to be proposed
         /// like a normal command.
         const TRANSFER_LEADER_PROPOSAL = 0b00000100;
+        /// Indicates this request is a flashback transaction.
+        const FLASHBACK = 0b00001000;
     }
 }
 

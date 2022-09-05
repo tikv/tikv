@@ -591,7 +591,11 @@ impl RaftEngine for RaftLogEngine {
         Ok(total as usize)
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+    fn need_manual_purge(&self) -> bool {
+        true
+    }
+
+    fn manual_purge(&self) -> Result<Vec<u64>> {
         let _io_type_guard = WithIoType::new(IoType::Compaction);
         self.0.purge_expired_files().map_err(transfer_error)
     }

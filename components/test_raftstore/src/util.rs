@@ -931,7 +931,6 @@ pub fn must_kv_prewrite_with(
     );
 }
 
-// Disk full test interface.
 pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
