@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::Duration, collections::HashMap,
 };
 
 pub use engine_rocks::RocksSnapshot;
@@ -210,7 +210,11 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+    fn modify_on_kv_engine(
+        &self,
+        modifies: Vec<Modify>,
+        _: Option<HashMap<Key, u64>>,
+    ) -> Result<()> {
         write_modifies(&self.engines.kv, modifies)
     }
 

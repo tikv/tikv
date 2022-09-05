@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
+    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
     mem,
@@ -36,7 +37,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::write_modifies;
+use tikv_kv::{write_modifies, write_modifies_v2};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -156,6 +157,7 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
+    multi_rocks: bool,
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
@@ -168,8 +170,14 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
+    pub fn new(
+        multi_rocks: bool,
+        router: S,
+        engine: E,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv<E, S> {
         RaftKv {
+            multi_rocks,
             router,
             engine,
             txn_extra_scheduler: None,
@@ -325,11 +333,19 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
+    fn multi_rocks(&self) -> bool {
+        self.multi_rocks
+    }
+
     fn kv_engine(&self) -> E {
         self.engine.clone()
     }
 
-    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+    fn modify_on_kv_engine(
+        &self,
+        mut modifies: Vec<Modify>,
+        key_to_region: Option<HashMap<Key, u64>>,
+    ) -> kv::Result<()> {
         for modify in &mut modifies {
             match modify {
                 Modify::Delete(_, ref mut key) => {
@@ -352,7 +368,12 @@ where
                 }
             }
         }
-        write_modifies(&self.engine, modifies)
+
+        if self.multi_rocks {
+            write_modifies_v2(&self.engine, modifies, key_to_region.unwrap())
+        } else {
+            write_modifies(&self.engine, modifies)
+        }
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {

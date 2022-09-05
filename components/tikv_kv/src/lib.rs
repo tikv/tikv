@@ -23,6 +23,7 @@ mod stats;
 
 use std::{
     cell::UnsafeCell,
+    collections::HashMap,
     error,
     num::NonZeroU64,
     ptr, result,
@@ -266,11 +267,20 @@ pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
 
+    /// Whether multi-rocks db setting is enabled
+    fn multi_rocks(&self) -> bool {
+        false
+    }
+
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
     /// Write modifications into internal local engine directly.
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+    fn modify_on_kv_engine(
+        &self,
+        modifies: Vec<Modify>,
+        key_to_region: Option<HashMap<Key, u64>>,
+    ) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
@@ -658,6 +668,14 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     }
     wb.write()?;
     Ok(())
+}
+
+pub fn write_modifies_v2(
+    _engine: &impl LocalEngine,
+    _modifies: Vec<Modify>,
+    _key_to_id: HashMap<Key, u64>,
+) -> Result<()> {
+    unimplemented!();
 }
 
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];

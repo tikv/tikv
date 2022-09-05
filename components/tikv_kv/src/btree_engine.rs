@@ -3,7 +3,7 @@
 use std::{
     collections::{
         BTreeMap,
-        Bound::{self, Excluded, Included, Unbounded},
+        Bound::{self, Excluded, Included, Unbounded}, HashMap,
     },
     default::Default,
     fmt::{self, Debug, Display, Formatter},
@@ -81,7 +81,7 @@ impl Engine for BTreeEngine {
         unimplemented!();
     }
 
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+    fn modify_on_kv_engine(&self, _: Vec<Modify>, _: Option<HashMap<Key, u64>>) -> EngineResult<()> {
         unimplemented!();
     }
 
