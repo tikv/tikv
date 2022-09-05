@@ -51,7 +51,9 @@ use raft::{
     SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use raft_proto::ConfChangeI;
-use rand::seq::SliceRandom;
+use rand::{
+    seq::SliceRandom, Rng, thread_rng,
+};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -1701,34 +1703,30 @@ where
     #[inline]
     fn assign_zone_agent(&self, group: &[usize], msgs: &[eraftpb::Message]) -> Option<u64> {
         // TODO: Find a better way to decide agent.
-        let mut agent_id: Option<u64> = None;
-        let mut next_idx = 0;
-        for idx in group {
-            let peer_id = msgs[*idx].get_to();
-            let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
-            if self.raft_group.raft.is_recent_active(peer_id)
-                && self.raft_group.raft.get_next_idx(peer_id).unwrap() > next_idx
-                && is_voter
-            {
-                agent_id = Some(peer_id);
-                next_idx = self.raft_group.raft.get_next_idx(peer_id).unwrap();
-            }
-        }
-        agent_id
+        let idx = thread_rng().gen_range(0..group.len());
+        Some(msgs[group[idx]].get_to())
+        // let mut agent_id: Option<u64> = None;
+        // let mut next_idx = 0;
+        // for idx in group {
+        //     let peer_id = msgs[*idx].get_to();
+        //     let is_voter = self.raft_group.raft.prs().conf().voters().contains(peer_id);
+        //     if self.raft_group.raft.is_recent_active(peer_id)
+        //         && self.raft_group.raft.get_next_idx(peer_id).unwrap() > next_idx
+        //         && is_voter
+        //     {
+        //         agent_id = Some(peer_id);
+        //         next_idx = self.raft_group.raft.get_next_idx(peer_id).unwrap();
+        //     }
+        // }
+        // agent_id
     }
 
     fn merge_msg_append(
         &self,
         group: &Vec<usize>,
         msgs: &mut [eraftpb::Message],
-        discard: &mut HashSet<usize>,
+        skip: &mut Vec<bool>,
     ) {
-        if group.len() >= 3 {
-            return;
-        }
-        if group.len() <= 2 {
-            return;
-        }
         // If no appropriate agent, do not use follower replication.
         if let Some(agent_id) = self.assign_zone_agent(group, msgs) {
             let mut forwards: Vec<Forward> = Vec::new();
@@ -1740,7 +1738,7 @@ where
                     forward.set_log_term(msg.get_log_term());
                     forward.set_index(msg.get_index());
                     forwards.push(forward);
-                    discard.insert(*idx);
+                    skip[*idx] = true;
                 }
             }
 
@@ -1770,7 +1768,7 @@ where
     ) -> Vec<RaftMessage> {
         let mut raft_msgs = Vec::with_capacity(msgs.len());
 
-        if self.follower_repl() && self.raft_group.raft.is_leader() {
+        if self.follower_repl() && self.is_leader() {
             // Group MsgAppend by AZ.
             let mut msg_append_group: HashMap<String, Vec<usize>> = HashMap::default();
             // let zone_info = Arc::clone(&ctx.zone_info.read().unwrap());
@@ -1778,7 +1776,6 @@ where
             let leader_store_id = self.peer.get_store_id();
             let leader_zone = zone_info.get(&leader_store_id);
             // Record message that should be discarded after merge_msg_append.
-            let mut discard: HashSet<usize> = HashSet::default();
             let mut skip = vec![false; msgs.len()];
 
             // Filter MsgAppend.
@@ -1805,18 +1802,15 @@ where
 
             // Build MsgGroupBroadcast.
             for (_, group) in msg_append_group.iter() {
-                if group.len() > 1 {
-                    self.merge_msg_append(group, &mut msgs, &mut discard);
+                if group.len() == 2 {
+                    self.merge_msg_append(group, &mut msgs, &mut skip);
                 }
             }
 
             // Filter unnecessary MsgAppend and build raft messages.
             let mut pos: usize = 0;
             for msg in msgs {
-                if skip[pos] {
-                    continue;
-                }
-                if let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
+                if !skip[pos] && let Some(m) = self.build_raft_message(msg, ctx.self_disk_usage) {
                     raft_msgs.push(m);
                 }
                 pos += 1;
