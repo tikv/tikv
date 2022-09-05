@@ -30,10 +30,6 @@ impl RocksSnapshot {
             }
         }
     }
-
-    pub fn db(&self) -> Arc<DB> {
-        self.db.clone()
-    }
 }
 
 impl Snapshot for RocksSnapshot {}

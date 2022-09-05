@@ -271,11 +271,8 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let key = keys.peek();
-        if key.is_none() {
-            break;
-        }
-        let key = key.unwrap().as_encoded().as_slice();
+        let Some(key) = keys.peek() else {break};
+        let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
             keys.next();
@@ -450,7 +447,7 @@ where
         let mut txn = Self::new_txn();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
-        for region in regions.into_iter() {
+        for region in regions {
             let mut reader = self.create_reader(
                 count,
                 &region,
