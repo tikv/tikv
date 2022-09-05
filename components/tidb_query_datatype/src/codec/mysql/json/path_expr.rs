@@ -28,7 +28,7 @@
 use std::{iter::Peekable, str::CharIndices};
 
 use super::json_unquote::unquote_string;
-use crate::codec::Result;
+use crate::codec::{Error, Result};
 
 pub const PATH_EXPR_ASTERISK: &str = "*";
 
@@ -65,7 +65,8 @@ impl PathExpression {
     }
 }
 
-// the position is counted from 1
+/// `box_json_path_err` creates an error from the slice position
+/// The position is added with 1, to count from 1 as start
 macro_rules! box_json_path_err {
     ($e:expr) => {{
         box_err!(
@@ -86,23 +87,23 @@ struct Position {
     end: usize,
 }
 
-// PathExpressionToken represents a section in path expression and its position
+/// PathExpressionToken represents a section in path expression and its position
 enum PathExpressionToken {
     Leg((PathLeg, Position)),
-    // represents the beginning "$" in the expression
+    /// Represents the beginning "$" in the expression
     Start(Position),
 }
 
 impl<'a> Iterator for PathExpressionTokenizer<'a> {
     type Item = Result<PathExpressionToken>;
 
-    // next will try to parse the next path leg and return
-    // if it returns None, it means the input is over.
-    // if it returns Some(Err(..)), it means the format is error.
-    // if it returns Some(Ok(..)), it represents the next token.
+    /// Next will try to parse the next path leg and return
+    /// If it returns None, it means the input is over.
+    /// If it returns Some(Err(..)), it means the format is error.
+    /// If it returns Some(Ok(..)), it represents the next token.
     fn next(&mut self) -> Option<Result<PathExpressionToken>> {
         self.trim_white_spaces();
-        // trim all spaces at first
+        // Trim all spaces at first
         if self.reached_end() {
             return None;
         };
@@ -132,7 +133,7 @@ impl<'a> PathExpressionTokenizer<'a> {
         }
     }
 
-    // returns the current index on the slice
+    /// Returns the current index on the slice
     fn current_index(&mut self) -> usize {
         match self.char_iterator.peek() {
             Some((start, _)) => *start,
@@ -140,7 +141,7 @@ impl<'a> PathExpressionTokenizer<'a> {
         }
     }
 
-    // trim_while_spaces remove spaces from the position
+    /// `trim_while_spaces` removes following spaces
     fn trim_white_spaces(&mut self) {
         while self
             .char_iterator
@@ -149,7 +150,7 @@ impl<'a> PathExpressionTokenizer<'a> {
         {}
     }
 
-    // returns whether the input has reached the end
+    /// Returns whether the input has reached the end
     fn reached_end(&mut self) -> bool {
         return self.char_iterator.peek().is_none();
     }
@@ -175,19 +176,19 @@ impl<'a> PathExpressionTokenizer<'a> {
                 )))
             }
             (mut key_start, '"') => {
-                // skip this '"' character
+                // Skip this '"' character
                 key_start += 1;
                 self.char_iterator.next().unwrap();
 
-                // next until the next '"' character
+                // Next until the next '"' character
                 while self.char_iterator.next_if(|(_, ch)| *ch != '"').is_some() {}
 
-                // now, it's a '"' or the end
+                // Now, it's a '"' or the end
                 if self.char_iterator.peek().is_none() {
                     return Err(box_json_path_err!(self.current_index()));
                 }
 
-                // key_end is the index of '"'
+                // `key_end` is the index of '"'
                 let key_end = self.current_index();
                 self.char_iterator.next().unwrap();
 
@@ -212,7 +213,7 @@ impl<'a> PathExpressionTokenizer<'a> {
                 )))
             }
             (key_start, _) => {
-                // we have to also check the current value
+                // We have to also check the current value
                 while self
                     .char_iterator
                     .next_if(|(_, ch)| {
@@ -221,17 +222,17 @@ impl<'a> PathExpressionTokenizer<'a> {
                     .is_some()
                 {}
 
-                // now it reaches the end or a whitespace/./[/*
+                // Now it reaches the end or a whitespace/./[/*
                 let key_end = self.current_index();
 
-                // the start character is not available
+                // The start character is not available
                 if key_end == key_start {
                     return Err(box_json_path_err!(key_start));
                 }
 
                 let key = unsafe { self.input.get_unchecked(key_start..key_end) }.to_string();
 
-                // it's not quoted, we'll have to validate whether it's an available ECMEScript
+                // It's not quoted, we'll have to validate whether it's an available ECMEScript
                 // identifier
                 for (i, c) in key.char_indices() {
                     if i == 0 && c.is_ascii_digit() {
@@ -263,7 +264,7 @@ impl<'a> PathExpressionTokenizer<'a> {
 
         return match self.char_iterator.next().unwrap() {
             (_, '*') => {
-                // then it's a glob array index
+                // Then it's a glob array index
                 self.trim_white_spaces();
                 if self.reached_end() {
                     return Err(box_json_path_err!(self.current_index()));
@@ -282,7 +283,7 @@ impl<'a> PathExpressionTokenizer<'a> {
                 )))
             }
             (number_start, '0'..='9') => {
-                // then it's a number array index
+                // Then it's a number array index
                 while self
                     .char_iterator
                     .next_if(|(_, ch)| ch.is_ascii_digit())
@@ -303,7 +304,9 @@ impl<'a> PathExpressionTokenizer<'a> {
                 }
                 self.char_iterator.next().unwrap();
 
-                let index = self.input[number_start..number_end].parse::<i32>().unwrap();
+                let index = self.input[number_start..number_end]
+                    .parse::<i32>()
+                    .map_err(|_| -> Error { box_json_path_err!(number_end) })?;
                 Ok(PathExpressionToken::Leg((
                     PathLeg::Index(index),
                     Position {
@@ -321,7 +324,7 @@ impl<'a> PathExpressionTokenizer<'a> {
 
         match self.char_iterator.next() {
             Some((end, '*')) => {
-                // three or more asterisks are not allowed
+                // Three or more asterisks are not allowed
                 if let Some((pos, '*')) = self.char_iterator.peek() {
                     return Err(box_json_path_err!(pos));
                 }
@@ -381,11 +384,11 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         }
     }
 
-    // there is no available token
+    // There is no available token
     if !started {
         return Err(box_json_path_err!(path_expr.len()));
     }
-    // the last one cannot be the double asterisk
+    // The last one cannot be the double asterisk
     if !legs.is_empty() && legs.last().unwrap() == &PathLeg::DoubleAsterisk {
         return Err(box_json_path_err!(last_position.end));
     }
@@ -427,6 +430,17 @@ mod tests {
                 None,
                 Some(PathExpression {
                     legs: vec![PathLeg::Key(String::from("a"))],
+                    flags: PathExpressionFlag::default(),
+                }),
+            ),
+            (
+                "$ .a. $",
+                None,
+                Some(PathExpression {
+                    legs: vec![
+                        PathLeg::Key(String::from("a")),
+                        PathLeg::Key(String::from("$")),
+                    ],
                     flags: PathExpressionFlag::default(),
                 }),
             ),
@@ -534,6 +548,16 @@ mod tests {
             (
                 "$.\"a\\t\"",
                 Some("Invalid JSON path expression. The error is around character position 4."),
+                None,
+            ),
+            (
+                "$ .a $",
+                Some("Invalid JSON path expression. The error is around character position 6."),
+                None,
+            ),
+            (
+                "$ [ 2147483648 ]",
+                Some("Invalid JSON path expression. The error is around character position 15."),
                 None,
             ),
         ];
