@@ -421,7 +421,7 @@ where
             error!("post apply snapshot error";
                 "error" => e,
                 "peer_id" => peer_id,
-                "snap_key" => ?snap_key
+                "region_id" => region_id,
             );
         };
 
