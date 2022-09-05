@@ -83,9 +83,23 @@ pub struct RfEngine {
 
     pub(crate) task_sender: SyncSender<Task>,
 
-    pub(crate) worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub(crate) worker_handle: Arc<Mutex<WorkerHandle>>,
 
     pub(crate) engine_id: Arc<AtomicU64>,
+}
+
+pub(crate) struct WorkerHandle {
+    task_sender: SyncSender<Task>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for WorkerHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.task_sender.send(Task::Close).unwrap();
+            handle.join().unwrap();
+        }
+    }
 }
 
 impl RfEngine {
@@ -100,8 +114,11 @@ impl RfEngine {
             dir: dir.to_owned(),
             regions: Arc::default(),
             writer: Arc::new(Mutex::new(writer)),
-            task_sender: tx,
-            worker_handle: Arc::default(),
+            task_sender: tx.clone(),
+            worker_handle: Arc::new(Mutex::new(WorkerHandle {
+                task_sender: tx,
+                handle: None,
+            })),
             engine_id: Arc::new(AtomicU64::new(0)),
         };
         let mut offset = 0;
@@ -138,7 +155,7 @@ impl RfEngine {
                 en.engine_id.clone(),
             );
             let join_handle = thread::spawn(move || worker.run());
-            en.worker_handle.lock().unwrap().replace(join_handle);
+            en.worker_handle.lock().unwrap().handle = Some(join_handle);
         }
 
         Ok(en)
@@ -306,9 +323,9 @@ impl RfEngine {
     }
 
     pub fn stop_worker(&mut self) {
-        self.task_sender.send(Task::Close).unwrap();
         let mut handle_ref = self.worker_handle.lock().unwrap();
-        if let Some(h) = handle_ref.take() {
+        if let Some(h) = handle_ref.handle.take() {
+            handle_ref.task_sender.send(Task::Close).unwrap();
             h.join().unwrap();
         }
     }
@@ -426,12 +443,6 @@ impl RfEngine {
 
     pub fn get_engine_id(&self) -> u64 {
         self.engine_id.load(Ordering::Acquire)
-    }
-}
-
-impl Drop for RfEngine {
-    fn drop(&mut self) {
-        self.stop_worker();
     }
 }
 
