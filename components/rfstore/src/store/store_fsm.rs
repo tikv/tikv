@@ -1049,12 +1049,13 @@ impl<'a> StoreMsgHandler<'a> {
                 let tag = peer_fsm.peer.tag();
                 let pending_snap = peer_fsm.peer.has_pending_snapshot();
                 let initialized = peer_fsm.peer.is_initialized();
-                if pending_snap || initialized {
+                let pending_remove = peer_fsm.peer.pending_remove;
+                if pending_snap || initialized || pending_remove {
                     // We already received the snapshot, the snapshot must be newer than the newly
                     // split one, we should keep the newer peer.
                     info!(
-                        "{} peer avoid replace by split, has pending snap {}, initialized {}",
-                        tag, pending_snap, initialized
+                        "{} peer avoid replace by split, has pending snap {}, initialized {}, pending remove {}",
+                        tag, pending_snap, initialized, pending_remove,
                     );
                     self.ctx
                         .global
@@ -1072,6 +1073,11 @@ impl<'a> StoreMsgHandler<'a> {
                         "{} peer avoid created by split, peer state: {:?}",
                         tag, state
                     );
+                    self.ctx
+                        .global
+                        .engines
+                        .raft
+                        .remove_dependent(region_id, new_region_id);
                     continue;
                 }
             }
