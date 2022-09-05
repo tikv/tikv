@@ -50,10 +50,9 @@ fn test_flashback_for_schedule() {
         .call_command_on_leader(transfer_leader, Duration::from_secs(3))
         .unwrap();
     let e = resp.get_header().get_error();
-    // reuse recovery_in_progress error code.
     assert_eq!(
-        e.get_recovery_in_progress(),
-        &kvproto::errorpb::RecoveryInProgress {
+        e.get_flashback_in_progress(),
+        &kvproto::errorpb::FlashbackInProgress {
             region_id: region.get_id(),
             ..Default::default()
         }
@@ -277,8 +276,8 @@ fn must_get_error_recovery_in_progress<T: Simulator>(
             Ok(_) => {}
             Err(e) => {
                 assert_eq!(
-                    e.get_recovery_in_progress(),
-                    &kvproto::errorpb::RecoveryInProgress {
+                    e.get_flashback_in_progress(),
+                    &kvproto::errorpb::FlashbackInProgress {
                         region_id: region.get_id(),
                         ..Default::default()
                     }
