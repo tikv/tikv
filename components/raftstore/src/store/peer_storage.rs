@@ -37,7 +37,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::write::WriteTask, entry_storage::EntryStorage, fsm::GenSnapTask,
-        peer::PersistSnapshotResult, util, worker::RaftlogFetchTask,
+        peer::PersistSnapshotResult, snap::SNAPSHOT_VERSION, util, worker::RaftlogFetchTask,
     },
     Error, Result,
 };
@@ -120,6 +120,7 @@ pub enum HandleReadyResult {
         destroy_regions: Vec<Region>,
         /// The first index before applying the snapshot.
         last_first_index: u64,
+        for_witness: bool,
     },
     NoIoTask,
 }
@@ -444,17 +445,34 @@ where
             ));
         }
 
+        let for_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
+        if for_witness {
+            // generate an empty snapshot for witness directly
+            let mut snapshot = Snapshot::default();
+            snapshot.mut_metadata().set_index(self.applied_index());
+            snapshot.mut_metadata().set_term(self.applied_term());
+            snapshot
+                .mut_metadata()
+                .set_conf_state(util::conf_state_from_region(&self.region));
+            snapshot.set_data({
+                let mut snap_data = RaftSnapshotData::default();
+                snap_data.set_region(self.region.clone());
+                snap_data.set_file_size(0);
+                snap_data.set_version(SNAPSHOT_VERSION);
+                snap_data.mut_meta().set_for_witness(true);
+                snap_data.write_to_bytes()?.into()
+            });
+            return Ok(snapshot);
+        }
+
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
-        let for_witness = util::find_peer_by_id(&self.region, to).unwrap().is_witness;
         let mut tried = false;
         let mut last_canceled = false;
         if let SnapState::Generating {
-            ref canceled,
-            ref receiver,
-            ..
-        } = *snap_state
+            canceled, receiver, ..
+        } = &*snap_state
         {
             tried = true;
             last_canceled = canceled.load(Ordering::SeqCst);
@@ -506,7 +524,6 @@ where
             "peer_id" => self.peer_id,
             "request_index" => request_index,
             "request_peer" => to,
-            "for_witness" => for_witness,
         );
 
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -557,8 +574,9 @@ where
         &mut self,
         snap: &Snapshot,
         task: &mut WriteTask<EK, ER>,
-        destroy_regions: &[metapb::Region],
-    ) -> Result<metapb::Region> {
+        destroy_regions: Vec<metapb::Region>,
+        persisted_messages: Vec<eraftpb::Message>,
+    ) -> Result<HandleReadyResult> {
         info!(
             "begin to apply snapshot";
             "region_id" => self.region.get_id(),
@@ -568,8 +586,10 @@ where
         let mut snap_data = RaftSnapshotData::default();
         snap_data.merge_from_bytes(snap.get_data())?;
 
-        let region_id = self.get_region_id();
+        let for_witness = snap_data.get_meta().get_for_witness();
+        let last_first_index = self.first_index().unwrap();
 
+        let region_id = self.get_region_id();
         let region = snap_data.take_region();
         if region.get_id() != region_id {
             return Err(box_err!(
@@ -601,27 +621,32 @@ where
             self.clear_meta(first_index, kv_wb, raft_wb)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
-        for r in destroy_regions {
+        for r in &destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
         }
-        write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
 
-        let last_index = snap.get_metadata().get_index();
+        // Witness snapshot is applied atomically as no async applying operation to
+        // region worker, so need to set the peer state
+        if !for_witness {
+            write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
+        }
 
-        self.raft_state_mut().set_last_index(last_index);
-        self.set_last_term(snap.get_metadata().get_term());
-        self.apply_state_mut().set_applied_index(last_index);
-        let last_term = self.last_term();
-        self.set_applied_term(last_term);
+        let snap_index = snap.get_metadata().get_index();
+        let snap_term = snap.get_metadata().get_term();
+
+        self.raft_state_mut().set_last_index(snap_index);
+        self.set_last_term(snap_term);
+        self.apply_state_mut().set_applied_index(snap_index);
+        self.set_applied_term(snap_term);
 
         // The snapshot only contains log which index > applied index, so
         // here the truncate state's (index, term) is in snapshot metadata.
         self.apply_state_mut()
             .mut_truncated_state()
-            .set_index(last_index);
+            .set_index(snap_index);
         self.apply_state_mut()
             .mut_truncated_state()
-            .set_term(snap.get_metadata().get_term());
+            .set_term(snap_term);
 
         // `region` will be updated after persisting.
         // Although there is an interval that other metadata are updated while `region`
@@ -641,7 +666,13 @@ where
             "state" => ?self.apply_state(),
         );
 
-        Ok(region)
+        Ok(HandleReadyResult::Snapshot {
+            msgs: persisted_messages,
+            snap_region: region,
+            destroy_regions,
+            last_first_index,
+            for_witness,
+        })
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
@@ -863,20 +894,12 @@ where
 
         let mut write_task = WriteTask::new(region_id, self.peer_id, ready.number());
 
-        let mut res = HandleReadyResult::SendIoTask;
-        if !ready.snapshot().is_empty() {
-            fail_point!("raft_before_apply_snap");
-            let last_first_index = self.first_index().unwrap();
-            let snap_region =
-                self.apply_snapshot(ready.snapshot(), &mut write_task, &destroy_regions)?;
-
-            res = HandleReadyResult::Snapshot {
-                msgs: ready.take_persisted_messages(),
-                snap_region,
-                destroy_regions,
-                last_first_index,
-            };
-            fail_point!("raft_after_apply_snap");
+        let mut res = if ready.snapshot().is_empty() {
+            HandleReadyResult::SendIoTask
+        } else {
+            let msgs = ready.take_persisted_messages();
+            // returns HandleReadyResult::Snapshot
+            self.apply_snapshot(ready.snapshot(), &mut write_task, destroy_regions, msgs)?
         };
 
         if !ready.entries().is_empty() {
@@ -937,7 +960,7 @@ where
         // - After `PrepareMerge` log is committed, the source region leader's lease
         //   will be suspected immediately which makes the local reader not serve read
         //   request.
-        // - No read request can be responsed in peer fsm during merging. These
+        // - No read request can be responded in peer fsm during merging. These
         //   conditions are used to prevent reading **stale** data in the past. At
         //   present, they are also used to prevent reading **corrupt** data.
         for r in &res.destroy_regions {
@@ -949,7 +972,14 @@ where
             }
         }
 
-        self.schedule_applying_snapshot();
+        if !res.for_witness {
+            self.schedule_applying_snapshot();
+        } else {
+            // Bypass apply snapshot process for witness as the snapshot is empty, so mark
+            // status as finished directly here
+            let status = Arc::new(AtomicUsize::new(JOB_STATUS_FINISHED));
+            self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
+        }
 
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
@@ -1795,6 +1825,9 @@ pub mod tests {
         s.set_region(r);
 
         let wait_snapshot = |snap: raft::Result<Snapshot>| -> Snapshot {
+            if snap.is_ok() {
+                return snap.unwrap();
+            }
             let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
             assert_eq!(snap.unwrap_err(), unavailable);
             assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -1806,9 +1839,7 @@ pub mod tests {
                 }
                 ref s => panic!("unexpected state: {:?}", s),
             };
-            *s.snap_tried_cnt.borrow_mut() = 0;
-            println!("snapshot {:?}, {}", snap.region, snap.for_witness);
-            snap.snapshot
+            snap
         };
 
         // generate snapshot for peer
@@ -1881,10 +1912,11 @@ pub mod tests {
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
         assert_eq!(s2.first_index(), Ok(s2.applied_index() + 1));
         let mut write_task = WriteTask::new(s2.get_region_id(), s2.peer_id, 1);
-        let snap_region = s2.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.merge_from_bytes(snap1.get_data()).unwrap();
-        assert_eq!(snap_region, snap_data.take_region(),);
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s2.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+            let mut snap_data = RaftSnapshotData::default();
+            snap_data.merge_from_bytes(snap1.get_data()).unwrap();
+            assert_eq!(snap_region, snap_data.take_region());
+        }
         assert_eq!(s2.last_term(), snap1.get_metadata().get_term());
         assert_eq!(s2.apply_state().get_applied_index(), 6);
         assert_eq!(s2.raft_state().get_last_index(), 6);
@@ -1898,10 +1930,11 @@ pub mod tests {
         let mut s3 = new_storage_from_ents(sched, dummy_scheduler, &td3, ents);
         validate_cache(&s3, &ents[1..]);
         let mut write_task = WriteTask::new(s3.get_region_id(), s3.peer_id, 1);
-        let snap_region = s3.apply_snapshot(&snap1, &mut write_task, &[]).unwrap();
-        let mut snap_data = RaftSnapshotData::default();
-        snap_data.merge_from_bytes(snap1.get_data()).unwrap();
-        assert_eq!(snap_region, snap_data.take_region(),);
+        if let HandleReadyResult::Snapshot { snap_region, .. } = s3.apply_snapshot(&snap1, &mut write_task, vec![], vec![]).unwrap() {
+            let mut snap_data = RaftSnapshotData::default();
+            snap_data.merge_from_bytes(snap1.get_data()).unwrap();
+            assert_eq!(snap_region, snap_data.take_region());
+        }
         assert_eq!(s3.last_term(), snap1.get_metadata().get_term());
         assert_eq!(s3.apply_state().get_applied_index(), 6);
         assert_eq!(s3.raft_state().get_last_index(), 6);

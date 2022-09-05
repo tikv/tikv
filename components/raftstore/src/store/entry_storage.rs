@@ -911,7 +911,7 @@ impl<ER: RaftEngine> EntryStorage<ER> {
     }
 
     #[inline]
-    pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
+    pub fn set_apply_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
     }
 

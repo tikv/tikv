@@ -85,6 +85,7 @@ use super::{
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
     errors::RAFTSTORE_IS_BUSY,
+    router::RaftStoreRouter,
     store::{
         async_io::{write::WriteMsg, write_router::WriteRouter},
         fsm::{
@@ -94,7 +95,7 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -461,6 +462,7 @@ pub struct PersistSnapshotResult {
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
     pub destroy_regions: Vec<metapb::Region>,
+    pub for_witness: bool,
 }
 
 #[derive(Debug)]
@@ -2688,8 +2690,15 @@ where
             snap_region,
             destroy_regions,
             last_first_index,
+            for_witness,
         } = res
         {
+            if for_witness {
+                // inform next round to check apply status
+                ctx.router
+                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .unwrap();
+            }
             // When applying snapshot, there is no log applied and not compacted yet.
             self.raft_log_size_hint = 0;
 
@@ -2701,6 +2710,7 @@ where
                     prev_region: self.region().clone(),
                     region: snap_region,
                     destroy_regions,
+                    for_witness,
                 }),
             });
             if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
@@ -3307,7 +3317,7 @@ where
         }
 
         let progress_to_be_updated = self.mut_store().applied_term() != applied_term;
-        self.mut_store().set_applied_state(apply_state);
+        self.mut_store().set_apply_state(apply_state);
         self.mut_store().set_applied_term(applied_term);
 
         self.peer_stat.written_keys += apply_metrics.written_keys;
@@ -3717,54 +3727,6 @@ where
     }
 
     pub fn maybe_witness_transfer_leader<T>(&mut self, ctx: &PollContext<EK, ER, T>) {
-        if self.is_leader() {
-            let has_witness = self.region().get_peers().iter().any(|p| p.is_witness);
-            if !has_witness {
-                // change one peer to witness
-                if let Some(mut peer) = self
-                    .region()
-                    .get_peers()
-                    .iter()
-                    .filter(|p| p.id != self.peer.id)
-                    .next()
-                    .cloned()
-                {
-                    info!(
-                        "change peer to witness";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer_id(),
-                        "change_peer" => peer.get_id(),
-                    );
-                    peer.set_is_witness(true);
-
-                    let mut cp = ChangePeerRequest::default();
-                    cp.set_change_type(ConfChangeType::AddNode);
-                    cp.set_peer(peer);
-
-                    let mut admin = AdminRequest::default();
-                    admin.set_cmd_type(AdminCmdType::ChangePeerV2);
-                    admin.mut_change_peer_v2().set_changes(vec![cp].into());
-
-                    let mut req = RaftCmdRequest::default();
-                    req.mut_header().set_region_id(self.region_id);
-                    req.mut_header()
-                        .set_region_epoch(self.region().get_region_epoch().clone());
-                    req.mut_header().set_peer(self.peer.clone());
-                    req.set_admin_request(admin);
-
-                    let cmd = RaftCommand::new(req, Callback::None);
-                    if let Err(e) = ctx.router.send_raft_command(cmd) {
-                        error!(
-                            "change to witness failed";
-                            "region_id" => self.region_id,
-                            "peer_id" => self.peer.get_id(),
-                            "err" => ?e,
-                        );
-                    }
-                }
-            }
-        }
-
         if !(self.is_witness() && self.is_leader()) {
             return;
         }

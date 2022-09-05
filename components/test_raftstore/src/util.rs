@@ -334,19 +334,6 @@ pub fn is_error_response(resp: &RaftCmdResponse) -> bool {
     resp.get_header().has_error()
 }
 
-pub fn new_pd_change_peer(
-    change_type: ConfChangeType,
-    peer: metapb::Peer,
-) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeer::default();
-    change_peer.set_change_type(change_type);
-    change_peer.set_peer(peer);
-
-    let mut resp = RegionHeartbeatResponse::default();
-    resp.set_change_peer(change_peer);
-    resp
-}
-
 pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
     let mut change_peer = ChangePeerV2::default();
     change_peer.set_changes(changes.into());
