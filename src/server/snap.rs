@@ -25,6 +25,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{
+    pdpb::SnapshotStat,
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData, SnapshotChunk},
     tikvpb::TikvClient,
 };
@@ -36,7 +37,7 @@ use raftstore::{
 use security::SecurityManager;
 use tikv_util::{
     config::{Tracker, VersionTrack},
-    time::Instant,
+    time::{Instant, UnixSecs},
     worker::Runnable,
     DeferContext,
 };
@@ -190,6 +191,18 @@ pub fn send_snap(
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
+                let stat = {
+                    let mut s = SnapshotStat::default();
+                    s.set_region_id(key.region_id);
+                    s.set_transport_size(total_size);
+                    s.set_send_ms(timer.saturating_elapsed().as_secs());
+                    s.set_total_ms(UnixSecs::now().into_inner() - key.start);
+                    s.set_generate_ms(key.generate_sec);
+                    s
+                };
+
+                mgr.put_stat(stat);
+
                 Ok(SendStat {
                     key,
                     total_size,

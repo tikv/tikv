@@ -24,7 +24,7 @@ use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try, defer, error, info, thd_name,
-    time::Instant,
+    time::{Instant, UnixSecs},
     warn,
     worker::{Runnable, RunnableWithTimer},
 };
@@ -272,6 +272,7 @@ where
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
         allow_multi_files_snapshot: bool,
+        start: UnixSecs,
     ) -> Result<()> {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot::<EK>(
@@ -283,6 +284,7 @@ where
             last_applied_state,
             for_balance,
             allow_multi_files_snapshot,
+            start
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
@@ -314,6 +316,7 @@ where
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
         allow_multi_files_snapshot: bool,
+        start: UnixSecs,
     ) {
         fail_point!("before_region_gen_snap", |_| ());
         SNAP_COUNTER.generate.all.inc();
@@ -322,7 +325,7 @@ where
             return;
         }
 
-        let start = Instant::now();
+        let t = Instant::now();
         let _io_type_guard = WithIoType::new(if for_balance {
             IoType::LoadBalance
         } else {
@@ -337,15 +340,14 @@ where
             notifier,
             for_balance,
             allow_multi_files_snapshot,
+            start,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
             return;
         }
 
         SNAP_COUNTER.generate.success.inc();
-        SNAP_HISTOGRAM
-            .generate
-            .observe(start.saturating_elapsed_secs());
+        SNAP_HISTOGRAM.generate.observe(t.saturating_elapsed_secs());
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -781,6 +783,7 @@ where
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
+                let start = UnixSecs::now();
                 let ctx = self.ctx.clone();
                 let mut allow_multi_files_snapshot = false;
                 // if to_store_id is 0, it means the to_store_id cannot be found
@@ -817,6 +820,7 @@ where
                         notifier,
                         for_balance,
                         allow_multi_files_snapshot,
+                        start,
                     );
                     tikv_alloc::remove_thread_memory_accessor();
                 });

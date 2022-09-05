@@ -22,7 +22,11 @@ use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use tikv::server::snap::send_snap;
-use tikv_util::{config::*, time::Instant, HandyRwLock};
+use tikv_util::{
+    config::*,
+    time::{Instant, UnixSecs},
+    HandyRwLock,
+};
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
     cluster.cfg.rocksdb.titan.enabled = true;
@@ -578,6 +582,7 @@ fn test_gen_during_heavy_recv() {
         snap_apply_state,
         true,
         true,
+        UnixSecs::now(),
     )
     .unwrap();
 

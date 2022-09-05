@@ -30,7 +30,10 @@ use raft::{
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
 use tikv_util::{
-    box_err, box_try, debug, defer, error, info, time::Instant, warn, worker::Scheduler,
+    box_err, box_try, debug, defer, error, info,
+    time::{Instant, UnixSecs},
+    warn,
+    worker::Scheduler,
 };
 
 use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
@@ -990,6 +993,7 @@ pub fn do_snapshot<E>(
     last_applied_state: RaftApplyState,
     for_balance: bool,
     allow_multi_files_snapshot: bool,
+    start: UnixSecs,
 ) -> raft::Result<Snapshot>
 where
     E: KvEngine,
@@ -1047,6 +1051,7 @@ where
         region_state.get_region(),
         allow_multi_files_snapshot,
         for_balance,
+        start,
     )?;
     snapshot.set_data(snap_data.write_to_bytes()?.into());
 

@@ -27,6 +27,7 @@ use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     metapb::Region,
+    pdpb::SnapshotStat,
     raft_serverpb::{RaftSnapshotData, SnapshotCfFile, SnapshotMeta},
 };
 use openssl::symm::{Cipher, Crypter, Mode};
@@ -35,7 +36,7 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
     box_err, box_try, debug, error, info,
-    time::{duration_to_sec, Instant, Limiter},
+    time::{duration_to_sec, Instant, Limiter, UnixSecs},
     warn, HandyRwLock,
 };
 
@@ -121,6 +122,8 @@ pub struct SnapKey {
     pub region_id: u64,
     pub term: u64,
     pub idx: u64,
+    pub start: u64,
+    pub generate_sec: u64,
 }
 
 impl SnapKey {
@@ -130,6 +133,8 @@ impl SnapKey {
             region_id,
             term,
             idx,
+            start: 0,
+            generate_sec: 0,
         }
     }
 
@@ -144,11 +149,10 @@ impl SnapKey {
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
-
-        Ok(SnapKey::from_region_snap(
-            snap_data.get_region().get_id(),
-            snap,
-        ))
+        let mut key = SnapKey::from_region_snap(snap_data.get_region().get_id(), snap);
+        key.start = snap_data.get_meta().get_start();
+        key.generate_sec = snap_data.get_meta().get_generate_sec();
+        Ok(key)
     }
 }
 
@@ -1026,6 +1030,7 @@ impl Snapshot {
         region: &Region,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
+        start: UnixSecs,
     ) -> RaftStoreResult<RaftSnapshotData> {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
@@ -1044,7 +1049,10 @@ impl Snapshot {
         // set snapshot meta data
         snap_data.set_file_size(total_size);
         snap_data.set_version(SNAPSHOT_VERSION);
-        snap_data.set_meta(self.meta_file.meta.as_ref().unwrap().clone());
+        let meta = self.meta_file.meta.as_mut().unwrap();
+        meta.set_start(start.into_inner());
+        meta.set_generate_sec(t.saturating_elapsed().as_secs());
+        snap_data.set_meta(meta.clone());
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
         SNAPSHOT_KV_COUNT_HISTOGRAM.observe(total_count as f64);
@@ -1348,6 +1356,7 @@ pub enum SnapEntry {
 pub struct SnapStats {
     pub sending_count: usize,
     pub receiving_count: usize,
+    pub stats: Vec<SnapshotStat>,
 }
 
 #[derive(Clone)]
@@ -1361,6 +1370,7 @@ struct SnapManagerCore {
     encryption_key_manager: Option<Arc<DataKeyManager>>,
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
+    stats: Arc<RwLock<Vec<SnapshotStat>>>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
@@ -1642,6 +1652,23 @@ impl SnapManager {
         self.core.limiter.speed_limit()
     }
 
+    pub fn put_stat(&self, snap: SnapshotStat) {
+        info!(
+            "put snapshot stat";
+            "region_id"=>snap.region_id,
+            "total_size"=>snap.transport_size,
+            "total_duration_sec"=>snap.total_ms,
+            "generate_duration_sec"=>snap.generate_ms,
+            "send_duration_sec"=>snap.send_ms,
+        );
+
+        // println!(
+        //     "snapshot stat collect, region_is:{},total_size{},total_duration_sec:{}",
+        //     snap.region_id, snap.transport_size, snap.total_ms
+        // );
+        self.core.stats.wl().push(snap);
+    }
+
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
         debug!(
             "register snapshot";
@@ -1712,9 +1739,11 @@ impl SnapManager {
             }
         }
 
+        let stats = self.core.stats.wl().drain(..).collect();
         SnapStats {
             sending_count: sending_cnt,
             receiving_count: receiving_cnt,
+            stats,
         }
     }
 
@@ -1873,6 +1902,7 @@ impl SnapManagerBuilder {
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
                 )),
+                stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
         };
@@ -2090,6 +2120,7 @@ pub mod tests {
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
+            stats: Default::default(),
         }
     }
 
