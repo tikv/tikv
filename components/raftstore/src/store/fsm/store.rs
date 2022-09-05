@@ -2355,9 +2355,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let snap_stats = self.ctx.snap_mgr.stats();
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
-        for stat in snap_stats.stats {
-            stats.snapshot_stats.push(stat);
-        }
+        stats.set_snapshot_stats(::protobuf::RepeatedField::from_vec(snap_stats.stats));
 
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["sending"])
