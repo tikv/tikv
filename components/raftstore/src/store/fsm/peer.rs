@@ -3473,28 +3473,11 @@ where
                                 let _ = self.fsm.peer.get_store().clear_data();
                             }
                             (true, false) => {
-                                // unreachable
+                                // TODO: support witness -> nonwitness conf change
                                 panic!(
                                     "{} is witness, but the new peer is not witness",
                                     self.fsm.peer.tag
                                 );
-                                // // set to uninitialized
-                                // self.fsm.peer.pending
-                                // // If the previous peer is witness, but the
-                                // new peer is not witness,
-                                // if self
-                                //     .fsm
-                                //     .peer
-                                //     .raft_group
-                                //     .request_snapshot(self.fsm.peer.
-                                // get_store().first_index())
-                                //     .is_err()
-                                // {
-                                //     // dropped, need to request later
-                                //     // TODO:
-                                // }
-                                // if self.fsm.peer.raft_group.raft.
-                                // pending_request_snapshot == INVALID_INDEX {
                             }
                             _ => {}
                         }

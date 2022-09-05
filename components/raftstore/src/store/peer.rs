@@ -2834,21 +2834,6 @@ where
                     .collect();
             }
             if committed_entries.is_empty() {
-                // let metrics = ApplyMetrics::default();
-                // let mut apply_state = self.get_store().apply_state().clone();
-                // apply_state.set_applied_index(self.last_applying_idx);
-                // apply_state.set_commit_index(commit_index);
-                // apply_state.set_commit_term(commit_term);
-                // let has_ready = self.post_apply(
-                //     ctx,
-                //     apply_state,
-                //     self.get_store().term(self.last_applying_idx).unwrap(),
-                //     &metrics,
-                // );
-                // if has_ready {
-                //     // trigger has ready check
-                //     ctx.router.notify_one(self.region_id,
-                // PeerMsg::CasualMessage(CasualMessage::SnapshotApplied)); }
                 return;
             }
 
