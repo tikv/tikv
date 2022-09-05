@@ -351,6 +351,18 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
     }
 }
 
+impl From<FlashbackToVersionRequest> for TypedCommand<()> {
+    fn from(mut req: FlashbackToVersionRequest) -> Self {
+        FlashbackToVersionReadPhase::new(
+            req.get_version().into(),
+            Some(Key::from_raw(req.get_end_key())),
+            Some(Key::from_raw(req.get_start_key())),
+            Some(Key::from_raw(req.get_start_key())),
+            req.take_context(),
+        )
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ReleasedLocks {
     start_ts: TimeStamp,
