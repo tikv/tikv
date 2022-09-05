@@ -1870,9 +1870,8 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             let raw_key = vec![api_version::api_v2::RAW_KEY_PREFIX];
             // Make keys for locking by RAW_KEY_PREFIX & ts. RAW_KEY_PREFIX to avoid
             // conflict with TiDB & TxnKV keys, and ts to avoid collision with
-            // other raw write requests. ts in lock value to used by CDC which
-            // get maximum resolved-ts from concurrency_manager.
-            // global_min_lock_ts
+            // other raw write requests. Ts in lock value to used by CDC which
+            // get maximum resolved-ts from concurrency_manager.global_min_lock_ts
             let encode_key = ApiV2::encode_raw_key(&raw_key, Some(ts));
             let key_guard = concurrency_manager.lock_key(&encode_key).await;
             let lock = Lock::new(LockType::Put, raw_key, ts, 0, None, 0.into(), 1, ts);
