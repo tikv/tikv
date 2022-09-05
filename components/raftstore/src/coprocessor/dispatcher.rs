@@ -539,13 +539,12 @@ impl<E: KvEngine> CoprocessorHost<E> {
         peer_id: u64,
         snap_key: &crate::store::SnapKey,
         snap: Option<&crate::store::Snapshot>,
-    ) -> Result<()> {
+    ) {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.apply_snapshot_observers {
             let observer = observer.observer.inner();
-            observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap)?;
+            observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap);
         }
-        Ok(())
     }
 
     pub fn new_split_checker_host<'a>(
@@ -909,11 +908,10 @@ mod tests {
             _: u64,
             _: &crate::store::SnapKey,
             _: Option<&Snapshot>,
-        ) -> Result<()> {
+        ) {
             self.called
                 .fetch_add(ObserverIndex::PostApplySnapshot as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
-            Ok(())
         }
 
         fn should_pre_apply_snapshot(&self) -> bool {
@@ -1073,7 +1071,7 @@ mod tests {
         index += ObserverIndex::PreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
-        let _ = host.post_apply_snapshot(&region, 0, &key, None);
+        host.post_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PostApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
