@@ -8,6 +8,7 @@ use kvproto::kvrpcpb;
 use txn_types::{Key, Value};
 
 use crate::storage::{
+    lock_manager::WaitTimeout,
     mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
     Callback, Result,
@@ -119,6 +120,22 @@ pub struct PrewriteResult {
     pub locks: Vec<Result<()>>,
     pub min_commit_ts: TimeStamp,
     pub one_pc_commit_ts: TimeStamp,
+}
+
+#[derive(Clone)]
+pub struct PessimisticLockParameters {
+    pub pb_ctx: kvrpcpb::Context,
+    pub primary: Vec<u8>,
+    pub start_ts: TimeStamp,
+    pub lock_ttl: u64,
+    pub for_update_ts: TimeStamp,
+    pub wait_timeout: Option<WaitTimeout>,
+    pub return_values: bool,
+    pub min_commit_ts: TimeStamp,
+    pub check_existence: bool,
+    pub is_first_lock: bool,
+    pub should_not_exist: bool,
+    pub allow_lock_with_conflict: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
