@@ -673,12 +673,14 @@ where
                 write_opts.set_sync(true);
                 // TODO: Add perf context
                 let tag = &self.tag;
-                kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
-                    panic!(
-                        "store {}: {} failed to write to kv engine: {:?}",
-                        store_id, tag, e
-                    );
-                });
+                if !wb.is_empty() {
+                    kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
+                        panic!(
+                            "store {}: {} failed to write to kv engine: {:?}",
+                            store_id, tag, e
+                        );
+                    });
+                }
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                     *kv_wb = self
                         .kv_engine
