@@ -8,7 +8,7 @@ use std::{
 };
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
+    BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler, Router,
 };
 use collections::HashMap;
 use crossbeam::channel::Sender;
@@ -482,4 +482,21 @@ where
         logger: logger.clone(),
     };
     (StoreRouter { router, logger }, system)
+}
+
+pub trait MsgRouter: Send {
+    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()>;
+}
+
+impl<EK, ER> MsgRouter for StoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()> {
+        match Router::force_send(self, addr, msg) {
+            Ok(()) => Ok(()),
+            Err(e) => unimplemented!(),
+        }
+    }
 }

@@ -533,10 +533,7 @@ where
         rd.filter(|r| !r.pending_remove)
     }
 
-    pub fn pre_propose_raft_command(
-        &mut self,
-        req: &RaftCmdRequest,
-    ) -> Result<Option<(D, RequestPolicy)>> {
+    pub fn request_check(&mut self, req: &RaftCmdRequest) -> Result<Option<D>> {
         // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.store_id();
@@ -588,16 +585,7 @@ where
             return Ok(None);
         }
 
-        let mut inspector = Inspector {
-            delegate: &delegate,
-        };
-        match inspector.inspect(req) {
-            Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
-            Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
-            // It can not handle other policies.
-            Ok(_) => Ok(None),
-            Err(e) => Err(e),
-        }
+        Ok(Some(delegate))
     }
 }
 
@@ -656,6 +644,26 @@ where
         }
     }
 
+    pub fn pre_propose_raft_command(
+        &mut self,
+        req: &RaftCmdRequest,
+    ) -> Result<Option<(D, RequestPolicy)>> {
+        if let Some(delegate) = self.local_reader.request_check(req)? {
+            let mut inspector = Inspector {
+                delegate: &delegate,
+            };
+            match inspector.inspect(req) {
+                Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
+                Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
+                // It can not handle other policies.
+                Ok(_) => Ok(None),
+                Err(e) => Err(e),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
@@ -694,7 +702,7 @@ where
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
-        match self.local_reader.pre_propose_raft_command(&req) {
+        match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.

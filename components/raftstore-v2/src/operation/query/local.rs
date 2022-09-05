@@ -43,41 +43,66 @@ use tikv_util::{
     time::{monotonic_raw_now, Instant, ThreadReadId},
 };
 use time::Timespec;
+use txn_types::WriteBatchFlags;
 
-use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, StoreRouter};
+use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, MsgRouter, StoreRouter};
 
 #[derive(Clone)]
-pub struct LocalReader<EK, ER, D, S>
+pub struct LocalReader<E, C, D, S>
 where
-    EK: KvEngine,
-    ER: RaftEngine,
-    D: ReadExecutor<EK> + Deref<Target = ReadDelegate>,
-    S: ReadExecutorProvider<EK, Executor = D>,
+    E: KvEngine,
+    C: MsgRouter + CasualRouter<E>,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
+    S: ReadExecutorProvider<E, Executor = D>,
 {
-    local_reader: LocalReaderCore<EK, D, S>,
-    router: StoreRouter<EK, ER>,
+    local_reader: LocalReaderCore<E, D, S>,
+    router: C,
+
+    logger: Logger,
 }
 
-impl<EK, ER, D, S> LocalReader<EK, ER, D, S>
+impl<E, C, D, S> LocalReader<E, C, D, S>
 where
-    EK: KvEngine,
-    ER: RaftEngine,
-    D: ReadExecutor<EK> + Deref<Target = ReadDelegate> + Clone,
-    S: ReadExecutorProvider<EK, Executor = D> + Clone,
+    E: KvEngine,
+    C: MsgRouter + CasualRouter<E>,
+    D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
+    S: ReadExecutorProvider<E, Executor = D> + Clone,
 {
-    pub fn new(kv_engine: EK, store_meta: S, router: StoreRouter<EK, ER>) -> Self {
+    pub fn new(kv_engine: E, store_meta: S, router: C, logger: Logger) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
             local_reader: LocalReaderCore::new(kv_engine, store_meta),
             router,
+            logger,
+        }
+    }
+
+    pub fn pre_propose_raft_command(
+        &mut self,
+        req: &RaftCmdRequest,
+    ) -> Result<Option<(D, RequestPolicy)>> {
+        if let Some(delegate) = self.local_reader.request_check(req)? {
+            let mut inspector = SnapRequestInspector {
+                delegate: &delegate,
+                logger: &self.logger,
+            };
+            match inspector.inspect(req) {
+                Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
+                Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
+                // It can not handle other policies.
+                Ok(_) => Ok(None),
+                Err(e) => Err(e),
+            }
+        } else {
+            Ok(None)
         }
     }
 
     fn try_get_snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<Option<RegionSnapshot<EK::Snapshot>>, RaftCmdResponse> {
-        match self.local_reader.pre_propose_raft_command(&req) {
+    ) -> std::result::Result<Option<RegionSnapshot<E::Snapshot>>, RaftCmdResponse> {
+        match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => match policy {
                 RequestPolicy::ReadLocal => {
                     let snapshot_ts = monotonic_raw_now();
@@ -94,12 +119,12 @@ where
                 }
                 RequestPolicy::StaleRead => {
                     let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                    delegate.check_stale_read_safe::<EK>(read_ts)?;
+                    delegate.check_stale_read_safe::<E>(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
                     let snap = delegate.get_region_snapshot(None, region, &mut None);
 
-                    delegate.check_stale_read_safe::<EK>(read_ts)?;
+                    delegate.check_stale_read_safe::<E>(read_ts)?;
 
                     // TLS_LOCAL_READ_METRICS.with(|m|
                     // m.borrow_mut().local_executed_stale_read_requests.inc());
@@ -107,7 +132,7 @@ where
                 }
                 _ => unreachable!(),
             },
-            Ok(None) => unimplemented!(),
+            Ok(None) => Ok(None),
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self
@@ -125,7 +150,7 @@ where
     pub async fn snapshot(
         &mut self,
         req: RaftCmdRequest,
-    ) -> std::result::Result<RegionSnapshot<EK::Snapshot>, RaftCmdResponse> {
+    ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         let region_id = req.header.get_ref().region_id;
         loop {
             if let Some(snap) = self.try_get_snapshot(req.clone())? {
@@ -134,7 +159,7 @@ where
 
             // try to renew the lease
             let (msg, mut sub) = PeerMsg::raft_query(req.clone());
-            Router::send(&self.router, region_id, msg);
+            MsgRouter::send(&self.router, region_id, msg);
             sub.result();
         }
     }
@@ -245,6 +270,73 @@ where
     }
 }
 
+struct SnapRequestInspector<'r> {
+    delegate: &'r ReadDelegate,
+    logger: &'r Logger,
+}
+
+impl<'r> RequestInspector for SnapRequestInspector<'r> {
+    fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+        assert!(!req.has_admin_request());
+        assert!(
+            req.get_requests().len() == 1
+                && req.get_requests().first().unwrap().get_cmd_type() == CmdType::Snap
+        );
+
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            return Ok(RequestPolicy::StaleRead);
+        }
+
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        if !self.has_applied_to_current_term() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
+
+        // Local read should be performed, if and only if leader is in lease.
+        // None for now.
+        match self.inspect_lease() {
+            LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
+            LeaseState::Expired | LeaseState::Suspect => {
+                // Perform a consistent read to Raft quorum and try to renew the leader lease.
+                Ok(RequestPolicy::ReadIndex)
+            }
+        }
+    }
+
+    fn has_applied_to_current_term(&mut self) -> bool {
+        if self.delegate.applied_term == self.delegate.term {
+            true
+        } else {
+            debug!(
+                self.logger,
+                "rejected by term check";
+                "tag" => &self.delegate.tag,
+                "applied_term" => self.delegate.applied_term,
+                "delegate_term" => ?self.delegate.term,
+            );
+
+            // only for metric.
+            // TLS_LOCAL_READ_METRICS.with(|m|
+            // m.borrow_mut().reject_reason.applied_term.inc());
+            false
+        }
+    }
+
+    fn inspect_lease(&mut self) -> LeaseState {
+        // TODO: disable localreader if we did not enable raft's check_quorum.
+        if self.delegate.leader_lease.is_some() {
+            // We skip lease check, because it is postponed until `handle_read`.
+            LeaseState::Valid
+        } else {
+            debug!(self.logger, "rejected by leader lease"; "tag" => &self.delegate.tag);
+            // TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_lease.inc());
+            LeaseState::Expired
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{borrow::Borrow, sync::mpsc::*, thread};
@@ -257,8 +349,8 @@ mod tests {
     use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
-        util::Lease, Callback, CasualMessage, CasualRouter, LocalReaderCore, ProposalRouter,
-        RaftCommand,
+        util::{new_peer, Lease},
+        Callback, CasualMessage, CasualRouter, LocalReaderCore, ProposalRouter, RaftCommand,
     };
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -279,6 +371,116 @@ mod tests {
         read_delegate_core.applied_term = applied_index_term;
         read_delegate_core.region = Arc::new(region.clone());
         read_delegate_core
+    }
+
+    struct MockRouter {
+        p_router: SyncSender<PeerMsg>,
+        c_router: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
+    }
+
+    impl MockRouter {
+        fn new() -> (
+            MockRouter,
+            Receiver<PeerMsg>,
+            Receiver<(u64, CasualMessage<KvTestEngine>)>,
+        ) {
+            let (p_ch, p_rx) = sync_channel(1);
+            let (c_ch, c_rx) = sync_channel(1);
+            (
+                MockRouter {
+                    p_router: p_ch,
+                    c_router: c_ch,
+                },
+                p_rx,
+                c_rx,
+            )
+        }
+    }
+
+    impl MsgRouter for MockRouter {
+        fn send(&self, addr: u64, cmd: PeerMsg) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    impl CasualRouter<KvTestEngine> for MockRouter {
+        fn send(&self, region_id: u64, msg: CasualMessage<KvTestEngine>) -> Result<()> {
+            CasualRouter::send(&self.c_router, region_id, msg)
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn new_reader(
+        path: &str,
+        store_id: u64,
+        store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
+    ) -> (
+        TempDir,
+        LocalReader<
+            KvTestEngine,
+            MockRouter,
+            CachedReadDelegate<KvTestEngine>,
+            StoreMetaDelegate<KvTestEngine>,
+        >,
+        Receiver<PeerMsg>,
+    ) {
+        let path = Builder::new().prefix(path).tempdir().unwrap();
+        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
+        let (ch, rx, _) = MockRouter::new();
+        let mut reader = LocalReader::new(
+            db,
+            StoreMetaDelegate::new(store_meta),
+            ch,
+            Logger::root(slog::Discard, o!("key1" => "value1")),
+        );
+        reader.local_reader.store_id = Cell::new(Some(store_id));
+        (path, reader, rx)
+    }
+
+    fn new_peers(store_id: u64, pr_ids: Vec<u64>) -> Vec<metapb::Peer> {
+        pr_ids
+            .into_iter()
+            .map(|id| {
+                let mut pr = metapb::Peer::default();
+                pr.set_store_id(store_id);
+                pr.set_id(id);
+                pr
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_read() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
+        let (_tmp, mut reader, _rx) = new_reader("test-local-reader", store_id, store_meta);
+
+        let mut region1 = metapb::Region::default();
+        region1.set_id(1);
+        let prs = new_peers(store_id, vec![2, 3, 4]);
+        region1.set_peers(prs.clone().into());
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let leader2 = prs[0].clone();
+        region1.set_region_epoch(epoch13.clone());
+        let term6 = 6;
+        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250));
+        let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, "".to_owned()));
+
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader2);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        cmd.set_header(header);
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
     }
 
     #[test]
