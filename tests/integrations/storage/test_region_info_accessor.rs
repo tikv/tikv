@@ -176,3 +176,39 @@ fn test_region_collection_get_regions_in_range() {
         p.stop();
     }
 }
+
+#[test]
+fn test_region_collection_find_region_by_key() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    let (tx, rx) = channel();
+    cluster
+        .sim
+        .wl()
+        .post_create_coprocessor_host(Box::new(move |id, host| {
+            let p = RegionInfoAccessor::new(host);
+            tx.send((id, p)).unwrap()
+        }));
+
+    cluster.run();
+    let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
+    assert_eq!(region_info_providers.len(), 3);
+    let regions = prepare_cluster(&mut cluster);
+
+    for node_id in cluster.get_node_ids() {
+        let engine = &region_info_providers[&node_id];
+
+        let region = engine.find_region_by_key(b"").unwrap();
+        assert_eq!(region, regions[0]);
+
+        let region = engine.find_region_by_key(b"k2").unwrap();
+        assert_eq!(region, regions[1]);
+
+        let region = engine.find_region_by_key(b"k99").unwrap();
+        assert_eq!(region, *regions.last().unwrap());
+    }
+
+    for (_, p) in region_info_providers {
+        p.stop();
+    }
+}
