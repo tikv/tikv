@@ -152,7 +152,9 @@ impl<S: Snapshot> EventLoader<S> {
                         )
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
-                    resolver.track_phase_one_lock(lock.ts, lock_at)
+                    if utils::should_track_lock(&lock) {
+                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                    }
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     result.push(ApplyEvent {
