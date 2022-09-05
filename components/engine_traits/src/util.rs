@@ -24,7 +24,7 @@ pub fn check_key_in_range(
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct FlushedSeqno {
     seqno: HashMap<String, u64>,
     min_seqno: u64,
@@ -42,8 +42,7 @@ impl FlushedSeqno {
     pub fn update(&mut self, cf: &str, seqno: u64) -> Option<u64> {
         self.seqno
             .entry(cf.to_string())
-            .and_modify(|v| *v = u64::max(*v, seqno))
-            .or_insert(seqno);
+            .and_modify(|v| *v = u64::max(*v, seqno));
         let min = self.seqno.values().min().copied();
         match min {
             Some(min) if min > self.min_seqno => {
@@ -56,5 +55,9 @@ impl FlushedSeqno {
 
     pub fn min_seqno(&self) -> u64 {
         self.min_seqno
+    }
+
+    pub fn max_seqno(&self) -> u64 {
+        self.seqno.values().max().copied().unwrap()
     }
 }

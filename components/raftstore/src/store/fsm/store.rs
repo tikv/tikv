@@ -25,12 +25,12 @@ use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, Result as EngineTraitsResult, WriteBatch, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE, DATA_CFS,
+    CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
-use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_MIN_KEY};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     import_sstpb::{SstMeta, SwitchMode},
     metapb::{self, Region, RegionEpoch},
@@ -1198,25 +1198,12 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let store_id = self.store.get_id();
 
         if let Some(seqno) = raft_engine.recover_from_raft_db().unwrap() {
-            let cf_seqnos: Vec<_> = DATA_CFS
-                .iter()
-                .map(|cf| {
-                    kv_engine
-                        .get_range_seqno_properties_cf(cf, DATA_MIN_KEY, DATA_MAX_KEY)
-                        .unwrap()
-                        .map_or(0, |prop| {
-                            println!("map cf {:?} to seqno {:?}", cf, prop);
-                            prop.largest_seqno
-                        })
-                })
-                .collect();
+            let flushed_seqnos = raft_engine.get_flushed_seqno().unwrap();
+            let min_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.min_seqno());
+            let max_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.max_seqno());
             let latest_seqno = kv_engine.get_latest_sequence_number();
-            println!(
-                "recover store from raftdb, seqno: {}, cf_seqno: {:?}, latest_seqno: {}",
-                seqno, cf_seqnos, latest_seqno
-            );
-            let start_seqno = cf_seqnos.iter().copied().min().unwrap_or(0).max(seqno);
-            let end_seqno = cf_seqnos.iter().copied().max().unwrap_or(latest_seqno);
+            let start_seqno = min_flushed_seqno.unwrap_or(0).max(seqno);
+            let end_seqno = max_flushed_seqno.unwrap_or(latest_seqno);
             self.seqno_recover_range = Some(RangeInclusive::new(start_seqno, end_seqno));
             let mut raft_wb = raft_engine.log_batch(0);
             gc_seqno_relations(start_seqno, &raft_engine, &mut raft_wb).unwrap();
@@ -1773,6 +1760,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         let (raft_builder, apply_builder) = (builder.clone(), apply_poller_builder.clone());
 
+        self.router
+            .send_control(StoreMsg::Start {
+                store: store.clone(),
+            })
+            .unwrap();
+
+        self.apply_system
+            .spawn("apply".to_owned(), apply_poller_builder);
+        if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
+            self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
+        }
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
@@ -1791,17 +1789,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         for addr in address {
             self.router.force_send(addr, PeerMsg::Start).unwrap();
         }
-        self.router
-            .send_control(StoreMsg::Start {
-                store: store.clone(),
-            })
-            .unwrap();
 
-        self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
-        if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
-            self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
-        }
         if raft_builder.cfg.value().disable_kv_wal {
             let seqno = raft_builder.engines.kv.get_latest_sequence_number();
             raft_builder
@@ -1905,7 +1893,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             region_id,
                             (
                                 raft_state,
-                                apply_state.applied_index,
+                                apply_state.applied_index + 1,
                                 relation.get_apply_state().applied_index,
                             ),
                         );
@@ -1930,9 +1918,17 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                     let hard_state = raft_state.get_hard_state().clone();
                     pool.spawn(async move {
                         let mut entries = vec![];
-                        raftdb
-                            .fetch_entries_to(region_id, start, end + 1, None, &mut entries)
-                            .unwrap();
+                        if let Err(e) =
+                            raftdb.fetch_entries_to(region_id, start, end + 1, None, &mut entries)
+                        {
+                            panic!(
+                                "fetch entries failed: {:?}, region_id: {}, start:{}, end: {}",
+                                e,
+                                region_id,
+                                start,
+                                end + 1
+                            );
+                        }
                         router.schedule_task(
                             region_id,
                             ApplyTask::recover(

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{Iterable, MiscExt, SeqnoPropertiesExt, CF_WRITE, DATA_CFS};
+use engine_traits::{Iterable, MiscExt, RaftEngineReadOnly, CF_WRITE};
 use grpcio::{ChannelBuilder, Environment};
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
@@ -45,15 +45,6 @@ fn test_disable_wal_recovery() {
     );
     must_kv_commit(&client, ctx.clone(), vec![b"k2".to_vec()], 30, 40, 40);
     cluster.get_engine(1).flush_cfs(true).unwrap();
-    for cf in DATA_CFS {
-        println!(
-            "{} get prop after flush: {:?}",
-            cf,
-            cluster
-                .get_engine(1)
-                .get_range_seqno_properties_cf(cf, DATA_MIN_KEY, DATA_MAX_KEY)
-        );
-    }
 
     must_kv_prewrite(
         &client,
@@ -63,15 +54,6 @@ fn test_disable_wal_recovery() {
         50,
     );
     cluster.stop_node(1);
-    for cf in DATA_CFS {
-        println!(
-            "{} get prop after stop: {:?}",
-            cf,
-            cluster
-                .get_engine(1)
-                .get_range_seqno_properties_cf(cf, DATA_MIN_KEY, DATA_MAX_KEY)
-        );
-    }
     cluster
         .get_engine(1)
         .scan(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY, false, |k, v| {

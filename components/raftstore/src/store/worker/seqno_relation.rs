@@ -151,18 +151,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .raft
             .put_flushed_seqno(&self.flushed_seqno)
             .unwrap();
-        if let Err(e) = self
-            .raftlog_gc_scheduler
-            .as_ref()
-            .unwrap()
-            .get()
-            .unwrap()
-            .schedule(RaftlogGcTask::MemtableFlushed {
+        if let Some(scheduler) = self.raftlog_gc_scheduler.as_ref().unwrap().get() {
+            if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed {
                 cf: cf.to_string(),
                 seqno,
-            })
-        {
-            error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+            }) {
+                error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
+            }
         }
         if let Some(min) = min_flushed {
             gc_seqno_relations(min, &self.engines.raft, &mut self.wb).unwrap();

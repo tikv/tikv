@@ -807,6 +807,7 @@ impl RaftEngine for RaftLogEngine {
             FLUSHED_SEQNO_KEY.to_vec(),
             result.as_bytes().to_vec(),
         );
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
 }

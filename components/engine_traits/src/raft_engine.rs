@@ -75,6 +75,7 @@ pub trait RaftEngineDebug: RaftEngine + Sync + Send + 'static {
     }
 }
 
+#[derive(Debug)]
 pub struct RaftLogGcTask {
     pub raft_group_id: u64,
     pub from: u64,

@@ -966,6 +966,8 @@ where
     buckets: Option<BucketStat>,
 
     last_write_seqno: Vec<SequenceNumber>,
+
+    last_recover_index: u64,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -999,6 +1001,7 @@ where
             trace: ApplyMemoryTrace::default(),
             buckets: None,
             last_write_seqno: vec![],
+            last_recover_index: 0,
         }
     }
 
@@ -1030,6 +1033,9 @@ where
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
                 break;
+            }
+            if entry.get_index() <= self.last_recover_index {
+                continue;
             }
 
             let expect_index = self.apply_state.get_applied_index() + 1;
@@ -3622,6 +3628,7 @@ where
                     apply_ctx.tag,
                 );
             }
+            self.delegate.last_recover_index = entry.get_index();
 
             let prev_version = self.delegate.region.get_region_epoch().get_version();
             let res = match entry.get_entry_type() {

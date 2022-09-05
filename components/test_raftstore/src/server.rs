@@ -592,7 +592,7 @@ impl ServerCluster {
             let seqno_runner =
                 SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
             listener.update_notifier(notifier);
-            println!("start seqno worker: {}", worker.start(seqno_runner));
+            worker.start(seqno_runner);
             seqno_worker = Some(worker);
             scheduler
         });
