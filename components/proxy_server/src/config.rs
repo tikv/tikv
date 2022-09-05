@@ -11,7 +11,7 @@ use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use serde_with::with_prefix;
 use tikv::config::{TiKvConfig, LAST_CONFIG_FILE};
-use tikv_util::{config::ReadableDuration, crit};
+use tikv_util::{config::ReadableDuration, crit, sys::SysQuota};
 
 use crate::fatal;
 
@@ -26,8 +26,12 @@ pub struct RaftstoreConfig {
 
 impl Default for RaftstoreConfig {
     fn default() -> Self {
+        let cpu_num = SysQuota::cpu_cores_quota();
+
         RaftstoreConfig {
-            snap_handle_pool_size: 2,
+            // When scaling TiFlash instances there will be raft snapshots.
+            // We want to make sure this process does not consume too many resources.
+            snap_handle_pool_size: (cpu_num * 0.4).clamp(2.0, 8.0) as usize,
         }
     }
 }
@@ -135,6 +139,8 @@ pub fn make_tikv_config() -> TiKvConfig {
 }
 
 pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
+    let cpu_num = SysQuota::cpu_cores_quota();
+
     default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
     default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
@@ -142,6 +148,12 @@ pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
     let stale_peer_check_tick =
         (10_000 / default.raft_store.region_worker_tick_interval.as_millis()) as usize;
     default.raft_store.stale_peer_check_tick = stale_peer_check_tick;
+
+    // Unlike TiKV, in TiFlash, we use the low-priority pool to both decode snapshots
+    // (transform from row to column) and ingest SST. These operations are pretty heavy.
+    // So we increase the default limit here to handle ingest SST faster.
+    default.raft_store.apply_batch_system.low_priority_pool_size =
+        (cpu_num * 0.8).clamp(1.0, 8.0) as usize;
 }
 
 /// This function changes TiKV's config according to ProxyConfig.
