@@ -122,8 +122,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
     /// Purge expired logs files and return a set of Raft group ids
     /// which needs to be compacted ASAP.
     fn manual_purge(&self) -> Result<Vec<u64>> {
-        debug_assert!(false, "missing `manual_purge` implementation");
-        Ok(Vec::new())
+        unimplemented!()
     }
 
     fn flush_metrics(&self, _instance: &str) {}
