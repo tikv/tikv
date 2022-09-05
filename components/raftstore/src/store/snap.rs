@@ -45,7 +45,6 @@ use tikv_util::{
 
 use crate::{
     coprocessor::CoprocessorHost,
-    engine_store_ffi,
     store::{
         metrics::{
             CfNames, INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM,
@@ -449,14 +448,6 @@ pub struct Snapshot {
 
     mgr: SnapManagerCore,
 }
-
-pub struct PreHandledSnapshot {
-    pub index: u64,
-    pub term: u64,
-    pub inner: engine_store_ffi::RawCppPtr,
-}
-
-unsafe impl Send for PreHandledSnapshot {}
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum CheckPolicy {

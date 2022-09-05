@@ -737,6 +737,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
                         info!("background pre-handle snapshot get error";
                             "snap_key" => ?snap_key,
                             "region" => ?ob_ctx.region(),
+                            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
                         );
                         true
                     }
@@ -754,6 +755,11 @@ impl ApplySnapshotObserver for TiFlashObserver {
             None => {
                 // We can't find background pre-handle task,
                 // maybe we can't get snapshot at that time.
+                info!("pre-handled snapshot not found";
+                    "snap_key" => ?snap_key,
+                    "region" => ?ob_ctx.region(),
+                    "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+                );
                 true
             }
         };
@@ -772,12 +778,12 @@ impl ApplySnapshotObserver for TiFlashObserver {
             );
             self.engine_store_server_helper
                 .apply_pre_handled_snapshot(ptr.0);
+            info!("apply snapshot finished";
+                "peer_id" => ?snap_key,
+                "region" => ?ob_ctx.region(),
+                "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
+            );
         }
-        info!("apply snapshot finished";
-            "peer_id" => ?peer_id,
-            "region" => ?ob_ctx.region(),
-            "pending" => self.engine.pending_applies_count.load(Ordering::SeqCst),
-        );
         Ok(())
     }
 

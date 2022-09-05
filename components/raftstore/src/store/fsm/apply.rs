@@ -75,9 +75,6 @@ use crate::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState,
     },
-    engine_store_ffi::{
-        ColumnFamilyType, EngineStoreApplyRes, RaftCmdHeader, WriteCmdType, WriteCmds,
-    },
     store::{
         cmd_resp,
         fsm::RaftPollerBuilder,
