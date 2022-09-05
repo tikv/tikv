@@ -42,6 +42,7 @@ const TSO_BATCH_RENEW_ON_INITIALIZE: &str = "init";
 const TSO_BATCH_RENEW_BY_BACKGROUND: &str = "background";
 const TSO_BATCH_RENEW_FOR_USED_UP: &str = "used-up";
 const TSO_BATCH_RENEW_FOR_FLUSH: &str = "flush";
+const TSO_BATCH_RENEW_FOR_SOFT_FLUSH: &str = "soft-flush";
 
 /// TSO range: [(physical, logical_start), (physical, logical_end))
 #[derive(Default, Debug)]
@@ -379,6 +380,10 @@ impl<C: PdClient + 'static> CausalTsProvider for BatchTsoProvider<C> {
 
     fn flush(&self) -> Result<()> {
         block_on(self.renew_tso_batch(true, TSO_BATCH_RENEW_FOR_FLUSH))
+    }
+
+    fn soft_flush(&self) -> Result<()> {
+        block_on(self.renew_tso_batch(false, TSO_BATCH_RENEW_FOR_SOFT_FLUSH))
     }
 }
 

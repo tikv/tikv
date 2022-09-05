@@ -1167,7 +1167,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
 
             // If flush_causal_timestamp fails, cannot schedule MinTS task
             // as new coming raw data may use timestamp smaller than min_ts
-            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.flush()) {
+            if let Err(e) = causal_ts_provider.map_or(Ok(()), |provider| provider.soft_flush()) {
                 error!("cdc flush causal timestamp failed"; "err" => ?e);
                 return;
             }

@@ -26,6 +26,10 @@ pub trait CausalTsProvider: Send + Sync {
     fn flush(&self) -> Result<()> {
         Ok(())
     }
+
+    fn soft_flush(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub trait RawTsTracker: Send + Sync + Clone {
