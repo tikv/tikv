@@ -418,7 +418,11 @@ where
             self.coprocessor_host
                 .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
         {
-            return Err(box_err!("post apply snapshot error {:?}", e));
+            error!("post apply snapshot error";
+                "error" => e,
+                "peer_id" => peer_id,
+                "snap_key" => ?snap_key
+            );
         };
 
         // delete snapshot state.
