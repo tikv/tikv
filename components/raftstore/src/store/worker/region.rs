@@ -419,7 +419,7 @@ where
                 .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s))
         {
             error!("post apply snapshot error";
-                "error" => e,
+                "error" => ?e,
                 "peer_id" => peer_id,
                 "region_id" => region_id,
             );
