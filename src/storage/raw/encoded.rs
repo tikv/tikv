@@ -60,7 +60,6 @@ impl<S: Snapshot, F: KvFormat> RawEncodeSnapshot<S, F> {
 }
 
 impl<S: Snapshot, F: KvFormat> Snapshot for RawEncodeSnapshot<S, F> {
-    type E = S::E;
     type Iter = RawEncodeIterator<S::Iter, F>;
     type Ext<'a> = S::Ext<'a> where S: 'a;
 
@@ -91,11 +90,6 @@ impl<S: Snapshot, F: KvFormat> Snapshot for RawEncodeSnapshot<S, F> {
     #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
         self.snap.upper_bound()
-    }
-
-    #[inline]
-    fn inner_engine(&self) -> Self::E {
-        self.snap.inner_engine()
     }
 
     fn ext(&self) -> S::Ext<'_> {

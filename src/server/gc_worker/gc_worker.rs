@@ -6,7 +6,7 @@ use std::{
     mem,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
-        mpsc::{self, Sender},
+        mpsc::Sender,
         Arc, Mutex,
     },
     vec::IntoIter,
@@ -32,7 +32,7 @@ use raftstore::{
     router::RaftStoreRouter,
     store::{msg::StoreMsg, util::find_peer},
 };
-use tikv_kv::{write_modifies, CfStatistics, CursorBuilder, Modify, SnapContext, Snapshot};
+use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
@@ -289,28 +289,6 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     keys_in_region
 }
 
-fn seek_region(
-    store_id: u64,
-    key: &[u8],
-    region_provider: Arc<dyn RegionInfoProvider>,
-) -> Result<Option<Region>> {
-    let (tx, rx) = mpsc::channel();
-    box_try!(region_provider.seek_region(
-        key,
-        Box::new(move |iter| {
-            for info in iter {
-                if find_peer(&info.region, store_id).is_some() {
-                    let _ = tx.send(Some(info.region.clone()));
-                    return;
-                }
-            }
-            let _ = tx.send(None);
-        }),
-    ));
-
-    Ok(box_try!(rx.recv()))
-}
-
 fn init_snap_ctx(store_id: u64, region: &Region) -> Context {
     let mut ctx = Context::default();
     ctx.region_id = region.id;
@@ -392,22 +370,12 @@ where
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
-    // Flush the modifications to the disk.
-    // `engine` here represents the storage level engien (ex: RaftKv) which may do
-    // some specific encoding works for each modification.
-    // `kv_engine` here represents the underlying db (ex: RocksEngine)
-    fn flush_txn<EK: KvEngine>(
-        txn: MvccTxn,
-        limiter: &Limiter,
-        engine: &E,
-        kv_engine: EK,
-    ) -> Result<()> {
+    fn flush_txn(txn: MvccTxn, limiter: &Limiter, engine: &E) -> Result<()> {
         let write_size = txn.write_size();
-        let mut modifies = txn.into_modifies();
+        let modifies = txn.into_modifies();
         if !modifies.is_empty() {
             limiter.blocking_consume(write_size);
-            engine.encode_in_place(&mut modifies);
-            write_modifies(&kv_engine, modifies)?;
+            engine.modify_on_kv_engine(modifies)?;
         }
         Ok(())
     }
@@ -478,28 +446,17 @@ where
         if regions.is_empty() {
             return Ok((handled_keys, wasted_keys));
         }
-        let region = &regions[0];
-        let (mut reader, mut kv_engine) = self.create_reader(
-            count,
-            region,
-            range_start_key.clone(),
-            range_end_key.clone(),
-        )?;
 
-        let mut first_iteration = true;
         let mut txn = Self::new_txn();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions.into_iter() {
-            if !first_iteration {
-                (reader, kv_engine) = self.create_reader(
-                    count,
-                    &region,
-                    range_start_key.clone(),
-                    range_end_key.clone(),
-                )?;
-            }
-            first_iteration = false;
+            let mut reader = self.create_reader(
+                count,
+                &region,
+                range_start_key.clone(),
+                range_end_key.clone(),
+            )?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
@@ -535,8 +492,8 @@ where
                     next_gc_key = keys_in_region.next();
                     gc_info = GcInfo::default();
                 } else {
-                    Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
-                    (reader, kv_engine) = self.create_reader(
+                    Self::flush_txn(txn, &self.limiter, &self.engine)?;
+                    reader = self.create_reader(
                         count,
                         &region,
                         range_start_key.clone(),
@@ -547,7 +504,7 @@ where
             }
         }
 
-        Self::flush_txn(txn, &self.limiter, &self.engine, kv_engine)?;
+        Self::flush_txn(txn, &self.limiter, &self.engine)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -557,24 +514,20 @@ where
         region: &Region,
         range_start_key: Key,
         range_end_key: Key,
-    ) -> Result<(MvccReader<E::Snap>, <E::Snap as Snapshot>::E)> {
-        let (mut reader, kv_engine) = {
+    ) -> Result<MvccReader<E::Snap>> {
+        let mut reader = {
             let snapshot = self.get_snapshot(self.store_id, region)?;
-            let kv_engine = snapshot.inner_engine();
 
             if key_count <= 1 {
-                (MvccReader::new(snapshot, None, false), kv_engine)
+                MvccReader::new(snapshot, None, false)
             } else {
                 // keys are closing to each other in one batch of gc keys, so do not use
                 // prefix seek here to avoid too many seeks
-                (
-                    MvccReader::new(snapshot, Some(ScanMode::Forward), false),
-                    kv_engine,
-                )
+                MvccReader::new(snapshot, Some(ScanMode::Forward), false)
             }
         };
         reader.set_range(Some(range_start_key), Some(range_end_key));
-        Ok((reader, kv_engine))
+        Ok(reader)
     }
 
     fn raw_gc_keys(
@@ -596,27 +549,16 @@ where
 
         let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let mut regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?
-            .into_iter()
-            .peekable();
+        let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
 
-        // First item is fetched to initialize the reader and kv_engine
-        let region = regions.peek();
-        if region.is_none() {
+        if regions.is_empty() {
             return Ok((handled_keys, wasted_keys));
         }
-        let mut snapshot = self.get_snapshot(self.store_id, region.as_ref().unwrap())?;
-        let mut kv_engine = snapshot.inner_engine();
 
-        let mut first_iteration = true;
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
-            if !first_iteration {
-                snapshot = self.get_snapshot(self.store_id, &region)?;
-                kv_engine = snapshot.inner_engine();
-            }
-            first_iteration = false;
+            let mut snapshot = self.get_snapshot(self.store_id, &region)?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
@@ -656,19 +598,14 @@ where
                     gc_info = GcInfo::default();
                 } else {
                     // Flush writeBatch to engine.
-                    Self::flush_raw_gc(
-                        raw_modifies,
-                        &self.limiter,
-                        &self.engine,
-                        kv_engine.clone(),
-                    )?;
+                    Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
                     // After flush, reset raw_modifies.
                     raw_modifies = MvccRaw::new();
                 }
             }
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, kv_engine)?;
+        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -748,23 +685,13 @@ where
         gc_info.deleted_versions += 1;
     }
 
-    // Flush the modifications to the disk.
-    // `engine` here represents the storage level engien (ex: RaftKv) which may do
-    // some specific encoding works for each modification.
-    // `kv_engine` here represents the underlying db (ex: RocksEngine)
-    fn flush_raw_gc<EK: KvEngine>(
-        raw_modifies: MvccRaw,
-        limiter: &Limiter,
-        engine: &E,
-        kv_engine: EK,
-    ) -> Result<()> {
+    fn flush_raw_gc(raw_modifies: MvccRaw, limiter: &Limiter, engine: &E) -> Result<()> {
         let write_size = raw_modifies.write_size();
-        let mut modifies = raw_modifies.into_modifies();
+        let modifies = raw_modifies.into_modifies();
         if !modifies.is_empty() {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.encode_in_place(&mut modifies);
-            write_modifies(&kv_engine, modifies)?;
+            engine.modify_on_kv_engine(modifies)?;
         }
         Ok(())
     }
@@ -774,7 +701,7 @@ where
         ctx: &Context,
         start_key: &Key,
         end_key: &Key,
-        regions_provider: Arc<dyn RegionInfoProvider>,
+        _regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<()> {
         info!(
             "unsafe destroy range started";
@@ -786,11 +713,7 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-
-        let Some(region) = seek_region(self.store_id, start_key.as_encoded(), regions_provider)? else {return Ok(());};
-        // We only need to get a snapshot of any region as we just want the inner engine
-        // of it which is the same for all regions.
-        let kv_engine = self.get_snapshot(self.store_id, &region)?.inner_engine();
+        let local_storage = self.engine.kv_engine();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is
@@ -803,7 +726,7 @@ where
         // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
         let delete_files_start_time = Instant::now();
         for cf in cfs {
-            kv_engine
+            local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteFiles,
@@ -826,7 +749,7 @@ where
         let cleanup_all_start_time = Instant::now();
         for cf in cfs {
             // TODO: set use_delete_range with config here.
-            kv_engine
+            local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteByKey,
@@ -837,7 +760,7 @@ where
                     warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
                     e
                 })?;
-            kv_engine
+            local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteBlobs,
@@ -1455,6 +1378,7 @@ pub mod test_gc_worker {
         metapb::{Peer, Region},
     };
     use raftstore::store::RegionSnapshot;
+    use tikv_kv::write_modifies;
     use txn_types::{Key, TimeStamp};
 
     use crate::{
@@ -1486,8 +1410,8 @@ pub mod test_gc_worker {
             self.0.kv_engine()
         }
 
-        fn encode_in_place(&self, modifies: &mut Vec<Modify>) {
-            for modify in modifies {
+        fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+            for modify in &mut modifies {
                 match modify {
                     Modify::Delete(_, ref mut key) => {
                         let bytes = keys::data_key(key.as_encoded());
@@ -1509,6 +1433,7 @@ pub mod test_gc_worker {
                     }
                 }
             }
+            write_modifies(&self.kv_engine(), modifies)
         }
 
         fn async_write(

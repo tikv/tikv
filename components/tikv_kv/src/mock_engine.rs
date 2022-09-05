@@ -152,8 +152,8 @@ impl Engine for MockEngine {
         self.base.kv_engine()
     }
 
-    fn encode_in_place(&self, modifies: &mut Vec<Modify>) {
-        self.base.encode_in_place(modifies);
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+        self.base.modify_on_kv_engine(modifies)
     }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {

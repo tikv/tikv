@@ -81,6 +81,10 @@ impl Engine for BTreeEngine {
         unimplemented!();
     }
 
+    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+        unimplemented!();
+    }
+
     fn async_write(
         &self,
         _ctx: &Context,
@@ -223,7 +227,6 @@ impl Iterator for BTreeEngineIterator {
 }
 
 impl Snapshot for BTreeEngineSnapshot {
-    type E = PanicEngine;
     type Iter = BTreeEngineIterator;
     type Ext<'a> = DummySnapshotExt;
 
@@ -249,10 +252,6 @@ impl Snapshot for BTreeEngineSnapshot {
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
-    }
-
-    fn inner_engine(&self) -> Self::E {
-        panic!("BTreeEngine is in memory and does not support this method.")
     }
 
     fn ext(&self) -> DummySnapshotExt {

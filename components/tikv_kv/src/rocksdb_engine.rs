@@ -210,6 +210,10 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+        write_modifies(&self.engines.kv, modifies)
+    }
+
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         if self.not_leader.load(Ordering::SeqCst) {
             return Err(self.not_leader_error());
@@ -263,7 +267,6 @@ impl Engine for RocksEngine {
 }
 
 impl Snapshot for Arc<RocksSnapshot> {
-    type E = BaseRocksEngine;
     type Iter = RocksEngineIterator;
     type Ext<'a> = DummySnapshotExt;
 
@@ -288,11 +291,6 @@ impl Snapshot for Arc<RocksSnapshot> {
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> Result<Self::Iter> {
         trace!("RocksSnapshot: create cf iterator");
         Ok(self.iterator_opt(cf, iter_opt)?)
-    }
-
-    #[inline]
-    fn inner_engine(&self) -> Self::E {
-        BaseRocksEngine::from_db(self.db())
     }
 
     fn ext(&self) -> DummySnapshotExt {

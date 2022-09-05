@@ -36,6 +36,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
+use tikv_kv::write_modifies;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -328,8 +329,8 @@ where
         self.engine.clone()
     }
 
-    fn encode_in_place(&self, modifies: &mut Vec<Modify>) {
-        for modify in modifies {
+    fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
+        for modify in &mut modifies {
             match modify {
                 Modify::Delete(_, ref mut key) => {
                     let bytes = keys::data_key(key.as_encoded());
@@ -351,6 +352,7 @@ where
                 }
             }
         }
+        write_modifies(&self.engine, modifies)
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {

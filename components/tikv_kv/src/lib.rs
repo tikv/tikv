@@ -269,10 +269,8 @@ pub trait Engine: Send + Clone + 'static {
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
-    /// Change the encoding of `Modify` so that they can be written to local
-    /// engine directly. After the method, `modifies` should not be passed to
-    /// any write methods of `Engine` trait any more.
-    fn encode_in_place(&self, _modifies: &mut Vec<Modify>) {}
+    /// Write modifications into internal local engine directly.
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
@@ -353,7 +351,6 @@ pub trait Engine: Send + Clone + 'static {
 /// of a view of TiKV at a specific timestamp. This snapshot is lower-level, a
 /// view of the underlying storage.
 pub trait Snapshot: Sync + Send + Clone {
-    type E: LocalEngine;
     type Iter: Iterator;
     type Ext<'a>: SnapshotExt
     where
@@ -383,9 +380,6 @@ pub trait Snapshot: Sync + Send + Clone {
     fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
-
-    /// Get the underlying kv_engine inside the snapshot.
-    fn inner_engine(&self) -> Self::E;
 
     fn ext(&self) -> Self::Ext<'_>;
 }

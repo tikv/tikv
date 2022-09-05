@@ -2791,8 +2791,8 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         self.engine.kv_engine()
     }
 
-    fn encode_in_place(&self, modifies: &mut Vec<Modify>) {
-        self.engine.encode_in_place(modifies)
+    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> tikv_kv::Result<()> {
+        self.engine.modify_on_kv_engine(modifies)
     }
 
     fn async_snapshot(
@@ -2826,7 +2826,6 @@ pub struct TxnTestSnapshot<S: Snapshot> {
 }
 
 impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
-    type E = S::E;
     type Iter = S::Iter;
     type Ext<'a> = TxnTestSnapshotExt<'a> where S: 'a;
 
@@ -2853,10 +2852,6 @@ impl<S: Snapshot> Snapshot for TxnTestSnapshot<S> {
         iter_opt: engine_traits::IterOptions,
     ) -> tikv_kv::Result<Self::Iter> {
         self.snapshot.iter(cf, iter_opt)
-    }
-
-    fn inner_engine(&self) -> Self::E {
-        self.snapshot.inner_engine()
     }
 
     fn ext(&self) -> Self::Ext<'_> {

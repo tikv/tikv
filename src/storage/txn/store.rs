@@ -635,7 +635,6 @@ mod tests {
     use std::sync::Arc;
 
     use concurrency_manager::ConcurrencyManager;
-    use engine_panic::PanicEngine;
     use engine_traits::{CfName, IterOptions, ReadOptions};
     use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
     use tikv_kv::DummySnapshotExt;
@@ -804,7 +803,6 @@ mod tests {
     }
 
     impl Snapshot for MockRangeSnapshot {
-        type E = PanicEngine;
         type Iter = MockRangeSnapshotIter;
         type Ext<'a> = DummySnapshotExt;
 
@@ -830,10 +828,6 @@ mod tests {
 
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
-        }
-
-        fn inner_engine(&self) -> Self::E {
-            unimplemented!()
         }
 
         fn ext(&self) -> DummySnapshotExt {
