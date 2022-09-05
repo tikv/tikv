@@ -4,7 +4,6 @@ use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
-use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
 
 use crate::{
@@ -222,29 +221,6 @@ impl MiscExt for RocksEngine {
             used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
         }
         Ok(used_size)
-    }
-
-    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-        let db = self.as_inner();
-        let mut delete_ranges = Vec::new();
-        for &(ref start, ref end) in ranges {
-            if start == end {
-                continue;
-            }
-            assert!(start < end);
-            delete_ranges.push(RocksRange::new(start, end));
-        }
-        if delete_ranges.is_empty() {
-            return Ok(());
-        }
-
-        for cf in db.cf_names() {
-            let handle = util::get_cf_handle(db, cf)?;
-            db.delete_files_in_ranges_cf(handle, &delete_ranges, /* include_end */ false)
-                .map_err(r2e)?;
-        }
-
-        Ok(())
     }
 
     fn path(&self) -> &str {
