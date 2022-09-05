@@ -31,8 +31,8 @@ use kvproto::{
     pdpb::{self, PeerStats},
     raft_cmdpb::{
         self, AdminCmdType, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        PutRequest, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request,
-        TransferLeaderRequest, TransferLeaderResponse,
+        PutRequest, RaftCmdRequest, RaftCmdResponse, Request, TransferLeaderRequest,
+        TransferLeaderResponse,
     },
     raft_serverpb::{
         ExtraMessage, ExtraMessageType, MergeState, PeerState, RaftApplyState, RaftMessage,
@@ -79,7 +79,7 @@ use super::{
         self, check_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI, ConfChangeKind,
         Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
-    DestroyPeerJob, LocalReadContext, RegionSnapshot,
+    DestroyPeerJob, LocalReadContext,
 };
 use crate::{
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason, RoleChange},
@@ -4625,7 +4625,7 @@ where
             }
         }
 
-        let mut resp = self.execute_read(ctx, &req, &Arc::new(region), read_index);
+        let mut resp = ctx.execute(&req, &Arc::new(region), read_index, None, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self.region_buckets.as_ref().map(|b| b.meta.clone());
@@ -4633,64 +4633,6 @@ where
         resp.txn_extra_op = self.txn_extra_op.load();
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
-    }
-
-    fn execute_read<T>(
-        &self,
-        ctx: &mut PollContext<EK, ER, T>,
-        msg: &RaftCmdRequest,
-        region: &Arc<metapb::Region>,
-        read_index: Option<u64>,
-    ) -> ReadResponse<EK::Snapshot> {
-        let requests = msg.get_requests();
-        let mut response = ReadResponse {
-            response: RaftCmdResponse::default(),
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        let mut responses = Vec::with_capacity(requests.len());
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Get => match ctx.get_value(req, region.as_ref()) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!(?e;
-                            "failed to execute get command";
-                            "region_id" => region.get_id(),
-                        );
-                        response.response = cmd_resp::new_error(e);
-                        return response;
-                    }
-                },
-                CmdType::Snap => {
-                    let snapshot = ctx.get_region_snapshot(None, region.clone(), &mut None);
-                    response.snapshot = Some(snapshot);
-                    raft_cmdpb::Response::default()
-                }
-                CmdType::ReadIndex => {
-                    let mut resp = raft_cmdpb::Response::default();
-                    if let Some(read_index) = read_index {
-                        let mut res = ReadIndexResponse::default();
-                        res.set_read_index(read_index);
-                        resp.set_read_index(res);
-                    } else {
-                        panic!("[region {}] can not get readindex", region.get_id());
-                    }
-                    resp
-                }
-                CmdType::Prewrite
-                | CmdType::Put
-                | CmdType::Delete
-                | CmdType::DeleteRange
-                | CmdType::IngestSst
-                | CmdType::Invalid => unreachable!(),
-            };
-            resp.set_cmd_type(cmd_type);
-            responses.push(resp);
-        }
-        response.response.set_responses(responses.into());
-        response
     }
 
     pub fn voters(&self) -> raft::util::Union<'_> {
@@ -5538,13 +5480,12 @@ where
         &self.engines.kv
     }
 
-    fn get_region_snapshot(
+    fn get_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        region: Arc<metapb::Region>,
         _: &mut Option<LocalReadContext<'_, EK>>,
-    ) -> RegionSnapshot<EK::Snapshot> {
-        RegionSnapshot::from_snapshot(Arc::new(self.engines.kv.snapshot()), region)
+    ) -> Arc<EK::Snapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 

@@ -18,7 +18,7 @@ use kvproto::{
     errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response},
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
 use pd_client::BucketMeta;
 use tikv_util::{
@@ -46,12 +46,11 @@ use crate::{
 pub trait ReadExecutor<E: KvEngine> {
     fn get_tablet(&mut self) -> &E;
 
-    fn get_region_snapshot(
+    fn get_snapshot(
         &mut self,
         ts: Option<ThreadReadId>,
-        region: Arc<metapb::Region>,
         read_context: &mut Option<LocalReadContext<'_, E>>,
-    ) -> RegionSnapshot<E::Snapshot>;
+    ) -> Arc<E::Snapshot>;
 
     fn get_value(&mut self, req: &Request, region: &metapb::Region) -> Result<Response> {
         let key = req.get_get().get_key();
@@ -88,6 +87,68 @@ pub trait ReadExecutor<E: KvEngine> {
         }
 
         Ok(resp)
+    }
+
+    fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &Arc<metapb::Region>,
+        read_index: Option<u64>,
+        mut ts: Option<ThreadReadId>,
+        mut read_context: Option<LocalReadContext<'_, E>>,
+    ) -> ReadResponse<E::Snapshot> {
+        let requests = msg.get_requests();
+        let mut response = ReadResponse {
+            response: RaftCmdResponse::default(),
+            snapshot: None,
+            txn_extra_op: TxnExtraOp::Noop,
+        };
+        let mut responses = Vec::with_capacity(requests.len());
+        for req in requests {
+            let cmd_type = req.get_cmd_type();
+            let mut resp = match cmd_type {
+                CmdType::Get => match self.get_value(req, region.as_ref()) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        error!(?e;
+                            "failed to execute get command";
+                            "region_id" => region.get_id(),
+                        );
+                        response.response = cmd_resp::new_error(e);
+                        return response;
+                    }
+                },
+                CmdType::Snap => {
+                    let snapshot = RegionSnapshot::from_snapshot(
+                        self.get_snapshot(ts.take(), &mut read_context),
+                        region.clone(),
+                    );
+                    response.snapshot = Some(snapshot);
+                    Response::default()
+                }
+                CmdType::ReadIndex => {
+                    let mut resp = Response::default();
+                    if let Some(read_index) = read_index {
+                        let mut res = ReadIndexResponse::default();
+                        res.set_read_index(read_index);
+                        resp.set_read_index(res);
+                    } else {
+                        panic!("[region {}] can not get readindex", region.get_id());
+                    }
+                    resp
+                }
+                CmdType::Prewrite
+                | CmdType::Put
+                | CmdType::Delete
+                | CmdType::DeleteRange
+                | CmdType::IngestSst
+                | CmdType::Invalid => unreachable!(),
+            };
+            resp.set_cmd_type(cmd_type);
+            responses.push(resp);
+        }
+        response.response.set_responses(responses.into());
+        response
     }
 }
 
@@ -698,7 +759,7 @@ where
 
     pub fn propose_raft_command(
         &mut self,
-        read_id: Option<ThreadReadId>,
+        mut read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
@@ -707,21 +768,66 @@ where
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
-                        let response = self.read_local(read_id, &req, &mut delegate);
-                        if response.is_none() {
+                        let snapshot_ts = match read_id.as_mut() {
+                            // If this peer became Leader not long ago and just after the cached
+                            // snapshot was created, this snapshot can not see all data of the peer.
+                            Some(id) => {
+                                if id.create_time <= delegate.last_valid_ts {
+                                    id.create_time = monotonic_raw_now();
+                                }
+                                id.create_time
+                            }
+                            None => monotonic_raw_now(),
+                        };
+                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                            // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        response.unwrap()
+
+                        let read_ctx = self.local_read_context();
+
+                        let region = Arc::clone(&delegate.region);
+                        let response =
+                            delegate.execute(&req, &region, None, read_id, Some(read_ctx));
+                        // Try renew lease in advance
+                        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
+                        response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
-                    RequestPolicy::StaleRead => match self.stale_read(&req, &mut delegate) {
-                        Ok(response) => response,
-                        Err(response) => {
-                            cb.set_result(response);
+                    RequestPolicy::StaleRead => {
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        assert!(read_ts > 0);
+                        if let Err(resp) = delegate.check_stale_read_safe::<E>(read_ts) {
+                            cb.set_result(ReadResponse {
+                                response: resp,
+                                snapshot: None,
+                                txn_extra_op: TxnExtraOp::Noop,
+                            });
                             return;
                         }
-                    },
+
+                        let read_ctx = self.local_read_context();
+
+                        let region = Arc::clone(&delegate.region);
+                        // Getting the snapshot
+                        let response =
+                            delegate.execute(&req, &region, None, read_id, Some(read_ctx));
+
+                        // Double check in case `safe_ts` change after the first check and before
+                        // getting snapshot
+                        if let Err(resp) = delegate.check_stale_read_safe::<E>(read_ts) {
+                            cb.set_result(ReadResponse {
+                                response: resp,
+                                snapshot: None,
+                                txn_extra_op: TxnExtraOp::Noop,
+                            });
+                            return;
+                        }
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                        response
+                    }
                     _ => unreachable!(),
                 };
                 cmd_resp::bind_term(&mut response.response, delegate.term);
@@ -752,123 +858,18 @@ where
         }
     }
 
-    fn read_local(
-        &mut self,
-        mut read_id: Option<ThreadReadId>,
-        req: &RaftCmdRequest,
-        delegate: &mut D,
-    ) -> Option<ReadResponse<E::Snapshot>> {
-        let snapshot_ts = match read_id.as_mut() {
-            // If this peer became Leader not long ago and just after the cached
-            // snapshot was created, this snapshot can not see all data of the peer.
-            Some(id) => {
-                if id.create_time <= delegate.last_valid_ts {
-                    id.create_time = monotonic_raw_now();
-                }
-                id.create_time
-            }
-            None => monotonic_raw_now(),
-        };
-        if !delegate.is_in_leader_lease(snapshot_ts) {
-            return None;
-        }
-
-        let region = Arc::clone(&delegate.region);
-        let response = self.execute_read(delegate, req, &region, read_id);
-
-        // Try renew lease in advance
-        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
-        Some(response)
-    }
-
-    fn stale_read(
-        &mut self,
-        req: &RaftCmdRequest,
-        delegate: &mut D,
-    ) -> std::result::Result<ReadResponse<E::Snapshot>, ReadResponse<E::Snapshot>> {
-        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-        assert!(read_ts > 0);
-        delegate
-            .check_stale_read_safe::<E>(read_ts)
-            .map_err(|response| ReadResponse {
-                response,
-                snapshot: None,
-                txn_extra_op: TxnExtraOp::Noop,
-            })?;
-
-        let region = Arc::clone(&delegate.region);
-        // Getting the snapshot
-        let response = self.execute_read(delegate, req, &region, None);
-
-        // Double check in case `safe_ts` change after the first check and before
-        // getting snapshot
-        delegate
-            .check_stale_read_safe::<E>(read_ts)
-            .map_err(|response| ReadResponse {
-                response,
-                snapshot: None,
-                txn_extra_op: TxnExtraOp::Noop,
-            })?;
-
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-        Ok(response)
-    }
-
-    fn execute_read(
-        &mut self,
-        ctx: &mut D,
-        req: &RaftCmdRequest,
-        region: &Arc<metapb::Region>,
-        mut ts: Option<ThreadReadId>,
-    ) -> ReadResponse<E::Snapshot> {
-        let requests = req.get_requests();
-        let mut response = ReadResponse {
-            response: RaftCmdResponse::default(),
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        };
-        let mut responses = Vec::with_capacity(requests.len());
-        let mut read_context = Some(self.local_read_context());
-        for req in requests {
-            let cmd_type = req.get_cmd_type();
-            let mut resp = match cmd_type {
-                CmdType::Get => match ctx.get_value(req, region.as_ref()) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!(?e;
-                            "failed to execute get command";
-                            "region_id" => region.get_id(),
-                        );
-                        response.response = cmd_resp::new_error(e);
-                        return response;
-                    }
-                },
-                CmdType::Snap => {
-                    let snapshot =
-                        ctx.get_region_snapshot(ts.take(), region.clone(), &mut read_context);
-                    response.snapshot = Some(snapshot);
-                    Response::default()
-                }
-                CmdType::ReadIndex
-                | CmdType::Prewrite
-                | CmdType::Put
-                | CmdType::Delete
-                | CmdType::DeleteRange
-                | CmdType::IngestSst
-                | CmdType::Invalid => unreachable!(),
-            };
-            resp.set_cmd_type(cmd_type);
-            responses.push(resp);
-        }
-        response.response.set_responses(responses.into());
-        response
-    }
-
+    /// If read requests are received at the same RPC request, we can create one
+    /// snapshot for all of them and check whether the time when the snapshot
+    /// was created is in lease. We use ThreadReadId to figure out whether this
+    /// RaftCommand comes from the same RPC request with the last RaftCommand
+    /// which left a snapshot cached in LocalReader. ThreadReadId is composed by
+    /// thread_id and a thread_local incremental sequence.
+    #[inline]
     pub fn read(
         &mut self,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<<E as KvEngine>::Snapshot>,
+        cb: Callback<E::Snapshot>,
     ) {
         self.propose_raft_command(read_id, req, cb);
         maybe_tls_local_read_metrics_flush();
@@ -904,12 +905,11 @@ where
         &self.kv_engine
     }
 
-    fn get_region_snapshot(
+    fn get_snapshot(
         &mut self,
         create_time: Option<ThreadReadId>,
-        region: Arc<metapb::Region>,
         read_context: &mut Option<LocalReadContext<'_, E>>,
-    ) -> RegionSnapshot<E::Snapshot> {
+    ) -> Arc<E::Snapshot> {
         let ctx = read_context.as_mut().unwrap();
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
         if let Some(ts) = create_time {
@@ -917,16 +917,15 @@ where
                 if let Some(snap) = ctx.snap_cache.as_ref().as_ref() {
                     TLS_LOCAL_READ_METRICS
                         .with(|m| m.borrow_mut().local_executed_snapshot_cache_hit.inc());
-                    return RegionSnapshot::from_snapshot(snap.clone(), region);
+                    return snap.clone();
                 }
             }
             let snap = Arc::new(self.kv_engine.snapshot());
             *ctx.read_id = ts;
             *ctx.snap_cache = Box::new(Some(snap.clone()));
-            return RegionSnapshot::from_snapshot(snap, region);
+            return snap;
         }
-
-        RegionSnapshot::from_snapshot(Arc::new(self.kv_engine.snapshot()), region)
+        Arc::new(self.kv_engine.snapshot())
     }
 }
 
@@ -972,7 +971,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{SyncMutable, ALL_CFS, Peekable};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -1545,8 +1544,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot =
-            delegate.get_region_snapshot(read_id_copy.clone(), Arc::default(), &mut read_context);
+        let snapshot = delegate.get_snapshot(read_id_copy.clone(), &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1556,8 +1554,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(kv_engine.as_inner().path(), tablet.as_inner().path());
-        let snapshot =
-            delegate.get_region_snapshot(read_id_copy, Arc::default(), &mut read_context);
+        let snapshot = delegate.get_snapshot(read_id_copy, &mut read_context);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -1611,11 +1608,7 @@ mod tests {
 
             for _ in 0..10 {
                 // Different region id should reuse the cache
-                let _ = delegate.get_region_snapshot(
-                    read_id.clone(),
-                    Arc::default(),
-                    &mut read_context,
-                );
+                let _ = delegate.get_snapshot(read_id.clone(), &mut read_context);
             }
         }
         // We should hit cache 9 times
@@ -1629,11 +1622,7 @@ mod tests {
         {
             let read_context = reader.local_read_context();
 
-            let _ = delegate.get_region_snapshot(
-                read_id.clone(),
-                Arc::default(),
-                &mut Some(read_context),
-            );
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
         }
         // This time, we will miss the cache
         assert_eq!(
@@ -1643,11 +1632,7 @@ mod tests {
 
         {
             let read_context = reader.local_read_context();
-            let _ = delegate.get_region_snapshot(
-                read_id.clone(),
-                Arc::default(),
-                &mut Some(read_context),
-            );
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
             // We can hit it again.
             assert_eq!(
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow().local_executed_snapshot_cache_hit.get()),
@@ -1658,11 +1643,7 @@ mod tests {
         reader.release_snapshot_cache();
         {
             let read_context = reader.local_read_context();
-            let _ = delegate.get_region_snapshot(
-                read_id.clone(),
-                Arc::default(),
-                &mut Some(read_context),
-            );
+            let _ = delegate.get_snapshot(read_id.clone(), &mut Some(read_context));
         }
         // After release, we will mss the cache even with the prevsiou read_id.
         assert_eq!(
@@ -1672,7 +1653,7 @@ mod tests {
 
         {
             let read_context = reader.local_read_context();
-            let _ = delegate.get_region_snapshot(read_id, Arc::default(), &mut Some(read_context));
+            let _ = delegate.get_snapshot(read_id, &mut Some(read_context));
         }
         // We can hit it again.
         assert_eq!(

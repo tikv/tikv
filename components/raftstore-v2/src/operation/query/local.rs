@@ -111,7 +111,10 @@ where
                     }
 
                     let region = Arc::clone(&delegate.region);
-                    let snap = delegate.get_region_snapshot(None, region, &mut None);
+                    let snap = RegionSnapshot::from_snapshot(
+                        delegate.get_snapshot(None, &mut None),
+                        region,
+                    );
 
                     // Try renew lease in advance
                     delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
@@ -122,7 +125,10 @@ where
                     delegate.check_stale_read_safe::<E>(read_ts)?;
 
                     let region = Arc::clone(&delegate.region);
-                    let snap = delegate.get_region_snapshot(None, region, &mut None);
+                    let snap = RegionSnapshot::from_snapshot(
+                        delegate.get_snapshot(None, &mut None),
+                        region,
+                    );
 
                     delegate.check_stale_read_safe::<E>(read_ts)?;
 
@@ -210,16 +216,12 @@ where
         self.cached_tablet.latest().unwrap()
     }
 
-    fn get_region_snapshot(
+    fn get_snapshot(
         &mut self,
         _: Option<ThreadReadId>,
-        region: Arc<metapb::Region>,
         _: &mut Option<raftstore::store::LocalReadContext<'_, E>>,
-    ) -> RegionSnapshot<E::Snapshot> {
-        RegionSnapshot::from_snapshot(
-            Arc::new(self.cached_tablet.latest().unwrap().snapshot()),
-            region,
-        )
+    ) -> Arc<E::Snapshot> {
+        Arc::new(self.cached_tablet.latest().unwrap().snapshot())
     }
 }
 
@@ -532,8 +534,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet1.as_inner().path(), tablet.as_inner().path());
-        let region = Region::default();
-        let snapshot = delegate.get_region_snapshot(None, delegate.region.clone(), &mut None);
+        let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val1".to_vec(),
             *snapshot.get_value(b"a1").unwrap().unwrap()
@@ -543,7 +544,7 @@ mod tests {
         let mut delegate = delegate.unwrap();
         let tablet = delegate.get_tablet();
         assert_eq!(tablet2.as_inner().path(), tablet.as_inner().path());
-        let snapshot = delegate.get_region_snapshot(None, delegate.region.clone(), &mut None);
+        let snapshot = delegate.get_snapshot(None, &mut None);
         assert_eq!(
             b"val2".to_vec(),
             *snapshot.get_value(b"a2").unwrap().unwrap()
