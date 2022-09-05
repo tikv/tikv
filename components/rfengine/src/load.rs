@@ -49,9 +49,6 @@ impl Epoch {
     }
 
     pub(crate) fn add_file(&mut self, filename: PathBuf) -> Result<()> {
-        if self.has_wal_file {
-            return Ok(());
-        }
         let extention = filename.extension().unwrap();
         if extention == "wal" {
             self.has_wal_file = true;
@@ -99,7 +96,7 @@ pub(crate) fn read_epoches(dir: &Path) -> Result<Vec<Epoch>> {
 }
 
 impl RfEngine {
-    pub(crate) fn load_epoch(&mut self, ep: &Epoch) -> Result<u64> {
+    pub(crate) fn load_epoch(&mut self, ep: &mut Epoch, prev_has_state_file: bool) -> Result<u64> {
         info!(
             "load epoch {}, rlog files {}, has_wal {}, has_state {}",
             ep.id,
@@ -107,6 +104,19 @@ impl RfEngine {
             ep.has_wal_file,
             ep.has_state_file
         );
+        if ep.has_wal_file && ep.has_state_file && !prev_has_state_file {
+            // The compact job:
+            //   1. write rlog files.
+            //   2. write new state file.
+            //   3. remove old state file.
+            //   4. remove the WAL file.
+            //
+            // If process crashed between 3 and 4, i.e., the prev epoch doesn't have state
+            // file and the current epoch has WAL and state file, the compact job is actually finished
+            // so we remove the WAL file directly.
+            fs::remove_file(wal_file_name(&self.dir, ep.id))?;
+            ep.has_wal_file = false;
+        }
         let mut wal_off: u64 = 0;
         if ep.has_wal_file {
             wal_off = self.load_wal_file(ep.id)?;

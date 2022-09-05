@@ -106,8 +106,15 @@ impl RfEngine {
         };
         let mut offset = 0;
         let mut worker_states = HashMap::new();
-        for ep in &epoches {
-            offset = en.load_epoch(ep)?;
+        for i in 0..epoches.len() {
+            let prev_has_state_file = if i == 0 {
+                false
+            } else {
+                let prev_ep = &epoches[i - 1];
+                prev_ep.has_state_file
+            };
+            let ep = &mut epoches[i];
+            offset = en.load_epoch(ep, prev_has_state_file)?;
             if ep.has_state_file {
                 for region in en.regions.iter() {
                     let region = region.read().unwrap();
@@ -419,6 +426,12 @@ impl RfEngine {
 
     pub fn get_engine_id(&self) -> u64 {
         self.engine_id.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for RfEngine {
+    fn drop(&mut self) {
+        self.stop_worker();
     }
 }
 
