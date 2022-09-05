@@ -80,6 +80,14 @@ impl<'a> JsonRef<'a> {
                     &self.value()[val_offset..val_offset + str_len as usize + len_len],
                 )
             }
+            JsonType::Opaque => {
+                let (opaque_bytes_len, len_len) =
+                    NumberCodec::try_decode_var_u64(&self.value()[val_offset + 1..])?;
+                JsonRef::new(
+                    val_type,
+                    &self.value()[val_offset..val_offset + opaque_bytes_len as usize + len_len + 1],
+                )
+            }
             _ => {
                 let data_size =
                     NumberCodec::decode_u32_le(&self.value()[val_offset + ELEMENT_COUNT_LEN..])

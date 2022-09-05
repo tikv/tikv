@@ -122,8 +122,8 @@ impl RequestHandler for BatchDagHandler {
         handle_qe_response(result, self.runner.can_be_cached(), self.data_version).map(|x| x.into())
     }
 
-    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        handle_qe_stream_response(self.runner.handle_streaming_request())
+    async fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        handle_qe_stream_response(self.runner.handle_streaming_request().await)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

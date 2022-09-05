@@ -32,7 +32,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
             |executor| {
                 profiler::start("./BatchNext1024Bencher.profile");
                 let iter_times = black_box(1024);
-                let r = black_box(executor.next_batch(iter_times));
+                let r = black_box(block_on(executor.next_batch(iter_times)));
                 r.is_drained.unwrap();
                 profiler::stop();
             },
@@ -62,7 +62,7 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
             |executor| {
                 profiler::start("./BatchNextAllBencher.profile");
                 loop {
-                    let r = executor.next_batch(1024);
+                    let r = block_on(executor.next_batch(1024));
                     black_box(&r);
                     if r.is_drained.unwrap() {
                         break;

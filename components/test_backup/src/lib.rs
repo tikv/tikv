@@ -13,7 +13,7 @@ use backup::Task;
 use collections::HashMap;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage_export::make_local_backend;
-use futures::channel::mpsc as future_mpsc;
+use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
@@ -362,7 +362,7 @@ impl TestSuite {
             is_scanned_range_aware: false,
         });
         let digest = crc64fast::Digest::new();
-        while let Some((k, v)) = scanner.next().unwrap() {
+        while let Some((k, v)) = block_on(scanner.next()).unwrap() {
             checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;

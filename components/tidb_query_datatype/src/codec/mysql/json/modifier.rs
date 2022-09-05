@@ -232,7 +232,8 @@ impl<'a> BinaryModifier<'a> {
             | JsonType::I64
             | JsonType::U64
             | JsonType::Double
-            | JsonType::String => {
+            | JsonType::String
+            | JsonType::Opaque => {
                 buf.extend_from_slice(self.old.value);
             }
             JsonType::Object | JsonType::Array => {
