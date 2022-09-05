@@ -36,7 +36,9 @@ pub fn new_raft_storage_with_store_count<F: KvFormat>(
     let (cluster, engine, ctx) = new_raft_engine(count, key);
     (
         cluster,
-        SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
+        SyncTestStorageBuilder::from_engine(engine)
+            .build(ctx.peer.as_ref().unwrap().store_id)
+            .unwrap(),
         ctx,
     )
 }

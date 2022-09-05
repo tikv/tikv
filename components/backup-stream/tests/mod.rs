@@ -44,8 +44,12 @@ use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
 fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
+    mutation_op(k, v, Op::Put)
+}
+
+fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
     let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
+    mutation.set_op(op);
     mutation.key = k;
     mutation.value = v;
     mutation
@@ -419,6 +423,36 @@ impl Suite {
 
 // Copy & Paste from cdc::tests::TestSuite, maybe make it a mixin?
 impl Suite {
+    pub fn tso(&self) -> TimeStamp {
+        run_async_test(self.cluster.pd_client.get_tso()).unwrap()
+    }
+
+    pub fn must_kv_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        ts: TimeStamp,
+        pk: Vec<u8>,
+    ) {
+        let mut lock_req = PessimisticLockRequest::new();
+        lock_req.set_context(self.get_context(region_id));
+        let mut mutations = vec![];
+        for key in keys {
+            mutations.push(mutation_op(key, vec![], Op::PessimisticLock));
+        }
+        lock_req.set_mutations(mutations.into());
+        lock_req.primary_lock = pk;
+        lock_req.start_version = ts.into_inner();
+        lock_req.lock_ttl = ts.into_inner() + 1;
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_lock(&lock_req)
+            .unwrap();
+
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_prewrite(
         &mut self,
         region_id: u64,
@@ -1018,6 +1052,43 @@ mod test {
             }),
             "{:?}",
             regions
+        );
+    }
+
+    /// This test case tests whether we correctly handle the pessimistic locks.
+    #[test]
+    fn pessimistic_lock() {
+        let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 42)],
+            suite.tso(),
+            make_record_key(1, 42),
+        );
+        suite.must_register_task(1, "pessimistic_lock");
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 43)],
+            suite.tso(),
+            make_record_key(1, 43),
+        );
+        let expected_tso = suite.tso().into_inner();
+        suite.force_flush_files("pessimistic_lock");
+        suite.wait_for_flush();
+        std::thread::sleep(Duration::from_secs(1));
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("pessimistic_lock"),
+        )
+        .unwrap();
+        // The checkpoint should be advanced: because PiTR is "Read" operation,
+        // which shouldn't be blocked by pessimistic locks.
+        assert!(
+            checkpoint > expected_tso,
+            "expected = {}; checkpoint = {}",
+            expected_tso,
+            checkpoint
         );
     }
 }
