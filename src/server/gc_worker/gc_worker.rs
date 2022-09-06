@@ -374,10 +374,10 @@ where
     ) -> Result<()> {
         let mut modifies = std::collections::HashMap::new();
         let mut write_size = 0;
-        let _ = txns.into_iter().map(|(id, txn)| {
+        for (id, txn) in txns {
             write_size += txn.write_size();
             modifies.insert(id, txn.into_modifies());
-        });
+        }
         if write_size > 0 {
             limiter.blocking_consume(write_size);
             engine.modify_on_kv_engine(modifies)?;
@@ -711,10 +711,10 @@ where
     ) -> Result<()> {
         let mut modifies = std::collections::HashMap::new();
         let mut write_size = 0;
-        let _ = region_modifies.into_iter().map(|(id, mvcc_raw)| {
-            write_size += mvcc_raw.write_size();
-            modifies.insert(id, mvcc_raw.into_modifies());
-        });
+        for (id, m) in region_modifies {
+            write_size += m.write_size();
+            modifies.insert(id, m.into_modifies());
+        }
         if write_size > 0 {
             // rate limiter
             limiter.blocking_consume(write_size);
@@ -1404,6 +1404,7 @@ pub mod test_gc_worker {
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_test::kv::TestTabletFactoryV2;
+    use engine_traits::{KvEngine, OpenOptions, TabletFactory};
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1534,7 +1535,10 @@ pub mod test_gc_worker {
 
     #[derive(Clone)]
     pub struct MultiRocksEngine {
-        pub factory: TestTabletFactoryV2,
+        // Factory is not a normal way to fetch tablet and is just used in test to ease the test.
+        // Note: at most one tablet is allowed to exist for each region in the cache of factory
+        pub factory: Arc<TestTabletFactoryV2>,
+        pub region_info: HashMap<u64, Region>,
     }
 
     impl Engine for MultiRocksEngine {
@@ -1551,26 +1555,93 @@ pub mod test_gc_worker {
 
         fn modify_on_kv_engine(
             &self,
-            _region_modifies: HashMap<u64, Vec<Modify>>,
+            mut region_modifies: HashMap<u64, Vec<Modify>>,
         ) -> kv::Result<()> {
-            unimplemented!()
+            for modifies in region_modifies.values_mut() {
+                for modify in modifies.iter_mut() {
+                    match modify {
+                        Modify::Delete(_, ref mut key) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::Put(_, ref mut key, _) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::PessimisticLock(ref mut key, _) => {
+                            let bytes = keys::data_key(key.as_encoded());
+                            *key = Key::from_encoded(bytes);
+                        }
+                        Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                            let bytes = keys::data_key(key1.as_encoded());
+                            *key1 = Key::from_encoded(bytes);
+                            let bytes = keys::data_end_key(key2.as_encoded());
+                            *key2 = Key::from_encoded(bytes);
+                        }
+                    }
+                }
+            }
+            for (region_id, modifies) in region_modifies {
+                let tablet = self
+                    .factory
+                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                    .unwrap();
+
+                write_modifies(&tablet, modifies)?;
+            }
+
+            Ok(())
         }
 
         fn async_write(
             &self,
-            _ctx: &Context,
-            mut _batch: WriteData,
-            _callback: EngineCallback<()>,
+            ctx: &Context,
+            mut batch: WriteData,
+            callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            unimplemented!()
+            batch.modifies.iter_mut().for_each(|modify| match modify {
+                Modify::Delete(_, ref mut key) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::PessimisticLock(ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
+                    *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
+                }
+            });
+            let tablet = self
+                .factory
+                .open_tablet(
+                    ctx.region_id,
+                    None,
+                    OpenOptions::default().set_cache_only(true),
+                )
+                .unwrap();
+
+            callback(write_modifies(&tablet, batch.modifies));
+            Ok(())
         }
 
         fn async_snapshot(
             &self,
-            _ctx: SnapContext<'_>,
-            _callback: EngineCallback<Self::Snap>,
+            ctx: SnapContext<'_>,
+            callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
-            unimplemented!()
+            let region_id = ctx.pb_ctx.region_id;
+            let tablet = self
+                .factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap();
+            callback(Ok(RegionSnapshot::from_snapshot(
+                Arc::new(tablet.snapshot()),
+                Arc::new(self.region_info.get(&region_id).unwrap().clone()),
+            )));
+            Ok(())
         }
     }
 }
@@ -1587,6 +1658,11 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::TestTabletFactoryV2,
+    };
+    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -1601,49 +1677,55 @@ mod tests {
         router::RaftStoreBlackHole,
         store::util::new_peer,
     };
+    use tempfile::Builder;
     use tikv_kv::Snapshot;
     use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
     use txn_types::Mutation;
 
-    use super::*;
+    use super::{test_gc_worker::MultiRocksEngine, *};
     use crate::{
         config::DbConfig,
         server::gc_worker::{MockSafePointProvider, PrefixedEngine},
         storage::{
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
-            mvcc::{tests::must_get_none, MAX_TXN_WRITE_SIZE},
+            mvcc::{
+                tests::{must_get_none, must_get_none_v2},
+                MAX_TXN_WRITE_SIZE,
+            },
             txn::{
                 commands,
                 tests::{
-                    must_commit, must_gc, must_prewrite_delete, must_prewrite_put, must_rollback,
+                    must_commit, must_commit_v2, must_gc, must_prewrite_delete,
+                    must_prewrite_delete_v2, must_prewrite_put, must_prewrite_put_v2,
+                    must_rollback,
                 },
             },
             Engine, Storage, TestStorageBuilderApiV1,
         },
     };
 
+    fn init_region(
+        start_key: &[u8],
+        end_key: &[u8],
+        region_id: u64,
+        store_id: Option<u64>,
+    ) -> Region {
+        let start_key = Key::from_encoded(start_key.to_vec());
+        let end_key = Key::from_encoded(end_key.to_vec());
+        let mut region = Region::default();
+        region.set_start_key(start_key.as_encoded().clone());
+        region.set_end_key(end_key.as_encoded().clone());
+        region.id = region_id;
+        if let Some(store_id) = store_id {
+            region.mut_peers().push(Peer::default());
+            region.mut_peers()[0].set_store_id(store_id);
+        }
+        region
+    }
+
     #[test]
     fn test_get_regions_for_gc() {
-        fn init_region(
-            start_key: &[u8],
-            end_key: &[u8],
-            region_id: u64,
-            store_id: Option<u64>,
-        ) -> Region {
-            let start_key = Key::from_encoded(start_key.to_vec());
-            let end_key = Key::from_encoded(end_key.to_vec());
-            let mut region = Region::default();
-            region.set_start_key(start_key.as_encoded().clone());
-            region.set_end_key(end_key.as_encoded().clone());
-            region.id = region_id;
-            if let Some(store_id) = store_id {
-                region.mut_peers().push(Peer::default());
-                region.mut_peers()[0].set_store_id(store_id);
-            }
-            region
-        }
-
         let store_id = 1;
 
         let r1 = init_region(b"", b"k10", 1, None);
@@ -2517,5 +2599,107 @@ mod tests {
         let ks = get_keys_in_region(&mut iter, &region);
         assert!(iter.peek().is_none());
         assert!(ks.is_empty());
+    }
+
+    #[test]
+    fn test_gc_for_multi_rocksdb() {
+        let store_id = 1;
+
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new().prefix("multi-rocks-gc").tempdir().unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+
+        // Note: as the tablet split is not supported yet, we artificially divide the
+        // region to: 1 ["", "k10"], 2 ["k10", "k20"], 3["k20", "30"]
+        let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        let r2 = init_region(b"k10", b"k20", 2, Some(store_id));
+        let r3 = init_region(b"k20", b"", 3, Some(store_id));
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(3, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        let mut region_info = std::collections::HashMap::new();
+        region_info.insert(1, r1.clone());
+        region_info.insert(2, r2.clone());
+        region_info.insert(3, r3.clone());
+        let engine = MultiRocksEngine {
+            factory: factory.clone(),
+            region_info,
+        };
+
+        let (tx, _rx) = mpsc::channel();
+        let feature_gate = FeatureGate::default();
+        feature_gate.set_version("5.0.0").unwrap();
+
+        let _ri_provider = Arc::new(MockRegionInfoProvider::new(vec![
+            r1.clone(),
+            r2.clone(),
+            r3.clone(),
+        ]));
+
+        let cfg = GcConfig::default();
+        let mut gc_runner = GcRunner::new(
+            store_id,
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        let mut region_id = 0;
+        for i in 0..30 {
+            if i % 10 == 0 {
+                region_id += 1;
+            }
+            let k = format!("k{:02}", i).into_bytes();
+            must_prewrite_put_v2(&engine, region_id, &k, b"value", &k, 101);
+            must_commit_v2(&engine, region_id, &k, 101, 102);
+            must_prewrite_delete_v2(&engine, region_id, &k, &k, 151);
+            must_commit_v2(&engine, region_id, &k, 151, 152);
+        }
+
+        gc_runner.gc(r1.clone(), 200.into()).unwrap();
+        gc_runner.gc(r2.clone(), 200.into()).unwrap();
+        gc_runner.gc(r3.clone(), 200.into()).unwrap();
+
+        region_id = 1;
+        let mut db = factory
+            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
+            .unwrap()
+            .as_inner()
+            .clone();
+        let mut cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        for i in 0..30 {
+            if i >= 20 && i % 10 == 0 {
+                region_id += 1;
+                db = factory
+                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                    .unwrap()
+                    .as_inner()
+                    .clone();
+                cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            }
+            let k = format!("k{:02}", i).into_bytes();
+
+            // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+            must_get_none_v2(&engine, region_id, &k, 150);
+
+            // However, MVCC-DELETIONs will be kept.
+            let mut raw_k = vec![b'z'];
+            let suffix = Key::from_raw(&k).append_ts(152.into());
+            raw_k.extend_from_slice(suffix.as_encoded());
+            assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+        }
     }
 }
