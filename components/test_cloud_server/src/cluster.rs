@@ -261,6 +261,8 @@ pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
     config.server.cluster_id = 1;
     config.server.addr = node_addr(node_id);
     config.server.status_addr = node_status_addr(node_id);
+    config.server.grpc_keepalive_time = ReadableDuration::secs(1);
+    config.server.grpc_keepalive_timeout = ReadableDuration::secs(1);
     config.dfs.s3_endpoint = "memory".to_string();
     config.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     config.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
