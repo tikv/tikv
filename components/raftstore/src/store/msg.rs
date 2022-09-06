@@ -29,17 +29,20 @@ use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRAC
 use super::{
     local_metrics::TimeTracker, region_meta::RegionMeta, worker::FetchedLogs, RegionSnapshot,
 };
-use crate::store::{
-    fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
-    metrics::RaftEventDurationType,
-    peer::{
-        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-        UnsafeRecoveryWaitApplySyncer,
+use crate::{
+    store::{
+        fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
+        metrics::RaftEventDurationType,
+        peer::{
+            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+            UnsafeRecoveryWaitApplySyncer,
+        },
+        util::{KeysInfoFormatter, LatencyInspector},
+        worker::{Bucket, BucketRange},
+        SnapKey,
     },
-    util::{KeysInfoFormatter, LatencyInspector},
-    worker::{Bucket, BucketRange},
-    SnapKey,
+    Error,
 };
 
 #[derive(Debug)]
@@ -513,7 +516,11 @@ where
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
-    PrepareFlashback(Sender<bool>),
+    PrepareFlashback(
+        // Version to flashback
+        u64,
+        Sender<Result<(), Error>>,
+    ),
     FinishFlashback,
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }

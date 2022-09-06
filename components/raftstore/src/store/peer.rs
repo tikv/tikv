@@ -766,10 +766,10 @@ pub enum UnsafeRecoveryState {
 // if the latest committed index is met, the syncer will be called to notify the
 // result.
 #[derive(Debug)]
-pub struct FlashbackState(Option<Sender<bool>>);
+pub struct FlashbackState(Option<Sender<Result<()>>>);
 
 impl FlashbackState {
-    pub fn new(ch: Sender<bool>) -> Self {
+    pub fn new(ch: Sender<Result<()>>) -> Self {
         FlashbackState(Some(ch))
     }
 
@@ -778,7 +778,7 @@ impl FlashbackState {
             return;
         }
         let ch = self.0.take().unwrap();
-        match ch.send(true) {
+        match ch.send(Ok(())) {
             Ok(_) => {}
             Err(e) => {
                 error!("Fail to notify flashback state"; "err" => ?e);

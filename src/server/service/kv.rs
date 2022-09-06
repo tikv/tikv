@@ -1705,13 +1705,12 @@ fn future_flashback_to_version<
         // we start the flashback command.
         let region_id = req.get_context().get_region_id();
         let (result_tx, result_rx) = oneshot::channel();
-        raft_router_clone
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(result_tx))?;
-        if !result_rx.await? {
-            return Err(Error::Other(box_err!(
-                "failed to prepare the region {} for flashback",
-                region_id
-            )));
+        raft_router_clone.significant_send(
+            region_id,
+            SignificantMsg::PrepareFlashback(req.get_version(), result_tx),
+        )?;
+        if let Err(err) = result_rx.await? {
+            return Err(Error::from(err));
         }
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.into(), cb);

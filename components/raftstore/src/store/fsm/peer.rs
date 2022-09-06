@@ -993,14 +993,37 @@ where
     // the flashback-only command in this way, But for RW local reads which need
     // to be considered, we let the leader lease to None to ensure that local reads
     // are not executed.
-    fn on_prepare_flashback(&mut self, ch: Sender<bool>) {
+    fn on_prepare_flashback(&mut self, version: u64, ch: Sender<Result<()>>) {
+        let region_id = self.region().get_id();
         info!(
             "prepare flashback";
-            "region_id" => self.region().get_id(),
+            "region_id" => region_id,
             "peer_id" => self.fsm.peer.peer_id(),
         );
+        // Check if there is another flashback in in progress.
         if self.fsm.peer.flashback_state.is_some() {
-            ch.send(false).unwrap();
+            ch.send(Err(Error::Other(
+                format!("region {} is in another flashback progress", region_id).into(),
+            )))
+            .unwrap();
+            return;
+        }
+        // Check if the flashback version is greater than the region safe ts, i.e, the
+        // resolved ts.
+        let meta = self.ctx.store_meta.lock().unwrap();
+        let safe_ts = meta
+            .region_read_progress
+            .get_safe_ts(&region_id)
+            .unwrap_or(0);
+        if version > safe_ts {
+            ch.send(Err(Error::Other(
+                format!(
+                    "region {} safe ts {} is smaller the the flashback version {}",
+                    region_id, safe_ts, version
+                )
+                .into(),
+            )))
+            .unwrap();
             return;
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
@@ -1464,7 +1487,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
 
-            SignificantMsg::PrepareFlashback(ch) => self.on_prepare_flashback(ch),
+            SignificantMsg::PrepareFlashback(version, ch) => self.on_prepare_flashback(version, ch),
             SignificantMsg::FinishFlashback => self.on_finish_flashback(),
             // for snapshot recovery (safe recovery)
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
