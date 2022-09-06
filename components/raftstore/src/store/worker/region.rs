@@ -254,6 +254,98 @@ struct SnapGenContext<EK, R> {
     router: R,
 }
 
+impl<EK, R> SnapGenContext<EK, R>
+where
+    EK: KvEngine,
+    R: CasualRouter<EK>,
+{
+    /// Generates the snapshot of the Region.
+    fn generate_snap(
+        &self,
+        region_id: u64,
+        last_applied_term: u64,
+        last_applied_state: RaftApplyState,
+        kv_snap: EK::Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
+        allow_multi_files_snapshot: bool,
+    ) -> Result<()> {
+        // do we need to check leader here?
+        let snap = box_try!(store::do_snapshot::<EK>(
+            self.mgr.clone(),
+            &self.engine,
+            kv_snap,
+            region_id,
+            last_applied_term,
+            last_applied_state,
+            for_balance,
+            allow_multi_files_snapshot,
+        ));
+        // Only enable the fail point when the region id is equal to 1, which is
+        // the id of bootstrapped region in tests.
+        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
+        if let Err(e) = notifier.try_send(snap) {
+            info!(
+                "failed to notify snap result, leadership may have changed, ignore error";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+        // The error can be ignored as snapshot will be sent in next heartbeat in the
+        // end.
+        let _ = self
+            .router
+            .send(region_id, CasualMessage::SnapshotGenerated);
+        Ok(())
+    }
+
+    /// Handles the task of generating snapshot of the Region. It calls
+    /// `generate_snap` to do the actual work.
+    fn handle_gen(
+        &self,
+        region_id: u64,
+        last_applied_term: u64,
+        last_applied_state: RaftApplyState,
+        kv_snap: EK::Snapshot,
+        canceled: Arc<AtomicBool>,
+        notifier: SyncSender<RaftSnapshot>,
+        for_balance: bool,
+        allow_multi_files_snapshot: bool,
+    ) {
+        fail_point!("before_region_gen_snap", |_| ());
+        SNAP_COUNTER.generate.all.inc();
+        if canceled.load(Ordering::Relaxed) {
+            info!("generate snap is canceled"; "region_id" => region_id);
+            return;
+        }
+
+        let start = Instant::now();
+        let _io_type_guard = WithIoType::new(if for_balance {
+            IoType::LoadBalance
+        } else {
+            IoType::Replication
+        });
+
+        if let Err(e) = self.generate_snap(
+            region_id,
+            last_applied_term,
+            last_applied_state,
+            kv_snap,
+            notifier,
+            for_balance,
+            allow_multi_files_snapshot,
+        ) {
+            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
+            return;
+        }
+
+        SNAP_COUNTER.generate.success.inc();
+        SNAP_HISTOGRAM
+            .generate
+            .observe(start.saturating_elapsed_secs());
+    }
+}
+
 pub struct Runner<EK, R, T>
 where
     EK: KvEngine,
@@ -319,91 +411,6 @@ where
                 .max_thread_count(snap_generator_pool_size)
                 .build_future_pool(),
         }
-    }
-
-    /// Generates the snapshot of the Region.
-    fn generate_snap(
-        ctx: &SnapGenContext<EK, R>,
-        region_id: u64,
-        last_applied_term: u64,
-        last_applied_state: RaftApplyState,
-        kv_snap: EK::Snapshot,
-        notifier: SyncSender<RaftSnapshot>,
-        for_balance: bool,
-        allow_multi_files_snapshot: bool,
-    ) -> Result<()> {
-        // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot::<EK>(
-            ctx.mgr.clone(),
-            &ctx.engine,
-            kv_snap,
-            region_id,
-            last_applied_term,
-            last_applied_state,
-            for_balance,
-            allow_multi_files_snapshot,
-        ));
-        // Only enable the fail point when the region id is equal to 1, which is
-        // the id of bootstrapped region in tests.
-        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
-        if let Err(e) = notifier.try_send(snap) {
-            info!(
-                "failed to notify snap result, leadership may have changed, ignore error";
-                "region_id" => region_id,
-                "err" => %e,
-            );
-        }
-        // The error can be ignored as snapshot will be sent in next heartbeat in the
-        // end.
-        let _ = ctx.router.send(region_id, CasualMessage::SnapshotGenerated);
-        Ok(())
-    }
-
-    /// Handles the task of generating snapshot of the Region. It calls
-    /// `generate_snap` to do the actual work.
-    fn handle_gen(
-        ctx: &SnapGenContext<EK, R>,
-        region_id: u64,
-        last_applied_term: u64,
-        last_applied_state: RaftApplyState,
-        kv_snap: EK::Snapshot,
-        canceled: Arc<AtomicBool>,
-        notifier: SyncSender<RaftSnapshot>,
-        for_balance: bool,
-        allow_multi_files_snapshot: bool,
-    ) {
-        fail_point!("before_region_gen_snap", |_| ());
-        SNAP_COUNTER.generate.all.inc();
-        if canceled.load(Ordering::Relaxed) {
-            info!("generate snap is canceled"; "region_id" => region_id);
-            return;
-        }
-
-        let start = Instant::now();
-        let _io_type_guard = WithIoType::new(if for_balance {
-            IoType::LoadBalance
-        } else {
-            IoType::Replication
-        });
-
-        if let Err(e) = Self::generate_snap(
-            ctx,
-            region_id,
-            last_applied_term,
-            last_applied_state,
-            kv_snap,
-            notifier,
-            for_balance,
-            allow_multi_files_snapshot,
-        ) {
-            error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
-            return;
-        }
-
-        SNAP_COUNTER.generate.success.inc();
-        SNAP_HISTOGRAM
-            .generate
-            .observe(start.saturating_elapsed_secs());
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -812,8 +819,7 @@ where
                 };
                 self.pool.spawn(async move {
                     tikv_alloc::add_thread_memory_accessor();
-                    Self::handle_gen(
-                        &ctx,
+                    ctx.handle_gen(
                         region_id,
                         last_applied_term,
                         last_applied_state,
