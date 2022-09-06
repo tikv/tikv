@@ -19,13 +19,13 @@ use rusoto_s3::{util::AddressingStyle, *};
 use std::error::Error as StdError;
 use tokio::time::{sleep, timeout};
 
+use crate::util::{self, retry_and_count};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
 use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use tikv_util::{debug, stream::error_stream, time::Instant};
-use crate::util::{self, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
