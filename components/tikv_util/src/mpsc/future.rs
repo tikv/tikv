@@ -113,6 +113,7 @@ impl<T: Send> Stream for Receiver<T> {
             return Poll::Ready(Some(t));
         }
         queue.waker.register(cx.waker());
+        // In case the message is pushed right before registering waker.
         if let Some(t) = queue.queue.pop() {
             return Poll::Ready(Some(t));
         }
