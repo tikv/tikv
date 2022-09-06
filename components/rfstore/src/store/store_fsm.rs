@@ -314,54 +314,6 @@ pub struct StoreMeta {
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
     pub pending_msgs: RingQueue<RaftMessage>,
-
-    /// pending_new_regions is used to avoid the race between create peer by split and create peer by
-    /// raft message.
-    ///
-    /// Events:
-    ///
-    /// A1: The split log is committed.
-    ///     If the new region is found and initialized, avoid update the new region.
-    ///     Otherwise add pending create in store meta.
-    ///
-    /// A2: Handle apply result of split.
-    ///     If the new region is found, it must be initialized, then avoid create the peer.
-    ///     Otherwise, create the peer and remove pending create.
-    ///
-    /// B1: store handle raft message maybe create peer.
-    ///     If region or pending create is found, avoid create the peer.
-    ///     Otherwise create the peer with the uninitialized region.
-    ///
-    /// B2: new peer recevied snapshot.
-    ///     If prev region is uninitialized and the region in store is initialized, avoid update the store meta.
-    ///     Otherwise update the store meta.
-    ///
-    /// There are 5 possible sequences to analyze:
-    ///
-    /// - A1, A2
-    ///     After A2, the peer can be found in router.
-    ///
-    /// - A1, B1, A2
-    ///     A1 set pending create in store meta.
-    ///     B1 found the pending create in store meta, then avoid create peer.
-    ///
-    /// - B1, A1, A2, B2,
-    ///     B1 create the peer in the store meta.
-    ///     A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
-    ///     A2 replace the uninitialized region by split, removed the pending create.
-    ///     B2 found no pending create, and prev region is not initialized, meta region is initialized, avoid update the meta.
-    ///
-    /// - B1, A1, B2, A2
-    ///     B1 create the peer in the store meta.
-    ///     A1 found the peer is already exists in store meta, but region is not initialized, add pending create.
-    ///     B2 found pending create, avoid update the meta.
-    ///     A2 replace the uninitialized region by split, removed the pending create.
-    ///
-    /// - B1. B2, A1, A2
-    ///     B2 updated the meta with initialized region.
-    ///     A1 found region is initialized, do not add pending create.
-    ///     A2 do not create the initialized region on ready split.
-    pub(crate) pending_new_regions: HashMap<u64, bool>,
 }
 
 impl StoreMeta {
@@ -373,7 +325,6 @@ impl StoreMeta {
             cop_host,
             readers: Arc::new(dashmap::DashMap::new()),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
-            pending_new_regions: HashMap::default(),
         }
     }
 
@@ -571,7 +522,6 @@ impl<'a> StoreMsgHandler<'a> {
             StoreMsg::SnapshotReady(region_id) => {
                 apply_region = self.on_snapshot_ready(region_id);
             }
-            StoreMsg::PendingNewRegions(new_regions) => self.on_pending_new_regions(new_regions),
             StoreMsg::GetRegionsInRange {
                 start,
                 end,
@@ -927,14 +877,6 @@ impl<'a> StoreMsgHandler<'a> {
         if self.ctx.store_meta.regions.contains_key(&region_id) {
             return Ok(true);
         }
-        if self
-            .ctx
-            .store_meta
-            .pending_new_regions
-            .contains_key(&region_id)
-        {
-            return Ok(false);
-        }
         let target = msg.get_to_peer();
         // New created peers should know it's learner or not.
         let peer = PeerFsm::replicate(
@@ -1050,12 +992,13 @@ impl<'a> StoreMsgHandler<'a> {
                 let pending_snap = peer_fsm.peer.has_pending_snapshot();
                 let initialized = peer_fsm.peer.is_initialized();
                 let pending_remove = peer_fsm.peer.pending_remove;
-                if pending_snap || initialized || pending_remove {
+                let peer_id_changed = !region_has_peer(&new_region, peer_fsm.peer_id());
+                if pending_snap || initialized || pending_remove || peer_id_changed {
                     // We already received the snapshot, the snapshot must be newer than the newly
                     // split one, we should keep the newer peer.
                     info!(
-                        "{} peer avoid replace by split, has pending snap {}, initialized {}, pending remove {}",
-                        tag, pending_snap, initialized, pending_remove,
+                        "{} peer avoid replace by split, has pending snap {}, initialized {}, pending remove {}, peer_id changed {}",
+                        tag, pending_snap, initialized, pending_remove, peer_id_changed,
                     );
                     self.ctx
                         .global
@@ -1078,6 +1021,7 @@ impl<'a> StoreMsgHandler<'a> {
                         .engines
                         .raft
                         .remove_dependent(region_id, new_region_id);
+                    self.ctx.global.engines.kv.remove_shard(new_region_id);
                     continue;
                 }
             }
@@ -1089,10 +1033,6 @@ impl<'a> StoreMsgHandler<'a> {
                 "region_id" => new_region_id,
                 "region" => ?new_region,
             );
-            self.ctx
-                .store_meta
-                .pending_new_regions
-                .remove(&new_region_id);
 
             let mut new_peer = match PeerFsm::create(
                 self.ctx.store_id(),
@@ -1399,20 +1339,6 @@ impl<'a> StoreMsgHandler<'a> {
         peer_fsm.stop();
         self.ctx.peers.remove(&region_id);
         self.ctx.global.engines.kv.remove_shard(region_id);
-    }
-
-    fn on_pending_new_regions(&mut self, new_regions: Vec<u64>) {
-        for new_region in new_regions {
-            if let Some(region) = self.ctx.store_meta.regions.get(&new_region) {
-                if region.is_initialized() {
-                    continue;
-                }
-            }
-            self.ctx
-                .store_meta
-                .pending_new_regions
-                .insert(new_region, true);
-        }
     }
 
     fn on_snapshot_ready(&mut self, region_id: u64) -> Option<u64> {

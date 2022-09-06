@@ -1857,11 +1857,6 @@ impl Peer {
         );
 
         // TODO(x) update commit group
-
-        if meta.pending_new_regions.contains_key(&self.region_id) {
-            // The region is about to be created by split, do not update store meta.
-            return false;
-        }
         if let Some(meta_region) = meta.regions.get(&self.region_id) {
             if !is_region_initialized(&prev_region) && is_region_initialized(meta_region) {
                 // The region is updated by split, the peer is already replaced.

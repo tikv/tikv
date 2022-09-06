@@ -77,7 +77,6 @@ pub enum StoreMsg {
     GenerateEngineChangeSet(kvenginepb::ChangeSet),
     RaftMessage(kvproto::raft_serverpb::RaftMessage),
     SnapshotReady(u64),
-    PendingNewRegions(Vec<u64>),
     GetRegionsInRange {
         start: Vec<u8>,
         end: Vec<u8>,

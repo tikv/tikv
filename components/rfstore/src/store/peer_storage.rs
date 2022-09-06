@@ -23,9 +23,9 @@ use super::{util::raft_state_key, RAFT_TRUNCATED_STATE_KEY};
 use crate::{
     errors::*,
     store::{
-        get_preprocess_cmd, region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState,
-        RaftContext, RaftState, RaftTruncatedState, RegionIDVer, StoreMeta, StoreMsg,
-        KV_ENGINE_META_KEY, REGION_META_KEY_PREFIX, TERM_KEY,
+        region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState, RaftContext, RaftState,
+        RaftTruncatedState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY,
+        REGION_META_KEY_PREFIX, TERM_KEY,
     },
 };
 
@@ -397,29 +397,19 @@ impl PeerStorage {
         let mut res = None;
         let prev_raft_state = self.raft_state;
         if !ready.snapshot().is_empty() {
-            let region_id = self.get_region_id();
             let meta = store_meta.take().unwrap();
-            let pending_split = meta.pending_new_regions.contains_key(&region_id);
-            let replaced_by_split = if let Some(meta_region) = meta.regions.get(&region_id) {
-                !self.region.is_initialized() && meta_region.is_initialized()
-            } else {
-                false
-            };
             *store_meta = Some(meta);
-            if !pending_split && !replaced_by_split {
-                let prev_region = self.region().clone();
-                let change_set = self.restore_snapshot(ready.snapshot(), ctx).unwrap();
-                let region = self.region.clone();
-                res = Some(RestoreSnapResult {
-                    prev_region,
-                    region,
-                    destroyed_regions: vec![],
-                    change_set,
-                })
-            }
+            let prev_region = self.region().clone();
+            let change_set = self.restore_snapshot(ready.snapshot(), ctx).unwrap();
+            let region = self.region.clone();
+            res = Some(RestoreSnapResult {
+                prev_region,
+                region,
+                destroyed_regions: vec![],
+                change_set,
+            })
         }
         if !ready.entries().is_empty() {
-            self.handle_pending_split(ctx, ready.entries());
             self.append(ready.take_entries(), &mut ctx.raft_wb);
         }
 
@@ -435,34 +425,6 @@ impl PeerStorage {
             self.write_raft_state(ctx);
         }
         res
-    }
-
-    // TODO(x) This is a temporary solution
-    // A newly created peer can not send snapshot until initial flush, if majority of the peers
-    // are created by raft message, they will never get the snapshot, the raft group hangs forever.
-    // So we insert the pending split new region on appended instead of committed raft log,
-    // this way, we ensure majority of the peers will create the peer by split.
-    // But we still at the risk if one peer created by raft message,
-    // before initial flush, another peer is down, we are not able to replicate the snapshot.
-    // A complete solution would be that we send the snapshot with local generated initial flush
-    // result, mark some of the L0 tables are not replicated, then fix the inconsistency later.
-    pub fn handle_pending_split(&mut self, ctx: &mut RaftContext, entries: &Vec<eraftpb::Entry>) {
-        for entry in entries {
-            if let Some(cmd) = get_preprocess_cmd(entry) {
-                if cmd.has_admin_request() {
-                    let splits = cmd.get_admin_request().get_splits();
-                    let mut new_regions = vec![];
-                    for req in splits.get_requests() {
-                        if req.new_region_id != self.get_region_id() {
-                            new_regions.push(req.new_region_id);
-                        }
-                    }
-                    ctx.global
-                        .router
-                        .send_store(StoreMsg::PendingNewRegions(new_regions));
-                }
-            }
-        }
     }
 
     pub fn write_raft_state(&mut self, ctx: &mut RaftContext) {
@@ -579,15 +541,15 @@ fn init_raft_state(raft_engine: &rfengine::RfEngine, region: &metapb::Region) ->
 }
 
 fn init_apply_state(kv_engine: &kvengine::Engine, region: &metapb::Region) -> RaftApplyState {
+    if region.get_peers().is_empty() {
+        return RaftApplyState::new(0, 0);
+    }
     if let Some(shard) = kv_engine.get_shard(region.get_id()) {
         let mut term_bin = shard.get_property(TERM_KEY).unwrap();
         let applied_index = shard.get_write_sequence();
         return RaftApplyState::new(applied_index, term_bin.get_u64_le());
     }
-    if !region.get_peers().is_empty() {
-        return RaftApplyState::new(RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM);
-    }
-    RaftApplyState::new(0, 0)
+    RaftApplyState::new(RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM)
 }
 
 fn init_truncated_state(
