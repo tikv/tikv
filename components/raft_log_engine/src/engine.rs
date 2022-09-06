@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    convert::TryInto,
     fs,
     io::{Read, Result as IoResult, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -12,7 +11,7 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result,
+    RaftLogGcTask, Result, StoreRecoverState,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
@@ -475,12 +474,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_recover_state(&self) -> Result<Option<u64>> {
-        let seqno = self
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        let state = self
             .0
             .get(STORE_STATE_ID, RECOVER_STATE_KEY)
-            .map(|v| u64::from_be_bytes(v.try_into().unwrap()));
-        Ok(seqno)
+            .map(|v| serde_json::from_slice(&v).unwrap());
+        Ok(state)
     }
 }
 
@@ -628,12 +627,12 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn put_recover_state(&self, seqno: u64) -> Result<()> {
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
         batch.0.put(
             STORE_STATE_ID,
             RECOVER_STATE_KEY.to_vec(),
-            u64::to_be_bytes(seqno).to_vec(),
+            serde_json::to_vec(state).unwrap(),
         );
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())

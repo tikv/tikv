@@ -1,6 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result};
+use engine_traits::{
+    Error, RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch, Result, StoreRecoverState,
+};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
@@ -53,7 +55,7 @@ impl RaftEngineReadOnly for PanicEngine {
         panic!()
     }
 
-    fn get_recover_state(&self) -> Result<Option<u64>> {
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
         panic!()
     }
 }
@@ -150,7 +152,7 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn put_recover_state(&self, seqno: u64) -> Result<()> {
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         panic!()
     }
 }

@@ -1,12 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryInto, ops::Deref};
-
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, StoreRecoverState, SyncMutable,
+    WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
@@ -154,11 +152,11 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
-    fn get_recover_state(&self) -> Result<Option<u64>> {
-        let seqno = self
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        let state = self
             .get_value(keys::RECOVER_STATE_KEY)?
-            .map(|v| u64::from_be_bytes(v.deref().try_into().unwrap()));
-        Ok(seqno)
+            .map(|v| serde_json::from_slice(&v).unwrap());
+        Ok(state)
     }
 }
 
@@ -376,8 +374,8 @@ impl RaftEngine for RocksEngine {
         }
     }
 
-    fn put_recover_state(&self, seqno: u64) -> Result<()> {
-        self.put(keys::RECOVER_STATE_KEY, &u64::to_be_bytes(seqno))
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        self.put(keys::RECOVER_STATE_KEY, &serde_json::to_vec(state).unwrap())
     }
 }
 
