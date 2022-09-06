@@ -4980,7 +4980,7 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
-        persist_when_pre_commit: Arc<AtomicBool>,
+        skip_persist_when_pre_commit: Arc<AtomicBool>,
         delay_remove_ssts: Arc<AtomicBool>,
         last_delete_sst_count: Arc<AtomicU64>,
         last_pending_delete_sst_count: Arc<AtomicU64>,
@@ -5106,7 +5106,7 @@ mod tests {
 
     impl RegionChangeObserver for ApplyObserver {
         fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
-            self.persist_when_pre_commit.load(Ordering::SeqCst)
+            !self.skip_persist_when_pre_commit.load(Ordering::SeqCst)
         }
     }
 
@@ -5768,6 +5768,8 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
+        obs.skip_persist_when_pre_commit
+            .store(true, Ordering::SeqCst);
         let mut index_id = 1;
         let put_entry = EntryBuilder::new(index_id, 1)
             .put(b"k1", b"v1")
@@ -5787,7 +5789,8 @@ mod tests {
             apply_res.apply_state.get_applied_index(),
             state.get_applied_index() + 1
         );
-        obs.persist_when_pre_commit.store(true, Ordering::SeqCst);
+        obs.skip_persist_when_pre_commit
+            .store(false, Ordering::SeqCst);
 
         // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
