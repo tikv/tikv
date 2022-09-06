@@ -1122,8 +1122,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             last_start_key = keys::enc_end_key(region);
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
+        let ranges: Vec<_> = ranges
+            .iter()
+            .map(|(start, end)| Range::new(start, end))
+            .collect();
 
-        self.engines.kv.roughly_cleanup_ranges(&ranges)?;
+        self.engines
+            .kv
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -2715,8 +2721,32 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_some()
         {
             panic!(
+<<<<<<< HEAD
                 "key conflicts while insert region {:?} into store meta",
                 region
+=======
+                "Unsafe recovery, key conflicts while inserting region {:?} into store meta",
+                region,
+            );
+        }
+        drop(meta);
+
+        if let Err(e) = self.ctx.engines.kv.delete_ranges_cfs(
+            DeleteStrategy::DeleteByKey,
+            &[Range::new(&start_key, &end_key)],
+        ) {
+            panic!(
+                "Unsafe recovery, fail to clean up stale data while creating the new region {:?}, the error is {:?}",
+                region, e,
+            );
+        }
+        let mut kv_wb = self.ctx.engines.kv.write_batch();
+        if let Err(e) = peer_storage::write_peer_state(&mut kv_wb, &region, PeerState::Normal, None)
+        {
+            panic!(
+                "Unsafe recovery, fail to add peer state for {:?} into write batch, the error is {:?}",
+                region, e,
+>>>>>>> cbf85c11f... raftstore: optimize region destroy (#13384)
             );
         }
         let mailbox = BasicMailbox::new(sender, peer, self.ctx.router.state_cnt().clone());
