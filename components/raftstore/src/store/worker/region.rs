@@ -268,11 +268,14 @@ where
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task<EK::Snapshot>>,
-    // Ranges that should be destroyed eventually. Each range carries a sequence number. We can
-    // assume there will be no reader (snapshot) newer than that sequence number. That being
-    // said, it's possible that an old reader is still referencing some data in these ranges.
+    // Ranges that have been logically destroyed at a specific sequence number. We can
+    // assume there will be no reader (engine snapshot) newer than that sequence number. Therefore,
+    // they can be physically deleted with `DeleteFiles` when we're sure there is no older
+    // reader as well.
     // To protect this assumption, before a new snapshot is applied, the overlapping pending ranges
-    // must first be consumed (data in them fully deleted).
+    // must first be removed.
+    // The sole purpose of maintaining this list is to optimize deletion with `DeleteFiles`
+    // whenever we can. Errors while processing them can be ignored.
     pending_delete_ranges: PendingDeleteRanges,
 
     engine: EK,
