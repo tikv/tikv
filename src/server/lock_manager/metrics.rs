@@ -12,6 +12,7 @@ make_auto_flush_static_metric! {
             detect,
             clean_up_wait_for,
             clean_up,
+            update_wait_for,
         },
     }
 

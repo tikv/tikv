@@ -709,7 +709,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         start_ts: TimeStamp,
         pr: ProcessResult,
-        lock: lock_manager::Lock,
+        lock: lock_manager::LockDigest,
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
         diag_ctx: DiagnosticContext,

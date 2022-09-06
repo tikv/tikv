@@ -382,7 +382,7 @@ pub struct WriteResult {
 }
 
 pub struct WriteResultLockInfo {
-    pub lock: lock_manager::Lock,
+    pub lock: lock_manager::LockDigest,
     pub key: Vec<u8>,
     pub is_first_lock: bool,
     pub wait_timeout: Option<WaitTimeout>,
@@ -394,7 +394,7 @@ impl WriteResultLockInfo {
         is_first_lock: bool,
         wait_timeout: Option<WaitTimeout>,
     ) -> Self {
-        let lock = lock_manager::Lock {
+        let lock = lock_manager::LockDigest {
             ts: lock_info.get_lock_version().into(),
             hash: Key::from_raw(lock_info.get_key()).gen_hash(),
         };

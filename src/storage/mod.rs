@@ -3227,7 +3227,10 @@ mod tests {
     use error_code::ErrorCodeExt;
     use errors::extract_key_error;
     use futures::executor::block_on;
-    use kvproto::kvrpcpb::{AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*};
+    use kvproto::{
+        kvrpcpb::{AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*},
+        metapb::RegionEpoch,
+    };
     use tikv_util::config::ReadableSize;
     use tracker::INVALID_TRACKER_TOKEN;
     use txn_types::{Mutation, PessimisticLock, WriteType};
@@ -3245,7 +3248,10 @@ mod tests {
             kv::{
                 Error as KvError, ErrorInner as EngineErrorInner, ExpectedWrite, MockEngineBuilder,
             },
-            lock_manager::{DiagnosticContext, Lock, WaitTimeout},
+            lock_manager::{
+                DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken,
+                UpdateWaitForEvent, WaitTimeout,
+            },
             mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, LockType},
             txn::{
                 commands,
@@ -7310,20 +7316,22 @@ mod tests {
     #[allow(clippy::large_enum_variant)]
     pub enum Msg {
         WaitFor {
+            token: LockWaitToken,
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: u64,
             start_ts: TimeStamp,
-            cb: StorageCallback,
-            pr: ProcessResult,
-            lock: Lock,
+            wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
         },
-
-        WakeUp {
-            lock_ts: TimeStamp,
-            hashes: Vec<u64>,
-            commit_ts: TimeStamp,
-            is_pessimistic_txn: bool,
+        RemoveLockWait {
+            token: LockWaitToken,
+        },
+        OnKeysWakeUp {
+            events: Vec<KeyWakeUpEvent>,
         },
     }
 
@@ -7343,50 +7351,57 @@ mod tests {
             }
         }
 
-        pub fn set_has_waiter(&mut self, has_waiter: bool) {
-            self.has_waiter.store(has_waiter, Ordering::Relaxed);
-        }
+        // pub fn set_has_waiter(&mut self, has_waiter: bool) {
+        //     self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        // }
     }
 
     impl LockManager for ProxyLockMgr {
+        fn allocate_token(&self) -> LockWaitToken {
+            LockWaitToken(Some(1))
+        }
+
         fn wait_for(
             &self,
+            token: LockWaitToken,
+            region_id: u64,
+            region_epoch: RegionEpoch,
+            term: u64,
             start_ts: TimeStamp,
-            cb: StorageCallback,
-            pr: ProcessResult,
-            lock: Lock,
+            wait_info: KeyLockWaitInfo,
             is_first_lock: bool,
             timeout: Option<WaitTimeout>,
+            cancel_callback: Box<dyn FnOnce(Error) + Send>,
             diag_ctx: DiagnosticContext,
         ) {
             self.tx
                 .send(Msg::WaitFor {
+                    token,
+                    region_id,
+                    region_epoch,
+                    term,
                     start_ts,
-                    cb,
-                    pr,
-                    lock,
+                    wait_info,
                     is_first_lock,
                     timeout,
+                    cancel_callback,
                     diag_ctx,
                 })
                 .unwrap();
         }
 
-        fn wake_up(
-            &self,
-            lock_ts: TimeStamp,
-            hashes: Vec<u64>,
-            commit_ts: TimeStamp,
-            is_pessimistic_txn: bool,
-        ) {
+        fn update_wait_for(&self, _updated_items: Vec<UpdateWaitForEvent>) {}
+
+        fn on_keys_wakeup(&self, wake_up_events: Vec<KeyWakeUpEvent>) {
             self.tx
-                .send(Msg::WakeUp {
-                    lock_ts,
-                    hashes,
-                    commit_ts,
-                    is_pessimistic_txn,
+                .send(Msg::OnKeysWakeUp {
+                    events: wake_up_events,
                 })
                 .unwrap();
+        }
+
+        fn remove_lock_wait(&self, token: LockWaitToken) {
+            self.tx.send(Msg::RemoveLockWait { token }).unwrap();
         }
 
         fn has_waiter(&self) -> bool {
@@ -7463,7 +7478,7 @@ mod tests {
                 assert_eq!(start_ts, TimeStamp::new(20));
                 assert_eq!(
                     lock,
-                    Lock {
+                    LockDigest {
                         ts: 10.into(),
                         hash: Key::from_raw(&k).gen_hash(),
                     }
