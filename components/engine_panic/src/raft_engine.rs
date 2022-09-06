@@ -114,7 +114,11 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
+    fn need_manual_purge(&self) -> bool {
+        panic!()
+    }
+
+    fn manual_purge(&self) -> Result<Vec<u64>> {
         panic!()
     }
 
