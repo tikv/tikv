@@ -316,9 +316,10 @@ where
         allow_multi_files_snapshot: bool,
     ) {
         fail_point!("before_region_gen_snap", |_| ());
-        SNAP_COUNTER.generate.all.inc();
+        SNAP_COUNTER.generate.start.inc();
         if canceled.load(Ordering::Relaxed) {
             info!("generate snap is canceled"; "region_id" => region_id);
+            SNAP_COUNTER.generate.abort.inc();
             return;
         }
 
@@ -339,6 +340,7 @@ where
             allow_multi_files_snapshot,
         ) {
             error!(%e; "failed to generate snap!!!"; "region_id" => region_id,);
+            SNAP_COUNTER.generate.fail.inc();
             return;
         }
 
@@ -455,7 +457,7 @@ where
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
-        SNAP_COUNTER.apply.all.inc();
+        SNAP_COUNTER.apply.start.inc();
 
         let start = Instant::now();
 
@@ -805,7 +807,7 @@ where
                         allow_multi_files_snapshot = !is_tiflash;
                     }
                 }
-
+                SNAP_COUNTER.generate.all.inc();
                 self.pool.spawn(async move {
                     tikv_alloc::add_thread_memory_accessor();
                     ctx.handle_gen(
@@ -826,6 +828,7 @@ where
                 if self.ctx.coprocessor_host.should_pre_apply_snapshot() {
                     let _ = self.ctx.pre_apply_snapshot(&task);
                 }
+                SNAP_COUNTER.apply.all.inc();
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
