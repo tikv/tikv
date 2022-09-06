@@ -123,7 +123,7 @@ pub struct SnapKey {
     pub term: u64,
     pub idx: u64,
     pub start: u64,
-    pub generate_sec: u64,
+    pub generate_duration_sec: u64,
 }
 
 impl SnapKey {
@@ -134,7 +134,7 @@ impl SnapKey {
             term,
             idx,
             start: 0,
-            generate_sec: 0,
+            generate_duration_sec: 0,
         }
     }
 
@@ -151,7 +151,7 @@ impl SnapKey {
         }
         let mut key = SnapKey::from_region_snap(snap_data.get_region().get_id(), snap);
         key.start = snap_data.get_meta().get_start();
-        key.generate_sec = snap_data.get_meta().get_generate_sec();
+        key.generate_duration_sec = snap_data.get_meta().get_generate_duration_sec();
         Ok(key)
     }
 }
@@ -1051,7 +1051,7 @@ impl Snapshot {
         snap_data.set_version(SNAPSHOT_VERSION);
         let meta = self.meta_file.meta.as_mut().unwrap();
         meta.set_start(start.into_inner());
-        meta.set_generate_sec(t.saturating_elapsed().as_secs());
+        meta.set_generate_duration_sec(t.saturating_elapsed().as_secs());
         snap_data.set_meta(meta.clone());
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.saturating_elapsed()) as f64);
@@ -1656,10 +1656,10 @@ impl SnapManager {
         info!(
             "put snapshot stat";
             "region_id"=>snap.region_id,
-            "total_size"=>snap.transport_size,
-            "total_duration_sec"=>snap.total_ms,
-            "generate_duration_sec"=>snap.generate_ms,
-            "send_duration_sec"=>snap.send_ms,
+            "total_size"=>snap.get_transport_size(),
+            "total_duration_sec"=>snap.get_total_duration_sec(),
+            "generate_duration_sec"=>snap.get_generate_duration_sec(),
+            "send_duration_sec"=>snap.get_generate_duration_sec(),
         );
 
         // println!(

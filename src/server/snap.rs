@@ -188,21 +188,16 @@ pub fn send_snap(
             Ok(_) => {
                 fail_point!("snapshot_delete_after_send");
                 mgr.delete_snapshot(&key, &chunks.snap, true);
+                let mut stat = SnapshotStat::default();
+                stat.set_region_id(key.region_id);
+                stat.set_transport_size(total_size);
+                stat.set_generate_duration_sec(key.generate_duration_sec);
+                stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
+                stat.set_total_duration_sec(UnixSecs::now().into_inner() - key.start);
+                mgr.put_stat(stat);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
-                let stat = {
-                    let mut s = SnapshotStat::default();
-                    s.set_region_id(key.region_id);
-                    s.set_transport_size(total_size);
-                    s.set_send_ms(timer.saturating_elapsed().as_secs());
-                    s.set_total_ms(UnixSecs::now().into_inner() - key.start);
-                    s.set_generate_ms(key.generate_sec);
-                    s
-                };
-
-                mgr.put_stat(stat);
-
                 Ok(SendStat {
                     key,
                     total_size,
