@@ -134,7 +134,6 @@ impl KvEngineFactory {
         tablet_path: &Path,
         region_id: u64,
         suffix: u64,
-        tablet_factory: Option<KvEngineFactoryV2>,
     ) -> Result<RocksEngine> {
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
@@ -155,7 +154,6 @@ impl KvEngineFactory {
             self.inner.api_version,
             region_id,
             suffix,
-            tablet_factory,
         );
 
         let kv_engine = engine_rocks::util::new_engine_opt(
@@ -227,7 +225,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
     #[inline]
     fn create_shared_db(&self) -> Result<RocksEngine> {
         let root_path = self.kv_engine_path();
-        let tablet = self.create_tablet(&root_path, 0, 0, None)?;
+        let tablet = self.create_tablet(&root_path, 0, 0)?;
         let mut root_db = self.inner.root_db.lock().unwrap();
         root_db.replace(tablet.clone());
         Ok(tablet)

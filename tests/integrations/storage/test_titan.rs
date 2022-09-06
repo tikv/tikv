@@ -160,9 +160,9 @@ fn test_delete_files_in_range_for_titan() {
     cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
     cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
     let kv_db_opts = cfg.rocksdb.build_opt();
-    let kv_cfs_opts =
-        cfg.rocksdb
-            .build_cf_opts(&cache, None, cfg.storage.api_version(), 0, 0, None);
+    let kv_cfs_opts = cfg
+        .rocksdb
+        .build_cf_opts(&cache, None, cfg.storage.api_version(), 0, 0);
 
     let raft_path = path.path().join(Path::new("titan"));
     let engines = Engines::new(

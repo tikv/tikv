@@ -440,7 +440,12 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
     let gc_worker = sim.get_gc_worker(store_id);
     gc_worker
         .start_auto_gc(
+<<<<<<< HEAD
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
+=======
+            &kv_engine,
+            AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1, None),
+>>>>>>> d05ffa40a (*: address comments and use clean interfaces)
             Arc::new(AtomicU64::new(0)),
         )
         .unwrap();

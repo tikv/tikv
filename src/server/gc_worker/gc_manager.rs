@@ -10,7 +10,8 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::KvEngine;
+use engine_rocks::RocksEngine;
+use engine_traits::{KvEngine, TabletFactory};
 use kvproto::metapb::Region;
 use pd_client::FeatureGate;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -51,11 +52,19 @@ pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
     /// This will be called when a round of GC has finished and goes back to
     /// idle state. This field is for test purpose.
     pub post_a_round_of_gc: Option<Box<dyn Fn() + Send>>,
+
+    /// Used to save tablet factory of TiKV instance
+    pub tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a new config.
-    pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
+    pub fn new(
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+        tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+    ) -> Self {
         Self {
             safe_point_provider,
             region_info_provider,
@@ -63,6 +72,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
             poll_safe_point_interval: Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
             always_check_safe_point: false,
             post_a_round_of_gc: None,
+            tablet_factory,
         }
     }
 
@@ -80,6 +90,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
             poll_safe_point_interval: Duration::from_millis(100),
             always_check_safe_point: true,
             post_a_round_of_gc: None,
+            tablet_factory: None,
         }
     }
 }
@@ -723,6 +734,7 @@ mod tests {
                 },
                 MockRegionInfoProvider { regions },
                 1,
+                None,
             );
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;

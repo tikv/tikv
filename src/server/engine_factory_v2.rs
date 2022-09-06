@@ -132,9 +132,7 @@ impl TabletFactory<RocksEngine> for KvEngineFactoryV2 {
             ));
         }
 
-        let tablet = self
-            .inner
-            .create_tablet(path, id, suffix, Some((*self).clone()))?;
+        let tablet = self.inner.create_tablet(path, id, suffix)?;
         debug!("open tablet"; "key" => ?(id, suffix));
         self.inner.on_tablet_created(id, suffix);
         Ok(tablet)

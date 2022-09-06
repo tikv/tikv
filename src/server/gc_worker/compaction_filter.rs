@@ -35,12 +35,10 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    server::{
-        engine_factory_v2::KvEngineFactoryV2,
-        gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
-    },
+    server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
+// use crate::storage::txn::gc;
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
@@ -64,6 +62,7 @@ pub struct GcContext {
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
+    pub(crate) tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -155,6 +154,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     );
 }
 
@@ -170,6 +170,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
+        _tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -184,6 +185,7 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -197,37 +199,34 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
             region_info_provider,
             #[cfg(any(test, feature = "failpoints"))]
             callbacks_on_drop: vec![],
+            tablet_factory,
         });
+    }
+}
+
+pub trait RocksDBCompactionFilterFactory: CompactionFilterFactory {
+    fn get_rocksdb(&self, region_id: u64, suffix: u64) -> engine_traits::Result<RocksEngine> {
+        let gc_context_option = GC_CONTEXT.lock().unwrap();
+        let gc_context = match *gc_context_option {
+            Some(ref ctx) => ctx,
+            None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
+        };
+
+        match &gc_context.tablet_factory {
+            Some(factory) => factory.open_tablet(region_id, Some(suffix), OpenOptions::default()),
+            None => return Ok(gc_context.db.clone()),
+        }
     }
 }
 
 pub struct WriteCompactionFilterFactory {
     region_id: u64,
     suffix: u64,
-    tablet_factory: Option<KvEngineFactoryV2>,
 }
 
 impl WriteCompactionFilterFactory {
-    pub fn new(region_id: u64, suffix: u64, tablet_factory: Option<KvEngineFactoryV2>) -> Self {
-        Self {
-            region_id,
-            suffix,
-            tablet_factory,
-        }
-    }
-
-    pub fn get_rocksdb(&self) -> Option<RocksEngine> {
-        return match &self.tablet_factory {
-            Some(factory) => Some(
-                factory
-                    .open_tablet(self.region_id, Some(self.suffix), OpenOptions::default())
-                    .unwrap(),
-            ),
-            None => {
-                let gc_context_option = GC_CONTEXT.lock().unwrap();
-                (*gc_context_option).as_ref().map(|ctx| ctx.db.clone())
-            }
-        };
+    pub fn new(region_id: u64, suffix: u64) -> Self {
+        Self { region_id, suffix }
     }
 }
 
@@ -236,11 +235,9 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let db = match self.get_rocksdb() {
-            Some(rocksdb) => rocksdb,
-            None => {
-                return std::ptr::null_mut();
-            }
+        let db = match self.get_rocksdb(self.region_id, self.suffix) {
+            Ok(rocksdb) => rocksdb,
+            Err(_) => return std::ptr::null_mut(),
         };
 
         let gc_context_option = GC_CONTEXT.lock().unwrap();
@@ -314,6 +311,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
+
+impl RocksDBCompactionFilterFactory for WriteCompactionFilterFactory {}
 
 struct WriteCompactionFilter {
     safe_point: u64,
@@ -868,6 +867,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
+                tablet_factory: None,
             });
         }
 
