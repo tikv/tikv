@@ -45,9 +45,17 @@ pub trait Notifier: Send {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SequenceNumber {
-    pub number: u64,
-    pub version: u64,
+    number: u64,
+    // Version is actually the counter of memtables flushed. Once the version increased, indicates
+    // a memtable was flushed, then relations of a region buffered in memory could be merged into
+    // one and persisted into raftdb.
+    version: u64,
+    // start_counter is an identity of a write. It's used to check if all seqno of writes were
+    // received in the receiving end.
     start_counter: u64,
+    // end_counter is the value of sequence number counter after a write. It's used for finding
+    // corresponding seqno of a counter. The corresponding seqno may be smaller or equal to the
+    // lastest seqno at the time of end_counter generated.
     end_counter: u64,
 }
 
@@ -72,8 +80,19 @@ impl SequenceNumber {
             cmp::Ordering::Greater => left,
         }
     }
+
+    pub fn get_number(&self) -> u64 {
+        self.number
+    }
+
+    pub fn get_version(&self) -> u64 {
+        self.version
+    }
 }
 
+// Receive all seqno and their counters, check the last committed seqno (a seqno
+// is considered committed if all seqno before it was received), and return the
+// largest sequence number received.
 #[derive(Default)]
 pub struct SequenceNumberWindow {
     // The sequence number doesn't be received in order, we need a buffer to
