@@ -1424,7 +1424,7 @@ impl<T: Simulator> Cluster<T> {
         let (tx, rx) = oneshot::channel();
 
         router
-            .significant_send(region_id, SignificantMsg::PrepareFlashback(u64::MAX, tx))
+            .significant_send(region_id, SignificantMsg::PrepareFlashback(0, tx))
             .unwrap();
 
         rx.await.unwrap().unwrap();

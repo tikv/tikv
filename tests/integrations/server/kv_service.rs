@@ -599,7 +599,9 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
 #[test]
 fn test_mvcc_flashback() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.resolved_ts.enable = true;
+    });
     let mut ts = 0;
     let k = b"key".to_vec();
     for i in 0..10 {
@@ -679,7 +681,9 @@ fn test_mvcc_flashback() {
 #[test]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_block_rw() {
-    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.resolved_ts.enable = true;
+    });
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
@@ -728,7 +732,9 @@ fn test_mvcc_flashback_block_rw() {
 #[test]
 #[cfg(feature = "failpoints")]
 fn test_mvcc_flashback_block_scheduling() {
-    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let (mut cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.resolved_ts.enable = true;
+    });
     fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
     // Flashback
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();

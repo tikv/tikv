@@ -1011,20 +1011,18 @@ where
         // Check if the flashback version is greater than the region safe ts, i.e, the
         // resolved ts.
         let meta = self.ctx.store_meta.lock().unwrap();
-        let safe_ts = meta
-            .region_read_progress
-            .get_safe_ts(&region_id)
-            .unwrap_or(0);
-        if version > safe_ts {
-            ch.send(Err(Error::Other(
-                format!(
-                    "region {} safe ts {} is smaller the the flashback version {}",
-                    region_id, safe_ts, version
-                )
-                .into(),
-            )))
-            .unwrap();
-            return;
+        if let Some(safe_ts) = meta.region_read_progress.get_safe_ts(&region_id) {
+            if version > safe_ts {
+                ch.send(Err(Error::Other(
+                    format!(
+                        "region {} safe ts {} is smaller the the flashback version {}",
+                        region_id, safe_ts, version
+                    )
+                    .into(),
+                )))
+                .unwrap();
+                return;
+            }
         }
         self.fsm.peer.flashback_state = Some(FlashbackState::new(ch));
         // Let the leader lease to None to ensure that local reads are not executed.
