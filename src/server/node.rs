@@ -123,8 +123,14 @@ where
         if store.get_address() == "" {
             if cfg.advertise_addr.is_empty() {
                 store.set_address(cfg.addr.clone());
+                if store.get_peer_address() == "" {
+                    store.set_peer_address(cfg.addr.clone());
+                }
             } else {
-                store.set_address(cfg.advertise_addr.clone())
+                store.set_address(cfg.advertise_addr.clone());
+                if store.get_peer_address() == "" {
+                    store.set_peer_address(cfg.advertise_addr.clone());
+                }
             }
         }
         if store.get_status_address() == "" {

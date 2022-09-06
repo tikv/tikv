@@ -113,7 +113,7 @@ pub mod kv {
 
     #[derive(Clone)]
     pub struct TestTabletFactory {
-        root_path: String,
+        root_path: PathBuf,
         db_opt: DbOptions,
         cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         root_db: Arc<Mutex<Option<KvTestEngine>>>,
@@ -121,12 +121,12 @@ pub mod kv {
 
     impl TestTabletFactory {
         pub fn new(
-            root_path: &str,
+            root_path: &Path,
             db_opt: DbOptions,
             cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         ) -> Self {
             Self {
-                root_path: root_path.to_string(),
+                root_path: root_path.to_path_buf(),
                 db_opt,
                 cf_opts,
                 root_db: Arc::new(Mutex::default()),
@@ -230,7 +230,7 @@ pub mod kv {
 
     impl TestTabletFactoryV2 {
         pub fn new(
-            root_path: &str,
+            root_path: &Path,
             db_opt: DbOptions,
             cf_opts: Vec<(&'static str, KvTestCfOptions)>,
         ) -> Self {
@@ -342,12 +342,14 @@ pub mod kv {
 
         #[inline]
         fn tablets_path(&self) -> PathBuf {
-            Path::new(&self.inner.root_path).join("tablets")
+            self.inner.root_path.join("tablets")
         }
 
         #[inline]
         fn tablet_path(&self, id: u64, suffix: u64) -> PathBuf {
-            Path::new(&self.inner.root_path).join(format!("tablets/{}_{}", id, suffix))
+            self.inner
+                .root_path
+                .join(format!("tablets/{}_{}", id, suffix))
         }
 
         #[inline]

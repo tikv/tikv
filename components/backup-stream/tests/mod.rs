@@ -44,8 +44,12 @@ use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
 fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
+    mutation_op(k, v, Op::Put)
+}
+
+fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
     let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
+    mutation.set_op(op);
     mutation.key = k;
     mutation.value = v;
     mutation
@@ -158,7 +162,6 @@ impl SuiteBuilder {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, use_v3);
         }
-        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
         // start or make slash_etc support multi-version, then we can get rid of this
@@ -318,6 +321,19 @@ impl Suite {
         inserted
     }
 
+    fn commit_keys(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let mut region_keys = HashMap::<u64, Vec<Vec<u8>>>::new();
+        for k in keys {
+            let enc_key = Key::from_raw(&k).into_encoded();
+            let region = self.cluster.get_region_id(&enc_key);
+            region_keys.entry(region).or_default().push(k);
+        }
+
+        for (region, keys) in region_keys {
+            self.must_kv_commit(region, keys, start_ts, commit_ts);
+        }
+    }
+
     fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let enc_key = Key::from_raw(&key).into_encoded();
         let region = self.cluster.get_region_id(&enc_key);
@@ -407,6 +423,36 @@ impl Suite {
 
 // Copy & Paste from cdc::tests::TestSuite, maybe make it a mixin?
 impl Suite {
+    pub fn tso(&self) -> TimeStamp {
+        run_async_test(self.cluster.pd_client.get_tso()).unwrap()
+    }
+
+    pub fn must_kv_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        ts: TimeStamp,
+        pk: Vec<u8>,
+    ) {
+        let mut lock_req = PessimisticLockRequest::new();
+        lock_req.set_context(self.get_context(region_id));
+        let mut mutations = vec![];
+        for key in keys {
+            mutations.push(mutation_op(key, vec![], Op::PessimisticLock));
+        }
+        lock_req.set_mutations(mutations.into());
+        lock_req.primary_lock = pk;
+        lock_req.start_version = ts.into_inner();
+        lock_req.lock_ttl = ts.into_inner() + 1;
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_lock(&lock_req)
+            .unwrap();
+
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_prewrite(
         &mut self,
         region_id: u64,
@@ -598,16 +644,19 @@ fn run_async_test<T>(test: impl Future<Output = T>) -> T {
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use backup_stream::{
         errors::Error, metadata::MetadataClient, router::TaskSelector, GetCheckpointResult,
         RegionCheckpointOperation, RegionSet, Task,
     };
+    use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
-    use txn_types::TimeStamp;
+    use txn_types::{Key, TimeStamp};
 
-    use crate::{make_record_key, make_split_key_at_record, run_async_test, SuiteBuilder};
+    use crate::{
+        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+    };
 
     #[test]
     fn basic() {
@@ -645,6 +694,58 @@ mod test {
             suite.check_for_write_records(
                 suite.flushed_files.path(),
                 round1.union(&round2).map(Vec::as_slice),
+            );
+        });
+        suite.cluster.shutdown();
+    }
+
+    /// This test tests whether we can handle some weird transactions and their
+    /// race with initial scanning.
+    /// Generally, those transactions:
+    /// - Has N mutations, which's values are all short enough to be inlined in
+    ///   the `Write` CF. (N > 1024)
+    /// - Commit the mutation set M first. (for all m in M: Nth-Of-Key(m) >
+    ///   1024)
+    /// ```text
+    /// |--...-----^------*---*-*--*-*-*-> (The line is the Key Space - from "" to inf)
+    ///            +The 1024th key  (* = committed mutation)
+    /// ```
+    /// - Before committing remaining mutations, PiTR triggered initial
+    ///   scanning.
+    /// - The remaining mutations are committed before the instant when initial
+    ///   scanning get the snapshot.
+    #[test]
+    fn with_split_txn() {
+        let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
+        run_async_test(async {
+            let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
+            suite.must_kv_prewrite(
+                1,
+                keys.clone()
+                    .into_iter()
+                    .map(|k| mutation(k, b"hello, world".to_vec()))
+                    .collect(),
+                make_record_key(1, 1913),
+                start_ts,
+            );
+            let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
+            suite.must_register_task(1, "test_split_txn");
+            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
+            suite.force_flush_files("test_split_txn");
+            suite.wait_for_flush();
+            let keys_encoded = keys
+                .iter()
+                .map(|v| {
+                    Key::from_raw(v.as_slice())
+                        .append_ts(commit_ts)
+                        .into_encoded()
+                })
+                .collect::<Vec<_>>();
+            suite.check_for_write_records(
+                suite.flushed_files.path(),
+                keys_encoded.iter().map(Vec::as_slice),
             );
         });
         suite.cluster.shutdown();
@@ -875,6 +976,38 @@ mod test {
     }
 
     #[test]
+    fn upload_checkpoint_exits_in_time() {
+        defer! {{
+            std::env::remove_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN");
+        }}
+        let suite = SuiteBuilder::new_named("upload_checkpoint_exits_in_time")
+            .nodes(1)
+            .build();
+        std::env::set_var("LOG_BACKUP_UGC_SLEEP_AND_RETURN", "meow");
+        let (_, victim) = suite.endpoints.iter().next().unwrap();
+        let sched = victim.scheduler();
+        sched
+            .schedule(Task::UpdateGlobalCheckpoint("greenwoods".to_owned()))
+            .unwrap();
+        let start = Instant::now();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        sched
+            .schedule(Task::Sync(
+                Box::new(move || {
+                    tx.send(Instant::now()).unwrap();
+                }),
+                Box::new(|_| true),
+            ))
+            .unwrap();
+        let end = run_async_test(rx).unwrap();
+        assert!(
+            end - start < Duration::from_secs(10),
+            "take = {:?}",
+            end - start
+        );
+    }
+
+    #[test]
     fn failed_during_refresh_region() {
         defer! {
             fail::remove("get_last_checkpoint_of")
@@ -919,6 +1052,43 @@ mod test {
             }),
             "{:?}",
             regions
+        );
+    }
+
+    /// This test case tests whether we correctly handle the pessimistic locks.
+    #[test]
+    fn pessimistic_lock() {
+        let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 42)],
+            suite.tso(),
+            make_record_key(1, 42),
+        );
+        suite.must_register_task(1, "pessimistic_lock");
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 43)],
+            suite.tso(),
+            make_record_key(1, 43),
+        );
+        let expected_tso = suite.tso().into_inner();
+        suite.force_flush_files("pessimistic_lock");
+        suite.wait_for_flush();
+        std::thread::sleep(Duration::from_secs(1));
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("pessimistic_lock"),
+        )
+        .unwrap();
+        // The checkpoint should be advanced: because PiTR is "Read" operation,
+        // which shouldn't be blocked by pessimistic locks.
+        assert!(
+            checkpoint > expected_tso,
+            "expected = {}; checkpoint = {}",
+            expected_tso,
+            checkpoint
         );
     }
 }

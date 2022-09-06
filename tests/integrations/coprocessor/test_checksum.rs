@@ -2,6 +2,7 @@
 
 use std::u64;
 
+use futures::executor::block_on;
 use kvproto::{
     coprocessor::{KeyRange, Request},
     kvrpcpb::{Context, IsolationLevel},
@@ -46,7 +47,7 @@ fn test_checksum() {
     ];
 
     let product = ProductTable::new();
-    let (store, endpoint) = init_data_with_commit(&product, &data, true);
+    let (store, endpoint, _) = init_data_with_commit(&product, &data, true);
 
     for column in &[&product["id"], &product["name"], &product["count"]] {
         assert!(column.index >= 0);
@@ -88,7 +89,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
 
     let mut checksum = 0;
     let digest = crc64fast::Digest::new();
-    while let Some((k, v)) = scanner.next().unwrap() {
+    while let Some((k, v)) = block_on(scanner.next()).unwrap() {
         let mut digest = digest.clone();
         digest.write(&k);
         digest.write(&v);

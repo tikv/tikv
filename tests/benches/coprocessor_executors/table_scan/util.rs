@@ -3,6 +3,7 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use criterion::black_box;
+use futures::executor::block_on;
 use kvproto::coprocessor::KeyRange;
 use test_coprocessor::*;
 use tidb_query_datatype::expr::EvalConfig;
@@ -48,7 +49,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
-        executor.next_batch(1);
+        block_on(executor.next_batch(1));
         Box::new(executor) as Box<dyn BatchExecutor<StorageStats = Statistics>>
     }
 }

@@ -10,10 +10,7 @@ use std::{
     },
     mem,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -24,7 +21,7 @@ use batch_system::{
 };
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::channel::{unbounded, Sender, TryRecvError, TrySendError};
+use crossbeam::channel::{unbounded, TryRecvError, TrySendError};
 use engine_traits::{
     CompactedEvent, DeleteStrategy, Engines, KvEngine, Mutable, PerfContextKind, RaftEngine,
     RaftLogBatch, Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -71,7 +68,10 @@ use crate::{
         RegionChangeReason,
     },
     store::{
-        async_io::write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+        async_io::{
+            write::{StoreWriters, Worker as WriteWorker, WriteMsg},
+            write_router::WriteSenders,
+        },
         config::Config,
         fsm::{
             create_apply_batch_system,
@@ -82,7 +82,7 @@ use crate::{
             ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
             ApplyTaskRes,
         },
-        local_metrics::{RaftMetrics, RaftReadyMetrics},
+        local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
         peer_storage,
@@ -518,9 +518,8 @@ where
     /// Disk usage for other stores. The store itself is not included.
     /// Only contains items which is not `DiskUsage::Normal`.
     pub store_disk_usages: HashMap<u64, DiskUsage>,
-    pub write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
+    pub write_senders: WriteSenders<EK, ER>,
     pub sync_write_worker: Option<WriteWorker<EK, ER, RaftRouter<EK, ER>, T>>,
-    pub io_reschedule_concurrent_count: Arc<AtomicUsize>,
     pub pending_latency_inspect: Vec<util::LatencyInspector>,
 }
 
@@ -599,7 +598,7 @@ where
             "msg_type" => ?msg_type,
         );
 
-        self.raft_metrics.message_dropped.stale_msg += 1;
+        self.raft_metrics.message_dropped.stale_msg.inc();
 
         let mut gc_msg = RaftMessage::default();
         gc_msg.set_region_id(region_id);
@@ -766,7 +765,6 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     tag: String,
     store_msg_buf: Vec<StoreMsg<EK>>,
     peer_msg_buf: Vec<PeerMsg<EK>>,
-    previous_metrics: RaftReadyMetrics,
     timer: TiInstant,
     poll_ctx: PollContext<EK, ER, T>,
     messages_per_tick: usize,
@@ -774,12 +772,17 @@ pub struct RaftPoller<EK: KvEngine + 'static, ER: RaftEngine + 'static, T: 'stat
     trace_event: TraceEvent,
     last_flush_time: TiInstant,
     need_flush_events: bool,
+
+    // previous metrics count
+    previous_append: u64,
+    previous_message: u64,
+    previous_snapshot: u64,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T: Transport> RaftPoller<EK, ER, T> {
     fn flush_events(&mut self) {
         self.flush_ticks();
-        self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.raft_metrics.maybe_flush();
         self.poll_ctx.store_stat.flush();
 
         MEMTRACE_PEERS.trace(mem::take(&mut self.trace_event));
@@ -801,7 +804,9 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         for<'a> F: FnOnce(&'a BatchSystemConfig),
     {
         fail_point!("begin_raft_poller");
-        self.previous_metrics = self.poll_ctx.raft_metrics.ready.clone();
+        self.previous_append = self.poll_ctx.raft_metrics.ready.append.get();
+        self.previous_message = self.poll_ctx.raft_metrics.ready.message.get();
+        self.previous_snapshot = self.poll_ctx.raft_metrics.ready.snapshot.get();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.ready_count = 0;
         self.poll_ctx.has_ready = false;
@@ -1011,17 +1016,20 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     .raft_metrics
                     .ready
                     .append
-                    .saturating_sub(self.previous_metrics.append),
+                    .get()
+                    .saturating_sub(self.previous_append),
                 self.poll_ctx
                     .raft_metrics
                     .ready
                     .message
-                    .saturating_sub(self.previous_metrics.message),
+                    .get()
+                    .saturating_sub(self.previous_message),
                 self.poll_ctx
                     .raft_metrics
                     .ready
                     .snapshot
-                    .saturating_sub(self.previous_metrics.snapshot),
+                    .get()
+                    .saturating_sub(self.previous_snapshot),
             );
         }
 
@@ -1072,8 +1080,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub engines: Engines<EK, ER>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
     feature_gate: FeatureGate,
-    write_senders: Vec<Sender<WriteMsg<EK, ER>>>,
-    io_reschedule_concurrent_count: Arc<AtomicUsize>,
+    write_senders: WriteSenders<EK, ER>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1313,7 +1320,6 @@ where
             store_disk_usages: Default::default(),
             write_senders: self.write_senders.clone(),
             sync_write_worker,
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
             pending_latency_inspect: vec![],
         };
         ctx.update_ticks_timeout();
@@ -1322,7 +1328,6 @@ where
             tag: tag.clone(),
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
-            previous_metrics: ctx.raft_metrics.ready.clone(),
             timer: TiInstant::now(),
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
@@ -1330,6 +1335,9 @@ where
             trace_event: TraceEvent::default(),
             last_flush_time: TiInstant::now(),
             need_flush_events: false,
+            previous_append: 0,
+            previous_message: 0,
+            previous_snapshot: 0,
         }
     }
 }
@@ -1364,7 +1372,6 @@ where
             global_replication_state: self.global_replication_state.clone(),
             feature_gate: self.feature_gate.clone(),
             write_senders: self.write_senders.clone(),
-            io_reschedule_concurrent_count: self.io_reschedule_concurrent_count.clone(),
         }
     }
 }
@@ -1378,9 +1385,9 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
     region_worker: Worker,
-    // Used for calling `purge_expired_files`, which can be time-consuming for certain
-    // engine implementations.
-    purge_worker: Worker,
+    // Used for calling `manual_purge` if the specific engine implementation requires it
+    // (`need_manual_purge`).
+    purge_worker: Option<Worker>,
 
     raftlog_fetch_worker: Worker,
 
@@ -1445,12 +1452,36 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .registry
             .register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
 
+        let purge_worker = if engines.raft.need_manual_purge() {
+            let worker = Worker::new("purge-worker");
+            let raft_clone = engines.raft.clone();
+            let router_clone = self.router();
+            worker.spawn_interval_task(cfg.value().raft_engine_purge_interval.0, move || {
+                match raft_clone.manual_purge() {
+                    Ok(regions) => {
+                        for region_id in regions {
+                            let _ = router_clone.send(
+                                region_id,
+                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("purge expired files"; "err" => %e);
+                    }
+                };
+            });
+            Some(worker)
+        } else {
+            None
+        };
+
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
-            purge_worker: Worker::new("purge-worker"),
+            purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
@@ -1477,26 +1508,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-        let router_clone = self.router();
-        let engines_clone = engines.clone();
-        workers.purge_worker.spawn_interval_task(
-            cfg.value().raft_engine_purge_interval.0,
-            move || {
-                match engines_clone.raft.purge_expired_files() {
-                    Ok(regions) => {
-                        for region_id in regions {
-                            let _ = router_clone.send(
-                                region_id,
-                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!("purge expired files"; "err" => %e);
-                    }
-                };
-            },
-        );
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1558,8 +1569,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             store_meta,
             pending_create_peers: Arc::new(Mutex::new(HashMap::default())),
             feature_gate: pd_client.feature_gate().clone(),
-            write_senders: self.store_writers.senders().clone(),
-            io_reschedule_concurrent_count: Arc::new(AtomicUsize::new(0)),
+            write_senders: self.store_writers.senders(),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1705,7 +1715,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         workers.cleanup_worker.stop();
         workers.region_worker.stop();
         workers.background_worker.stop();
-        workers.purge_worker.stop();
+        if let Some(w) = workers.purge_worker {
+            w.stop();
+        }
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
     }
@@ -1762,7 +1774,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
             if !util::is_first_message(msg.get_message()) {
-                self.ctx.raft_metrics.message_dropped.region_nonexistent += 1;
+                self.ctx
+                    .raft_metrics
+                    .message_dropped
+                    .region_nonexistent
+                    .inc();
                 return Err(box_err!(
                     "[region {}] region not exist but not tombstone: {:?}",
                     region_id,
@@ -1815,7 +1831,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
-            self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .region_tombstone_peer
+                .inc();
             info!(
                 "tombstone peer receives a stale message";
                 "region_id" => region_id,
@@ -1864,7 +1884,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             util::find_peer(region, self.ctx.store_id()).map(|r| r.get_id())
         {
             if to_peer_id <= local_peer_id {
-                self.ctx.raft_metrics.message_dropped.region_tombstone_peer += 1;
+                self.ctx
+                    .raft_metrics
+                    .message_dropped
+                    .region_tombstone_peer
+                    .inc();
                 info!(
                     "tombstone peer receives a stale message, local_peer_id >= to_peer_id in msg";
                     "region_id" => region_id,
@@ -1912,7 +1936,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "to_store_id" => msg.get_to_peer().get_store_id(),
                 "region_id" => region_id,
             );
-            self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_store_id
+                .inc();
             return Ok(());
         }
 
@@ -1921,7 +1949,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "missing epoch in raft message, ignore it";
                 "region_id" => region_id,
             );
-            self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
+            self.ctx
+                .raft_metrics
+                .message_dropped
+                .mismatch_region_epoch
+                .inc();
             return Ok(());
         }
         if msg.get_is_tombstone() || msg.has_merge_target() {
@@ -1991,7 +2023,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "region_id" => region_id,
                 "msg_type" => ?msg_type,
             );
-            self.ctx.raft_metrics.message_dropped.stale_msg += 1;
+            self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return Ok(false);
         }
 
@@ -2134,7 +2166,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
 
         if is_overlapped {
-            self.ctx.raft_metrics.message_dropped.region_overlap += 1;
+            self.ctx.raft_metrics.message_dropped.region_overlap.inc();
             return Ok(false);
         }
 

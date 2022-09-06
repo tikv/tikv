@@ -320,6 +320,7 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
+    use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
 
     use self::{deadlock::tests::*, metrics::*, waiter_manager::tests::*};
     use super::*;
@@ -361,10 +362,11 @@ mod tests {
         lock_mgr
     }
 
-    fn diag_ctx(key: &[u8], resource_group_tag: &[u8]) -> DiagnosticContext {
+    fn diag_ctx(key: &[u8], resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
         DiagnosticContext {
             key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
+            tracker,
         }
     }
 
@@ -428,7 +430,7 @@ mod tests {
             waiter1.lock,
             false,
             Some(WaitTimeout::Default),
-            diag_ctx(b"k1", b"tag1"),
+            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -439,7 +441,7 @@ mod tests {
             waiter2.lock,
             false,
             Some(WaitTimeout::Default),
-            diag_ctx(b"k2", b"tag2"),
+            diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(

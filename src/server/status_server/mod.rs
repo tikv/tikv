@@ -2,7 +2,6 @@
 
 /// Provides profilers for TiKV.
 pub mod profile;
-pub mod region_meta;
 use std::{
     error::Error as StdError,
     marker::PhantomData,
@@ -455,8 +454,8 @@ where
         let (tx, rx) = oneshot::channel();
         match router.send(
             id,
-            CasualMessage::AccessPeer(Box::new(move |peer| {
-                if let Err(meta) = tx.send(region_meta::RegionMeta::new(peer)) {
+            CasualMessage::AccessPeer(Box::new(move |meta| {
+                if let Err(meta) = tx.send(meta) {
                     error!("receiver dropped, region meta: {:?}", meta)
                 }
             })),

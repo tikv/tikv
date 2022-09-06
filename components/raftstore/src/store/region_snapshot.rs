@@ -460,7 +460,7 @@ mod tests {
             let db = &engines.kv;
             for &(ref k, level) in &levels {
                 db.put(&data_key(k), k).unwrap();
-                db.flush(true).unwrap();
+                db.flush_cfs(true).unwrap();
                 data.push((k.to_vec(), k.to_vec()));
                 db.compact_files_in_range(Some(&data_key(k)), Some(&data_key(k)), Some(level))
                     .unwrap();

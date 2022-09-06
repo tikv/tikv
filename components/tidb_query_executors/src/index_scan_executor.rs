@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use codec::{number::NumberCodec, prelude::NumberDecoder};
 use itertools::izip;
 use kvproto::coprocessor::KeyRange;
@@ -152,6 +153,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
     }
 }
 
+#[async_trait]
 impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     type StorageStats = S::Statistics;
 
@@ -161,8 +163,8 @@ impl<S: Storage> BatchExecutor for BatchIndexScanExecutor<S> {
     }
 
     #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(scan_rows)
+    async fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows).await
     }
 
     #[inline]
@@ -874,6 +876,7 @@ mod tests {
     use std::sync::Arc;
 
     use codec::prelude::NumberEncoder;
+    use futures::executor::block_on;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_common::{storage::test_fixture::FixtureStorage, util::convert_to_prefix_next};
     use tidb_query_datatype::{
@@ -984,7 +987,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
@@ -1041,7 +1044,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 3);
@@ -1101,7 +1104,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 2);
             assert_eq!(result.physical_columns.rows_len(), 3);
@@ -1146,7 +1149,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 3);
@@ -1198,7 +1201,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -1275,7 +1278,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 2);
@@ -1332,7 +1335,7 @@ mod tests {
             )
             .unwrap();
 
-            let mut result = executor.next_batch(10);
+            let mut result = block_on(executor.next_batch(10));
             assert!(result.is_drained.as_ref().unwrap());
             assert_eq!(result.physical_columns.columns_len(), 3);
             assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1442,7 +1445,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1485,7 +1488,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1581,7 +1584,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1681,7 +1684,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1775,7 +1778,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1868,7 +1871,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 3);
         assert_eq!(result.physical_columns.rows_len(), 1);
@@ -1994,7 +1997,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut result = executor.next_batch(10);
+        let mut result = block_on(executor.next_batch(10));
         assert!(result.is_drained.as_ref().unwrap());
         assert_eq!(result.physical_columns.columns_len(), 4);
         assert_eq!(result.physical_columns.rows_len(), 1);

@@ -15,17 +15,6 @@ make_auto_flush_static_metric! {
         write_thread_wait,
         db_mutex_lock_nanos,
     }
-    pub label_enum ProposalType {
-        all,
-        local_read,
-        read_index,
-        unsafe_read_index,
-        normal,
-        transfer_leader,
-        conf_change,
-        batch,
-        dropped_read_index,
-    }
 
     pub label_enum WriteCmdType {
         put,
@@ -51,43 +40,6 @@ make_auto_flush_static_metric! {
         reject_unsafe,
         all,
         success,
-    }
-
-    pub label_enum RaftReadyType {
-        message,
-        commit,
-        append,
-        snapshot,
-        pending_region,
-        has_ready_region,
-    }
-
-    pub label_enum MessageCounterType {
-        append,
-        append_resp,
-        prevote,
-        prevote_resp,
-        vote,
-        vote_resp,
-        snapshot,
-        heartbeat,
-        heartbeat_resp,
-        transfer_leader,
-        timeout_now,
-        read_index,
-        read_index_resp,
-    }
-
-    pub label_enum RaftDroppedMessage {
-        mismatch_store_id,
-        mismatch_region_epoch,
-        stale_msg,
-        region_overlap,
-        region_no_peer,
-        region_tombstone_peer,
-        region_nonexistent,
-        applying_snap,
-        disk_full,
     }
 
     pub label_enum SnapValidationType {
@@ -126,17 +78,7 @@ make_auto_flush_static_metric! {
         fetch_unused,
     }
 
-    pub label_enum RaftInvalidProposal {
-        mismatch_store_id,
-        region_not_found,
-        not_leader,
-        mismatch_peer_id,
-        stale_command,
-        epoch_not_match,
-        read_index_no_leader,
-        region_not_initialized,
-        is_applying_snapshot,
-    }
+
     pub label_enum RaftEventDurationType {
         compact_check,
         pd_store_heartbeat,
@@ -154,23 +96,10 @@ make_auto_flush_static_metric! {
         skip_partition,
     }
 
-    pub label_enum SendStatus {
-        accept,
-        drop,
-    }
-
-    pub label_enum RaftLogGcSkippedReason {
-        reserve_log,
-        compact_idx_too_small,
-        threshold_limit,
-    }
-
     pub struct RaftEventDuration : LocalHistogram {
         "type" => RaftEventDurationType
     }
-    pub struct RaftInvalidProposalCount : LocalIntCounter {
-        "type" => RaftInvalidProposal
-    }
+
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
@@ -184,9 +113,6 @@ make_auto_flush_static_metric! {
         "type" => RegionHashType,
         "result" => RegionHashResult,
     }
-    pub struct ProposalVec: LocalIntCounter {
-        "type" => ProposalType,
-    }
 
     pub struct AdminCmdVec : LocalIntCounter {
         "type" => AdminCmdType,
@@ -195,19 +121,6 @@ make_auto_flush_static_metric! {
 
     pub struct WriteCmdVec : LocalIntCounter {
         "type" => WriteCmdType,
-    }
-
-    pub struct RaftReadyVec : LocalIntCounter {
-        "type" => RaftReadyType,
-    }
-
-    pub struct MessageCounterVec : LocalIntCounter {
-        "type" => MessageCounterType,
-        "status" => SendStatus,
-    }
-
-    pub struct RaftDropedVec : LocalIntCounter {
-        "type" => RaftDroppedMessage,
     }
 
     pub struct SnapValidVec : LocalIntCounter {
@@ -221,18 +134,81 @@ make_auto_flush_static_metric! {
         "cf" => CfNames,
         "type" => CompactionGuardAction,
     }
-
-    pub struct RaftLogGcSkippedVec: LocalIntCounter {
-        "reason" => RaftLogGcSkippedReason,
-    }
 }
 
 make_static_metric! {
-    pub struct HibernatedPeerStateGauge: IntGauge {
-        "state" => {
-            awaken,
-            hibernated,
-        },
+    pub label_enum RaftReadyType {
+        message,
+        commit,
+        append,
+        snapshot,
+        pending_region,
+        has_ready_region,
+    }
+
+    pub label_enum RaftSentMessageCounterType {
+        append,
+        append_resp,
+        prevote,
+        prevote_resp,
+        vote,
+        vote_resp,
+        snapshot,
+        heartbeat,
+        heartbeat_resp,
+        transfer_leader,
+        timeout_now,
+        read_index,
+        read_index_resp,
+    }
+
+    pub label_enum SendStatus {
+        accept,
+        drop,
+    }
+
+    pub label_enum RaftDroppedMessage {
+        mismatch_store_id,
+        mismatch_region_epoch,
+        stale_msg,
+        region_overlap,
+        region_no_peer,
+        region_tombstone_peer,
+        region_nonexistent,
+        applying_snap,
+        disk_full,
+    }
+
+    pub label_enum ProposalType {
+        all,
+        local_read,
+        read_index,
+        unsafe_read_index,
+        normal,
+        transfer_leader,
+        conf_change,
+        batch,
+        dropped_read_index,
+    }
+
+    pub label_enum RaftInvalidProposal {
+        mismatch_store_id,
+        region_not_found,
+        not_leader,
+        mismatch_peer_id,
+        stale_command,
+        epoch_not_match,
+        read_index_no_leader,
+        region_not_initialized,
+        is_applying_snapshot,
+        force_leader,
+        flashback,
+    }
+
+    pub label_enum RaftLogGcSkippedReason {
+        reserve_log,
+        compact_idx_too_small,
+        threshold_limit,
     }
 
     pub label_enum LoadBaseSplitEventType {
@@ -260,6 +236,38 @@ make_static_metric! {
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
         unable_to_split_cpu_top,
+    }
+
+    pub struct HibernatedPeerStateGauge: IntGauge {
+        "state" => {
+            awaken,
+            hibernated,
+        },
+    }
+
+    pub struct RaftReadyCounterVec : LocalIntCounter {
+        "type" => RaftReadyType,
+    }
+
+    pub struct RaftSentMessageCounterVec : LocalIntCounter {
+        "type" => RaftSentMessageCounterType,
+        "status" => SendStatus,
+    }
+
+    pub struct RaftDroppedMessageCounterVec : LocalIntCounter {
+        "type" => RaftDroppedMessage,
+    }
+
+    pub struct RaftProposalCounterVec: LocalIntCounter {
+        "type" => ProposalType,
+    }
+
+    pub struct RaftInvalidProposalCounterVec : LocalIntCounter {
+        "type" => RaftInvalidProposal
+    }
+
+    pub struct RaftLogGcSkippedCounterVec: LocalIntCounter {
+        "reason" => RaftLogGcSkippedReason,
     }
 
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
@@ -404,8 +412,6 @@ lazy_static! {
             "Total number of proposal made.",
             &["type"]
         ).unwrap();
-    pub static ref PEER_PROPOSAL_COUNTER: ProposalVec =
-        auto_flush_from!(PEER_PROPOSAL_COUNTER_VEC, ProposalVec);
 
     pub static ref PEER_ADMIN_CMD_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -452,8 +458,6 @@ lazy_static! {
             "Total number of raft ready handled.",
             &["type"]
         ).unwrap();
-    pub static ref STORE_RAFT_READY_COUNTER: RaftReadyVec =
-        auto_flush_from!(STORE_RAFT_READY_COUNTER_VEC, RaftReadyVec);
 
     pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -461,8 +465,6 @@ lazy_static! {
             "Total number of raft ready sent messages.",
             &["type", "status"]
         ).unwrap();
-    pub static ref STORE_RAFT_SENT_MESSAGE_COUNTER: MessageCounterVec =
-        auto_flush_from!(STORE_RAFT_SENT_MESSAGE_COUNTER_VEC, MessageCounterVec);
 
     pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
@@ -470,8 +472,6 @@ lazy_static! {
             "Total number of raft dropped messages.",
             &["type"]
         ).unwrap();
-    pub static ref STORE_RAFT_DROPPED_MESSAGE_COUNTER: RaftDropedVec =
-        auto_flush_from!(STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC, RaftDropedVec);
 
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
@@ -632,8 +632,6 @@ lazy_static! {
             "Total number of raft invalid proposal.",
             &["type"]
         ).unwrap();
-    pub static ref RAFT_INVALID_PROPOSAL_COUNTER: RaftInvalidProposalCount =
-        auto_flush_from!(RAFT_INVALID_PROPOSAL_COUNTER_VEC, RaftInvalidProposalCount);
 
     pub static ref RAFT_EVENT_DURATION_VEC: HistogramVec =
         register_histogram_vec!(
@@ -714,11 +712,10 @@ lazy_static! {
         exponential_buckets(8.0, 2.0, 24).unwrap()
     ).unwrap();
 
-
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
-        ).unwrap();
+    ).unwrap();
 
     pub static ref RAFT_ENTRIES_EVICT_BYTES: IntCounter = register_int_counter!(
         "tikv_raft_entries_evict_bytes",
@@ -775,6 +772,10 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
-    pub static ref RAFT_LOG_GC_SKIPPED: RaftLogGcSkippedVec =
-        auto_flush_from!(RAFT_LOG_GC_SKIPPED_VEC, RaftLogGcSkippedVec);
+
+    pub static ref RAFT_APPLYING_SST_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raft_applying_sst",
+        "Sum of applying sst.",
+        &["type"]
+    ).unwrap();
 }

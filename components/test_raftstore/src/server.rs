@@ -289,14 +289,18 @@ impl ServerCluster {
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
         );
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
-        let sim_router = SimulateTransport::new(raft_router.clone());
-
-        let raft_engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+        let sim_router = SimulateTransport::new(raft_router.clone());
+        let raft_engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
 
         if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
             for hook in hooks {
@@ -313,7 +317,11 @@ impl ServerCluster {
             raft_engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(sim_router.clone(), engines.kv.clone());
+        let mut engine = RaftKv::new(
+            sim_router.clone(),
+            engines.kv.clone(),
+            region_info_accessor.region_leaders(),
+        );
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
         }
@@ -329,8 +337,9 @@ impl ServerCluster {
             tx,
             cfg.gc.clone(),
             Default::default(),
+            Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(node_id).unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
@@ -364,7 +373,9 @@ impl ServerCluster {
                 block_on(causal_ts::BatchTsoProvider::new_opt(
                     self.pd_client.clone(),
                     cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.available_interval.0,
                     cfg.causal_ts.renew_batch_min_size,
+                    cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap(),
             );

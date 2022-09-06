@@ -16,7 +16,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use prometheus::local::LocalHistogram;
+use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
@@ -25,9 +25,10 @@ use crate::{
     server::gc_worker::{
         compaction_filter::{
             CompactionFilterStats, DEFAULT_DELETE_BATCH_COUNT, GC_COMPACTION_FAILURE,
-            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
+            GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
+            GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
         },
-        GcTask,
+        GcTask, STAT_RAW_KEYMODE,
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
@@ -87,8 +88,8 @@ struct RawCompactionFilter {
     total_versions: usize,
     total_filtered: usize,
     orphan_versions: usize,
-    versions_hist: LocalHistogram,
-    filtered_hist: LocalHistogram,
+    versions_hist: LocalHistogramVec,
+    filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
 }
@@ -128,7 +129,9 @@ impl CompactionFilter for RawCompactionFilter {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
-                GC_COMPACTION_FAILURE.with_label_values(&["filter"]).inc();
+                GC_COMPACTION_FAILURE
+                    .with_label_values(&[STAT_RAW_KEYMODE, "filter"])
+                    .inc();
                 self.encountered_errors = true;
                 CompactionFilterDecision::Keep
             }
@@ -203,6 +206,9 @@ impl RawCompactionFilter {
             // If it's the latest version, and it's deleted or expired, it needs to be sent
             // to GcWorker to be processed asynchronously.
             if !raw_value.is_valid(self.current_ts) {
+                GC_COMPACTION_FILTER_MVCC_DELETION_MET
+                    .with_label_values(&[STAT_RAW_KEYMODE])
+                    .inc();
                 self.raw_handle_delete();
                 if self.mvcc_deletions.len() >= DEFAULT_DELETE_BATCH_COUNT {
                     self.raw_gc_mvcc_deletions();
@@ -233,7 +239,6 @@ impl RawCompactionFilter {
             let task = GcTask::RawGcKeys {
                 keys: mem::replace(&mut self.mvcc_deletions, empty),
                 safe_point: self.safe_point.into(),
-                store_id: self.regions_provider.0,
                 region_info_provider: self.regions_provider.1.clone(),
             };
             self.schedule_gc_task(task, false);
@@ -251,10 +256,14 @@ impl RawCompactionFilter {
                 }
                 match e {
                     ScheduleError::Full(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["full"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&[STAT_RAW_KEYMODE, "full"])
+                            .inc();
                     }
                     ScheduleError::Stopped(_) => {
-                        GC_COMPACTION_FAILURE.with_label_values(&["stopped"]).inc();
+                        GC_COMPACTION_FAILURE
+                            .with_label_values(&[STAT_RAW_KEYMODE, "stopped"])
+                            .inc();
                     }
                 }
             }
@@ -270,21 +279,27 @@ impl RawCompactionFilter {
     // TODO some refactor to avoid duplicated codes.
     fn switch_key_metrics(&mut self) {
         if self.versions != 0 {
-            self.versions_hist.observe(self.versions as f64);
+            self.versions_hist
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .observe(self.versions as f64);
             self.total_versions += self.versions;
             self.versions = 0;
         }
         if self.filtered != 0 {
-            self.filtered_hist.observe(self.filtered as f64);
+            self.filtered_hist
+                .with_label_values(&[STAT_RAW_KEYMODE])
+                .observe(self.filtered as f64);
             self.total_filtered += self.filtered;
             self.filtered = 0;
         }
     }
 
     fn flush_metrics(&self) {
-        GC_COMPACTION_FILTERED.inc_by(self.total_filtered as u64);
+        GC_COMPACTION_FILTERED
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .inc_by(self.total_filtered as u64);
         GC_COMPACTION_FILTER_ORPHAN_VERSIONS
-            .with_label_values(&["generated"])
+            .with_label_values(&[STAT_RAW_KEYMODE, "generated"])
             .inc_by(self.orphan_versions as u64);
         if let Some((versions, filtered)) = STATS.with(|stats| {
             stats.versions.update(|x| x + self.total_versions);
@@ -299,6 +314,13 @@ impl RawCompactionFilter {
             }
         }
     }
+}
+
+#[cfg(any(test, feature = "testexport"))]
+pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
+    let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+    let res = keys::data_key(encode_key.as_encoded());
+    res
 }
 
 #[cfg(test)]
@@ -316,12 +338,6 @@ pub mod tests {
     use crate::{
         config::DbConfig, server::gc_worker::TestGcRunner, storage::kv::TestEngineBuilder,
     };
-
-    pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
-        let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
-        let res = keys::data_key(encode_key.as_encoded());
-        res
-    }
 
     #[test]
     fn test_raw_compaction_filter() {

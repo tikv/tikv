@@ -37,9 +37,13 @@ impl Tracker {
         detail_v2.set_rocksdb_key_skipped_count(self.metrics.internal_key_skipped_count);
         detail_v2.set_rocksdb_delete_skipped_count(self.metrics.deleted_key_skipped_count);
         detail_v2.set_get_snapshot_nanos(self.metrics.get_snapshot_nanos);
+        detail_v2.set_read_index_propose_wait_nanos(self.metrics.read_index_propose_wait_nanos);
+        detail_v2.set_read_index_confirm_wait_nanos(self.metrics.read_index_confirm_wait_nanos);
+        detail_v2.set_read_pool_schedule_wait_nanos(self.metrics.read_pool_schedule_wait_nanos);
     }
 
     pub fn write_write_detail(&self, detail: &mut pb::WriteDetail) {
+        detail.set_pessimistic_lock_wait_nanos(self.metrics.pessimistic_lock_wait_nanos);
         detail.set_store_batch_wait_nanos(self.metrics.wf_batch_wait_nanos);
         detail.set_propose_send_wait_nanos(
             self.metrics
@@ -109,6 +113,7 @@ pub enum RequestType {
     KvTxnHeartBeat,
     KvRollback,
     KvPessimisticRollback,
+    KvFlashbackToVersion,
     CoprocessorDag,
     CoprocessorAnalyze,
     CoprocessorChecksum,
@@ -117,12 +122,16 @@ pub enum RequestType {
 #[derive(Debug, Default, Clone)]
 pub struct RequestMetrics {
     pub get_snapshot_nanos: u64,
+    pub read_index_propose_wait_nanos: u64,
+    pub read_index_confirm_wait_nanos: u64,
+    pub read_pool_schedule_wait_nanos: u64,
     pub block_cache_hit_count: u64,
     pub block_read_count: u64,
     pub block_read_byte: u64,
     pub block_read_nanos: u64,
     pub internal_key_skipped_count: u64,
     pub deleted_key_skipped_count: u64,
+    pub pessimistic_lock_wait_nanos: u64,
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,

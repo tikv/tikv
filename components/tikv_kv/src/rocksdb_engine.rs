@@ -129,6 +129,15 @@ impl RocksEngine {
         self.not_leader.store(true, Ordering::SeqCst);
     }
 
+    fn not_leader_error(&self) -> Error {
+        let not_leader = {
+            let mut header = kvproto::errorpb::Error::default();
+            header.mut_not_leader().set_region_id(100);
+            header
+        };
+        Error::from(ErrorInner::Request(not_leader))
+    }
+
     pub fn pause(&self, dur: Duration) {
         self.sched.schedule(Task::Pause(dur)).unwrap();
     }
@@ -201,12 +210,15 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(Default::default())
-    }
-
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
         write_modifies(&self.engines.kv, modifies)
+    }
+
+    fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
+        if self.not_leader.load(Ordering::SeqCst) {
+            return Err(self.not_leader_error());
+        }
+        Ok(())
     }
 
     fn async_write(&self, ctx: &Context, batch: WriteData, cb: Callback<()>) -> Result<()> {
@@ -243,16 +255,11 @@ impl Engine for RocksEngine {
         fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
             "snapshot failed"
         )));
-        let not_leader = {
-            let mut header = kvproto::errorpb::Error::default();
-            header.mut_not_leader().set_region_id(100);
-            header
-        };
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::from(ErrorInner::Request(not_leader.clone())))
+            Err(self.not_leader_error())
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::from(ErrorInner::Request(not_leader)));
+            return Err(self.not_leader_error());
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
