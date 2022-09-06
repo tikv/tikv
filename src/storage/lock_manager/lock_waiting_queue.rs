@@ -148,26 +148,36 @@ impl<L: LockManager> LockWaitQueues<L> {
     }
 
     fn dequeue_lock_wait(&self, key: &Key) -> Option<Box<LockWaitEntry>> {
-        let mut entry = self.queue_map.get_mut(key)?;
+        let mut result = None;
 
-        loop {
-            let result = entry.queue.pop();
-            if entry.queue.is_empty() {
-                self.queue_map.remove(key);
-            }
-            let result = result?.unwrap();
-            if result.req_states.as_ref().unwrap().is_finished() {
-                // Skip already cancelled entries.
-                continue;
+        // We don't want other thread insert insert any more entries between finding the
+        // queue is empty and removing the queue from the map. Wrap the logic
+        // within a call to `remove_if_mut` to avoid releasing lock during the
+        // procedure.
+        self.queue_map.remove_if_mut(key, |_, v| {
+            while let Some(front) = v.queue.pop() {
+                // Remove the comparator wrapper.
+                let lock_wait_entry = result.unwrap();
+
+                if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
+                    // Skip already cancelled entries.
+                    continue;
+                }
+
+                if !lock_wait_entry.parameters.allow_lock_with_conflict {
+                    // If a pessimistic lock request in legacy mode is woken up, increase the
+                    // counter.
+                    v.legacy_wakeup_cnt += 1
+                }
+                result = Some(result);
+                break;
             }
 
-            if !result.parameters.allow_lock_with_conflict {
-                // If a pessimistic lock request in legacy mode is woken up, increase the
-                // counter.
-                entry.legacy_wakeup_cnt += 1
-            }
-            return Some(result);
-        }
+            // Remove the queue if it's emptied.
+            v.queue.is_empty()
+        });
+
+        result
     }
 
     fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
@@ -184,33 +194,40 @@ impl<L: LockManager> LockWaitQueues<L> {
         legacy_wake_up_index: usize,
     ) -> Option<Box<LockWaitEntry>> {
         let mut popped_lock_wait_entries = SmallVec::<[_; 4]>::new();
-        let mut entry = self.queue_map.get_mut(key)?;
 
         let mut woken_up_resumeable_entry = None;
-        while let Some(front) = entry.queue.peek() {
-            if front.0.req_states.as_ref().unwrap().is_finished() {
-                // Skip already cancelled entries.
-                entry.queue.pop();
-                continue;
-            }
-            if front
-                .0
-                .current_legacy_wakeup_cnt
-                .map_or(false, |cnt| cnt > legacy_wake_up_index)
-            {
-                break;
-            }
-            let lock_wait_entry = entry.queue.pop().unwrap().unwrap();
-            if lock_wait_entry.parameters.allow_lock_with_conflict {
-                woken_up_resumeable_entry = Some(lock_wait_entry);
-                break;
-            }
-            popped_lock_wait_entries.push(lock_wait_entry);
-        }
 
-        // Release lock.
+        // We don't want other thread insert insert any more entries between finding the
+        // queue is empty and removing the queue from the map. Wrap the logic
+        // within a call to `remove_if_mut` to avoid releasing lock during the
+        // procedure.
+        self.queue_map.remove_if_mut(key, |_, v| {
+            while let Some(front) = v.queue.peek() {
+                if front.0.req_states.as_ref().unwrap().is_finished() {
+                    // Skip already cancelled entries.
+                    v.queue.pop();
+                    continue;
+                }
+                if front
+                    .0
+                    .current_legacy_wakeup_cnt
+                    .map_or(false, |cnt| cnt > legacy_wake_up_index)
+                {
+                    // This entry is added after the legacy-wakeup that issued the current
+                    // delayed_notify_all operation. Keep it and other remaining items in the queue.
+                    break;
+                }
+                let lock_wait_entry = v.queue.pop().unwrap().unwrap();
+                if lock_wait_entry.parameters.allow_lock_with_conflict {
+                    woken_up_resumeable_entry = Some(lock_wait_entry);
+                    break;
+                }
+                popped_lock_wait_entries.push(lock_wait_entry);
+            }
 
-        drop(entry);
+            // If the queue is empty, remove it from the map.
+            v.queue.is_empty()
+        });
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'better make it concurrent with scheduling the new command
