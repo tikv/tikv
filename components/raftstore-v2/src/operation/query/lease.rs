@@ -26,6 +26,7 @@ use raftstore::{
 use slog::{debug, error, info, o, Logger};
 use tikv_util::{box_err, time::monotonic_raw_now, Either};
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 
 use crate::{
     batch::StoreContext,
@@ -78,7 +79,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
         ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
@@ -108,7 +108,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        // TODO:
+        // TODO:add following when propose is done
         // if self.leader_lease.is_suspect() {
         // let req = RaftCmdRequest::default();
         // if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
@@ -137,14 +137,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
         ch: QueryResChannel,
     ) -> bool {
+        // TODO: add pre_read_index to handle splitting or merging
         let now = monotonic_raw_now();
         if self.is_leader() {
-            self.leader_read_index(poll_ctx, req, err_resp, ch, now)
+            self.leader_read_index(poll_ctx, req, ch, now)
         } else {
-            self.follower_read_index(poll_ctx, req, err_resp, ch, now)
+            self.follower_read_index(poll_ctx, req, ch, now)
         }
     }
 
@@ -189,14 +189,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request_id" => ?read_index_req.id,
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
+        let time = monotonic_raw_now();
         for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+            ch.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
+                        .to_std()
+                        .unwrap()
+                        .as_nanos()
+                        as u64;
+                })
+            });
+
             // leader reports key is locked
             if let Some(locked) = read_index_req.locked.take() {
                 let mut response = raft_cmdpb::Response::default();
                 response.mut_read_index().set_locked(*locked);
                 let mut cmd_resp = RaftCmdResponse::default();
                 cmd_resp.mut_responses().push(response);
-                ch.set_result(QueryResult::Response(cmd_resp));
+                ch.report_error(cmd_resp);
             } else {
                 match (read_index, read_index_req.read_index) {
                     (Some(local_responsed_index), Some(batch_index)) => {
@@ -215,17 +226,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     _ => {}
                 }
                 let region = self.region().clone();
-                let read_resp = if let Err(e) = check_region_epoch(&req, &region, true) {
-                    debug!(self.logger, "epoch not match"; "err" => ?e);
+                if let Err(e) = check_region_epoch(&req, &region, true) {
                     let mut response = cmd_resp::new_error(e);
                     cmd_resp::bind_term(&mut response, self.term());
-                    QueryResult::Response(response)
+                    ch.report_error(response);
                 } else {
                     let read_resp = ReadResponse::new(read_index.unwrap_or(0));
-                    QueryResult::Read(read_resp)
-                };
-
-                ch.set_result(read_resp);
+                    ch.set_result(QueryResult::Read(read_resp));
+                }
             }
         }
     }
@@ -252,6 +260,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
                 }
             }
+
+            // TODO: add ready_to_handle_read for splitting and merging
             while let Some(mut read) = self.pending_reads_mut().pop_front() {
                 self.response_read(&mut read, ctx);
             }

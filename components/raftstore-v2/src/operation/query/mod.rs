@@ -2,22 +2,22 @@
 
 //! There are two types of Query: KV read and status query.
 //!
-//! KV Read is implemented in local module and lease module (not implemented
-//! yet). Read will be executed in callee thread if in lease, which is
+//! KV Read is implemented in local module and query module.
+//! Read will be executed in callee thread if in lease, which is
 //! implemented in local module. If lease is expired, it will extend the lease
 //! first. Lease maintainance is implemented in lease module.
 //!
 //! Status query is implemented in the root module directly.
-//! Follower's read index is implemenented follower_read_index
-//! Leader's read index is implemented in read_index
-//! stale read check is implemented replica_read.rs
+//! Follower's read index and replica read is implemenented replica.rs.
+//! Leader's read index and lease renew is implemented in lease.rs.
+//! Stale read check is implemented stale.rs.
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, StatusCmdType};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
-        cmd_resp, region_meta::RegionMeta, util, util::LeaseState, GroupState, ReadCallback,
-        RequestInspector, RequestPolicy,
+        cmd_resp, msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
+        ReadCallback, RequestInspector, RequestPolicy,
     },
     Error, Result,
 };
@@ -30,19 +30,46 @@ use crate::{
     router::{DebugInfoChannel, QueryResChannel, QueryResult, ReadResponse},
 };
 
-mod follower_read_index;
+mod lease;
 mod local;
-mod read_index;
-mod replica_read;
+mod replica;
+mod stale;
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
 {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
+        if req.has_admin_request() {
+            return Err(box_err!("PeerMsg::RaftQuery does not allow admin requests"));
+        }
+
+        for r in req.get_requests() {
+            if r.get_cmd_type() != CmdType::Get
+                && r.get_cmd_type() != CmdType::Snap
+                && r.get_cmd_type() != CmdType::ReadIndex
+            {
+                return Err(box_err!(
+                    "PeerMsg::RaftQuery does not allow write requests: {:?}",
+                    r.get_cmd_type()
+                ));
+            }
+        }
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
         }
+
+        if req.get_header().get_read_quorum() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
+
+        // TODO
+        // If applied index's term is differ from current raft's term, leader transfer
+        // must happened, if read locally, we may read old value.
+        // if !self.has_applied_to_current_term() {
+        // return Ok(RequestPolicy::ReadIndex);
+        // }
 
         match self.fsm.peer_mut().inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
@@ -56,22 +83,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     #[inline]
     pub fn on_query(&mut self, req: RaftCmdRequest, ch: QueryResChannel) {
         if !req.has_status_request() {
-            let mut resp = RaftCmdResponse::default();
-            let term = self.fsm.peer().term();
-            cmd_resp::bind_term(&mut resp, term);
             let policy = self.inspect_read(&req);
             match policy {
                 Ok(RequestPolicy::ReadIndex) => {
-                    self.fsm
-                        .peer_mut()
-                        .read_index(self.store_ctx, req, resp, ch);
+                    self.fsm.peer_mut().read_index(self.store_ctx, req, ch);
                 }
                 Ok(RequestPolicy::ReadLocal) => {
+                    self.store_ctx.raft_metrics.propose.local_read.inc();
                     let read_resp = ReadResponse::new(0);
                     ch.set_result(QueryResult::Read(read_resp));
                 }
                 Ok(RequestPolicy::StaleRead) => {
-                    ch.set_result(self.fsm.peer_mut().can_replica_read(req, true, None));
+                    self.store_ctx.raft_metrics.propose.local_read.inc();
+                    self.fsm.peer_mut().can_stale_read(req, true, None, ch);
+                }
+                Err(err) => {
+                    let mut err_resp = RaftCmdResponse::default();
+                    let term = self.fsm.peer().term();
+                    cmd_resp::bind_term(&mut err_resp, term);
+                    cmd_resp::bind_error(&mut err_resp, err);
+                    ch.report_error(err_resp);
                 }
                 _ => {
                     unimplemented!();

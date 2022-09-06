@@ -6,15 +6,19 @@ use pd_client::INVALID_ID;
 use raftstore::{
     store::{
         cmd_resp,
+        fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Transport,
+        propose_read_index,
+        util::check_region_epoch,
+        ReadIndexRequest, Transport,
     },
     Error,
 };
 use slog::{debug, error, info, o, Logger};
 use tikv_util::{box_err, time::monotonic_raw_now};
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 
 use crate::{
     batch::StoreContext,
@@ -30,7 +34,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
-        mut err_resp: RaftCmdResponse,
         ch: QueryResChannel,
         now: Timespec,
     ) -> bool {
@@ -40,6 +43,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .invalid_proposal
                 .read_index_no_leader
                 .inc();
+            let mut err_resp = RaftCmdResponse::default();
+            let term = self.term();
+            cmd_resp::bind_term(&mut err_resp, term);
             cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id(), None));
             ch.report_error(err_resp);
             return false;
@@ -87,5 +93,67 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 break;
             }
         }
+    }
+
+    fn response_replica_read<T>(
+        &self,
+        read_index_req: &mut ReadIndexRequest<QueryResChannel>,
+        ctx: &mut StoreContext<EK, ER, T>,
+    ) {
+        debug!(
+            self.logger,
+            "handle replica reads with a read index";
+            "request_id" => ?read_index_req.id,
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
+        let time = monotonic_raw_now();
+        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+            ch.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(*tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
+                        .to_std()
+                        .unwrap()
+                        .as_nanos()
+                        as u64;
+                })
+            });
+
+            // leader reports key is locked
+            if let Some(locked) = read_index_req.locked.take() {
+                let mut response = raft_cmdpb::Response::default();
+                response.mut_read_index().set_locked(*locked);
+                let mut cmd_resp = RaftCmdResponse::default();
+                cmd_resp.mut_responses().push(response);
+                ch.report_error(cmd_resp);
+                continue;
+            }
+            if req.get_header().get_replica_read() {
+                // We should check epoch since the range could be changed.
+                let region = self.region().clone();
+                if let Err(e) = check_region_epoch(&req, &region, true) {
+                    let mut response = cmd_resp::new_error(e);
+                    cmd_resp::bind_term(&mut response, self.term());
+                    ch.report_error(response);
+                }
+            } else {
+                // The request could be proposed when the peer was leader.
+                // TODO: figure out that it's necessary to notify stale or not.
+                let term = self.term();
+                notify_stale_req(term, ch);
+            }
+        }
+    }
+
+    // Note: comparing with v1, it removes the snapshot check because in v2 the
+    // snapshot will not delete the data anymore.
+    fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
+        // Wait until the follower applies all values before the read. There is still a
+        // problem if the leader applies fewer values than the follower, the follower
+        // read could get a newer value, and after that, the leader may read a stale
+        // value, which violates linearizability.
+        self.storage().apply_state().get_applied_index() >= read_index
+            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
+            // TODO: Add a test to cover this case
+            && !self.has_pending_merge_state()
     }
 }
