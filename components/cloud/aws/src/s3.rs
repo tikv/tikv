@@ -24,11 +24,8 @@ use cloud::blob::{
 };
 use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
-use tikv_util::time::Instant;
-
-use crate::util;
+use tikv_util::{debug, stream::error_stream, time::Instant};
+use crate::util::{self, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
@@ -293,11 +290,11 @@ impl<'client> S3Uploader<'client> {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
-            retry(|| self.upload(&data)).await?;
+            retry_and_count(|| self.upload(&data), "upload_small_file").await?;
             Ok(())
         } else {
             // Otherwise, use multipart upload to improve robustness.
-            self.upload_id = retry(|| self.begin()).await?;
+            self.upload_id = retry_and_count(|| self.begin(), "begin_upload").await?;
             let upload_res = async {
                 let mut buf = vec![0; self.multi_part_size];
                 let mut part_number = 1;
@@ -306,7 +303,11 @@ impl<'client> S3Uploader<'client> {
                     if data_size == 0 {
                         break;
                     }
-                    let part = retry(|| self.upload_part(part_number, &buf[..data_size])).await?;
+                    let part = retry_and_count(
+                        || self.upload_part(part_number, &buf[..data_size]),
+                        "upload_part",
+                    )
+                    .await?;
                     self.parts.push(part);
                     part_number += 1;
                 }
@@ -315,9 +316,9 @@ impl<'client> S3Uploader<'client> {
             .await;
 
             if upload_res.is_ok() {
-                retry(|| self.complete()).await?;
+                retry_and_count(|| self.complete(), "complete_upload").await?;
             } else {
-                let _ = retry(|| self.abort()).await;
+                let _ = retry_and_count(|| self.abort(), "abort_upload").await;
             }
             upload_res
         }
