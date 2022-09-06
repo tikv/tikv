@@ -279,6 +279,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
