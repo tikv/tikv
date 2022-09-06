@@ -1652,20 +1652,15 @@ impl SnapManager {
         self.core.limiter.speed_limit()
     }
 
-    pub fn put_stat(&self, snap: SnapshotStat) {
-        info!(
-            "put snapshot stat";
+    pub fn collect_stat(&self, snap: SnapshotStat) {
+        debug!(
+            "collect snapshot stat";
             "region_id"=>snap.region_id,
             "total_size"=>snap.get_transport_size(),
             "total_duration_sec"=>snap.get_total_duration_sec(),
             "generate_duration_sec"=>snap.get_generate_duration_sec(),
             "send_duration_sec"=>snap.get_generate_duration_sec(),
         );
-
-        // println!(
-        //     "snapshot stat collect, region_is:{},total_size{},total_duration_sec:{}",
-        //     snap.region_id, snap.transport_size, snap.total_ms
-        // );
         self.core.stats.wl().push(snap);
     }
 

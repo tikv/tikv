@@ -194,7 +194,7 @@ pub fn send_snap(
                 stat.set_generate_duration_sec(key.generate_duration_sec);
                 stat.set_send_duration_sec(timer.saturating_elapsed().as_secs());
                 stat.set_total_duration_sec(UnixSecs::now().into_inner() - key.start);
-                mgr.put_stat(stat);
+                mgr.collect_stat(stat);
                 // TODO: improve it after rustc resolves the bug.
                 // Call `info` in the closure directly will cause rustc
                 // panic with `Cannot create local mono-item for DefId`.
