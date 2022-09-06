@@ -28,7 +28,9 @@ use tidb_query_datatype::{
 };
 use tipb::{Expr, FieldType};
 
-use crate::{types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
+use crate::{
+    types::RpnExpressionBuilder, RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode,
+};
 
 fn get_cast_fn_rpn_meta(
     is_from_constant: bool,
@@ -1288,13 +1290,30 @@ fn cast_uint_as_json(val: Option<&Int>) -> Result<Option<Json>> {
     }
 }
 
-#[rpn_fn(nullable, capture = [extra])]
+#[rpn_fn(nullable, capture = [args, extra])]
 #[inline]
-fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: Option<BytesRef>) -> Result<Option<Json>> {
+fn cast_string_as_json(
+    args: &[RpnStackNode<'_>],
+    extra: &RpnFnCallExtra<'_>,
+    val: Option<BytesRef>,
+) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
         Some(val) => {
-            if extra
+            let typ = args[0].field_type();
+            if typ.is_binary_string_like() {
+                let mut buf = val;
+
+                let mut vec;
+                if typ.tp() == FieldTypeTp::String {
+                    vec = (*val).to_owned();
+                    // the `flen` of string is always greater than zero
+                    vec.resize(typ.flen().try_into().unwrap(), 0);
+                    buf = &vec;
+                }
+
+                Ok(Some(Json::from_opaque(typ.tp(), buf)?))
+            } else if extra
                 .ret_field_type
                 .as_accessor()
                 .flag()
@@ -1467,12 +1486,16 @@ fn cast_enum_as_time(
     }
 }
 
-#[rpn_fn(nullable, capture = [extra])]
+#[rpn_fn(nullable, capture = [args, extra])]
 #[inline]
-fn cast_enum_as_json(extra: &RpnFnCallExtra, val: Option<EnumRef>) -> Result<Option<Json>> {
+fn cast_enum_as_json(
+    args: &[RpnStackNode<'_>],
+    extra: &RpnFnCallExtra,
+    val: Option<EnumRef>,
+) -> Result<Option<Json>> {
     match val {
         None => Ok(None),
-        Some(val) => cast_string_as_json(extra, Some(val.name())),
+        Some(val) => cast_string_as_json(args, extra, Some(val.name())),
     }
 }
 
@@ -1554,6 +1577,24 @@ mod tests {
             ret_field_type: &ret_field_type,
         };
         let r = func(&extra, None).unwrap();
+        assert!(r.is_none());
+    }
+
+    fn test_none_with_args_and_extra<F, Input, Ret>(func: F)
+    where
+        F: Fn(&[RpnStackNode<'_>], &RpnFnCallExtra, Option<Input>) -> Result<Option<Ret>>,
+    {
+        let value = ScalarValue::Bytes(None);
+        let field_type = FieldType::default();
+        let args: [RpnStackNode<'_>; 1] = [RpnStackNode::Scalar {
+            value: &value,
+            field_type: &field_type,
+        }];
+        let ret_field_type: FieldType = FieldType::default();
+        let extra = RpnFnCallExtra {
+            ret_field_type: &ret_field_type,
+        };
+        let r = func(&args, &extra, None).unwrap();
         assert!(r.is_none());
     }
 
@@ -2028,7 +2069,7 @@ mod tests {
 
     #[test]
     fn test_enum_as_json() {
-        test_none_with_extra(cast_enum_as_json);
+        test_none_with_args_and_extra(cast_enum_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
         jo1.insert(
@@ -2107,13 +2148,20 @@ mod tests {
             ),
         ];
         for (input, expect, parse_to_json) in cs {
+            let arg_type = FieldType::default();
+            let arg_value = ScalarValue::Enum(Some(input.to_owned()));
+            let args = [RpnStackNode::Scalar {
+                value: &arg_value,
+                field_type: &arg_type,
+            }];
+
             let mut rft = FieldType::default();
             if parse_to_json {
                 let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
             let extra = make_extra(&rft);
-            let result = cast_enum_as_json(&extra, Some(input));
+            let result = cast_enum_as_json(&args, &extra, Some(input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",
@@ -6647,7 +6695,7 @@ mod tests {
 
     #[test]
     fn test_string_as_json() {
-        test_none_with_extra(cast_string_as_json);
+        test_none_with_args_and_extra(cast_string_as_json);
 
         let mut jo1: BTreeMap<String, Json> = BTreeMap::new();
         jo1.insert(
@@ -6657,16 +6705,19 @@ mod tests {
         // HasParseToJSONFlag
         let cs = vec![
             (
+                FieldType::default(),
                 "{\"a\": \"b\"}".to_string(),
                 Json::from_object(jo1).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "{}".to_string(),
                 Json::from_object(BTreeMap::new()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "[1, 2, 3]".to_string(),
                 Json::from_array(vec![
                     Json::from_i64(1).unwrap(),
@@ -6677,49 +6728,109 @@ mod tests {
                 true,
             ),
             (
+                FieldType::default(),
                 "[]".to_string(),
                 Json::from_array(Vec::new()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "9223372036854775807".to_string(),
                 Json::from_i64(9223372036854775807).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "-9223372036854775808".to_string(),
                 Json::from_i64(-9223372036854775808).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "18446744073709551615".to_string(),
                 Json::from_f64(18446744073709552000.0).unwrap(),
                 true,
             ),
             // FIXME: f64::MAX.to_string() to json should success
             // (f64::MAX.to_string(), Json::from_f64(f64::MAX), true),
-            ("0.0".to_string(), Json::from_f64(0.0).unwrap(), true),
             (
+                FieldType::default(),
+                "0.0".to_string(),
+                Json::from_f64(0.0).unwrap(),
+                true,
+            ),
+            (
+                FieldType::default(),
                 "\"abcde\"".to_string(),
                 Json::from_string("abcde".to_string()).unwrap(),
                 true,
             ),
             (
+                FieldType::default(),
                 "\"\"".to_string(),
                 Json::from_string("".to_string()).unwrap(),
                 true,
             ),
-            ("true".to_string(), Json::from_bool(true).unwrap(), true),
-            ("false".to_string(), Json::from_bool(false).unwrap(), true),
+            (
+                FieldType::default(),
+                "true".to_string(),
+                Json::from_bool(true).unwrap(),
+                true,
+            ),
+            (
+                FieldType::default(),
+                "false".to_string(),
+                Json::from_bool(false).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .flen(4)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97, 0, 0, 0]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::String)
+                    .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[0; 256]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97]).unwrap(),
+                true,
+            ),
         ];
-        for (input, expect, parse_to_json) in cs {
+        for (arg_type, input, expect, parse_to_json) in cs {
+            let arg_value = ScalarValue::Bytes(Some(input.clone().into_bytes()));
+            let args = [RpnStackNode::Scalar {
+                value: &arg_value,
+                field_type: &arg_type,
+            }];
+
             let mut rft = FieldType::default();
             if parse_to_json {
                 let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
             let extra = make_extra(&rft);
-            let result = cast_string_as_json(&extra, Some(&input.clone().into_bytes()));
+            let result = cast_string_as_json(&args, &extra, Some(&input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, parse_to_json: {}, expect: {:?}, result: {:?}",

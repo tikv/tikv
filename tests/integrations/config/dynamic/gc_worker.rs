@@ -1,8 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::mpsc::channel, time::Duration};
+use std::{
+    sync::{mpsc::channel, Arc},
+    time::Duration,
+};
 
-use raftstore::router::RaftStoreBlackHole;
+use raftstore::{
+    coprocessor::region_info_accessor::MockRegionInfoProvider, router::RaftStoreBlackHole,
+};
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
     server::gc_worker::{GcConfig, GcTask, GcWorker},
@@ -34,8 +39,9 @@ fn setup_cfg_controller(
         tx,
         cfg.gc.clone(),
         Default::default(),
+        Arc::new(MockRegionInfoProvider::new(Vec::new())),
     );
-    gc_worker.start().unwrap();
+    gc_worker.start(0).unwrap();
 
     let cfg_controller = ConfigController::new(cfg);
     cfg_controller.register(Module::Gc, Box::new(gc_worker.get_config_manager()));
