@@ -65,6 +65,8 @@ impl ErrorCodeExt for errorpb::Error {
             DATA_IS_NOT_READY
         } else if self.has_recovery_in_progress() {
             RECOVERY_IN_PROGRESS
+        } else if self.has_flashback_in_progress() {
+            FLASHBACK_IN_PROGRESS
         } else {
             UNKNOWN
         }
