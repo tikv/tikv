@@ -279,6 +279,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -485,6 +486,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "tokio-stream",
@@ -2628,7 +2630,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f95ac338b3312e0a9bd7c33c9647a87a74314567"
+source = "git+https://github.com/pingcap/kvproto.git#2e37953b2b435961ad5b4f0e36b32c53f4777b23"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
