@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::Duration, collections::HashMap,
+    time::Duration,
 };
 
 pub use engine_rocks::RocksSnapshot;

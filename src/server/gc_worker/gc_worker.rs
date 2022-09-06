@@ -1396,7 +1396,10 @@ where
 
 #[cfg(any(test, feature = "testexport"))]
 pub mod test_gc_worker {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{mpsc, Arc},
+    };
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::{
@@ -1418,6 +1421,14 @@ pub mod test_gc_worker {
         },
     };
 
+    fn write_modifies_v2(
+        _modifies: Vec<Modify>,
+        _key_to_id: HashMap<Key, u64>,
+        _sender: &HashMap<u64, mpsc::Sender<Vec<Modify>>>,
+    ) -> kv::Result<()> {
+        unimplemented!();
+    }
+
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a
     /// 'z' prefix will be added to keys by raftstore layer before writing
@@ -1425,21 +1436,30 @@ pub mod test_gc_worker {
     /// they needs to know how data is actually represented in db. This
     /// wrapper allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]
-    pub struct PrefixedEngine(pub kv::RocksEngine);
+    pub struct PrefixedEngine {
+        pub engine: kv::RocksEngine,
+
+        // None means single rocksdb
+        pub write_task_sender: Option<HashMap<u64, mpsc::Sender<Vec<Modify>>>>,
+    }
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
         type Snap = RegionSnapshot<RocksSnapshot>;
         type Local = RocksEngine;
 
+        fn multi_rocks(&self) -> bool {
+            self.write_task_sender.is_some()
+        }
+
         fn kv_engine(&self) -> RocksEngine {
-            self.0.kv_engine()
+            self.engine.kv_engine()
         }
 
         fn modify_on_kv_engine(
             &self,
             mut modifies: Vec<Modify>,
-            _: Option<HashMap<Key, u64>>,
+            key_to_region: Option<HashMap<Key, u64>>,
         ) -> kv::Result<()> {
             for modify in &mut modifies {
                 match modify {
@@ -1463,7 +1483,16 @@ pub mod test_gc_worker {
                     }
                 }
             }
-            write_modifies(&self.kv_engine(), modifies)
+
+            if self.multi_rocks() {
+                write_modifies_v2(
+                    modifies,
+                    key_to_region.unwrap(),
+                    self.write_task_sender.as_ref().unwrap(),
+                )
+            } else {
+                write_modifies(&self.kv_engine(), modifies)
+            }
         }
 
         fn async_write(
@@ -1487,7 +1516,7 @@ pub mod test_gc_worker {
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
-            self.0.async_write(ctx, batch, callback)
+            self.engine.async_write(ctx, batch, callback)
         }
 
         fn async_snapshot(
@@ -1495,7 +1524,7 @@ pub mod test_gc_worker {
             ctx: SnapContext<'_>,
             callback: EngineCallback<Self::Snap>,
         ) -> EngineResult<()> {
-            self.0.async_snapshot(
+            self.engine.async_snapshot(
                 ctx,
                 Box::new(move |r| {
                     callback(r.map(|snap| {
@@ -1846,7 +1875,10 @@ mod tests {
     fn test_physical_scan_lock() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
+        let prefixed_engine = PrefixedEngine {
+            engine,
+            write_task_sender: None,
+        };
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
             DummyLockManager,
@@ -1928,7 +1960,10 @@ mod tests {
     fn test_gc_keys_with_region_info_provider() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let prefixed_engine = PrefixedEngine {
+            engine: engine.clone(),
+            write_task_sender: None,
+        };
 
         let (tx, _rx) = mpsc::channel();
         let feature_gate = FeatureGate::default();
@@ -2028,7 +2063,10 @@ mod tests {
     fn test_gc_keys_statistics() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let prefixed_engine = PrefixedEngine {
+            engine: engine.clone(),
+            write_task_sender: None,
+        };
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2091,7 +2129,10 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
         let engine = builder.build_with_cfg(&cfg).unwrap();
-        let prefixed_engine = PrefixedEngine(engine);
+        let prefixed_engine = PrefixedEngine {
+            engine,
+            write_task_sender: None,
+        };
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2192,7 +2233,10 @@ mod tests {
     #[test]
     fn test_gc_keys_scan_range_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+        let prefixed_engine = PrefixedEngine {
+            engine: engine.clone(),
+            write_task_sender: None,
+        };
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
@@ -2312,7 +2356,10 @@ mod tests {
     #[test]
     fn delete_range_when_worker_is_full() {
         let store_id = 1;
-        let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
+        let engine = PrefixedEngine {
+            engine: TestEngineBuilder::new().build().unwrap(),
+            write_task_sender: None,
+        };
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
         must_commit(&engine, b"key", 10, 20);
         let db = engine.kv_engine().as_inner().clone();
