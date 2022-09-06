@@ -476,6 +476,23 @@ impl<'a> PrewriteMutation<'a> {
         .into())
     }
 
+    /// Check the assertion set on the mutation. A mutation might has assertion (asserts the key
+    /// must already exist / not exist before the current write), and if the assertion is not
+    /// satisfied, it will be regarded as an inconsistent data or corruption.
+    ///
+    /// If `write_loaded` is true, `write` should be the most recent write record on the current
+    /// key, and the check will be made on this record. If the latest write record is not a data
+    /// record (it's neither `Put` nor `Delete`), it will then try to continue finding the most
+    /// recent `Put` or `Delete`.
+    ///
+    /// If `write_loaded` is false, this function will load the recent write by itself.
+    ///
+    /// Returns `(write, reloaded)`, where `reloaded` is a bool indicates whether this function
+    /// tried to load the write record from Write CF (because `write_loaded` is set to false or
+    /// `write` is not `Put` or `Delete`). If `reloaded` is true, `write` will be a write record
+    /// that this function finally found and its commit_ts, if any. If it's needed to read the
+    /// previous value after this function, the returned `write` can be reused to avoid reading
+    /// Write CF again.
     fn check_assertion<S: Snapshot>(
         &self,
         reader: &mut SnapshotReader<S>,
@@ -486,6 +503,11 @@ impl<'a> PrewriteMutation<'a> {
             || self.txn_props.assertion_level == AssertionLevel::Off
         {
             MVCC_PREWRITE_ASSERTION_PERF_COUNTER_VEC.none.inc();
+            return Ok((None, false));
+        }
+
+        // Do nothing if the mutation itself implies an existence check (it's Insert or CheckNotExist).
+        if self.should_not_exist {
             return Ok((None, false));
         }
 
@@ -785,6 +807,26 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> Result<()> {
+        try_prewrite_insert_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            Assertion::None,
+            AssertionLevel::Off,
+        )
+    }
+
+    fn try_prewrite_insert_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+        assertion: Assertion,
+        assertion_level: AssertionLevel,
+    ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
@@ -794,11 +836,12 @@ pub mod tests {
 
         let mut props = optimistic_txn_props(pk, ts);
         props.need_old_value = true;
+        props.assertion_level = assertion_level;
         let (_, old_value) = prewrite(
             &mut txn,
             &mut reader,
             &props,
-            Mutation::make_insert(Key::from_raw(key), value.to_vec()),
+            Mutation::Insert((Key::from_raw(key), value.to_vec()), assertion),
             &None,
             SkipPessimisticCheck,
         )?;
@@ -819,17 +862,37 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> Result<()> {
+        try_prewrite_check_not_exists_impl(
+            engine,
+            key,
+            pk,
+            ts,
+            Assertion::None,
+            AssertionLevel::Off,
+        )
+    }
+
+    fn try_prewrite_check_not_exists_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: impl Into<TimeStamp>,
+        assertion: Assertion,
+        assertion_level: AssertionLevel,
+    ) -> Result<()> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
         let cm = ConcurrencyManager::new(ts);
         let mut txn = MvccTxn::new(ts, cm);
         let mut reader = SnapshotReader::new(ts, snapshot, true);
 
+        let mut props = optimistic_txn_props(pk, ts);
+        props.assertion_level = assertion_level;
         let (_, old_value) = prewrite(
             &mut txn,
             &mut reader,
-            &optimistic_txn_props(pk, ts),
-            Mutation::make_check_not_exists(Key::from_raw(key)),
+            &props,
+            Mutation::CheckNotExists(Key::from_raw(key), assertion),
             &None,
             DoPessimisticCheck,
         )?;
@@ -1862,20 +1925,56 @@ pub mod tests {
             }
         };
 
-        let test = |key_prefix: &[u8], assertion_level, prepare: &dyn for<'a> Fn(&'a [u8])| {
-            let k1 = [key_prefix, b"k1"].concat();
-            let k2 = [key_prefix, b"k2"].concat();
-            let k3 = [key_prefix, b"k3"].concat();
-            let k4 = [key_prefix, b"k4"].concat();
+        let prewrite_insert = |key: &'_ _,
+                               value,
+                               ts: u64,
+                               assertion,
+                               assertion_level,
+                               already_exist| {
+            let res =
+                try_prewrite_insert_impl(&engine, key, value, key, ts, assertion, assertion_level);
+            if already_exist {
+                assert!(matches!(
+                    res,
+                    Err(Error(box ErrorInner::AlreadyExist { .. }))
+                ));
+            } else {
+                res.unwrap();
+            }
+        };
+        let prewrite_check_not_exist =
+            |key: &'_ _, ts: u64, assertion, assertion_level, already_exist| {
+                let res = try_prewrite_check_not_exists_impl(
+                    &engine,
+                    key,
+                    key,
+                    ts,
+                    assertion,
+                    assertion_level,
+                );
+                if already_exist {
+                    assert!(matches!(
+                        res,
+                        Err(Error(box ErrorInner::AlreadyExist { .. }))
+                    ));
+                } else {
+                    res.unwrap();
+                }
+            };
 
-            for k in &[&k1, &k2, &k3, &k4] {
+        let test = |key_prefix: &[u8], assertion_level, prepare: &dyn for<'a> Fn(&'a [u8])| {
+            let keys: Vec<_> = (0..6)
+                .map(|i| [key_prefix, &[b'k', i as u8]].concat())
+                .collect();
+
+            for k in &keys {
                 prepare(k.as_slice());
             }
 
             // Assertion passes (optimistic).
             prewrite_put(
-                &k1,
-                b"v1",
+                &keys[0],
+                b"v0",
                 10,
                 SkipPessimisticCheck,
                 0,
@@ -1883,11 +1982,11 @@ pub mod tests {
                 assertion_level,
                 true,
             );
-            must_commit(&engine, &k1, 10, 15);
+            must_commit(&engine, &keys[0], 10, 15);
 
             prewrite_put(
-                &k1,
-                b"v1",
+                &keys[0],
+                b"v0",
                 20,
                 SkipPessimisticCheck,
                 0,
@@ -1895,12 +1994,12 @@ pub mod tests {
                 assertion_level,
                 true,
             );
-            must_commit(&engine, &k1, 20, 25);
+            must_commit(&engine, &keys[0], 20, 25);
 
             // Assertion passes (pessimistic).
             prewrite_put(
-                &k2,
-                b"v2",
+                &keys[1],
+                b"v1",
                 10,
                 DoPessimisticCheck,
                 11,
@@ -1908,11 +2007,11 @@ pub mod tests {
                 assertion_level,
                 true,
             );
-            must_commit(&engine, &k2, 10, 15);
+            must_commit(&engine, &keys[1], 10, 15);
 
             prewrite_put(
-                &k2,
-                b"v2",
+                &keys[1],
+                b"v1",
                 20,
                 DoPessimisticCheck,
                 21,
@@ -1920,13 +2019,13 @@ pub mod tests {
                 assertion_level,
                 true,
             );
-            must_commit(&engine, &k2, 20, 25);
+            must_commit(&engine, &keys[1], 20, 25);
 
             // Optimistic transaction assertion fail on fast/strict level.
             let pass = assertion_level == AssertionLevel::Off;
             prewrite_put(
-                &k1,
-                b"v1",
+                &keys[0],
+                b"v0",
                 30,
                 SkipPessimisticCheck,
                 0,
@@ -1935,8 +2034,8 @@ pub mod tests {
                 pass,
             );
             prewrite_put(
-                &k3,
-                b"v3",
+                &keys[2],
+                b"v2",
                 30,
                 SkipPessimisticCheck,
                 0,
@@ -1944,15 +2043,15 @@ pub mod tests {
                 assertion_level,
                 pass,
             );
-            must_rollback(&engine, &k1, 30, true);
-            must_rollback(&engine, &k3, 30, true);
+            must_rollback(&engine, &keys[0], 30, true);
+            must_rollback(&engine, &keys[2], 30, true);
 
             // Pessimistic transaction assertion fail on fast/strict level if assertion
             // happens during amending pessimistic lock.
             let pass = assertion_level == AssertionLevel::Off;
             prewrite_put(
-                &k2,
-                b"v2",
+                &keys[1],
+                b"v1",
                 30,
                 DoPessimisticCheck,
                 31,
@@ -1961,8 +2060,8 @@ pub mod tests {
                 pass,
             );
             prewrite_put(
-                &k4,
-                b"v4",
+                &keys[3],
+                b"v3",
                 30,
                 DoPessimisticCheck,
                 31,
@@ -1970,15 +2069,15 @@ pub mod tests {
                 assertion_level,
                 pass,
             );
-            must_rollback(&engine, &k2, 30, true);
-            must_rollback(&engine, &k4, 30, true);
+            must_rollback(&engine, &keys[1], 30, true);
+            must_rollback(&engine, &keys[3], 30, true);
 
             // Pessimistic transaction fail on strict level no matter what
             // `pessimistic_action` is.
             let pass = assertion_level != AssertionLevel::Strict;
             prewrite_put(
-                &k1,
-                b"v1",
+                &keys[0],
+                b"v0",
                 40,
                 SkipPessimisticCheck,
                 41,
@@ -1987,24 +2086,24 @@ pub mod tests {
                 pass,
             );
             prewrite_put(
-                &k3,
-                b"v3",
-                40,
-                SkipPessimisticCheck,
-                41,
-                Assertion::Exist,
-                assertion_level,
-                pass,
-            );
-            must_rollback(&engine, &k1, 40, true);
-            must_rollback(&engine, &k3, 40, true);
-
-            must_acquire_pessimistic_lock(&engine, &k2, &k2, 40, 41);
-            must_acquire_pessimistic_lock(&engine, &k4, &k4, 40, 41);
-            prewrite_put(
-                &k2,
+                &keys[2],
                 b"v2",
                 40,
+                SkipPessimisticCheck,
+                41,
+                Assertion::Exist,
+                assertion_level,
+                pass,
+            );
+            must_rollback(&engine, &keys[0], 40, true);
+            must_rollback(&engine, &keys[2], 40, true);
+
+            must_acquire_pessimistic_lock(&engine, &keys[1], &keys[1], 40, 41);
+            must_acquire_pessimistic_lock(&engine, &keys[3], &keys[3], 40, 41);
+            prewrite_put(
+                &keys[1],
+                b"v1",
+                40,
                 DoPessimisticCheck,
                 41,
                 Assertion::NotExist,
@@ -2012,8 +2111,8 @@ pub mod tests {
                 pass,
             );
             prewrite_put(
-                &k4,
-                b"v4",
+                &keys[3],
+                b"v3",
                 40,
                 DoPessimisticCheck,
                 41,
@@ -2021,8 +2120,53 @@ pub mod tests {
                 assertion_level,
                 pass,
             );
-            must_rollback(&engine, &k1, 40, true);
-            must_rollback(&engine, &k3, 40, true);
+            must_rollback(&engine, &keys[1], 40, true);
+            must_rollback(&engine, &keys[3], 40, true);
+
+            // Test insert and check_not_exist.
+            // Insert and check_not_exist are not expected to be combined with Assertion::Exist.
+            // But for completeness, we still test that case. Since we skips checking assertion
+            // for Insert and CheckNotExist, nothing will happen even we assert the key already
+            // exists.
+            prewrite_insert(
+                &keys[4],
+                b"v4",
+                50,
+                Assertion::Exist,
+                assertion_level,
+                false,
+            );
+            prewrite_check_not_exist(&keys[5], 50, Assertion::Exist, assertion_level, false);
+            must_rollback(&engine, &keys[4], 50, false);
+
+            prewrite_insert(
+                &keys[4],
+                b"v4",
+                51,
+                Assertion::NotExist,
+                assertion_level,
+                false,
+            );
+            prewrite_check_not_exist(&keys[5], 51, Assertion::NotExist, assertion_level, false);
+            must_rollback(&engine, &keys[4], 51, false);
+
+            must_prewrite_put(&engine, &keys[4], b"v4", &keys[4], 52);
+            must_prewrite_put(&engine, &keys[5], b"v5", &keys[5], 52);
+            must_commit(&engine, &keys[4], 52, 53);
+            must_commit(&engine, &keys[5], 52, 53);
+
+            prewrite_insert(
+                &keys[4],
+                b"v4",
+                60,
+                Assertion::NotExist,
+                assertion_level,
+                true,
+            );
+            prewrite_check_not_exist(&keys[5], 60, Assertion::NotExist, assertion_level, true);
+
+            prewrite_insert(&keys[4], b"v4", 60, Assertion::Exist, assertion_level, true);
+            prewrite_check_not_exist(&keys[5], 60, Assertion::Exist, assertion_level, true);
         };
 
         let prepare_rollback = |k: &'_ _| must_rollback(&engine, k, 3, true);
