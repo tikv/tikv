@@ -34,10 +34,6 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn roughly_cleanup_ranges(&self, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-        panic!()
-    }
-
     fn path(&self) -> &str {
         panic!()
     }
