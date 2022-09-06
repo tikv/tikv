@@ -343,36 +343,40 @@ where
 
     fn modify_on_kv_engine(
         &self,
-        mut modifies: Vec<Modify>,
-        key_to_region: Option<HashMap<Key, u64>>,
+        mut region_modifies: HashMap<u64, Vec<Modify>>,
     ) -> kv::Result<()> {
-        for modify in &mut modifies {
-            match modify {
-                Modify::Delete(_, ref mut key) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::Put(_, ref mut key, _) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::PessimisticLock(ref mut key, _) => {
-                    let bytes = keys::data_key(key.as_encoded());
-                    *key = Key::from_encoded(bytes);
-                }
-                Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
-                    let bytes = keys::data_key(key1.as_encoded());
-                    *key1 = Key::from_encoded(bytes);
-                    let bytes = keys::data_end_key(key2.as_encoded());
-                    *key2 = Key::from_encoded(bytes);
+        for modifies in region_modifies.values_mut() {
+            for modify in modifies.iter_mut() {
+                match modify {
+                    Modify::Delete(_, ref mut key) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::Put(_, ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::PessimisticLock(ref mut key, _) => {
+                        let bytes = keys::data_key(key.as_encoded());
+                        *key = Key::from_encoded(bytes);
+                    }
+                    Modify::DeleteRange(_, ref mut key1, ref mut key2, _) => {
+                        let bytes = keys::data_key(key1.as_encoded());
+                        *key1 = Key::from_encoded(bytes);
+                        let bytes = keys::data_end_key(key2.as_encoded());
+                        *key2 = Key::from_encoded(bytes);
+                    }
                 }
             }
         }
 
         if self.multi_rocks {
-            write_modifies_v2(&self.engine, modifies, key_to_region.unwrap())
+            write_modifies_v2(region_modifies)
         } else {
-            write_modifies(&self.engine, modifies)
+            write_modifies(
+                &self.engine,
+                region_modifies.into_values().flatten().collect(),
+            )
         }
     }
 

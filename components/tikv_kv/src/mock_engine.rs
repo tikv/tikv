@@ -6,7 +6,6 @@ use std::{
 };
 
 use kvproto::kvrpcpb::Context;
-use txn_types::Key;
 
 use super::Result;
 use crate::{Callback, Engine, ExtCallback, Modify, RocksEngine, SnapContext, WriteData};
@@ -153,12 +152,8 @@ impl Engine for MockEngine {
         self.base.kv_engine()
     }
 
-    fn modify_on_kv_engine(
-        &self,
-        modifies: Vec<Modify>,
-        key_to_region: Option<HashMap<Key, u64>>,
-    ) -> Result<()> {
-        self.base.modify_on_kv_engine(modifies, key_to_region)
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        self.base.modify_on_kv_engine(region_modifies)
     }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()> {

@@ -82,11 +82,7 @@ impl Engine for BTreeEngine {
         unimplemented!();
     }
 
-    fn modify_on_kv_engine(
-        &self,
-        _: Vec<Modify>,
-        _: Option<HashMap<Key, u64>>,
-    ) -> EngineResult<()> {
+    fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> EngineResult<()> {
         unimplemented!();
     }
 

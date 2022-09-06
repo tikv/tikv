@@ -368,16 +368,19 @@ where
     }
 
     fn flush_txn(
-        txn: MvccTxn,
         limiter: &Limiter,
         engine: &E,
-        key_to_region: std::collections::HashMap<Key, u64>,
+        txns: std::collections::HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
     ) -> Result<()> {
-        let write_size = txn.write_size();
-        let modifies = txn.into_modifies();
-        if !modifies.is_empty() {
+        let mut modifies = std::collections::HashMap::new();
+        let mut write_size = 0;
+        let _ = txns.into_iter().map(|(id, txn)| {
+            write_size += txn.write_size();
+            modifies.insert(id, txn.into_modifies());
+        });
+        if write_size > 0 {
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies, Some(key_to_region))?;
+            engine.modify_on_kv_engine(modifies)?;
         }
         Ok(())
     }
@@ -451,13 +454,11 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
-        let mut key_to_region = std::collections::HashMap::new();
-        let multi_rocks = self.engine.multi_rocks();
-
-        let mut txn = Self::new_txn();
+        let mut txns = std::collections::HashMap::new();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
+            let mut txn = Self::new_txn();
             let mut reader = self.create_reader(
                 count,
                 &region,
@@ -469,10 +470,6 @@ where
             let mut next_gc_key = keys_in_region.next();
 
             while let Some(ref key) = next_gc_key {
-                if multi_rocks {
-                    key_to_region.insert(key.clone(), region.id);
-                }
-
                 if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
                     GC_KEY_FAILURES.inc();
                     error!(?e; "GC meets failure"; "key" => %key,);
@@ -504,8 +501,9 @@ where
                     next_gc_key = keys_in_region.next();
                     gc_info = GcInfo::default();
                 } else {
-                    Self::flush_txn(txn, &self.limiter, &self.engine, key_to_region)?;
-                    key_to_region = std::collections::HashMap::new();
+                    txns.insert(region.id, txn);
+                    Self::flush_txn(&self.limiter, &self.engine, txns)?;
+                    txns = std::collections::HashMap::new();
 
                     reader = self.create_reader(
                         count,
@@ -516,9 +514,11 @@ where
                     txn = Self::new_txn();
                 }
             }
+
+            txns.insert(region.id, txn);
         }
 
-        Self::flush_txn(txn, &self.limiter, &self.engine, key_to_region)?;
+        Self::flush_txn(&self.limiter, &self.engine, txns)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -561,7 +561,6 @@ where
             Key::from_raw(&k)
         };
 
-        let mut raw_modifies = MvccRaw::new();
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
 
@@ -569,20 +568,16 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
-        let multi_rocks = self.engine.multi_rocks();
-        let mut key_to_region = std::collections::HashMap::new();
+        let mut region_modifies = std::collections::HashMap::new();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
+            let mut raw_modifies = MvccRaw::new();
             let mut snapshot = self.get_snapshot(self.store_id, &region)?;
 
             let mut keys_in_region = get_keys_in_region(&mut keys, &region).into_iter();
             let mut next_gc_key = keys_in_region.next();
             while let Some(ref key) = next_gc_key {
-                if multi_rocks {
-                    key_to_region.insert(key.clone(), region.id);
-                }
-
                 if let Err(e) = self.raw_gc_key(
                     safe_point,
                     key,
@@ -617,16 +612,19 @@ where
                     next_gc_key = keys_in_region.next();
                     gc_info = GcInfo::default();
                 } else {
+                    region_modifies.insert(region.id, raw_modifies);
                     // Flush writeBatch to engine.
-                    Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, key_to_region)?;
+                    Self::flush_raw_gc(&self.limiter, &self.engine, region_modifies)?;
                     // After flush, reset raw_modifies.
                     raw_modifies = MvccRaw::new();
-                    key_to_region = std::collections::HashMap::new();
+                    region_modifies = std::collections::HashMap::new();
                 }
             }
+
+            region_modifies.insert(region.id, raw_modifies);
         }
 
-        Self::flush_raw_gc(raw_modifies, &self.limiter, &self.engine, key_to_region)?;
+        Self::flush_raw_gc(&self.limiter, &self.engine, region_modifies)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -707,17 +705,20 @@ where
     }
 
     fn flush_raw_gc(
-        raw_modifies: MvccRaw,
         limiter: &Limiter,
         engine: &E,
-        key_to_region: std::collections::HashMap<Key, u64>,
+        region_modifies: std::collections::HashMap<u64, MvccRaw>,
     ) -> Result<()> {
-        let write_size = raw_modifies.write_size();
-        let modifies = raw_modifies.into_modifies();
-        if !modifies.is_empty() {
+        let mut modifies = std::collections::HashMap::new();
+        let mut write_size = 0;
+        let _ = region_modifies.into_iter().map(|(id, mvcc_raw)| {
+            write_size += mvcc_raw.write_size();
+            modifies.insert(id, mvcc_raw.into_modifies());
+        });
+        if write_size > 0 {
             // rate limiter
             limiter.blocking_consume(write_size);
-            engine.modify_on_kv_engine(modifies, Some(key_to_region))?;
+            engine.modify_on_kv_engine(modifies)?;
         }
         Ok(())
     }
@@ -1402,6 +1403,7 @@ pub mod test_gc_worker {
     };
 
     use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_test::kv::TestTabletFactoryV2;
     use kvproto::{
         kvrpcpb::Context,
         metapb::{Peer, Region},
@@ -1420,14 +1422,6 @@ pub mod test_gc_worker {
             Engine,
         },
     };
-
-    fn write_modifies_v2(
-        _modifies: Vec<Modify>,
-        _key_to_id: HashMap<Key, u64>,
-        _sender: &HashMap<u64, mpsc::Sender<Vec<Modify>>>,
-    ) -> kv::Result<()> {
-        unimplemented!();
-    }
 
     /// A wrapper of engine that adds the 'z' prefix to keys internally.
     /// For test engines, they writes keys into db directly, but in production a
@@ -1458,9 +1452,9 @@ pub mod test_gc_worker {
 
         fn modify_on_kv_engine(
             &self,
-            mut modifies: Vec<Modify>,
-            key_to_region: Option<HashMap<Key, u64>>,
+            region_modifies: HashMap<u64, Vec<Modify>>,
         ) -> kv::Result<()> {
+            let mut modifies: Vec<_> = region_modifies.into_values().flatten().collect();
             for modify in &mut modifies {
                 match modify {
                     Modify::Delete(_, ref mut key) => {
@@ -1484,15 +1478,7 @@ pub mod test_gc_worker {
                 }
             }
 
-            if self.multi_rocks() {
-                write_modifies_v2(
-                    modifies,
-                    key_to_region.unwrap(),
-                    self.write_task_sender.as_ref().unwrap(),
-                )
-            } else {
-                write_modifies(&self.kv_engine(), modifies)
-            }
+            write_modifies(&self.kv_engine(), modifies)
         }
 
         fn async_write(
@@ -1543,6 +1529,48 @@ pub mod test_gc_worker {
     impl GcSafePointProvider for MockSafePointProvider {
         fn get_safe_point(&self) -> GcWorkerResult<TimeStamp> {
             Ok(self.0.into())
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct MultiRocksEngine {
+        pub factory: TestTabletFactoryV2,
+    }
+
+    impl Engine for MultiRocksEngine {
+        type Snap = RegionSnapshot<RocksSnapshot>;
+        type Local = RocksEngine;
+
+        fn multi_rocks(&self) -> bool {
+            true
+        }
+
+        fn kv_engine(&self) -> Self::Local {
+            panic!()
+        }
+
+        fn modify_on_kv_engine(
+            &self,
+            _region_modifies: HashMap<u64, Vec<Modify>>,
+        ) -> kv::Result<()> {
+            unimplemented!()
+        }
+
+        fn async_write(
+            &self,
+            _ctx: &Context,
+            mut _batch: WriteData,
+            _callback: EngineCallback<()>,
+        ) -> EngineResult<()> {
+            unimplemented!()
+        }
+
+        fn async_snapshot(
+            &self,
+            _ctx: SnapContext<'_>,
+            _callback: EngineCallback<Self::Snap>,
+        ) -> EngineResult<()> {
+            unimplemented!()
         }
     }
 }

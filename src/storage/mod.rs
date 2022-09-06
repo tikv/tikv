@@ -2794,10 +2794,9 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
 
     fn modify_on_kv_engine(
         &self,
-        modifies: Vec<Modify>,
-        key_to_region: Option<HashMap<Key, u64>>,
+        region_modifies: HashMap<u64, Vec<Modify>>,
     ) -> tikv_kv::Result<()> {
-        self.engine.modify_on_kv_engine(modifies, key_to_region)
+        self.engine.modify_on_kv_engine(region_modifies)
     }
 
     fn async_snapshot(

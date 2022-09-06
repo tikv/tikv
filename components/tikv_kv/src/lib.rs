@@ -276,11 +276,7 @@ pub trait Engine: Send + Clone + 'static {
     fn kv_engine(&self) -> Self::Local;
 
     /// Write modifications into internal local engine directly.
-    fn modify_on_kv_engine(
-        &self,
-        modifies: Vec<Modify>,
-        key_to_region: Option<HashMap<Key, u64>>,
-    ) -> Result<()>;
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
@@ -670,11 +666,7 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
-pub fn write_modifies_v2(
-    _engine: &impl LocalEngine,
-    _modifies: Vec<Modify>,
-    _key_to_id: HashMap<Key, u64>,
-) -> Result<()> {
+pub fn write_modifies_v2(_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
     unimplemented!();
 }
 

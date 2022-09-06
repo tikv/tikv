@@ -211,11 +211,8 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
-    fn modify_on_kv_engine(
-        &self,
-        modifies: Vec<Modify>,
-        _: Option<HashMap<Key, u64>>,
-    ) -> Result<()> {
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        let modifies = region_modifies.into_values().flatten().collect();
         write_modifies(&self.engines.kv, modifies)
     }
 
