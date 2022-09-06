@@ -584,7 +584,7 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if self.host.pre_commit(&delegate.region, true) {
+        if self.host.pre_commit(&delegate.region, true, None) {
             if !delegate.pending_remove {
                 delegate.write_apply_state(self.kv_wb_mut());
             }
@@ -1080,9 +1080,9 @@ where
             }
             let mut has_unflushed_data =
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
-            if has_unflushed_data && should_write_to_engine(&cmd)
-                || apply_ctx.kv_wb().should_write_to_engine()
-                || apply_ctx.host.pre_commit(&self.region, false)
+            if (has_unflushed_data && should_write_to_engine(&cmd)
+                || apply_ctx.kv_wb().should_write_to_engine())
+                && apply_ctx.host.pre_commit(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -5105,7 +5105,12 @@ mod tests {
     }
 
     impl RegionChangeObserver for ApplyObserver {
-        fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
+        fn pre_commit(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _is_finished: bool,
+            _cmd: Option<&RaftCmdRequest>,
+        ) -> bool {
             !self.skip_persist_when_pre_commit.load(Ordering::SeqCst)
         }
     }

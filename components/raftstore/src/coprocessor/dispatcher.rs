@@ -632,11 +632,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
     /// For example, in `finish_for` and `commit`,
     /// we will separately call `pre_commit` with is_finished = true/false.
     /// By returning false, we reject this persistence.
-    pub fn pre_commit(&self, region: &Region, is_finished: bool) -> bool {
+    pub fn pre_commit(
+        &self,
+        region: &Region,
+        is_finished: bool,
+        cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
         let mut ctx = ObserverContext::new(region);
         for observer in &self.registry.region_change_observers {
             let observer = observer.observer.inner();
-            if !observer.pre_commit(&mut ctx, is_finished) {
+            if !observer.pre_commit(&mut ctx, is_finished, cmd) {
                 return false;
             }
         }

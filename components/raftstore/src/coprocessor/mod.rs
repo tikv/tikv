@@ -313,7 +313,12 @@ pub trait RegionChangeObserver: Coprocessor {
 
     /// Should be called everytime before we commit in a WriteBatch in
     /// ApplyDelegate. Returns false if we can't commit at this time.
-    fn pre_commit(&self, _: &mut ObserverContext<'_>, _is_finished: bool) -> bool {
+    fn pre_commit(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _is_finished: bool,
+        _cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
         true
     }
 }
