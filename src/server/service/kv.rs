@@ -38,7 +38,7 @@ use raftstore::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::batch::{unbounded, BatchCollector, BatchReceiver, Sender},
+    mpsc::future::{unbounded, BatchCollector, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
@@ -1017,7 +1017,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
         mut sink: DuplexSink<BatchCommandsResponse>,
     ) {
         forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
-        let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
+        let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
 
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
@@ -1234,7 +1234,7 @@ fn response_batch_commands_request<F, T>(
                 source,
             };
             let task = MeasuredSingleResponse::new(id, resp, measure);
-            if let Err(e) = tx.send_and_notify(task) {
+            if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
                 error!("KvService response batch commands fail"; "err" => ?e);
             }
         }
