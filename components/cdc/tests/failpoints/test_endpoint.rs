@@ -453,7 +453,6 @@ fn test_cdc_rawkv_resolved_ts() {
     let region_id = region.get_id();
     let leader = region.get_peers()[0].clone();
     let node_id = leader.get_id();
-    // let leader_cm = cluster.sim.rl().get_concurrency_manager(node_id);
     let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
 
     let env = Arc::new(Environment::new(1));
