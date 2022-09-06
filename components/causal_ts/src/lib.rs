@@ -69,6 +69,13 @@ pub mod tests {
             self.ts.fetch_add(100, Ordering::Relaxed);
             Ok(())
         }
+
+        // This is used for unit test. Add 100 from current.
+        // Do not modify this value as several test cases (e.g. endpoint::tests::test_raw_causal_ts_flush) depend on it.
+        fn soft_flush(&self) -> Result<()> {
+            self.ts.fetch_add(100, Ordering::Relaxed);
+            Ok(())
+        }
     }
 
     #[derive(Clone, Default)]
