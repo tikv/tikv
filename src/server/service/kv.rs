@@ -1710,7 +1710,9 @@ fn future_flashback_to_version<
             SignificantMsg::PrepareFlashback(req.get_version(), result_tx),
         )?;
         if let Err(err) = result_rx.await? {
-            return Err(Error::from(err));
+            let mut resp = FlashbackToVersionResponse::default();
+            resp.set_error(format!("failed to prepare the flashback: {}", err));
+            return Ok(resp);
         }
         let (cb, f) = paired_future_callback();
         let res = storage_clone.sched_txn_command(req.into(), cb);

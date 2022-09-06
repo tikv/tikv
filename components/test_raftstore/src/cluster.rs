@@ -1427,10 +1427,7 @@ impl<T: Simulator> Cluster<T> {
             .significant_send(region_id, SignificantMsg::PrepareFlashback(u64::MAX, tx))
             .unwrap();
 
-        let prepared = rx.await.unwrap();
-        if !prepared {
-            panic!("prepare flashback failed");
-        }
+        rx.await.unwrap().unwrap();
     }
 
     pub fn call_finish_flashback(&mut self, region_id: u64, store_id: u64) {
