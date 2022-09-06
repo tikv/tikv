@@ -37,10 +37,6 @@ impl ThreadInfoStatistics {
     }
 }
 
-pub fn dump_thread_stats() -> String {
-    "only support linux".into()
-}
-
 impl Default for ThreadInfoStatistics {
     fn default() -> Self {
         Self::new()

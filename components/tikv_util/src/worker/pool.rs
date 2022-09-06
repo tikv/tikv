@@ -90,7 +90,6 @@ impl<R: Runnable + 'static> Drop for RunnableWrapper<R> {
 enum Msg<T: Display + Send> {
     Task(T),
     Timeout,
-    Poll(Arc<NotifyWaker>),
 }
 
 /// Scheduler provides interface to schedule task to underlying workers.
@@ -401,21 +400,13 @@ impl Worker {
 
     fn delay_notify<T: Display + Send + 'static>(tx: UnboundedSender<Msg<T>>, timeout: Duration) {
         let now = Instant::now();
-        let x = tx.clone();
         let f = GLOBAL_TIMER_HANDLE
             .delay(now + timeout)
             .compat()
             .map(move |_| {
                 let _ = tx.unbounded_send(Msg::<T>::Timeout);
             });
-        let f: BoxFuture<'static, ()> = Box::pin(f);
-        let waker = Arc::new(NotifyWaker {
-            future: Mutex::new(Some(f)),
-            retry_fn: Box::new(move |waker: Arc<NotifyWaker>| {
-                let _ = x.unbounded_send(Msg::Poll(waker));
-            }),
-        });
-        waker.wake();
+        poll_future_notify(f);
     }
 
     pub fn lazy_build<T: Display + Send + 'static, S: Into<String>>(
@@ -472,7 +463,6 @@ impl Worker {
                         metrics_pending_task_count.dec();
                     }
                     Msg::Timeout => (),
-                    _ => (),
                 }
             }
         });
@@ -504,44 +494,9 @@ impl Worker {
                         let timeout = handle.inner.get_interval();
                         Self::delay_notify(tx.clone(), timeout);
                     }
-                    Msg::Poll(waker) => {
-                        waker.wake();
-                    }
                 }
             }
         });
-    }
-}
-
-use futures::{
-    future::BoxFuture,
-    task::{self, ArcWake, Context, Poll},
-};
-
-struct NotifyWaker {
-    future: Mutex<Option<BoxFuture<'static, ()>>>,
-    retry_fn: Box<dyn Fn(Arc<Self>) + Send + Sync>,
-}
-
-impl ArcWake for NotifyWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        match arc_self.future.try_lock() {
-            Ok(mut future_slot) => {
-                if let Some(mut future) = future_slot.take() {
-                    let waker = task::waker_ref(&arc_self);
-                    let cx = &mut Context::from_waker(&*waker);
-                    match future.as_mut().poll(cx) {
-                        Poll::Pending => {
-                            *future_slot = Some(future);
-                        }
-                        Poll::Ready(()) => {}
-                    }
-                }
-            }
-            Err(_) => {
-                let _ = (arc_self.retry_fn)(arc_self.clone());
-            }
-        }
     }
 }
 

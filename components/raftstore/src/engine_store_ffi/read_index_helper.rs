@@ -153,9 +153,7 @@ impl<ER: RaftEngine, EK: KvEngine> ReadIndex for ReadIndexClient<ER, EK> {
 
             futures::pin_mut!(read_index_fut);
             let deadline = Instant::now() + timeout;
-            let delay = tikv_util::timer::PROXY_TIMER_HANDLE
-                .delay(deadline)
-                .compat();
+            let delay = super::utils::PROXY_TIMER_HANDLE.delay(deadline).compat();
             let ret = futures::future::select(read_index_fut, delay);
             match block_on(ret) {
                 futures::future::Either::Left(_) => true,

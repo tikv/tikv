@@ -93,7 +93,8 @@ lazy_static! {
     pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer("timer");
 }
 
-fn start_global_timer(name: &str) -> Handle {
+/// Create a global timer with specific thread name.
+pub fn start_global_timer(name: &str) -> Handle {
     let (tx, rx) = mpsc::channel();
     let props = crate::thread_group::current_properties();
     Builder::new()
@@ -272,8 +273,4 @@ mod tests {
             elapsed
         );
     }
-}
-
-lazy_static! {
-    pub static ref PROXY_TIMER_HANDLE: Handle = start_global_timer("proxy-timer");
 }

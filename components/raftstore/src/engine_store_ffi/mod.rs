@@ -24,6 +24,7 @@ use engine_traits::{
     SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::{kvrpcpb, metapb, raft_cmdpb};
+use lazy_static::lazy_static;
 use protobuf::Message;
 pub use read_index_helper::ReadIndexClient;
 

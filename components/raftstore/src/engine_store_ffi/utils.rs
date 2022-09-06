@@ -3,6 +3,14 @@
 use std::time;
 
 use futures_util::{compat::Future01CompatExt, future::BoxFuture, FutureExt};
+use tikv_util::timer::start_global_timer;
+use tokio_timer::timer::Handle;
+
+use crate::engine_store_ffi::lazy_static;
+
+lazy_static! {
+    pub static ref PROXY_TIMER_HANDLE: Handle = start_global_timer("proxy-timer");
+}
 
 pub type ArcNotifyWaker = std::sync::Arc<NotifyWaker>;
 
@@ -22,10 +30,7 @@ pub struct TimerTask {
 
 pub fn make_timer_task(millis: u64) -> TimerTask {
     let deadline = time::Instant::now() + time::Duration::from_millis(millis);
-    let delay = tikv_util::timer::PROXY_TIMER_HANDLE
-        .delay(deadline)
-        .compat()
-        .map(|_| {});
+    let delay = PROXY_TIMER_HANDLE.delay(deadline).compat().map(|_| {});
     TimerTask {
         future: Box::pin(delay),
     }

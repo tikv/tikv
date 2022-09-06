@@ -280,7 +280,6 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
 
         let mut sample = quota_limiter.new_sample();
-
         sample.add_cpu_time(Duration::from_millis(20));
         let should_delay = block_on(quota_limiter.async_consume(sample));
         // should less 60+50+20
@@ -290,7 +289,6 @@ mod tests {
         sample.add_cpu_time(Duration::from_millis(200));
         sample.add_write_bytes(256);
         let should_delay = block_on(quota_limiter.async_consume(sample));
-
         check_duration(should_delay, Duration::from_millis(250));
 
         // ThreadTime elapsed time is not long.
