@@ -386,9 +386,7 @@ where
     }
 
     fn gc(&mut self, region: Region, safe_point: TimeStamp) -> Result<()> {
-        if !self.engine.multi_rocks()
-            && !self.need_gc(region.get_start_key(), region.get_end_key(), safe_point)
-        {
+        if !self.need_gc(region.get_start_key(), region.get_end_key(), safe_point) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
@@ -740,7 +738,7 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.kv_engine();
+        let local_storage = self.engine.kv_engine().unwrap();
 
         // Convert keys to RocksDB layer form
         // TODO: Logic coupled with raftstore's implementation. Maybe better design is
@@ -1435,7 +1433,7 @@ pub mod test_gc_worker {
         type Snap = RegionSnapshot<RocksSnapshot>;
         type Local = RocksEngine;
 
-        fn kv_engine(&self) -> RocksEngine {
+        fn kv_engine(&self) -> Option<RocksEngine> {
             self.0.kv_engine()
         }
 
@@ -1466,7 +1464,7 @@ pub mod test_gc_worker {
                     }
                 }
             }
-            write_modifies(&self.kv_engine(), modifies)
+            write_modifies(&self.kv_engine().unwrap(), modifies)
         }
 
         fn async_write(
@@ -1532,12 +1530,8 @@ pub mod test_gc_worker {
         type Snap = RegionSnapshot<RocksSnapshot>;
         type Local = RocksEngine;
 
-        fn multi_rocks(&self) -> bool {
-            true
-        }
-
-        fn kv_engine(&self) -> Self::Local {
-            panic!()
+        fn kv_engine(&self) -> Option<Self::Local> {
+            None
         }
 
         fn modify_on_kv_engine(
@@ -2106,7 +2100,7 @@ mod tests {
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
         for i in 0..100 {
@@ -2181,7 +2175,7 @@ mod tests {
         let ri_provider = RegionInfoAccessor::new(&mut host);
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         let mut keys = vec![];
         for i in 0..100 {
@@ -2345,7 +2339,7 @@ mod tests {
         let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         // Generate some tombstone
         for i in 10u64..30 {
@@ -2441,7 +2435,7 @@ mod tests {
         let engine = PrefixedEngine(TestEngineBuilder::new().build().unwrap());
         must_prewrite_put(&engine, b"key", b"value", b"key", 10);
         must_commit(&engine, b"key", 10, 20);
-        let db = engine.kv_engine().as_inner().clone();
+        let db = engine.kv_engine().unwrap().as_inner().clone();
         let cf = get_cf_handle(&db, CF_WRITE).unwrap();
         db.flush_cf(cf, true).unwrap();
 

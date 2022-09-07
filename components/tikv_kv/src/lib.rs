@@ -267,13 +267,8 @@ pub trait Engine: Send + Clone + 'static {
     type Snap: Snapshot;
     type Local: LocalEngine;
 
-    /// Whether multi-rocks db setting is enabled
-    fn multi_rocks(&self) -> bool {
-        false
-    }
-
     /// Local storage engine.
-    fn kv_engine(&self) -> Self::Local;
+    fn kv_engine(&self) -> Option<Self::Local>;
 
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;

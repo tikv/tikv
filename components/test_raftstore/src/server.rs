@@ -297,7 +297,6 @@ impl ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
         let raft_engine = RaftKv::new(
-            false,
             sim_router.clone(),
             engines.kv.clone(),
             region_info_accessor.region_leaders(),
@@ -319,7 +318,6 @@ impl ServerCluster {
         ));
 
         let mut engine = RaftKv::new(
-            false,
             sim_router.clone(),
             engines.kv.clone(),
             region_info_accessor.region_leaders(),

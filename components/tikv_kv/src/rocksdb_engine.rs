@@ -207,8 +207,8 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+    fn kv_engine(&self) -> Option<BaseRocksEngine> {
+        Some(self.engines.kv.clone())
     }
 
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {

@@ -78,7 +78,7 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn kv_engine(&self) -> Option<PanicEngine> {
         unimplemented!();
     }
 

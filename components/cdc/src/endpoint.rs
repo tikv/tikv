@@ -1528,6 +1528,7 @@ mod tests {
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
+                    .unwrap()
             }),
             CdcObserver::new(task_sched, api_version),
             Arc::new(StdMutex::new(StoreMeta::new(0))),

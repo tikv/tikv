@@ -148,7 +148,7 @@ impl Engine for MockEngine {
     type Snap = <RocksEngine as Engine>::Snap;
     type Local = <RocksEngine as Engine>::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.base.kv_engine()
     }
 

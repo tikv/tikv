@@ -2788,7 +2788,7 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
     type Local = E::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.engine.kv_engine()
     }
 

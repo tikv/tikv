@@ -157,7 +157,6 @@ where
     E: KvEngine,
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
-    multi_rocks: bool,
     router: S,
     engine: E,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
@@ -170,14 +169,8 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(
-        multi_rocks: bool,
-        router: S,
-        engine: E,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
-    ) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
-            multi_rocks,
             router,
             engine,
             txn_extra_scheduler: None,
@@ -333,12 +326,8 @@ where
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;
 
-    fn multi_rocks(&self) -> bool {
-        self.multi_rocks
-    }
-
-    fn kv_engine(&self) -> E {
-        self.engine.clone()
+    fn kv_engine(&self) -> Option<E> {
+        Some(self.engine.clone())
     }
 
     fn modify_on_kv_engine(
@@ -370,15 +359,10 @@ where
             }
         }
 
-        if self.multi_rocks {
-            // Not read to implement
-            unimplemented!()
-        } else {
-            write_modifies(
-                &self.engine,
-                region_modifies.into_values().flatten().collect(),
-            )
-        }
+        write_modifies(
+            &self.engine,
+            region_modifies.into_values().flatten().collect(),
+        )
     }
 
     fn precheck_write_with_ctx(&self, ctx: &Context) -> kv::Result<()> {
