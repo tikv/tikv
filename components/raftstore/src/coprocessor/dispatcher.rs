@@ -665,6 +665,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_update_safe_ts(&self, region_id: u64, self_safe_ts: u64, leader_safe_ts: u64) {
+        if self.registry.query_observers.is_empty() {
+            return;
+        }
+        for observer in &self.registry.query_observers {
+            let observer = observer.observer.inner();
+            observer.on_update_safe_ts(region_id, self_safe_ts, leader_safe_ts)
+        }
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();

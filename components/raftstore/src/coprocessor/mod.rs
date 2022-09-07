@@ -155,6 +155,9 @@ pub trait QueryObserver: Coprocessor {
         false
     }
 
+    /// Hook after update self safe_ts and received leader safe_ts.
+    fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
+
     /// Hook to call immediately after exec command.
     /// Will be a special persistence after this exec if a observer returns
     /// true.
