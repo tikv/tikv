@@ -37,7 +37,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::{write_modifies};
+use tikv_kv::write_modifies;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 

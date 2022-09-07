@@ -2769,12 +2769,12 @@ mod tests {
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
         let engine = MultiRocksEngine {
-            factory: factory.clone(),
+            factory,
             region_info,
         };
 
         let (tx, _rx) = mpsc::channel();
-        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1.clone(), r2.clone()]));
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
 
         let cfg = GcConfig::default();
         let mut gc_runner = GcRunner::new(

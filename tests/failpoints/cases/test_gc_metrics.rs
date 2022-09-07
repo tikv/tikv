@@ -283,7 +283,7 @@ fn test_raw_gc_keys_handled() {
         .api_version(ApiVersion::V2)
         .build()
         .unwrap();
-        let prefixed_engine = PrefixedEngine(engine.clone());
+    let prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
