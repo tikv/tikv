@@ -949,7 +949,7 @@
 [raft-engine]
 ## Determines whether to use Raft Engine to store raft logs. When it is
 ## enabled, configurations of `raftdb` are ignored.
-# enable = false
+# enable = true
 
 ## The directory at which raft log files are stored. If the directory does not
 ## exist, it will be created when TiKV is started.
