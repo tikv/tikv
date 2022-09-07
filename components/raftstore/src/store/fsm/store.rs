@@ -1196,8 +1196,10 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let kv_engine = self.engines.kv.clone();
         let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
+        let mut recover_from_raft_db = false;
 
         if let Some(seqno) = raft_engine.recover_from_raft_db().unwrap() {
+            recover_from_raft_db = true;
             let flushed_seqnos = raft_engine.get_flushed_seqno().unwrap();
             let min_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.min_seqno());
             let max_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.max_seqno());
@@ -1250,7 +1252,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
-            if local_state.get_state() == PeerState::Applying {
+            if local_state.get_state() == PeerState::Applying && !recover_from_raft_db {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
                 box_try!(peer_storage::recover_from_applying_state(

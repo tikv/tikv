@@ -2,9 +2,8 @@
 
 use std::sync::Arc;
 
-use engine_traits::{Iterable, MiscExt, RaftEngineReadOnly, CF_WRITE};
+use engine_traits::MiscExt;
 use grpcio::{ChannelBuilder, Environment};
-use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     kvrpcpb::{Context, Op},
     tikvpb::TikvClient,
@@ -54,13 +53,6 @@ fn test_disable_wal_recovery() {
         50,
     );
     cluster.stop_node(1);
-    cluster
-        .get_engine(1)
-        .scan(CF_WRITE, DATA_MIN_KEY, DATA_MAX_KEY, false, |k, v| {
-            println!("key {:?} value {:?}", k, v);
-            Ok(true)
-        })
-        .unwrap();
     cluster.run_node(1).unwrap();
     must_kv_read_equal(&client, ctx.clone(), b"k1".to_vec(), b"v1".to_vec(), 60);
     must_kv_read_equal(&client, ctx.clone(), b"k2".to_vec(), b"v2".to_vec(), 60);

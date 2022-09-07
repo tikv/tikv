@@ -14,7 +14,7 @@ use kvproto::raft_serverpb::{
 };
 use once_cell::sync::OnceCell;
 use tikv_util::{
-    error, info,
+    debug, error,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     worker::{Runnable, Scheduler},
 };
@@ -134,7 +134,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         SYNCED_MAX_SEQUENCE_NUMBER.store(self.seqno_window.committed_seqno(), Ordering::SeqCst);
 
         SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
-        info!("pending seqno count"; "count" => self.seqno_window.pending_count());
+        debug!("pending seqno count"; "count" => self.seqno_window.pending_count());
         self.apply_res_notifier.notify(apply_res);
     }
 

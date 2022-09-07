@@ -155,6 +155,7 @@ pub struct NodeCluster {
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    seqno_workers: HashMap<u64, Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<RocksEngine>)>>,
 }
@@ -170,6 +171,7 @@ impl NodeCluster {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             post_create_coprocessor_host: None,
+            seqno_workers: HashMap::default(),
         }
     }
 }
@@ -310,14 +312,16 @@ impl Simulator for NodeCluster {
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
 
+        let mut seqno_worker = None;
         let seqno_scheduler = flush_listener.map(|listener| {
-            let mut seqno_worker = LazyWorker::new("seqno_relation");
-            let scheduler = seqno_worker.scheduler();
+            let mut worker = LazyWorker::new("seqno_relation");
+            let scheduler = worker.scheduler();
             let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler.clone()));
             let seqno_runner =
                 SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
             listener.update_notifier(notifier);
-            seqno_worker.start(seqno_runner);
+            worker.start(seqno_runner);
+            seqno_worker = Some(worker);
             scheduler
         });
         let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
@@ -390,6 +394,7 @@ impl Simulator for NodeCluster {
         self.nodes.insert(node_id, node);
         self.cfg_controller = Some(cfg_controller);
         self.simulate_trans.insert(node_id, simulate_trans);
+        self.seqno_workers.insert(node_id, seqno_worker);
 
         Ok(node_id)
     }
@@ -418,6 +423,9 @@ impl Simulator for NodeCluster {
             .routers
             .remove(&node_id)
             .unwrap();
+        if let Some(Some(mut worker)) = self.seqno_workers.remove(&node_id) {
+            worker.stop();
+        }
     }
 
     fn get_node_ids(&self) -> HashSet<u64> {
