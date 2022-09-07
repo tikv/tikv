@@ -421,7 +421,10 @@ mod tests {
     use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::store::{transport::Transport, *};
+    use raftstore::{
+        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        store::{transport::Transport, *},
+    };
     use resource_metering::ResourceTagFactory;
     use security::SecurityConfig;
     use tikv_util::quota_limiter::QuotaLimiter;
@@ -481,6 +484,7 @@ mod tests {
     // 'https_proxy', and retry.
     #[test]
     fn test_peer_resolve() {
+        let mock_store_id = 5;
         let cfg = Config {
             addr: "127.0.0.1:0".to_owned(),
             ..Default::default()
@@ -507,8 +511,9 @@ mod tests {
             tx,
             Default::default(),
             Default::default(),
+            Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(mock_store_id).unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -535,7 +540,6 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let mock_store_id = 5;
         let addr = Arc::new(Mutex::new(None));
         let (check_leader_scheduler, _) = tikv_util::worker::dummy_scheduler();
         let mut server = Server::new(
