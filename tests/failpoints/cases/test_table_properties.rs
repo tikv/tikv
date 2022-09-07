@@ -40,7 +40,6 @@ fn test_check_need_gc() {
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.feature_gate_version = "6.1.0".to_string();
 
     do_write(&engine, false, 5);
 
@@ -211,7 +210,6 @@ fn test_skip_gc_by_check() {
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.feature_gate_version = "6.1.0".to_string();
 
     do_write(&engine, false, 5);
     engine.get_rocksdb().flush_cfs(true).unwrap();

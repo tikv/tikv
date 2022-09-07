@@ -16,7 +16,6 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use pd_client::{Feature, FeatureGate};
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -34,13 +33,6 @@ use crate::{
     },
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
-
-// The default version that can enable compaction filter for GC. This is
-// necessary because after compaction filter is enabled, it's impossible to
-// fallback to ealier version which modifications of GC are distributed to other
-// replicas by Raft.
-const COMPACTION_FILTER_RAWKV_GC_FEATURE: Feature = Feature::require(6, 1, 0);
-
 pub struct RawCompactionFilterFactory;
 
 impl CompactionFilterFactory for RawCompactionFilterFactory {
@@ -85,10 +77,6 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         if db.is_stalled_or_stopped() {
             debug!("skip gc in compaction filter because the DB is stalled");
-            return std::ptr::null_mut();
-        }
-        if !do_check_allowed(skip_vcheck, &gc_context.feature_gate) {
-            debug!("skip gc in rawkv compaction filter because it's not allowed");
             return std::ptr::null_mut();
         }
 
@@ -184,10 +172,6 @@ impl CompactionFilter for RawCompactionFilter {
             }
         }
     }
-}
-
-fn do_check_allowed(skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
-    skip_vcheck || feature_gate.can_enable(COMPACTION_FILTER_RAWKV_GC_FEATURE)
 }
 
 impl RawCompactionFilter {
@@ -403,7 +387,6 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-        gc_runner.feature_gate_version = "6.1.0".to_string();
         let user_key = b"r\0aaaaaaaaaaa";
 
         let test_raws = vec![
@@ -468,7 +451,6 @@ pub mod tests {
             .unwrap();
         let raw_engine = engine.get_rocksdb();
         let mut gc_runner = TestGcRunner::new(0);
-        gc_runner.feature_gate_version = "6.1.0".to_string();
         let mut gc_and_check = |expect_tasks: bool, prefix: &[u8]| {
             gc_runner.safe_point(500).gc_raw(&raw_engine);
 

@@ -222,7 +222,6 @@ fn test_raw_mvcc_filtered() {
         .unwrap();
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.feature_gate_version = "6.1.0".to_string();
 
     let user_key = b"r\0aaaaaaaaaaa";
 
@@ -288,7 +287,6 @@ fn test_raw_gc_keys_handled() {
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
-    feature_gate.set_version("6.1.0").unwrap();
     let mut gc_worker = GcWorker::new(
         prefixed_engine,
         RaftStoreBlackHole,
