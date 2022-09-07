@@ -130,8 +130,7 @@ impl Config {
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
             multi_part_size: MINIMUM_PART_SIZE,
-            // FIXME after kvproto build
-            object_lock_enabled: true,
+            object_lock_enabled: input.object_lock_enabled,
         })
     }
 }
