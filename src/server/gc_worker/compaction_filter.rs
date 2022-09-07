@@ -714,10 +714,6 @@ pub fn check_need_gc(
             return (true, false);
         }
 
-        if props.min_ttl_ts != TimeStamp::max() && props.min_ttl_ts > safe_point {
-            return (false, false);
-        }
-
         (props.max_row_versions > 1024, false)
     };
 
