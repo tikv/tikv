@@ -38,6 +38,7 @@ use crate::{
     server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
+// use crate::storage::txn::gc;
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
@@ -203,7 +204,7 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     }
 }
 
-pub trait RocksDBCompactionFilterFactory: CompactionFilterFactory {
+pub trait RocksdbCompactionFilterFactory: CompactionFilterFactory {
     fn get_rocksdb(&self, region_id: u64, suffix: u64) -> engine_traits::Result<RocksEngine> {
         let gc_context_option = GC_CONTEXT.lock().unwrap();
         let gc_context = match *gc_context_option {
@@ -213,7 +214,7 @@ pub trait RocksDBCompactionFilterFactory: CompactionFilterFactory {
 
         match &gc_context.tablet_factory {
             Some(factory) => factory.open_tablet(region_id, Some(suffix), OpenOptions::default()),
-            None => return Ok(gc_context.db.clone()),
+            None => Ok(gc_context.db.clone()),
         }
     }
 }
@@ -311,7 +312,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
     }
 }
 
-impl RocksDBCompactionFilterFactory for WriteCompactionFilterFactory {}
+impl RocksdbCompactionFilterFactory for WriteCompactionFilterFactory {}
 
 struct WriteCompactionFilter {
     safe_point: u64,

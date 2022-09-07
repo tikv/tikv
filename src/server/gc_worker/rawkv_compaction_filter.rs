@@ -44,7 +44,7 @@ use crate::{
 =======
     server::gc_worker::{
         compaction_filter::{
-            CompactionFilterStats, RocksDBCompactionFilterFactory, DEFAULT_DELETE_BATCH_COUNT,
+            CompactionFilterStats, RocksdbCompactionFilterFactory, DEFAULT_DELETE_BATCH_COUNT,
             GC_COMPACTION_FAILURE, GC_COMPACTION_FILTERED, GC_COMPACTION_FILTER_MVCC_DELETION_MET,
             GC_COMPACTION_FILTER_ORPHAN_VERSIONS, GC_CONTEXT,
 >>>>>>> d05ffa40a (*: address comments and use clean interfaces)
@@ -136,7 +136,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
     }
 }
 
-impl RocksDBCompactionFilterFactory for RawCompactionFilterFactory {}
+impl RocksdbCompactionFilterFactory for RawCompactionFilterFactory {}
 struct RawCompactionFilter {
     safe_point: u64,
     engine: RocksEngine,
