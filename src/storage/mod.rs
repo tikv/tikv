@@ -1916,6 +1916,7 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = deadline.check() {
                 return callback(Err(Error::from(e)));
             }
+            let command_duration = tikv_util::time::Instant::now();
             let key_guard = Self::get_raw_key_guard(&provider, concurrency_manager).await;
             if let Err(e) = key_guard {
                 return callback(Err(e));
@@ -1924,7 +1925,6 @@ impl<E: Engine, L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static> Sto
             if let Err(e) = ts {
                 return callback(Err(e));
             }
-            let command_duration = tikv_util::time::Instant::now();
             let raw_value = RawValue {
                 user_value: value,
                 expire_ts: ttl_to_expire_ts(ttl),
