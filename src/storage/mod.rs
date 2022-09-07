@@ -1179,7 +1179,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let mut snap_ctx = SnapContext {
                     pb_ctx: &ctx,
-                    start_ts,
+                    start_ts: Some(start_ts),
                     ..Default::default()
                 };
                 let mut key_range = KeyRange::default();
@@ -2715,7 +2715,7 @@ fn prepare_snap_ctx<'a>(
 
     let mut snap_ctx = SnapContext {
         pb_ctx,
-        start_ts,
+        start_ts: Some(start_ts),
         ..Default::default()
     };
     if need_check_locks_in_replica_read(pb_ctx) {
@@ -2789,18 +2789,6 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
 
     fn kv_engine(&self) -> Self::Local {
         self.engine.kv_engine()
-    }
-
-    fn snapshot_on_kv_engine(
-        &self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> tikv_kv::Result<Self::Snap> {
-        let snapshot = self.engine.snapshot_on_kv_engine(start_key, end_key)?;
-        Ok(TxnTestSnapshot {
-            snapshot,
-            txn_ext: self.txn_ext.clone(),
-        })
     }
 
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> tikv_kv::Result<()> {

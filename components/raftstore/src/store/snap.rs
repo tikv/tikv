@@ -2252,7 +2252,9 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
         assert!(s1.exists());
@@ -2352,13 +2354,17 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(s2.exists());
 
-        let _ = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
     }
 
@@ -2501,7 +2507,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         corrupt_snapshot_size_in(dir.path());
@@ -2510,7 +2518,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let snap_data = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2571,7 +2581,9 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let _ = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s1.exists());
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
@@ -2580,7 +2592,9 @@ pub mod tests {
 
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
-        let mut snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s2
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         assert!(s2.exists());
 
         let dst_dir = Builder::new()
@@ -2642,7 +2656,9 @@ pub mod tests {
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
         let mut s2 =
@@ -2714,7 +2730,9 @@ pub mod tests {
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
-        let mut snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
+        let mut snap_data = s1
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
 
@@ -2797,6 +2815,7 @@ pub mod tests {
                 &gen_test_region(100, 1, 1),
                 true,
                 false,
+                UnixSecs::now(),
             )
             .unwrap()
         };
@@ -2820,7 +2839,7 @@ pub mod tests {
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s
-                .build(&engine.kv, &snapshot, &region, true, false)
+                .build(&engine.kv, &snapshot, &region, true, false, UnixSecs::now())
                 .unwrap();
 
             // The first snap_size is for region 100.
@@ -2890,7 +2909,9 @@ pub mod tests {
         // correctly.
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
+            let _ = s1
+                .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+                .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
     }
