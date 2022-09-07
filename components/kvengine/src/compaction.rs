@@ -329,8 +329,9 @@ impl Engine {
 
     pub(crate) fn compact(&self, id_ver: IDVer) -> Option<Result<pb::ChangeSet>> {
         let shard = self.get_shard_with_ver(id_ver.id, id_ver.ver).ok()?;
+        let tag = shard.tag();
         if !shard.ready_to_compact() {
-            info!("avoid shard {}:{} compaction", shard.id, shard.ver);
+            info!("avoid shard {} compaction", tag);
             return None;
         }
         // Destroy range has higher priority than compaction.
@@ -340,7 +341,6 @@ impl Engine {
         let pri = shard.get_compaction_priority()?;
         let (req, cd) = self.build_compact_request(&shard, pri)?;
         store_bool(&shard.compacting, true);
-        let tag = ShardTag::new(self.get_engine_id(), id_ver);
         if req.level == 0 {
             info!("start compact L0 for {}", tag);
         } else {
@@ -354,7 +354,7 @@ impl Engine {
                 cd.top_size + cd.bot_size,
             );
             if req.bottoms.is_empty() && req.cf as usize == WRITE_CF {
-                info!("move down L{} CF{} for {}", req.level, req.cf, tag,);
+                info!("move down L{} CF{} for {}", req.level, req.cf, tag);
                 // Move down. only write CF benefits from this optimization.
                 let mut comp = pb::Compaction::new();
                 comp.set_cf(req.cf as i32);
@@ -383,9 +383,10 @@ impl Engine {
     }
 
     pub(crate) fn build_compact_l0_request(&self, shard: &Shard) -> Option<CompactionRequest> {
+        let tag = shard.tag();
         let data = shard.get_data();
         if data.l0_tbls.is_empty() {
-            info!("zero L0 tables");
+            info!("{} zero L0 tables", tag);
             return None;
         }
         let mut req = self.new_compact_request(shard, -1, 0);
@@ -408,7 +409,8 @@ impl Engine {
             for tbl in lh.tables.as_slice() {
                 if tbl.biggest() < smallest || tbl.smallest() > biggest {
                     info!(
-                        "skip L1 table {} for L0 compaction, tbl smallest {:?}, tbl biggest {:?}, L0 smallest {:?}, L0 biggest {:?}",
+                        "{} skip L1 table {} for L0 compaction, tbl smallest {:?}, tbl biggest {:?}, L0 smallest {:?}, L0 biggest {:?}",
+                        tag,
                         tbl.id(),
                         tbl.smallest(),
                         tbl.biggest(),
@@ -427,6 +429,7 @@ impl Engine {
     }
 
     pub(crate) fn set_alloc_ids_for_request(&self, req: &mut CompactionRequest, total_size: u64) {
+        let tag = ShardTag::from_comp_req(&req);
         // We must ensure there are enough ids for remote compactor to use, so we need to allocate
         // more ids than needed.
         let mut old_ids_num = 0usize;
@@ -435,7 +438,10 @@ impl Engine {
         }
         old_ids_num += req.tops.len() + req.bottoms.len();
         let id_cnt = (total_size as usize / req.max_table_size) * 2 + 16 + old_ids_num;
-        info!("alloc id count {} for total size {}", id_cnt, total_size);
+        info!(
+            "{} alloc id count {} for total size {}",
+            tag, id_cnt, total_size
+        );
         let ids = self.id_allocator.alloc_id(id_cnt);
         req.file_ids = ids;
     }
@@ -528,9 +534,8 @@ impl Engine {
         });
 
         info!(
-            "start destroying range for {}:{}, {:?}, destroyed: {}, overlapping: {}",
-            shard.id,
-            shard.ver,
+            "start destroying range for {}, {:?}, destroyed: {}, overlapping: {}",
+            shard.tag(),
             data.del_prefixes,
             deletes.len(),
             overlaps.len()
@@ -869,7 +874,11 @@ pub(crate) fn compact_tables(
     req: &CompactionRequest,
     fs: Arc<dyn dfs::DFS>,
 ) -> Result<Vec<pb::TableCreate>> {
-    info!("compact req tops {:?}, bots {:?}", &req.tops, &req.bottoms);
+    let tag = ShardTag::from_comp_req(req);
+    info!(
+        "{} compact req tops {:?}, bots {:?}",
+        tag, &req.tops, &req.bottoms
+    );
     let opts = dfs::Options::new(req.shard_id, req.shard_ver);
     let top_files = load_table_files(&req.tops, fs.clone(), opts)?;
     let mut top_tables = in_mem_files_to_tables(top_files);
@@ -1336,6 +1345,12 @@ impl CompactRunner {
                 self.compact(id_ver);
             }
             None => {
+                info!("shard {} got empty compaction result", tag);
+                // The compaction result can be none under complex situations. To avoid compaction
+                // not making progress, we trigger it actively.
+                if let Ok(shard) = self.engine.get_shard_with_ver(id_ver.id, id_ver.ver) {
+                    self.engine.refresh_shard_states(&shard);
+                }
                 self.schedule_pending_compaction();
             }
         }
