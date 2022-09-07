@@ -181,7 +181,12 @@ impl KvEngineFactory {
         }
     }
 
-    pub fn destroy_tablet(&self, tablet_path: &Path) -> engine_traits::Result<()> {
+    pub fn destroy_tablet(
+        &self,
+        tablet_path: &Path,
+        id: u64,
+        suffix: u64,
+    ) -> engine_traits::Result<()> {
         info!("destroy tablet"; "path" => %tablet_path.display());
         // Create kv engine.
         let mut kv_db_opts = self.inner.rocksdb_config.build_opt();
@@ -189,11 +194,13 @@ impl KvEngineFactory {
         if let Some(filter) = self.create_raftstore_compaction_listener() {
             kv_db_opts.add_event_listener(filter);
         }
-        // let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
-        //    &self.inner.block_cache,
-        //    self.inner.region_info_accessor.as_ref(),
-        //    self.inner.api_version,
-        //);
+        let _kv_cfs_opts = self.inner.rocksdb_config.build_cf_opts(
+            &self.inner.block_cache,
+            self.inner.region_info_accessor.as_ref(),
+            self.inner.api_version,
+            id,
+            suffix,
+        );
         // TODOTODO: call rust-rocks or tirocks to destroy_engine;
         // engine_rocks::util::destroy_engine(
         //   tablet_path.to_str().unwrap(),

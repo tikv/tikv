@@ -204,18 +204,16 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
     }
 }
 
-pub trait RocksdbCompactionFilterFactory: CompactionFilterFactory {
-    fn get_rocksdb(&self, region_id: u64, suffix: u64) -> engine_traits::Result<RocksEngine> {
-        let gc_context_option = GC_CONTEXT.lock().unwrap();
-        let gc_context = match *gc_context_option {
-            Some(ref ctx) => ctx,
-            None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
-        };
+pub fn get_rocksdb_from_factory(region_id: u64, suffix: u64) -> engine_traits::Result<RocksEngine> {
+    let gc_context_option = GC_CONTEXT.lock().unwrap();
+    let gc_context = match *gc_context_option {
+        Some(ref ctx) => ctx,
+        None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
+    };
 
-        match &gc_context.tablet_factory {
-            Some(factory) => factory.open_tablet(region_id, Some(suffix), OpenOptions::default()),
-            None => Ok(gc_context.db.clone()),
-        }
+    match &gc_context.tablet_factory {
+        Some(factory) => factory.open_tablet(region_id, Some(suffix), OpenOptions::default()),
+        None => Ok(gc_context.db.clone()),
     }
 }
 
@@ -235,7 +233,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         &self,
         context: &CompactionFilterContext,
     ) -> *mut DBCompactionFilter {
-        let db = match self.get_rocksdb(self.region_id, self.suffix) {
+        let db = match get_rocksdb_from_factory(self.region_id, self.suffix) {
             Ok(rocksdb) => rocksdb,
             Err(_) => return std::ptr::null_mut(),
         };
@@ -311,8 +309,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         unsafe { new_compaction_filter_raw(name, filter) }
     }
 }
-
-impl RocksdbCompactionFilterFactory for WriteCompactionFilterFactory {}
 
 struct WriteCompactionFilter {
     safe_point: u64,
