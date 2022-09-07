@@ -85,6 +85,15 @@ impl RawRegion {
     fn id_ver(&self) -> RegionIDVer {
         RegionIDVer::new(self.id, self.epoch.version)
     }
+
+    fn update_leader(&mut self, leader: &Peer) -> bool {
+        if let Some(idx) = self.peers.iter().position(|p| p.id == leader.id) {
+            self.leader_idx = idx;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl ClusterClient {
@@ -289,8 +298,12 @@ impl ClusterClient {
         }
         let region: RawRegion = if let Some(region) = opt_region {
             region
-        } else if let Some(region) = block_on(self.pd_client.get_region_by_id(region_id)).unwrap() {
-            region.into()
+        } else if let Some((region, leader)) =
+            block_on(self.pd_client.get_region_leader_by_id(region_id)).unwrap()
+        {
+            let mut region = RawRegion::from(region);
+            region.update_leader(&leader);
+            region
         } else {
             return;
         };
@@ -318,18 +331,13 @@ impl ClusterClient {
             let region = self.regions.get_mut(&region_id).unwrap();
             if region_err.get_not_leader().has_leader() {
                 let leader = region_err.get_not_leader().get_leader();
-                for (i, peer) in region.peers.iter().enumerate() {
-                    if peer.id == leader.id {
-                        region.leader_idx = i;
-                        sleep(Duration::from_millis(100));
-                        return true;
-                    }
+                if region.update_leader(&leader) {
+                    sleep(Duration::from_millis(100));
+                    return true;
                 }
-                sleep(Duration::from_millis(100));
-                self.update_cache_by_id(region_id, None);
-            } else {
-                sleep(Duration::from_millis(100));
             }
+            sleep(Duration::from_millis(100));
+            self.update_cache_by_id(region_id, None);
             return true;
         }
         if region_err.has_region_not_found() {
