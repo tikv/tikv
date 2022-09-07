@@ -806,7 +806,7 @@ fn test_mvcc_flashback_resolved_ts_check() {
         .unwrap();
     assert!(!flashback_resp.has_region_error());
     assert!(!flashback_resp.get_error().is_empty());
-    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts);
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v, ts);
     // Flashback with a version that is smaller than the current resolved ts.
     let mut flashback_to_version_req = FlashbackToVersionRequest::default();
     flashback_to_version_req.set_context(ctx.clone());
