@@ -18,7 +18,7 @@ use std::{
 };
 
 use encryption::DataKeyManager;
-use engine_rocks::{encryption::get_env, RocksSstIterator, RocksSstReader};
+use engine_rocks::{get_env, RocksSstIterator, RocksSstReader};
 use engine_traits::{
     EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo, Iterator, Peekable, SeekKey,
     SstReader, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -663,7 +663,7 @@ pub struct SSTFileReader {
 
 impl SSTFileReader {
     fn ffi_get_cf_file_reader(path: &str, key_manager: Option<Arc<DataKeyManager>>) -> RawVoidPtr {
-        let env = get_env(None, key_manager).unwrap();
+        let env = get_env(key_manager, None).unwrap();
         let sst_reader_res = RocksSstReader::open_with_env(path, Some(env));
         match sst_reader_res {
             Err(ref e) => tikv_util::error!("Can not open sst file {:?}", e),

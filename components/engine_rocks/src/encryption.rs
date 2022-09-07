@@ -12,7 +12,7 @@ use rocksdb::{
 use crate::raw::Env;
 
 // Use engine::Env directly since Env is not abstracted.
-pub fn get_env(
+pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     key_manager: Option<Arc<DataKeyManager>>,
 ) -> std::result::Result<Arc<Env>, String> {

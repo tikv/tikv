@@ -23,7 +23,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct RocksEngine {
-    pub db: Arc<DB>,
+    db: Arc<DB>,
     shared_block_cache: bool,
 }
 

@@ -981,7 +981,7 @@ mod ingest {
         region_epoch: RegionEpoch,
         keys: Vec<String>,
     ) -> (PathBuf, SstMeta, PathBuf) {
-        let path = cluster.engines.iter().last().unwrap().1.kv.rocks.path();
+        let path = cluster.engines.iter().last().unwrap().1.kv.path();
         let (import_dir, importer) = create_tmp_importer(&cluster.cfg, path);
 
         // Prepare data

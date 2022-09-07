@@ -42,7 +42,7 @@ use crate::{
 /// SstImporter manages SST files that are waiting for ingesting.
 pub struct SstImporter {
     dir: ImportDir,
-    pub key_manager: Option<Arc<DataKeyManager>>,
+    key_manager: Option<Arc<DataKeyManager>>,
     switcher: ImportModeSwitcher,
     // TODO: lift api_version as a type parameter.
     api_version: ApiVersion,

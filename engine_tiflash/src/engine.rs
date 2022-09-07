@@ -13,7 +13,13 @@ use std::{
     },
 };
 
-use engine_rocks::{
+use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot};
+use engine_traits::{
+    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
+};
+use rocksdb::{DBIterator, Writable, DB};
+
+use crate::{
     options::RocksReadOptions,
     rocks_metrics::{
         flush_engine_histogram_metrics, flush_engine_iostall_properties, flush_engine_properties,
@@ -23,12 +29,7 @@ use engine_rocks::{
         ENGINE_HIST_TYPES, ENGINE_TICKER_TYPES, TITAN_ENGINE_HIST_TYPES, TITAN_ENGINE_TICKER_TYPES,
     },
     util::get_cf_handle,
-    RocksDBVector, RocksEngineIterator, RocksSnapshot,
 };
-use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable,
-};
-use rocksdb::{DBIterator, Writable, DB};
 
 pub struct FsStatsExt {
     pub used: u64,
@@ -44,7 +45,8 @@ pub trait FFIHub: FFIHubInner + Send + Sync {}
 
 #[derive(Clone)]
 pub struct RocksEngine {
-    // Must ensure rocks is the first field, for RocksEngine::from_ref
+    // Must ensure rocks is the first field, for RocksEngine::from_ref.
+    // We must own a engine_rocks::RocksEngine, since TiKV has not decouple from engine_rocks yet.
     pub rocks: engine_rocks::RocksEngine,
     pub engine_store_server_helper: isize,
     pub pool_capacity: usize,
