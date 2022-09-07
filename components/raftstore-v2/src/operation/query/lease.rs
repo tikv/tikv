@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::{Arc, Mutex};
 
 use crossbeam::channel::TrySendError;
@@ -38,45 +39,9 @@ use crate::{
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub(crate) fn propose_read_index<T: Transport>(
-        &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
-        is_leader: bool,
-        ch: QueryResChannel,
-        now: Timespec,
-    ) -> bool {
-        poll_ctx.raft_metrics.propose.read_index.inc();
-
-        let request = req
-            .mut_requests()
-            .get_mut(0)
-            .filter(|req| req.has_read_index())
-            .map(|req| req.take_read_index());
-        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
-        if dropped && is_leader {
-            // The message gets dropped silently, can't be handled anymore.
-            notify_stale_req(self.term(), ch);
-            poll_ctx.raft_metrics.propose.dropped_read_index.inc();
-            return false;
-        }
-
-        let mut read = ReadIndexRequest::with_command(id, req, ch, now);
-        read.addition_request = request.map(Box::new);
-        self.pending_reads_mut().push_back(read, is_leader);
-        debug!(
-            self.logger,
-            "request to get a read index";
-            "request_id" => ?id,
-            "is_leader" => is_leader,
-        );
-
-        true
-    }
-
     fn read_index_leader<T: Transport>(
         &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
+        ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
@@ -86,7 +51,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.pending_reads().back(),
             &req,
             lease_state,
-            poll_ctx.cfg.raft_store_max_leader_lease(),
+            ctx.cfg.raft_store_max_leader_lease(),
             now,
         ) {
             // Must use the commit index of `PeerStorage` instead of the commit index
@@ -101,16 +66,37 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
 
-        if self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
-            self.set_has_ready();
+        ctx.raft_metrics.propose.read_index.inc();
+
+        let request = req
+            .mut_requests()
+            .get_mut(0)
+            .filter(|req| req.has_read_index())
+            .map(|req| req.take_read_index());
+        let (id, dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
+        if dropped {
+            // The message gets dropped silently, can't be handled anymore.
+            notify_stale_req(self.term(), ch);
+            ctx.raft_metrics.propose.dropped_read_index.inc();
+            return;
         }
 
+        let mut read = ReadIndexRequest::with_command(id, req, ch, now);
+        read.addition_request = request.map(Box::new);
+        self.pending_reads_mut().push_back(read, true);
+        debug!(
+            self.logger,
+            "request to get a read index";
+            "request_id" => ?id,
+        );
+
+        self.set_has_ready();
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         // TODO:add following when propose is done
         // if self.leader_lease.is_suspect() {
         // let req = RaftCmdRequest::default();
-        // if let Ok(Either::Left(index)) = self.propose_normal(poll_ctx, req) {
+        // if let Ok(Either::Left(index)) = self.propose_normal(ctx, req) {
         // let (callback, _) = CmdResChannel::pair();
         // let p = Proposal {
         // is_conf_change: false,
@@ -121,7 +107,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // must_pass_epoch_check: false,
         // };
         //
-        // self.post_propose(poll_ctx, p);
+        // self.post_propose(ctx, p);
         // }
         // }
     }
@@ -133,43 +119,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // 3. There is already a read request proposed in the current lease;
     pub fn read_index<T: Transport>(
         &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
+        ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
         // TODO: add pre_read_index to handle splitting or merging
         if self.is_leader() {
-            self.read_index_leader(poll_ctx, req, ch);
+            self.read_index_leader(ctx, req, ch);
         } else {
-            self.read_index_follower(poll_ctx, req, ch);
+            self.read_index_follower(ctx, req, ch);
         }
-    }
-
-    pub(crate) fn send_read_command<T>(
-        &self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        read_cmd: RaftRequest<QueryResChannel>,
-    ) {
-        let mut err = errorpb::Error::default();
-        let region_id = read_cmd.request.get_header().get_region_id();
-        let read_ch = match ctx.router.send(region_id, PeerMsg::RaftQuery(read_cmd)) {
-            Ok(()) => return,
-            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => {
-                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
-                err.mut_server_is_busy()
-                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
-                cmd.ch
-            }
-            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
-                err.set_message(format!("region {} is missing", self.region_id()));
-                err.mut_region_not_found().set_region_id(self.region_id());
-                cmd.ch
-            }
-            _ => unreachable!(),
-        };
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        read_ch.report_error(resp);
     }
 
     /// response the read index request
@@ -331,9 +290,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if LeaseState::Expired == state {
             debug!(
                 self.logger,
-                "leader lease is expired, region_id {}, peer_id {}, lease {:?}",
-                self.region_id(),
-                self.peer_id(),
+                "leader lease is expired, lease {:?}",
                 self.leader_lease(),
             );
             // The lease is expired, call `expire` explicitly.

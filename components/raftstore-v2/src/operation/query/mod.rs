@@ -16,8 +16,8 @@ use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
-        cmd_resp, msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadCallback, RequestPolicy, Transport,
+        cmd_resp, local_metrics::RaftMetrics, msg::ErrorCallback, region_meta::RegionMeta, util,
+        util::LeaseState, GroupState, ReadCallback, RequestPolicy, Transport,
     },
     Error, Result,
 };
@@ -67,7 +67,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     #[inline]
     pub fn on_query(&mut self, req: RaftCmdRequest, ch: QueryResChannel) {
         if !req.has_status_request() {
-            if let Err(e) = self.fsm.peer_mut().validate_query_msg(&req, self.store_ctx) {
+            if let Err(e) = self
+                .fsm
+                .peer_mut()
+                .validate_query_msg(&req, &mut self.store_ctx.raft_metrics)
+            {
                 let resp = cmd_resp::new_error(e);
                 ch.report_error(resp);
                 return;
@@ -97,10 +101,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    fn validate_query_msg<T: Transport>(
+    fn validate_query_msg(
         &mut self,
         msg: &RaftCmdRequest,
-        ctx: &mut StoreContext<EK, ER, T>,
+        raft_metrics: &mut RaftMetrics,
     ) -> Result<()> {
         // check query specific requirements
         if msg.has_admin_request() {
@@ -122,7 +126,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Check store_id, make sure that the msg is dispatched to the right place.
         if let Err(e) = util::check_store_id(msg, self.peer().get_store_id()) {
-            ctx.raft_metrics.invalid_proposal.mismatch_store_id.inc();
+            raft_metrics.invalid_proposal.mismatch_store_id.inc();
             return Err(e);
         }
 
@@ -132,7 +136,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let leader_id = self.leader_id();
         let request = msg.get_requests();
 
-        // TODO: add false leader
+        // TODO: add force leader
 
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
@@ -142,21 +146,18 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
         let allow_stale_read = flags.contains(WriteBatchFlags::STALE_READ);
         if !self.is_leader() && !is_read_index_request && !allow_replica_read && !allow_stale_read {
-            ctx.raft_metrics.invalid_proposal.not_leader.inc();
+            raft_metrics.invalid_proposal.not_leader.inc();
             return Err(Error::NotLeader(self.region_id(), None));
         }
 
         // peer_id must be the same as peer's.
         if let Err(e) = util::check_peer_id(msg, self.peer_id()) {
-            ctx.raft_metrics.invalid_proposal.mismatch_peer_id.inc();
+            raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
         }
         // check whether the peer is initialized.
         if !self.storage().is_initialized() {
-            ctx.raft_metrics
-                .invalid_proposal
-                .region_not_initialized
-                .inc();
+            raft_metrics.invalid_proposal.region_not_initialized.inc();
             return Err(Error::RegionNotInitialized(self.region_id()));
         }
 
@@ -164,7 +165,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.term()) {
-            ctx.raft_metrics.invalid_proposal.stale_command.inc();
+            raft_metrics.invalid_proposal.stale_command.inc();
             return Err(e);
         }
 

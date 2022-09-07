@@ -32,17 +32,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// return true if it's proposed.
     pub(crate) fn read_index_follower<T: Transport>(
         &mut self,
-        poll_ctx: &mut StoreContext<EK, ER, T>,
+        ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
     ) {
         let now = monotonic_raw_now();
         if self.leader_id() == INVALID_ID {
-            poll_ctx
-                .raft_metrics
-                .invalid_proposal
-                .read_index_no_leader
-                .inc();
+            ctx.raft_metrics.invalid_proposal.read_index_no_leader.inc();
             let mut err_resp = RaftCmdResponse::default();
             let term = self.term();
             cmd_resp::bind_term(&mut err_resp, term);
@@ -51,9 +47,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        if self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
-            self.set_has_ready();
-        }
+        ctx.raft_metrics.propose.read_index.inc();
+
+        let request = req
+            .mut_requests()
+            .get_mut(0)
+            .filter(|req| req.has_read_index())
+            .map(|req| req.take_read_index());
+        propose_read_index(self.raft_group_mut(), request.as_ref(), None);
+
+        let mut read = ReadIndexRequest::with_command(id, req, ch, now);
+        read.addition_request = request.map(Box::new);
+        self.pending_reads_mut().push_back(read, false);
+        debug!(
+            self.logger,
+            "request to get a read index from follower";
+            "request_id" => ?id,
+        );
+        self.set_has_ready();
     }
 
     /// Responses to the ready read index request on the replica, the replica is
@@ -95,6 +106,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 break;
             }
         }
+    }
+
+    fn send_read_command<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        read_cmd: RaftRequest<QueryResChannel>,
+    ) {
+        let mut err = errorpb::Error::default();
+        let region_id = read_cmd.request.get_header().get_region_id();
+        let read_ch = match ctx.router.send(region_id, PeerMsg::RaftQuery(read_cmd)) {
+            Ok(()) => return,
+            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => {
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                cmd.ch
+            }
+            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
+                err.set_message(format!("region {} is missing", self.region_id()));
+                err.mut_region_not_found().set_region_id(self.region_id());
+                cmd.ch
+            }
+            _ => unreachable!(),
+        };
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        read_ch.report_error(resp);
     }
 
     fn response_replica_read<T>(
