@@ -32,7 +32,7 @@ use crate::{
     batch::StoreContext,
     fsm::{PeerFsm, PeerFsmDelegate},
     raft::{Peer, Storage},
-    PeerTick,
+    router::PeerTick,
 };
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
@@ -95,7 +95,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &mut StoreContext<EK, ER, T>,
         msg: eraftpb::Message,
     ) -> Option<RaftMessage> {
-        let to_peer = match self.get_peer_from_cache(msg.to) {
+        let to_peer = match self.peer_from_cache(msg.to) {
             Some(p) => p,
             None => {
                 warn!(self.logger, "failed to look up recipient peer"; "to_peer" => msg.to);

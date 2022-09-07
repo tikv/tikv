@@ -10,7 +10,7 @@ use std::{
 };
 
 use engine_rocks::RocksSnapshot;
-use kvproto::metapb;
+use kvproto::{kvrpcpb::Op, metapb};
 use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -526,7 +526,7 @@ fn test_read_index_stale_in_suspect_lease() {
             sim.async_command_on_node(
                 old_leader.get_id(),
                 read_request,
-                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+                Callback::read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
             .unwrap();
             rx
@@ -827,4 +827,48 @@ fn test_node_local_read_renew_lease() {
         assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
         thread::sleep(request_wait);
     }
+}
+
+#[test]
+fn test_stale_read_with_ts0() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.cfg.resolved_ts.enable = true;
+    cluster.run();
+
+    let leader = new_peer(1, 1);
+    cluster.must_transfer_leader(1, leader.clone());
+    let mut leader_client = PeerClient::new(&cluster, 1, leader);
+
+    let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
+
+    // Set the `stale_read` flag
+    leader_client.ctx.set_stale_read(true);
+    follower_client2.ctx.set_stale_read(true);
+
+    let commit_ts1 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value1"[..])],
+        b"key1".to_vec(),
+    );
+
+    let commit_ts2 = leader_client.must_kv_write(
+        &pd_client,
+        vec![new_mutation(Op::Put, &b"key1"[..], &b"value2"[..])],
+        b"key1".to_vec(),
+    );
+
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
+    follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value2".to_vec(), commit_ts2);
+    assert!(
+        follower_client2
+            .kv_read(b"key1".to_vec(), 0)
+            .region_error
+            .into_option()
+            .unwrap()
+            .not_leader
+            .is_some()
+    );
+    assert!(leader_client.kv_read(b"key1".to_vec(), 0).not_found);
 }

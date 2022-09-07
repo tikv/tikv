@@ -279,6 +279,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -485,6 +486,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
+ "tikv_kv",
  "tikv_util",
  "tokio",
  "tokio-stream",
@@ -722,6 +724,7 @@ name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "criterion",
  "engine_rocks",
  "engine_traits",
  "error_code",
@@ -2631,7 +2634,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/5kbpers/kvproto?branch=remove-kv-wal#c8ea3af22ce35f0b18e77db6d14014abbdce0345"
+source = "git+https://github.com/pingcap/kvproto.git#2e37953b2b435961ad5b4f0e36b32c53f4777b23"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4060,7 +4063,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#cf225c200b588ef53678bbe805d8e2949ff95e9b"
+source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4094,7 +4097,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#cf225c200b588ef53678bbe805d8e2949ff95e9b"
+source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4233,6 +4236,7 @@ dependencies = [
  "test_util",
  "tikv_util",
  "time",
+ "tracker",
  "txn_types",
 ]
 
@@ -5777,6 +5781,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "arrow",
+ "async-trait",
  "batch-system",
  "byteorder",
  "causal_ts",
@@ -5923,9 +5928,11 @@ name = "tidb_query_common"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "byteorder",
  "derive_more",
  "error_code",
+ "futures 0.3.15",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -5935,12 +5942,14 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "time",
+ "yatp",
 ]
 
 [[package]]
 name = "tidb_query_datatype"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "bitfield",
  "bitflags",
  "boolinator",
@@ -5980,6 +5989,7 @@ name = "tidb_query_executors"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "codec",
  "collections",
  "fail",
@@ -6341,6 +6351,7 @@ dependencies = [
  "openssl",
  "page_size",
  "panic_hook",
+ "pin-project",
  "procfs",
  "procinfo",
  "prometheus",

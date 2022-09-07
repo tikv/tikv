@@ -12,6 +12,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use engine_traits::KvEngine;
+use itertools::Itertools;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::{
@@ -656,6 +657,10 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
+    fn find_region_by_key(&self, _key: &[u8]) -> Result<Region> {
+        unimplemented!()
+    }
+
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
@@ -686,6 +691,27 @@ impl RegionInfoProvider for RegionInfoAccessor {
             .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
     }
 
+    fn find_region_by_key(&self, key: &[u8]) -> Result<Region> {
+        let key_in_vec = key.to_vec();
+        let (tx, rx) = mpsc::channel();
+        self.seek_region(
+            key,
+            Box::new(move |iter| {
+                if let Some(info) = iter.next() && info.region.get_start_key() <= key_in_vec.as_slice() {
+                    if let Err(e) = tx.send(info.region.clone()) {
+                        warn!("failed to send find_region_by_key result: {:?}", e);
+                    }
+                }
+            }),
+        )?;
+        rx.recv().map_err(|e| {
+            box_err!(
+                "failed to receive find_region_by_key result from region collector: {:?}",
+                e
+            )
+        })
+    }
+
     fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsInRange {
@@ -712,28 +738,87 @@ impl RegionInfoProvider for RegionInfoAccessor {
 }
 
 // Use in tests only.
-pub struct MockRegionInfoProvider(Mutex<Vec<Region>>);
+// Note: The `StateRole` in RegionInfo here should not be used
+pub struct MockRegionInfoProvider(Mutex<Vec<RegionInfo>>);
 
 impl MockRegionInfoProvider {
     pub fn new(regions: Vec<Region>) -> Self {
-        MockRegionInfoProvider(Mutex::new(regions))
+        MockRegionInfoProvider(Mutex::new(
+            regions
+                .into_iter()
+                .map(|region| RegionInfo::new(region, StateRole::Leader))
+                .collect_vec(),
+        ))
     }
 }
 
 impl Clone for MockRegionInfoProvider {
     fn clone(&self) -> Self {
-        MockRegionInfoProvider::new(self.0.lock().unwrap().clone())
+        MockRegionInfoProvider::new(
+            self.0
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|region_info| region_info.region.clone())
+                .collect_vec(),
+        )
     }
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
-        Ok(self.0.lock().unwrap().clone())
+    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+        let mut regions = Vec::new();
+        let (tx, rx) = mpsc::channel();
+        let end_key = RangeKey::from_end_key(end_key.to_vec());
+
+        self.seek_region(
+            start_key,
+            Box::new(move |iter| {
+                for region_info in iter {
+                    if RangeKey::from_start_key(region_info.region.get_start_key().to_vec())
+                        > end_key
+                    {
+                        continue;
+                    }
+                    tx.send(region_info.region.clone()).unwrap();
+                }
+            }),
+        )?;
+
+        for region in rx {
+            regions.push(region);
+        }
+        Ok(regions)
+    }
+
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        let region_infos = self.0.lock().unwrap();
+        let mut iter = region_infos.iter().filter(|&region_info| {
+            RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+                > RangeKey::from_start_key(from.to_vec())
+        });
+        callback(&mut iter);
+        Ok(())
+    }
+
+    fn find_region_by_key(&self, key: &[u8]) -> Result<Region> {
+        let region_infos = self.0.lock().unwrap();
+        let key = RangeKey::from_start_key(key.to_vec());
+        region_infos
+            .iter()
+            .find(|region_info| {
+                RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) <= key
+                    && key < RangeKey::from_end_key(region_info.region.get_end_key().to_vec())
+            })
+            .map(|region_info| region_info.region.clone())
+            .ok_or(box_err!("Not found region containing {:?}", key))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use txn_types::Key;
+
     use super::*;
 
     fn new_region_collector() -> RegionCollector {
@@ -1289,5 +1374,64 @@ mod tests {
                 (new_region(3, b"k9", b"", 1), StateRole::Follower),
             ],
         );
+    }
+
+    #[test]
+    fn test_mock_region_info_provider() {
+        fn init_region(start_key: &[u8], end_key: &[u8], region_id: u64) -> Region {
+            let start_key = Key::from_encoded(start_key.to_vec());
+            let end_key = Key::from_encoded(end_key.to_vec());
+            let mut region = Region::default();
+            region.set_start_key(start_key.as_encoded().clone());
+            region.set_end_key(end_key.as_encoded().clone());
+            region.id = region_id;
+            region
+        }
+
+        let regions = vec![
+            init_region(b"k01", b"k03", 1),
+            init_region(b"k05", b"k10", 2),
+            init_region(b"k10", b"k15", 3),
+        ];
+
+        let provider = MockRegionInfoProvider::new(regions);
+
+        // Test ranges covering all regions
+        let regions = provider.get_regions_in_range(b"k01", b"k15").unwrap();
+        assert!(regions.len() == 3);
+        assert!(regions[0].id == 1);
+        assert!(regions[1].id == 2);
+        assert!(regions[2].id == 3);
+
+        // Test ranges covering partial regions
+        let regions = provider.get_regions_in_range(b"k04", b"k10").unwrap();
+        assert!(regions.len() == 2);
+        assert!(regions[0].id == 2);
+        assert!(regions[1].id == 3);
+
+        // Test seek for all regions
+        provider
+            .seek_region(
+                b"k02",
+                Box::new(|iter| {
+                    assert!(iter.next().unwrap().region.id == 1);
+                    assert!(iter.next().unwrap().region.id == 2);
+                    assert!(iter.next().unwrap().region.id == 3);
+                    assert!(iter.next().is_none());
+                }),
+            )
+            .unwrap();
+
+        // Test seek for partial regions
+        provider
+            .seek_region(
+                b"k04",
+                Box::new(|iter| {
+                    assert!(iter.next().unwrap().region.id == 2);
+                    assert!(iter.next().unwrap().region.id == 3);
+                    assert!(iter.next().is_none());
+                }),
+            )
+            .unwrap();
     }
 }

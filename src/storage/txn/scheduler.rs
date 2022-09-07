@@ -564,10 +564,17 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 let tag = task.cmd.tag();
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
 
-                let snap_ctx = SnapContext {
+                let mut snap_ctx = SnapContext {
                     pb_ctx: task.cmd.ctx(),
                     ..Default::default()
                 };
+                if matches!(
+                    task.cmd,
+                    Command::FlashbackToVersionReadPhase { .. }
+                        | Command::FlashbackToVersion { .. }
+                ) {
+                    snap_ctx.for_flashback = true;
+                }
                 // The program is currently in scheduler worker threads.
                 // Safety: `self.inner.worker_pool` should ensure that a TLS engine exists.
                 match unsafe { with_tls_engine(|engine: &E| kv::snapshot(engine, snap_ctx)) }.await
@@ -827,6 +834,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let cid = task.cid;
         let priority = task.cmd.priority();
         let ts = task.cmd.ts();
+        let tracker = task.tracker;
         let scheduler = self.clone();
         let quota_limiter = self.inner.quota_limiter.clone();
         let mut sample = quota_limiter.new_sample(true);
@@ -913,6 +921,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             let diag_ctx = DiagnosticContext {
                 key,
                 resource_group_tag: ctx.get_resource_group_tag().into(),
+                tracker,
             };
             scheduler.on_wait_for_lock(cid, ts, pr, lock, is_first_lock, wait_timeout, diag_ctx);
             return;
@@ -1328,6 +1337,7 @@ mod tests {
                 false,
                 TimeStamp::default(),
                 OldValues::default(),
+                false,
                 false,
                 Context::default(),
             )
