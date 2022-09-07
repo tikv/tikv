@@ -760,6 +760,71 @@ fn test_mvcc_flashback_block_scheduling() {
     fail::remove("skip_finish_flashback_to_version");
 }
 
+#[test]
+fn test_mvcc_flashback_resolved_ts_check() {
+    let (_cluster, client, ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+        cluster.cfg.resolved_ts.enable = true;
+    });
+    let mut ts = 0;
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // Prewrite
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v.clone());
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        k.clone(),
+        prewrite_start_version,
+    );
+    // Commit
+    ts += 1;
+    let commit_version = ts;
+    must_kv_commit(
+        &client,
+        ctx.clone(),
+        vec![k.clone()],
+        prewrite_start_version,
+        commit_version,
+        commit_version,
+    );
+    // Get
+    ts += 1;
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts);
+    // Flashback with a version that is greater than the current resolved ts.
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.version = u64::MAX;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(!flashback_resp.get_error().is_empty());
+    must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts);
+    // Flashback with a version that is smaller than the current resolved ts.
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.version = 1;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(flashback_resp.get_error().is_empty());
+    let get_resp = kv_read(&client, ctx, k, ts);
+    assert!(!get_resp.has_region_error());
+    assert!(!get_resp.has_error());
+    assert!(get_resp.get_not_found());
+    assert!(get_resp.value.is_empty());
+}
+
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.
 
 #[test]

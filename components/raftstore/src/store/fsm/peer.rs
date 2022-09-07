@@ -1015,7 +1015,7 @@ where
             if version > safe_ts {
                 ch.send(Err(Error::Other(
                     format!(
-                        "region {} safe ts {} is smaller the the flashback version {}",
+                        "region {} safe ts {} is smaller than the flashback version {}",
                         region_id, safe_ts, version
                     )
                     .into(),
