@@ -59,6 +59,7 @@ thiserror = "1"
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
+tikv_kv = { path = "../tikv_kv" }
 tikv_util = { path = "../tikv_util" }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = "0.1"
