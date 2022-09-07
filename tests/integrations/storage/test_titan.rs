@@ -298,11 +298,11 @@ fn test_delete_files_in_range_for_titan() {
     // blob4: (b_7, b_value)
 
     // `delete_files_in_range` may expose some old keys.
-    // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
+    // For Titan it may encounter `missing blob file` in `delete_ranges_cfs`,
     // so we set key_only for Titan.
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteFiles,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -312,7 +312,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteByKey,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -322,7 +322,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteBlobs,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),

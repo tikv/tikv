@@ -124,6 +124,9 @@ pub struct MvccReader<S: EngineSnapshot> {
     lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Option<Cursor<S::Iter>>,
 
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
+
     /// None means following operations are performed on a single user key,
     /// i.e., different versions of the same key. It can use prefix seek to
     /// speed up reads from the write-cf.
@@ -149,6 +152,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
+            lower_bound: None,
+            upper_bound: None,
             scan_mode,
             current_key: None,
             fill_cache,
@@ -164,6 +169,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
             data_cursor: None,
             lock_cursor: None,
             write_cursor: None,
+            lower_bound: None,
+            upper_bound: None,
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
@@ -421,6 +428,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.data_cursor = Some(cursor);
         }
@@ -434,6 +442,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 // Only use prefix seek in non-scan mode.
                 .prefix_seek(self.scan_mode.is_none())
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .hint_min_ts(hint_min_ts)
                 .build()?;
             self.write_cursor = Some(cursor);
@@ -446,6 +455,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
                 .scan_mode(self.get_scan_mode(true))
+                .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.lock_cursor = Some(cursor);
         }
@@ -675,6 +685,11 @@ impl<S: EngineSnapshot> MvccReader<S> {
             },
             None => OldValue::None,
         })
+    }
+
+    pub fn set_range(&mut self, lower: Option<Key>, upper: Option<Key>) {
+        self.lower_bound = lower;
+        self.upper_bound = upper;
     }
 }
 
