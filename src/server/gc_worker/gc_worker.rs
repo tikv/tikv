@@ -1690,7 +1690,7 @@ mod tests {
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_v2},
+                tests::{must_get_none, must_get_none_v2, must_get_v2},
                 MAX_TXN_WRITE_SIZE,
             },
             txn::{
@@ -2601,10 +2601,16 @@ mod tests {
         assert!(ks.is_empty());
     }
 
-    #[test]
-    fn test_gc_for_multi_rocksdb() {
-        let store_id = 1;
-
+    // setup engine and prepare some data
+    fn multi_gc_engine_setup(
+        store_id: u64,
+    ) -> (
+        Arc<TestTabletFactoryV2>,
+        MultiRocksEngine,
+        Arc<MockRegionInfoProvider>,
+        GcRunner<MultiRocksEngine, RaftStoreBlackHole>,
+        Vec<Region>,
+    ) {
         // Building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -2639,14 +2645,14 @@ mod tests {
         let feature_gate = FeatureGate::default();
         feature_gate.set_version("5.0.0").unwrap();
 
-        let _ri_provider = Arc::new(MockRegionInfoProvider::new(vec![
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![
             r1.clone(),
             r2.clone(),
             r3.clone(),
         ]));
 
         let cfg = GcConfig::default();
-        let mut gc_runner = GcRunner::new(
+        let gc_runner = GcRunner::new(
             store_id,
             engine.clone(),
             RaftStoreBlackHole,
@@ -2669,11 +2675,21 @@ mod tests {
             must_commit_v2(&engine, region_id, &k, 151, 152);
         }
 
-        gc_runner.gc(r1.clone(), 200.into()).unwrap();
-        gc_runner.gc(r2.clone(), 200.into()).unwrap();
-        gc_runner.gc(r3.clone(), 200.into()).unwrap();
+        (factory, engine, ri_provider, gc_runner, vec![r1, r2, r3])
+    }
 
-        region_id = 1;
+    #[test]
+    fn test_gc_for_multi_rocksdb() {
+        let store_id = 1;
+
+        let (factory, engine, _ri_provider, mut gc_runner, regions) =
+            multi_gc_engine_setup(store_id);
+
+        gc_runner.gc(regions[0].clone(), 200.into()).unwrap();
+        gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
+        gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
+
+        let mut region_id = 1;
         let mut db = factory
             .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
             .unwrap()
@@ -2681,7 +2697,7 @@ mod tests {
             .clone();
         let mut cf = get_cf_handle(&db, CF_WRITE).unwrap();
         for i in 0..30 {
-            if i >= 20 && i % 10 == 0 {
+            if i >= 10 && i % 10 == 0 {
                 region_id += 1;
                 db = factory
                     .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
@@ -2695,11 +2711,65 @@ mod tests {
             // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
             must_get_none_v2(&engine, region_id, &k, 150);
 
-            // However, MVCC-DELETIONs will be kept.
+            // MVCC-DELETIONs is cleaned
             let mut raw_k = vec![b'z'];
             let suffix = Key::from_raw(&k).append_ts(152.into());
             raw_k.extend_from_slice(suffix.as_encoded());
-            assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+            assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn test_gc_keys_for_multi_rocksdb() {
+        let store_id = 1;
+
+        let (factory, engine, ri_provider, mut gc_runner, _regions) =
+            multi_gc_engine_setup(store_id);
+
+        let mut keys = Vec::new();
+        for i in 0..30 {
+            if i % 2 == 0 {
+                continue;
+            }
+
+            let k = format!("k{:02}", i).into_bytes();
+            let key = Key::from_raw(&k);
+            keys.push(key);
+        }
+        let _ = gc_runner
+            .gc_keys(keys, 200.into(), Either::Right(ri_provider))
+            .unwrap();
+
+        let mut region_id = 1;
+        let mut db = factory
+            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
+            .unwrap()
+            .as_inner()
+            .clone();
+        let mut cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        for i in 0..30 {
+            if i >= 10 && i % 10 == 0 {
+                region_id += 1;
+                db = factory
+                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                    .unwrap()
+                    .as_inner()
+                    .clone();
+                cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            }
+            let k = format!("k{:02}", i).into_bytes();
+
+            let mut raw_k = vec![b'z'];
+            let suffix = Key::from_raw(&k).append_ts(152.into());
+            raw_k.extend_from_slice(suffix.as_encoded());
+
+            if i % 2 == 0 {
+                assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                must_get_v2(&engine, region_id, &k, 150, b"value");
+            } else {
+                must_get_none_v2(&engine, region_id, &k, 150);
+                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+            }
         }
     }
 }
