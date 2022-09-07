@@ -28,7 +28,7 @@ use raftstore::{
         fsm::RaftRouter,
         msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
         transport::SignificantRouter,
-        RecoveryWaitApplySyncer,
+        SnapshotRecoveryWaitApplySyncer,
     },
 };
 use thiserror::Error;
@@ -141,6 +141,18 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         }
     }
 
+    // a new wait apply syncer share with all regions,
+    // when all region reached the target index, share reference decreased to 0,
+    // trigger closure to send finish info back.
+    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>,) {
+        // PR https://github.com/tikv/tikv/pull/13374
+        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender.clone());
+        // ensure recovery cmd be executed so the leader apply to last index
+        router.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()))
+        });
+    }
+
     fn set_db_options(&self, cf_name: &str) -> Result<()> {
         let level0_stop_writes_trigger: u32 = 1 << 30;
         let level0_slowdown_writes_trigger: u32 = 1 << 30;
@@ -241,19 +253,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         }
         Ok(store_id)
     }
-    // a new wait apply syncer share with all regions,
-    // when all region reached the target index, share reference decreased to 0,
-    // trigger closure to send finish info back.
-    fn wait_apply_last(&self, sender: SyncSender<u64>) {
-        // PR https://github.com/tikv/tikv/pull/13374
-        let wait_apply = RecoveryWaitApplySyncer::new(0, sender.clone());
-        // ensure recovery cmd be executed so the leader apply to last index
-        self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::RecoveryWaitApply(wait_apply.clone()))
-        });
-    }
 }
-
 impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     fn read_region_meta(
         &mut self,
@@ -340,11 +340,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
                 let (tx, rx) = sync_channel::<u64>(1);
-                let wait_apply = RecoveryWaitApplySyncer::new(region_id, tx.clone());
+                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
                 raft_router
                     .significant_send(
                         region_id,
-                        SignificantMsg::RecoveryWaitApply(wait_apply.clone()),
+                        SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
                     )
                     .unwrap();
                 rx_apply.push(Some(rx));
@@ -374,18 +374,17 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         _req: WaitApplyRequest,
         sink: UnarySink<WaitApplyResponse>,
     ) {
-        info!("wait_appy start");
-        let now = Instant::now();
-        let (tx, rx) = sync_channel(1);
-        self.wait_apply_last(tx.clone());
-        let _ = rx.recv().unwrap();
-
-        info!(
-            "all region apply to last log takes {}",
-            now.elapsed().as_secs()
-        );
-
+        let router = self.router.clone();
+        info!("wait_apply start");
         let task = async move {
+            let now = Instant::now();
+            let (tx, rx) = sync_channel::<u64>(1);
+            RecoveryService::wait_apply_last(router, tx.clone());
+            let _ = rx.recv().unwrap();    
+            info!(
+                "all region apply to last log takes {}",
+                now.elapsed().as_secs()
+            );
             let resp = WaitApplyResponse::default();
             let _ = sink.success(resp).await;
         };

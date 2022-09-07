@@ -7,6 +7,7 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
+use futures::channel::oneshot::Sender;
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -31,7 +32,7 @@ use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        RecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
         UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
         UnsafeRecoveryWaitApplySyncer,
     },
@@ -457,7 +458,9 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    RecoveryWaitApply(RecoveryWaitApplySyncer),
+    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    PrepareFlashback(Sender<bool>),
+    FinishFlashback,
 }
 
 /// Message that will be sent to a peer.

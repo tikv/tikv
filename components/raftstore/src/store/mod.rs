@@ -53,7 +53,7 @@ pub use self::{
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
     peer::{
-        Peer, PeerStat, ProposalContext, RecoveryWaitApplySyncer, RequestInspector, RequestPolicy,
+        Peer, PeerStat, ProposalContext, SnapshotRecoveryWaitApplySyncer, RequestInspector, RequestPolicy,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,

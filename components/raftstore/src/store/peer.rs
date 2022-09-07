@@ -24,7 +24,8 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use getset::Getters;
+use futures::channel::oneshot::Sender;
+use getset::{Getters, MutGetters};
 use kvproto::{
     errorpb,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp, LockInfo},
@@ -604,13 +605,13 @@ impl UnsafeRecoveryExecutePlanSyncer {
 }
 // Syncer only send to leader in 2nd BR restore
 #[derive(Clone, Debug)]
-pub struct RecoveryWaitApplySyncer {
+pub struct SnapshotRecoveryWaitApplySyncer {
     _closure: Arc<InvokeClosureOnDrop>,
     abort: Arc<Mutex<bool>>,
 }
 
-impl RecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
+impl SnapshotRecoveryWaitApplySyncer {
+    pub fn new(region_id: u64, sender: SyncSender<u64>,) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
@@ -629,7 +630,7 @@ impl RecoveryWaitApplySyncer {
                 })
                 .unwrap();
         }));
-        RecoveryWaitApplySyncer {
+        SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
             abort,
         }
@@ -723,7 +724,7 @@ impl UnsafeRecoveryFillOutReportSyncer {
     }
 }
 
-pub enum RecoveryState {
+pub enum SnapshotRecoveryState {
     // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
     // and force forward to last index once follower appended and then it also is checked
     // every time this peer applies a the last index, if the last index is met, this state is
@@ -731,9 +732,11 @@ pub enum RecoveryState {
     // the next step of recovery process.
     WaitLogApplyToLast {
         target_index: u64,
-        syncer: RecoveryWaitApplySyncer,
+        syncer: SnapshotRecoveryWaitApplySyncer,
     },
+}
 
+pub enum UnsafeRecoveryState {
     // Stores the state that is necessary for the wait apply stage of unsafe recovery process.
     // This state is set by the peer fsm. Once set, it is checked every time this peer applies a
     // new entry or a snapshot, if the target index is met, this state is reset / droppeds. The
@@ -754,7 +757,33 @@ pub enum RecoveryState {
     Destroy(UnsafeRecoveryExecutePlanSyncer),
 }
 
-#[derive(Getters)]
+// This state is set by the peer fsm when invoke msg PrepareFlashback. Once set,
+// it is checked every time this peer applies a new entry or a snapshot,
+// if the latest committed index is met, the syncer will be called to notify the
+// result.
+#[derive(Debug)]
+pub struct FlashbackState(Option<Sender<bool>>);
+
+impl FlashbackState {
+    pub fn new(ch: Sender<bool>) -> Self {
+        FlashbackState(Some(ch))
+    }
+
+    pub fn finish_wait_apply(&mut self) {
+        if self.0.is_none() {
+            return;
+        }
+        let ch = self.0.take().unwrap();
+        match ch.send(true) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Fail to notify flashback state"; "err" => ?e);
+            }
+        }
+    }
+}
+
+#[derive(Getters, MutGetters)]
 pub struct Peer<EK, ER>
 where
     EK: KvEngine,
@@ -779,7 +808,7 @@ where
 
     proposals: ProposalQueue<Callback<EK::Snapshot>>,
     leader_missing_time: Option<Instant>,
-    #[getset(get = "pub")]
+    #[getset(get = "pub", get_mut = "pub")]
     leader_lease: Lease,
     pending_reads: ReadIndexQueue<Callback<EK::Snapshot>>,
     /// Threshold of long uncommitted proposals.
@@ -934,7 +963,9 @@ where
     pub last_region_buckets: Option<BucketStat>,
     /// lead_transferee if the peer is in a leadership transferring.
     pub lead_transferee: u64,
-    pub recovery_state: Option<RecoveryState>,
+    pub unsafe_recovery_state: Option<UnsafeRecoveryState>,
+    pub flashback_state: Option<FlashbackState>,
+    pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1065,7 +1096,9 @@ where
             region_buckets: None,
             last_region_buckets: None,
             lead_transferee: raft::INVALID_ID,
-            recovery_state: None,
+            unsafe_recovery_state: None,
+            flashback_state: None,
+            snapshot_recovery_state: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2069,6 +2102,16 @@ where
         true
     }
 
+    // during the snapshot recovery, follower unconditionaly forward the commit_index.
+    // pub fn force_forward_commit_index(&mut self) -> bool {
+
+    //     let persisted = self.raft_group.raft.raft_log.persisted;
+
+    //     self.raft_group.raft.raft_log.committed =
+    //         std::cmp::max(self.raft_group.raft.raft_log.committed, persisted);
+    //     true
+    // }
+
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
@@ -2422,9 +2465,17 @@ where
                         self.raft_group.store().region(),
                     );
 
-                    if self.recovery_state.is_some() {
+                    if self.unsafe_recovery_state.is_some() {
                         debug!("unsafe recovery finishes applying a snapshot");
-                        self.recovery_maybe_finish_wait_apply(/* force= */ false);
+                        self.unsafe_recovery_maybe_finish_wait_apply(/* force= */ false);
+                    }
+                    if self.flashback_state.is_some() {
+                        debug!("flashback finishes applying a snapshot");
+                        self.maybe_finish_flashback_wait_apply();
+                    }
+                    if self.snapshot_recovery_state.is_some() {
+                        debug!("snapshot recovery finishes applying a snapshot");
+                        self.snapshot_recovery_maybe_finish_wait_apply(false);
                     }
                 }
                 // If `apply_snap_ctx` is none, it means this snapshot does not
@@ -3400,6 +3451,13 @@ where
                 "peer_id" => self.peer.get_id(),
             );
             None
+        } else if self.flashback_state.is_some() {
+            debug!(
+                "prevents renew lease while in flashback state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            None
         } else {
             self.leader_lease.renew(ts);
             let term = self.term();
@@ -4320,6 +4378,7 @@ where
         // In `pre_propose_raft_command`, it rejects all the requests expect conf-change
         // if in force leader state.
         if self.force_leader.is_some() {
+            poll_ctx.raft_metrics.invalid_proposal.force_leader.inc();
             panic!(
                 "{} propose normal in force leader state {:?}",
                 self.tag, self.force_leader
@@ -4973,29 +5032,50 @@ where
             Some(ForceLeaderState::ForceLeader { .. })
         )
     }
-
-    pub fn recovery_maybe_finish_wait_apply(&mut self, force: bool) {
-        match &self.recovery_state {
-            Some(RecoveryState::WaitApply { target_index, .. })
-            | Some(RecoveryState::WaitLogApplyToLast { target_index, .. }) => {
-                if self.raft_group.raft.raft_log.applied >= *target_index || force {
-                    if self.is_force_leader() {
-                        info!("Unsafe recovery, finish wait apply";);
-                    } else {
-                        info!("snapshot recovery, finish wait apply");
-                    }
-
-                    info!("wait apply finished info";
-                        "region_id" => self.region().get_id(),
+    pub fn unsafe_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(UnsafeRecoveryState::WaitApply { target_index, .. }) =
+            &self.unsafe_recovery_state
+        {
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                if self.is_force_leader() {
+                    info!(
+                       "Unsafe recovery, finish wait apply";
+                       "region_id" => self.region().get_id(),
                         "peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
                         "force" => force,
                     );
-                    self.recovery_state = None;
                 }
+                self.unsafe_recovery_state = None;
             }
-            Some(_) | None => {}
+        }
+    }
+
+    pub fn snapshot_recovery_maybe_finish_wait_apply(&mut self, force: bool) {
+        if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
+            &self.snapshot_recovery_state
+        {
+            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+                info!("snapshot recovery wait apply finished";
+                    "region_id" => self.region().get_id(),
+                    "peer_id" => self.peer_id(),
+                    "target_index" => target_index,
+                    "applied" =>  self.raft_group.raft.raft_log.applied,
+                    "force" => force,
+                );
+                self.snapshot_recovery_state = None;
+            }
+        }
+    }
+
+    pub fn maybe_finish_flashback_wait_apply(&mut self) {
+        let finished =
+            self.raft_group.raft.raft_log.applied == self.raft_group.raft.raft_log.last_index();
+        if finished {
+            if let Some(flashback_state) = self.flashback_state.as_mut() {
+                flashback_state.finish_wait_apply();
+            }
         }
     }
 }

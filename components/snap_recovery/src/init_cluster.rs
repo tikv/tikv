@@ -50,9 +50,7 @@ const MAX_SPLIT_KEY: u64 = 1 << 31;
 /// index) are safe
 pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // TOOD: if we do not have to restart TiKV, then, we need exit the recovery mode
-    // and config the following parameter back disable some configuration to ban
-    // raft election etc. For snapshot recovery, no raft peers can start a new
-    // election.
+    // and bring the following parameter back. 
     info!("adjust the raft configure and rocksdb config.");
     let bt = config.raft_store.raft_base_tick_interval.0;
 
@@ -74,8 +72,11 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
         ReadableDuration(bt * 4 * SNAP_MAX_TIMEOUT as _);
 
     // for optimize the write
-    config.raft_store.snap_generator_pool_size = 10;
-    config.raft_store.snap_apply_batch_size = ReadableSize::mb(10);
+    config.raft_store.snap_generator_pool_size = 20;
+    // applied snapshot mem size
+    config.raft_store.snap_apply_batch_size = ReadableSize::gb(1);
+    // max snapshot file size, if larger than it, file be splitted.
+    config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1); 
     config.raft_store.hibernate_regions = false;
 
     // disable auto compactions during the restore
