@@ -259,7 +259,7 @@ fn test_read_on_replica_check_memory_locks() {
     range.set_start_key(encoded_key.as_encoded().to_vec());
     let follower_snap_ctx = SnapContext {
         pb_ctx: &follower_ctx,
-        start_ts: 100.into(),
+        start_ts: Some(100.into()),
         key_ranges: vec![range],
         ..Default::default()
     };

@@ -46,7 +46,7 @@ use tikv_util::{
     Either, HandyRwLock,
 };
 use tokio_timer::timer::Handle;
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, TSO_PHYSICAL_SHIFT_BITS};
 
 use super::*;
 
@@ -1698,8 +1698,38 @@ impl PdClient for TestPdClient {
                 )),
             )));
         }
-        let tso = self.tso.fetch_add(count as u64, Ordering::SeqCst);
-        Box::pin(ok(TimeStamp::new(tso + count as u64)))
+
+        assert!(count > 0);
+        assert!(count < (1 << TSO_PHYSICAL_SHIFT_BITS));
+
+        let mut old_tso = self.tso.load(Ordering::SeqCst);
+        loop {
+            let ts: TimeStamp = old_tso.into();
+
+            // Add to logical part first.
+            let (mut physical, mut logical) = (ts.physical(), ts.logical() + count as u64);
+
+            // When logical part is overflow, add to physical part.
+            // Moreover, logical part must not less than `count-1`, as the
+            // generated batch of TSO is treated as of the same physical time.
+            // Refer to real PD's implementation:
+            // https://github.com/tikv/pd/blob/v6.2.0/server/tso/tso.go#L361
+            if logical >= (1 << TSO_PHYSICAL_SHIFT_BITS) {
+                physical += 1;
+                logical = (count - 1) as u64;
+            }
+
+            let new_tso = TimeStamp::compose(physical, logical);
+            match self.tso.compare_exchange_weak(
+                old_tso,
+                new_tso.into_inner(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Box::pin(ok(new_tso)),
+                Err(x) => old_tso = x,
+            }
+        }
     }
 
     fn update_service_safe_point(
