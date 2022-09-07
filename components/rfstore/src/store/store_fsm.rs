@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::{
         Bound::{Excluded, Unbounded},
         Deref, DerefMut,
@@ -314,6 +314,10 @@ pub struct StoreMeta {
     /// dropped if there is no such Region in this store now. So the messages are recorded temporarily and
     /// will be handled later.
     pub pending_msgs: RingQueue<RaftMessage>,
+    /// Saves destroying regions in one loop. It's used to solve the race between peer gc and split,
+    /// i.e., split won't create a destroying region if they are in the same loop with checking
+    /// it.
+    pub destroying: HashSet<u64>,
 }
 
 impl StoreMeta {
@@ -325,6 +329,7 @@ impl StoreMeta {
             cop_host,
             readers: Arc::new(dashmap::DashMap::new()),
             pending_msgs: RingQueue::with_capacity(vote_capacity),
+            destroying: HashSet::default(),
         }
     }
 
@@ -1007,23 +1012,20 @@ impl<'a> StoreMsgHandler<'a> {
                         .remove_dependent(region_id, new_region_id);
                     continue;
                 }
-            } else if let Some(state) =
-                load_last_peer_state(&self.ctx.global.engines.raft, new_region_id)
+            } else if load_last_peer_state(&self.ctx.global.engines.raft, new_region_id)
+                .map(|state| state.get_state() == PeerState::Tombstone)
+                .unwrap_or(false)
+                || self.ctx.store_meta.destroying.contains(&new_region_id)
             {
-                if state.get_state() == PeerState::Tombstone {
-                    // The peer has been destroyed.
-                    info!(
-                        "{} peer avoid created by split, peer state: {:?}",
-                        tag, state
-                    );
-                    self.ctx
-                        .global
-                        .engines
-                        .raft
-                        .remove_dependent(region_id, new_region_id);
-                    self.ctx.global.engines.kv.remove_shard(new_region_id);
-                    continue;
-                }
+                // The peer has been destroyed.
+                info!("{} region {} avoid created by split", tag, new_region_id);
+                self.ctx
+                    .global
+                    .engines
+                    .raft
+                    .remove_dependent(region_id, new_region_id);
+                self.ctx.global.engines.kv.remove_shard(new_region_id);
+                continue;
             }
             // Now all checking passed.
             // Insert new regions and validation
@@ -1339,6 +1341,7 @@ impl<'a> StoreMsgHandler<'a> {
         peer_fsm.stop();
         self.ctx.peers.remove(&region_id);
         self.ctx.global.engines.kv.remove_shard(region_id);
+        self.ctx.store_meta.destroying.insert(region_id);
     }
 
     fn on_snapshot_ready(&mut self, region_id: u64) -> Option<u64> {

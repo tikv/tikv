@@ -125,12 +125,7 @@ impl RaftWorker {
                 self.ctx.global.trans.flush();
             }
             self.persist_state();
-            self.ctx
-                .raft_metrics
-                .store_time
-                .observe(duration_to_sec(loop_start.saturating_elapsed()));
-            self.ctx.raft_metrics.flush();
-            self.ctx.current_time = None;
+            self.batch_end(loop_start.saturating_elapsed());
         }
     }
 
@@ -299,6 +294,16 @@ impl RaftWorker {
         } else {
             self.io_sender.send(Some(io_task)).unwrap();
         }
+    }
+
+    fn batch_end(&mut self, batch_duration: Duration) {
+        self.ctx
+            .raft_metrics
+            .store_time
+            .observe(duration_to_sec(batch_duration));
+        self.ctx.raft_metrics.flush();
+        self.ctx.current_time = None;
+        self.ctx.store_meta.destroying.clear();
     }
 }
 
