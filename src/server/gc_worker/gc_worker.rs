@@ -2741,4 +2741,141 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_raw_gc_keys_for_multi_rocksdb() {
+        let store_id = 1;
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new()
+            .prefix("multi-rocks-raw-gc")
+            .tempdir()
+            .unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+
+        // Note: as the tablet split is not supported yet, we artificially divide the
+        // region to: 1 ["", "k10"], 2 ["k10", ""]
+        let r1 = init_region(b"", b"k10", 1, Some(store_id));
+        let r2 = init_region(b"k10", b"", 2, Some(store_id));
+        let _ = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+        let _ = factory
+            .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap();
+
+        let mut region_info = std::collections::HashMap::new();
+        region_info.insert(1, r1.clone());
+        region_info.insert(2, r2.clone());
+        let engine = MultiRocksEngine {
+            factory: factory.clone(),
+            region_info,
+        };
+
+        let (tx, _rx) = mpsc::channel();
+        let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1.clone(), r2.clone()]));
+
+        let cfg = GcConfig::default();
+        let mut gc_runner = GcRunner::new(
+            store_id,
+            engine.clone(),
+            RaftStoreBlackHole,
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())))
+                .0
+                .tracker("gc-woker".to_owned()),
+            cfg,
+        );
+
+        // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>
+        let mut test_raws = std::collections::HashMap::new();
+        let mut test_raws_region = Vec::new();
+        let mut test_keys = Vec::new();
+        let mut i = 0;
+        let mut region_id = 1;
+        while i < 20 {
+            if i == 10 {
+                test_raws.insert(region_id, test_raws_region);
+                region_id += 1;
+                test_raws_region = Vec::new();
+            }
+            let k1 = format!("k{:02}", i).into_bytes();
+            let k2 = format!("k{:02}", i + 1).into_bytes();
+            test_keys.push(k1.clone());
+            test_keys.push(k2.clone());
+
+            // All data in engine. (key,expir_ts,is_delete,expect_exist)
+            let test_raw = vec![
+                (k1.clone(), 130, true, true), // ts(130) > safepoint
+                (k1.clone(), 120, true, true), // ts(120) = safepoint
+                (k1.clone(), 100, true, false),
+                (k1.clone(), 50, false, false),
+                (k1.clone(), 10, false, false),
+                (k1, 5, false, false),
+                (k2.clone(), 50, true, false),
+                (k2.clone(), 20, false, false),
+                (k2, 10, false, false),
+            ];
+
+            let modifies = test_raw
+                .clone()
+                .into_iter()
+                .map(|(key, ts, is_delete, _expect_exist)| {
+                    (
+                        ApiV2::encode_raw_key(&key, Some(ts.into())),
+                        ApiV2::encode_raw_value(RawValue {
+                            user_value: &[0; 10][..],
+                            expire_ts: Some(10),
+                            is_delete,
+                        }),
+                    )
+                })
+                .map(|(k, v)| Modify::Put(CF_DEFAULT, k, v))
+                .collect();
+
+            let ctx = Context {
+                region_id,
+                api_version: ApiVersion::V2,
+                ..Default::default()
+            };
+            let batch = WriteData::from_modifies(modifies);
+            engine.write(&ctx, batch).unwrap();
+
+            test_raws_region.extend(test_raw);
+            i += 2;
+        }
+        test_raws.insert(region_id, test_raws_region);
+
+        let to_gc_keys: Vec<Key> = test_keys
+            .into_iter()
+            .map(|key| ApiV2::encode_raw_key(&key, None))
+            .collect();
+
+        gc_runner
+            .raw_gc_keys(to_gc_keys, TimeStamp::new(120), ri_provider)
+            .unwrap();
+
+        assert_eq!(70, gc_runner.mut_stats(GcKeyMode::raw).data.next);
+        assert_eq!(20, gc_runner.mut_stats(GcKeyMode::raw).data.seek);
+
+        for (region_id, test_raws_region) in test_raws {
+            let mut ctx = Context::default();
+            ctx.region_id = region_id;
+            let snap_ctx = SnapContext {
+                pb_ctx: &ctx,
+                ..Default::default()
+            };
+            let snapshot = block_on(async { tikv_kv::snapshot(&engine, snap_ctx).await }).unwrap();
+
+            test_raws_region
+                .clone()
+                .into_iter()
+                .for_each(|(key, ts, _is_delete, expect_exist)| {
+                    let engine_key = ApiV2::encode_raw_key(&key, Some(ts.into()));
+                    let entry = snapshot.get(&Key::from_encoded(engine_key.into_encoded()));
+                    assert_eq!(entry.unwrap().is_some(), expect_exist);
+                });
+        }
+    }
 }
