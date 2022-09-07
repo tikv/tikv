@@ -269,7 +269,8 @@ impl RaftBatchSystem {
             }
             true
         });
-        rfengine.apply(&wb);
+        rfengine.apply(&mut wb);
+        rfengine.schedule_truncate_tasks(wb);
         let mut peers = vec![];
         let store_id = ctx.store.id;
         for region in &regions {

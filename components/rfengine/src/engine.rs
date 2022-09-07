@@ -172,13 +172,13 @@ impl RfEngine {
     }
 
     /// Applies and persists the write batch.
-    pub fn write(&self, wb: WriteBatch) -> Result<usize> {
-        self.apply(&wb);
+    pub fn write(&self, mut wb: WriteBatch) -> Result<usize> {
+        self.apply(&mut wb);
         self.persist(wb)
     }
 
     /// Applies the write batch to memory without persisting it to WAL.
-    pub fn apply(&self, wb: &WriteBatch) {
+    pub fn apply(&self, wb: &mut WriteBatch) {
         let timer = Instant::now_coarse();
         for (&region_id, batch_data) in &wb.regions {
             let region_data = self.get_or_init_region_data(region_id);
@@ -197,13 +197,11 @@ impl RfEngine {
             // In rfstore, we always truncate logs before appending logs in such a case, so we
             // don't handle it here.
             if !truncated.is_empty() || prev_truncated_idx != truncated_index {
-                self.task_sender
-                    .send(Task::Truncate {
-                        region_id,
-                        truncated_index,
-                        truncated,
-                    })
-                    .unwrap();
+                wb.truncate_tasks.push(Task::Truncate {
+                    region_id,
+                    truncated_index,
+                    truncated,
+                });
             }
         }
         ENGINE_APPLY_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
@@ -220,11 +218,18 @@ impl RfEngine {
         }
         let (size, rotated) = writer.flush()?;
         drop(writer);
+        self.schedule_truncate_tasks(wb);
         if rotated {
             self.task_sender.send(Task::Rotate { epoch_id }).unwrap();
         }
         ENGINE_PERSIST_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         Ok(size)
+    }
+
+    pub fn schedule_truncate_tasks(&self, wb: WriteBatch) {
+        for task in wb.truncate_tasks {
+            self.task_sender.send(task).unwrap();
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -665,7 +670,8 @@ mod tests {
             for &(region_id, truncated_idx) in truncated_regions.iter() {
                 wb.truncate_raft_log(region_id, truncated_idx);
             }
-            engine.apply(&wb);
+            engine.apply(&mut wb);
+            engine.schedule_truncate_tasks(wb);
             engine.iterate_all_states(false, |region_id, key, _| {
                 let old_region_data = old_entries_map.get(&region_id).unwrap();
                 assert!(old_region_data.get_state(key).is_some());

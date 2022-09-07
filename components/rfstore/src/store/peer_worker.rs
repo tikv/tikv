@@ -285,8 +285,8 @@ impl RaftWorker {
         if self.ctx.persist_readies.is_empty() && self.ctx.raft_wb.is_empty() {
             return;
         }
-        let raft_wb = mem::take(&mut self.ctx.raft_wb);
-        self.ctx.global.engines.raft.apply(&raft_wb);
+        let mut raft_wb = mem::take(&mut self.ctx.raft_wb);
+        self.ctx.global.engines.raft.apply(&mut raft_wb);
         let readies = mem::take(&mut self.ctx.persist_readies);
         let io_task = IOTask { raft_wb, readies };
         if let Some(sync_io_worker) = self.sync_io_worker.as_mut() {
