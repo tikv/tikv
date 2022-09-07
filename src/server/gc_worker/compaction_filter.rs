@@ -38,7 +38,6 @@ use crate::{
     server::gc_worker::{GcConfig, GcTask, GcWorkerConfigManager, STAT_TXN_KEYMODE},
     storage::mvcc::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM},
 };
-// use crate::storage::txn::gc;
 
 const DEFAULT_DELETE_BATCH_SIZE: usize = 256 * 1024;
 pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
