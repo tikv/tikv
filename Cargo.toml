@@ -203,6 +203,9 @@ snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "sta
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 
+# Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
+cmake = { git = "https://github.com/rust-lang/cmake-rs" }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
