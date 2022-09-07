@@ -37,7 +37,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
-use tikv_kv::{write_modifies, write_modifies_v2};
+use tikv_kv::{write_modifies};
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -371,7 +371,8 @@ where
         }
 
         if self.multi_rocks {
-            write_modifies_v2(region_modifies)
+            // Not read to implement
+            unimplemented!()
         } else {
             write_modifies(
                 &self.engine,

@@ -135,10 +135,7 @@ fn test_txn_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 
     let engine = TestEngineBuilder::new().build().unwrap();
-    let prefixed_engine = PrefixedEngine {
-        engine: engine.clone(),
-        write_task_sender: None,
-    };
+    let prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();
@@ -286,10 +283,7 @@ fn test_raw_gc_keys_handled() {
         .api_version(ApiVersion::V2)
         .build()
         .unwrap();
-    let prefixed_engine = PrefixedEngine {
-        engine: engine.clone(),
-        write_task_sender: None,
-    };
+        let prefixed_engine = PrefixedEngine(engine.clone());
 
     let (tx, _rx) = mpsc::channel();
     let feature_gate = FeatureGate::default();

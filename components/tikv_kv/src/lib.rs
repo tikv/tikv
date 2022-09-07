@@ -666,10 +666,6 @@ pub fn write_modifies(kv_engine: &impl LocalEngine, modifies: Vec<Modify>) -> Re
     Ok(())
 }
 
-pub fn write_modifies_v2(_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
-    unimplemented!();
-}
-
 pub const TEST_ENGINE_CFS: &[CfName] = &[CF_DEFAULT, "cf"];
 
 pub mod tests {
