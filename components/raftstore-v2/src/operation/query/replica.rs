@@ -86,7 +86,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                self.response_read(&mut read, ctx);
+                self.respond_read(&mut read, ctx);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 self.response_replica_read(&mut read, ctx);
             } else {

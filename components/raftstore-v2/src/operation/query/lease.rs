@@ -175,7 +175,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// response the read index request
     ///
     /// awake the read tasks waiting in frontend (such as unified thread pool)
-    pub(crate) fn response_read<T>(
+    /// In v1, it's named as response_read.
+    pub(crate) fn respond_read<T>(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -260,7 +261,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             // TODO: add ready_to_handle_read for splitting and merging
             while let Some(mut read) = self.pending_reads_mut().pop_front() {
-                self.response_read(&mut read, ctx);
+                self.respond_read(&mut read, ctx);
             }
         }
 
