@@ -52,7 +52,7 @@ pub fn create_raft_storage<
     EK,
     R: FlowStatsReporter,
     F: KvFormat,
-    LM: lock_manager::LockManagerTrait,
+    LM: lock_manager::LockManager,
 >(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,

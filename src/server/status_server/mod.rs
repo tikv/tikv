@@ -61,10 +61,6 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
-};
 use crate::{
     config::{ConfigController, LogLevel},
     server::Result,
