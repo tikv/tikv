@@ -2,22 +2,22 @@
 
 //! There are two types of Query: KV read and status query.
 //!
-//! KV Read is implemented in local module and query module.
+//! KV Read is implemented in local module and lease module.
 //! Read will be executed in callee thread if in lease, which is
 //! implemented in local module. If lease is expired, it will extend the lease
 //! first. Lease maintainance is implemented in lease module.
 //!
 //! Status query is implemented in the root module directly.
-//! Follower's read index and replica read is implemenented replica.rs.
-//! Leader's read index and lease renew is implemented in lease.rs.
-//! Stale read check is implemented stale.rs.
+//! Follower's read index and replica read is implemenented replica module.
+//! Leader's read index and lease renew is implemented in lease module.
+//! Stale read check is implemented stale module.
 
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType};
 use raftstore::{
     store::{
         cmd_resp, msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadCallback, RequestInspector, RequestPolicy,
+        ReadCallback, RequestPolicy, Transport,
     },
     Error, Result,
 };
@@ -25,6 +25,7 @@ use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
 use crate::{
+    batch::StoreContext,
     fsm::PeerFsmDelegate,
     raft::Peer,
     router::{DebugInfoChannel, QueryResChannel, QueryResult, ReadResponse},
@@ -39,22 +40,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
 {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
-        if req.has_admin_request() {
-            return Err(box_err!("PeerMsg::RaftQuery does not allow admin requests"));
-        }
-
-        for r in req.get_requests() {
-            if r.get_cmd_type() != CmdType::Get
-                && r.get_cmd_type() != CmdType::Snap
-                && r.get_cmd_type() != CmdType::ReadIndex
-            {
-                return Err(box_err!(
-                    "PeerMsg::RaftQuery does not allow write requests: {:?}",
-                    r.get_cmd_type()
-                ));
-            }
-        }
-
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
@@ -64,12 +49,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
             return Ok(RequestPolicy::ReadIndex);
         }
 
-        // TODO
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        // if !self.has_applied_to_current_term() {
-        // return Ok(RequestPolicy::ReadIndex);
-        // }
+        if !self.fsm.peer_mut().has_applied_to_current_term() {
+            return Ok(RequestPolicy::ReadIndex);
+        }
 
         match self.fsm.peer_mut().inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
@@ -83,6 +67,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     #[inline]
     pub fn on_query(&mut self, req: RaftCmdRequest, ch: QueryResChannel) {
         if !req.has_status_request() {
+            if let Err(e) = self.fsm.peer_mut().validate_query_msg(&req, self.store_ctx) {
+                let resp = cmd_resp::new_error(e);
+                ch.report_error(resp);
+                return;
+            }
             let policy = self.inspect_read(&req);
             match policy {
                 Ok(RequestPolicy::ReadIndex) => {
@@ -97,13 +86,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                     self.store_ctx.raft_metrics.propose.local_read.inc();
                     self.fsm.peer_mut().can_stale_read(req, true, None, ch);
                 }
-                Err(err) => {
-                    let mut err_resp = RaftCmdResponse::default();
-                    let term = self.fsm.peer().term();
-                    cmd_resp::bind_term(&mut err_resp, term);
-                    cmd_resp::bind_error(&mut err_resp, err);
-                    ch.report_error(err_resp);
-                }
                 _ => {
                     unimplemented!();
                 }
@@ -115,6 +97,81 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    fn validate_query_msg<T: Transport>(
+        &mut self,
+        msg: &RaftCmdRequest,
+        ctx: &mut StoreContext<EK, ER, T>,
+    ) -> Result<()> {
+        // check query specific requirements
+        if msg.has_admin_request() {
+            return Err(box_err!("PeerMsg::RaftQuery does not allow admin requests"));
+        }
+
+        // check query specific requirements
+        for r in msg.get_requests() {
+            if r.get_cmd_type() != CmdType::Get
+                && r.get_cmd_type() != CmdType::Snap
+                && r.get_cmd_type() != CmdType::ReadIndex
+            {
+                return Err(box_err!(
+                    "PeerMsg::RaftQuery does not allow write requests: {:?}",
+                    r.get_cmd_type()
+                ));
+            }
+        }
+
+        // Check store_id, make sure that the msg is dispatched to the right place.
+        if let Err(e) = util::check_store_id(msg, self.peer().get_store_id()) {
+            ctx.raft_metrics.invalid_proposal.mismatch_store_id.inc();
+            return Err(e);
+        }
+
+        // TODO: add flashback_state check
+
+        // Check whether the store has the right peer to handle the request.
+        let leader_id = self.leader_id();
+        let request = msg.get_requests();
+
+        // TODO: add false leader
+
+        // ReadIndex can be processed on the replicas.
+        let is_read_index_request =
+            request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
+
+        let allow_replica_read = msg.get_header().get_replica_read();
+        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+        let allow_stale_read = flags.contains(WriteBatchFlags::STALE_READ);
+        if !self.is_leader() && !is_read_index_request && !allow_replica_read && !allow_stale_read {
+            ctx.raft_metrics.invalid_proposal.not_leader.inc();
+            return Err(Error::NotLeader(self.region_id(), None));
+        }
+
+        // peer_id must be the same as peer's.
+        if let Err(e) = util::check_peer_id(msg, self.peer_id()) {
+            ctx.raft_metrics.invalid_proposal.mismatch_peer_id.inc();
+            return Err(e);
+        }
+        // check whether the peer is initialized.
+        if !self.storage().is_initialized() {
+            ctx.raft_metrics
+                .invalid_proposal
+                .region_not_initialized
+                .inc();
+            return Err(Error::RegionNotInitialized(self.region_id()));
+        }
+
+        // TODO: check applying snapshot
+
+        // Check whether the term is stale.
+        if let Err(e) = util::check_term(msg, self.term()) {
+            ctx.raft_metrics.invalid_proposal.stale_command.inc();
+            return Err(e);
+        }
+
+        // TODO: add check of sibling region for split
+        util::check_region_epoch(msg, self.region(), true)
+    }
+
     /// Status command is used to query target region information.
     #[inline]
     fn on_query_status(&mut self, req: &RaftCmdRequest, ch: QueryResChannel) {

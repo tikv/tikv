@@ -30,13 +30,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// read index on follower
     ///
     /// return true if it's proposed.
-    pub(crate) fn follower_read_index<T: Transport>(
+    pub(crate) fn read_index_follower<T: Transport>(
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
-        now: Timespec,
-    ) -> bool {
+    ) {
+        let now = monotonic_raw_now();
         if self.leader_id() == INVALID_ID {
             poll_ctx
                 .raft_metrics
@@ -48,10 +48,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             cmd_resp::bind_term(&mut err_resp, term);
             cmd_resp::bind_error(&mut err_resp, Error::NotLeader(self.region_id(), None));
             ch.report_error(err_resp);
-            return false;
+            return;
         }
 
-        self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now)
+        if self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
+            self.set_has_ready();
+        }
     }
 
     /// Responses to the ready read index request on the replica, the replica is

@@ -18,8 +18,7 @@ use raftstore::{
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         util::{check_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, RequestInspector,
-        Transport,
+        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, Transport,
     },
     Error,
 };
@@ -75,15 +74,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         true
     }
 
-    fn leader_read_index<T: Transport>(
+    fn read_index_leader<T: Transport>(
         &mut self,
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
-        now: Timespec,
-    ) -> bool {
+    ) {
+        let now = monotonic_raw_now();
         let lease_state = self.inspect_lease();
-        if can_amend_read::<Peer<EK, ER>, QueryResChannel>(
+        if can_amend_read::<QueryResChannel>(
             self.pending_reads().back(),
             &req,
             lease_state,
@@ -98,12 +97,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 // A read request proposed in the current lease is found; combine the new
                 // read request to that previous one, so that no proposing needed.
                 read.push_command(req, ch, commit_index);
-                return false;
+                return;
             }
         }
 
-        if !self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
-            return false;
+        if self.propose_read_index(poll_ctx, req, self.is_leader(), ch, now) {
+            self.set_has_ready();
         }
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
@@ -125,7 +124,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // self.post_propose(poll_ctx, p);
         // }
         // }
-        true
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
@@ -138,13 +136,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         poll_ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
         ch: QueryResChannel,
-    ) -> bool {
+    ) {
         // TODO: add pre_read_index to handle splitting or merging
-        let now = monotonic_raw_now();
         if self.is_leader() {
-            self.leader_read_index(poll_ctx, req, ch, now)
+            self.read_index_leader(poll_ctx, req, ch);
         } else {
-            self.follower_read_index(poll_ctx, req, ch, now)
+            self.read_index_follower(poll_ctx, req, ch);
         }
     }
 
@@ -319,18 +316,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         reader.update(progress);
     }
-}
 
-impl<EK, ER> RequestInspector for Peer<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn has_applied_to_current_term(&mut self) -> bool {
+    pub(crate) fn has_applied_to_current_term(&mut self) -> bool {
         self.entry_storage().applied_term() == self.term()
     }
 
-    fn inspect_lease(&mut self) -> LeaseState {
+    pub(crate) fn inspect_lease(&mut self) -> LeaseState {
         if !self.raft_group().raft.in_lease() {
             return LeaseState::Suspect;
         }

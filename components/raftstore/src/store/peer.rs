@@ -597,7 +597,7 @@ pub fn should_renew_lease(
 
 // check if the request can be amended to the last pending read?
 // return true if it can.
-pub fn can_amend_read<I: RequestInspector, C>(
+pub fn can_amend_read<C>(
     last_pending_read: Option<&ReadIndexRequest<C>>,
     req: &RaftCmdRequest,
     lease_state: LeaseState,
@@ -3946,7 +3946,7 @@ where
         let now = monotonic_raw_now();
         if self.is_leader() {
             let lease_state = self.inspect_lease();
-            if can_amend_read::<Peer<EK, ER>, Callback<EK::Snapshot>>(
+            if can_amend_read::<Callback<EK::Snapshot>>(
                 self.pending_reads.back(),
                 &req,
                 lease_state,
