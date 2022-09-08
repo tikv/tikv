@@ -5477,6 +5477,8 @@ pub trait RequestInspector {
 
         fail_point!("perform_read_index", |_| Ok(RequestPolicy::ReadIndex));
 
+        fail_point!("perform_read_local", |_| Ok(RequestPolicy::ReadLocal));
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
