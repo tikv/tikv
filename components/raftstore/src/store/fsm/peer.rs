@@ -1014,10 +1014,14 @@ where
 
     fn on_has_pending_conf(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
-            // no need check non-leader pending conf.
+            // no need to check non-leader pending conf change.
             // in snapshot recovery after we stopped all conf changes from PD.
             // if the follower slow than leader and has the pending conf change.
-            // that's means the follower cannot be select to leader during recovery.
+            // that's means
+            // 1. if the follower didn't finished the conf change
+            //    => it cannot be chosen to be leader during recovery.
+            // 2. if the follower has been chosen to be leader
+            //    => it already apply the pending conf change already.
             return;
         }
         debug!(
@@ -1027,8 +1031,7 @@ where
         );
         let region = self.fsm.peer.region();
         let mut resp = CheckAdminResponse::default();
-        resp.set_start_key(region.start_key.clone());
-        resp.set_end_key(region.end_key.clone());
+        resp.set_region(region.clone());
         resp.set_has_pending_admin(self.fsm.peer.raft_group.raft.has_pending_conf());
         if let Err(err) = ch.unbounded_send(resp) {
             warn!("failed to send check admin response"; "err" => ?err)
