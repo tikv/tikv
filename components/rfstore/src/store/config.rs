@@ -89,8 +89,6 @@ pub struct Config {
     pub region_split_size: ReadableSize,
 
     pub apply_pool_size: usize,
-
-    pub async_io: bool,
 }
 
 impl Default for Config {
@@ -129,7 +127,6 @@ impl Default for Config {
             consistency_check_interval: ReadableDuration::secs(0),
             channel_capacity: 40960,
             apply_pool_size: 3,
-            async_io: false,
         }
     }
 }
@@ -182,7 +179,6 @@ impl Config {
 
         cfg.region_split_size = old_cop.region_split_size;
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
-        cfg.async_io = old.store_io_pool_size > 0;
         cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;
         cfg.local_file_gc_timeout = old.local_file_gc_timeout;
 

@@ -63,7 +63,6 @@ pub(crate) struct RaftWorker {
     router: RaftRouter,
     apply_senders: Vec<Sender<Option<ApplyBatch>>>,
     io_sender: Sender<Option<IOTask>>,
-    sync_io_worker: Option<IOWorker>,
     last_tick: Instant,
     tick_millis: u64,
     store_fsm: StoreFSM,
@@ -78,7 +77,6 @@ impl RaftWorker {
         receiver: Receiver<(u64, PeerMsg)>,
         router: RaftRouter,
         io_sender: Sender<Option<IOTask>>,
-        sync_io_worker: Option<IOWorker>,
         store_fsm: StoreFSM,
     ) -> (Self, Vec<Receiver<Option<ApplyBatch>>>) {
         let apply_pool_size = ctx.cfg.apply_pool_size;
@@ -97,7 +95,6 @@ impl RaftWorker {
                 router,
                 apply_senders,
                 io_sender,
-                sync_io_worker,
                 last_tick: Instant::now(),
                 tick_millis,
                 store_fsm,
@@ -133,9 +130,7 @@ impl RaftWorker {
         self.apply_senders.iter().for_each(|sender| {
             let _ = sender.send(None);
         });
-        if self.sync_io_worker.is_none() {
-            let _ = self.io_sender.send(None);
-        }
+        let _ = self.io_sender.send(None);
         for peer in self.ctx.peers.values() {
             let mut peer_fsm = peer.peer_fsm.lock().unwrap();
             peer_fsm.peer.pending_reads.clear_all(None);
@@ -289,11 +284,7 @@ impl RaftWorker {
         self.ctx.global.engines.raft.apply(&mut raft_wb);
         let readies = mem::take(&mut self.ctx.persist_readies);
         let io_task = IOTask { raft_wb, readies };
-        if let Some(sync_io_worker) = self.sync_io_worker.as_mut() {
-            sync_io_worker.handle_task(io_task);
-        } else {
-            self.io_sender.send(Some(io_task)).unwrap();
-        }
+        self.io_sender.send(Some(io_task)).unwrap();
     }
 
     fn batch_end(&mut self, batch_duration: Duration) {

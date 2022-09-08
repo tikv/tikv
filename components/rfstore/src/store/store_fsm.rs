@@ -167,27 +167,21 @@ impl RaftBatchSystem {
             self.router.clone(),
             ctx.trans.clone(),
         );
-        let mut sync_io_worker = None;
-        if ctx.cfg.value().async_io {
-            let props = tikv_util::thread_group::current_properties();
-            let handle = std::thread::Builder::new()
-                .name("raft_io".to_string())
-                .spawn(move || {
-                    tikv_util::thread_group::set_properties(props);
-                    io_worker.run();
-                })
-                .unwrap();
-            self.join_handles.push(handle);
-        } else {
-            sync_io_worker = Some(io_worker);
-        }
+        let props = tikv_util::thread_group::current_properties();
+        let handle = std::thread::Builder::new()
+            .name("raft_io".to_string())
+            .spawn(move || {
+                tikv_util::thread_group::set_properties(props);
+                io_worker.run();
+            })
+            .unwrap();
+        self.join_handles.push(handle);
         let peer_receiver = self.peer_receiver.take().unwrap();
         let (mut rw, mut apply_receivers) = RaftWorker::new(
             store_ctx,
             peer_receiver,
             ctx.router.clone(),
             io_sender,
-            sync_io_worker,
             store_fsm,
         );
         let props = tikv_util::thread_group::current_properties();
