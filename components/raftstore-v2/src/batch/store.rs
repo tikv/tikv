@@ -12,7 +12,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
-use crossbeam::channel::{Sender, TrySendError};
+use crossbeam::channel::Sender;
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use kvproto::{metapb::Store, raft_serverpb::PeerState};
 use raft::INVALID_ID;
@@ -37,7 +37,7 @@ use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, A
 use crate::{
     fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::Peer,
-    router::{PeerMsg, PeerTick, QueryResChannel, RaftRequest, StoreMsg},
+    router::{PeerMsg, PeerTick, QueryResChannel, StoreMsg},
     Error, Result,
 };
 

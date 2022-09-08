@@ -12,15 +12,23 @@
 //! Leader's read index and lease renew is implemented in lease module.
 //! Stale read check is implemented stale module.
 
+use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType};
+use kvproto::{
+    errorpb,
+    raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType},
+};
+use raft::Ready;
 use raftstore::{
+    errors::RAFTSTORE_IS_BUSY,
     store::{
-        cmd_resp, local_metrics::RaftMetrics, msg::ErrorCallback, region_meta::RegionMeta, util,
-        util::LeaseState, GroupState, ReadCallback, RequestPolicy, Transport,
+        cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
+        ReadCallback, ReadIndexContext, RequestPolicy, Transport,
     },
     Error, Result,
 };
+use slog::info;
 use tikv_util::box_err;
 use txn_types::WriteBatchFlags;
 
@@ -28,7 +36,9 @@ use crate::{
     batch::StoreContext,
     fsm::PeerFsmDelegate,
     raft::Peer,
-    router::{DebugInfoChannel, QueryResChannel, QueryResult, ReadResponse},
+    router::{
+        message::RaftRequest, DebugInfoChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
+    },
 };
 
 mod lease;
@@ -88,7 +98,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                 }
                 Ok(RequestPolicy::StaleRead) => {
                     self.store_ctx.raft_metrics.propose.local_read.inc();
-                    self.fsm.peer_mut().can_stale_read(req, true, None, ch);
+                    self.fsm.peer_mut().respond_stale_read(req, true, None, ch);
                 }
                 _ => {
                     unimplemented!();
@@ -171,6 +181,142 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // TODO: add check of sibling region for split
         util::check_region_epoch(msg, self.region(), true)
+    }
+
+    // Returns a boolean to indicate whether the `read` is proposed or not.
+    // For these cases it won't be proposed:
+    // 1. The region is in merging or splitting;
+    // 2. The message is stale and dropped by the Raft group internally;
+    // 3. There is already a read request proposed in the current lease;
+    fn read_index<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        mut req: RaftCmdRequest,
+        ch: QueryResChannel,
+    ) {
+        // TODO: add pre_read_index to handle splitting or merging
+        if self.is_leader() {
+            self.read_index_leader(ctx, req, ch);
+        } else {
+            self.read_index_follower(ctx, req, ch);
+        }
+    }
+
+    pub(crate) fn apply_reads<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
+        let states = ready.read_states().iter().map(|state| {
+            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+            (read_index_ctx.id, read_index_ctx.locked, state.index)
+        });
+        // The follower may lost `ReadIndexResp`, so the pending_reads does not
+        // guarantee the orders are consistent with read_states. `advance` will
+        // update the `read_index` of read request that before this successful
+        // `ready`.
+        if !self.is_leader() {
+            // NOTE: there could still be some pending reads proposed by the peer when it
+            // was leader. They will be cleared in `clear_uncommitted_on_role_change` later
+            // in the function.
+            self.pending_reads_mut().advance_replica_reads(states);
+            self.post_pending_read_index_on_replica(ctx);
+        } else {
+            self.pending_reads_mut().advance_leader_reads(states);
+            if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time) {
+                if !self.leader_lease_mut().is_suspect() {
+                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
+                }
+            }
+
+            // TODO: add ready_to_handle_read for splitting and merging
+            while let Some(mut read) = self.pending_reads_mut().pop_front() {
+                self.respond_read_index(&mut read, ctx);
+            }
+        }
+
+        // Note that only after handle read_states can we identify what requests are
+        // actually stale.
+        if ready.ss().is_some() {
+            let term = self.term();
+            // all uncommitted reads will be dropped silently in raft.
+            self.pending_reads_mut()
+                .clear_uncommitted_on_role_change(term);
+        }
+    }
+
+    /// Respond to the ready read index request on the replica, the replica is
+    /// not a leader.
+    fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        while let Some(mut read) = self.pending_reads_mut().pop_front() {
+            // The response of this read index request is lost, but we need it for
+            // the memory lock checking result. Resend the request.
+            if let Some(read_index) = read.addition_request.take() {
+                assert_eq!(read.cmds().len(), 1);
+                let (mut req, ch, _) = read.take_cmds().pop().unwrap();
+                assert_eq!(req.requests.len(), 1);
+                req.requests[0].set_read_index(*read_index);
+                let read_cmd = RaftRequest::new(req, ch);
+                info!(
+                    self.logger,
+                    "re-propose read index request because the response is lost";
+                );
+                RAFT_READ_INDEX_PENDING_COUNT.sub(1);
+                self.send_read_command(ctx, read_cmd);
+                continue;
+            }
+
+            assert!(read.read_index.is_some());
+            let is_read_index_request = read.cmds().len() == 1
+                && read.cmds()[0].0.get_requests().len() == 1
+                && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
+            if is_read_index_request {
+                self.respond_read_index(&mut read, ctx);
+            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                self.respond_replica_read_index(&mut read, ctx);
+            } else {
+                // TODO: `ReadIndex` requests could be blocked.
+                self.pending_reads_mut().push_front(read);
+                break;
+            }
+        }
+    }
+
+    // Note: comparing with v1, it removes the snapshot check because in v2 the
+    // snapshot will not delete the data anymore.
+    fn ready_to_handle_unsafe_replica_read(&self, read_index: u64) -> bool {
+        // Wait until the follower applies all values before the read. There is still a
+        // problem if the leader applies fewer values than the follower, the follower
+        // read could get a newer value, and after that, the leader may read a stale
+        // value, which violates linearizability.
+        self.storage().apply_state().get_applied_index() >= read_index
+            // If it is in pending merge state(i.e. applied PrepareMerge), the data may be stale.
+            // TODO: Add a test to cover this case
+            && !self.has_pending_merge_state()
+    }
+
+    fn send_read_command<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        read_cmd: RaftRequest<QueryResChannel>,
+    ) {
+        let mut err = errorpb::Error::default();
+        let region_id = read_cmd.request.get_header().get_region_id();
+        let read_ch = match ctx.router.send(region_id, PeerMsg::RaftQuery(read_cmd)) {
+            Ok(()) => return,
+            Err(TrySendError::Full(PeerMsg::RaftQuery(cmd))) => {
+                err.set_message(RAFTSTORE_IS_BUSY.to_owned());
+                err.mut_server_is_busy()
+                    .set_reason(RAFTSTORE_IS_BUSY.to_owned());
+                cmd.ch
+            }
+            Err(TrySendError::Disconnected(PeerMsg::RaftQuery(cmd))) => {
+                err.set_message(format!("region {} is missing", self.region_id()));
+                err.mut_region_not_found().set_region_id(self.region_id());
+                cmd.ch
+            }
+            _ => unreachable!(),
+        };
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        read_ch.report_error(resp);
     }
 
     /// Status command is used to query target region information.

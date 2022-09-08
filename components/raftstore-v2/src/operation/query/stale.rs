@@ -20,7 +20,7 @@ use crate::{
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub(crate) fn can_stale_read(
+    pub(crate) fn respond_stale_read(
         &self,
         req: RaftCmdRequest,
         check_epoch: bool,
@@ -39,7 +39,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
         let safe_ts = self.read_progress().safe_ts();
         if safe_ts < read_ts {
-            warn!(
+            debug!(
                 self.logger,
                 "read rejected by safe timestamp";
                 "safe ts" => safe_ts,

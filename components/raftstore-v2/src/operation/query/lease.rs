@@ -2,16 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    errorpb,
     kvrpcpb::ExtraOp as TxnExtraOp,
     raft_cmdpb::{self, RaftCmdRequest, RaftCmdResponse},
 };
-use raft::Ready;
 use raftstore::{
-    errors::RAFTSTORE_IS_BUSY,
     store::{
         can_amend_read, cmd_resp,
         fsm::{apply::notify_stale_req, Proposal},
@@ -19,7 +15,7 @@ use raftstore::{
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         util::{check_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexContext, ReadIndexRequest, ReadProgress, Transport,
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
     },
     Error,
 };
@@ -32,14 +28,12 @@ use crate::{
     batch::StoreContext,
     fsm::StoreMeta,
     raft::Peer,
-    router::{
-        message::RaftRequest, CmdResChannel, PeerMsg, QueryResChannel, QueryResult, ReadResponse,
-    },
+    router::{CmdResChannel, QueryResChannel, QueryResult, ReadResponse},
     Result,
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    fn read_index_leader<T: Transport>(
+    pub(crate) fn read_index_leader<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -112,30 +106,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // }
     }
 
-    // Returns a boolean to indicate whether the `read` is proposed or not.
-    // For these cases it won't be proposed:
-    // 1. The region is in merging or splitting;
-    // 2. The message is stale and dropped by the Raft group internally;
-    // 3. There is already a read request proposed in the current lease;
-    pub fn read_index<T: Transport>(
-        &mut self,
-        ctx: &mut StoreContext<EK, ER, T>,
-        mut req: RaftCmdRequest,
-        ch: QueryResChannel,
-    ) {
-        // TODO: add pre_read_index to handle splitting or merging
-        if self.is_leader() {
-            self.read_index_leader(ctx, req, ch);
-        } else {
-            self.read_index_follower(ctx, req, ch);
-        }
-    }
-
     /// response the read index request
     ///
     /// awake the read tasks waiting in frontend (such as unified thread pool)
     /// In v1, it's named as response_read.
-    pub(crate) fn respond_read<T>(
+    pub(crate) fn respond_read_index<T>(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -182,60 +157,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                     _ => {}
                 }
-                let region = self.region().clone();
-                if let Err(e) = check_region_epoch(&req, &region, true) {
-                    let mut response = cmd_resp::new_error(e);
-                    cmd_resp::bind_term(&mut response, self.term());
-                    ch.report_error(response);
-                } else {
-                    let read_resp = ReadResponse::new(read_index.unwrap_or(0));
-                    ch.set_result(QueryResult::Read(read_resp));
-                }
+                let read_resp = ReadResponse::new(read_index.unwrap_or(0));
+                ch.set_result(QueryResult::Read(read_resp));
             }
-        }
-    }
-
-    pub(crate) fn apply_reads<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, ready: &Ready) {
-        let states = ready.read_states().iter().map(|state| {
-            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
-            (read_index_ctx.id, read_index_ctx.locked, state.index)
-        });
-        // The follower may lost `ReadIndexResp`, so the pending_reads does not
-        // guarantee the orders are consistent with read_states. `advance` will
-        // update the `read_index` of read request that before this successful
-        // `ready`.
-        if !self.is_leader() {
-            // NOTE: there could still be some pending reads proposed by the peer when it
-            // was leader. They will be cleared in `clear_uncommitted_on_role_change` later
-            // in the function.
-            self.pending_reads_mut().advance_replica_reads(states);
-            self.post_pending_read_index_on_replica(ctx);
-        } else {
-            self.pending_reads_mut().advance_leader_reads(states);
-            if let Some(propose_time) = self.pending_reads().last_ready().map(|r| r.propose_time) {
-                if !self.leader_lease_mut().is_suspect() {
-                    self.maybe_renew_leader_lease(propose_time, &mut ctx.store_meta, None);
-                }
-            }
-
-            // TODO: add ready_to_handle_read for splitting and merging
-            while let Some(mut read) = self.pending_reads_mut().pop_front() {
-                self.respond_read(&mut read, ctx);
-            }
-        }
-
-        // Note that only after handle read_states can we identify what requests are
-        // actually stale.
-        if ready.ss().is_some() {
-            let term = self.term();
-            // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads_mut()
-                .clear_uncommitted_on_role_change(term);
         }
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease(
+    pub(crate) fn maybe_renew_leader_lease(
         &mut self,
         ts: Timespec,
         store_meta: &mut Arc<Mutex<StoreMeta<EK>>>,
