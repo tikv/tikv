@@ -11,12 +11,14 @@ use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
     CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
-    RaftLogGcTask, Result, StoreRecoverState,
+    RaftLogGcTask, Result,
 };
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
@@ -475,11 +477,9 @@ impl RaftEngineReadOnly for RaftLogEngine {
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
-        let state = self
-            .0
-            .get(STORE_STATE_ID, RECOVER_STATE_KEY)
-            .map(|v| serde_json::from_slice(&v).unwrap());
-        Ok(state)
+        self.0
+            .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
+            .map_err(transfer_error)
     }
 }
 
@@ -629,11 +629,10 @@ impl RaftEngine for RaftLogEngine {
 
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
         let mut batch = Self::LogBatch::default();
-        batch.0.put(
-            STORE_STATE_ID,
-            RECOVER_STATE_KEY.to_vec(),
-            serde_json::to_vec(state).unwrap(),
-        );
+        batch
+            .0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)?;
         self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }

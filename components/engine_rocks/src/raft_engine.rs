@@ -3,12 +3,14 @@
 // #[PerformanceCriticalPath]
 use engine_traits::{
     Error, Iterable, KvEngine, MiscExt, Mutable, Peekable, RaftEngine, RaftEngineDebug,
-    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, StoreRecoverState, SyncMutable,
-    WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
+    RaftEngineReadOnly, RaftLogBatch, RaftLogGcTask, Result, SyncMutable, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_DEFAULT, RAFT_LOG_MULTI_GET_CNT,
 };
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -153,10 +155,7 @@ impl RaftEngineReadOnly for RocksEngine {
     }
 
     fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
-        let state = self
-            .get_value(keys::RECOVER_STATE_KEY)?
-            .map(|v| serde_json::from_slice(&v).unwrap());
-        Ok(state)
+        self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
     }
 }
 
@@ -375,7 +374,7 @@ impl RaftEngine for RocksEngine {
     }
 
     fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
-        self.put(keys::RECOVER_STATE_KEY, &serde_json::to_vec(state).unwrap())
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 

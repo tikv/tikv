@@ -2,19 +2,15 @@
 
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use raft::eraftpb::Entry;
-use serde_derive::{Deserialize, Serialize};
 
 use crate::*;
 
 pub const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
-
-#[derive(Deserialize, Serialize)]
-pub struct StoreRecoverState {
-    seqno: u64,
-}
 
 pub trait RaftEngineReadOnly: Sync + Send + 'static {
     fn is_empty(&self) -> Result<bool>;
