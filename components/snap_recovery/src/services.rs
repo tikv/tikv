@@ -32,6 +32,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
+use tikv_util::sys::thread::ThreadBuildWrapper;
 
 use crate::data_resolver::DataResolverManager;
 // TODO: ERROR need more specific
@@ -127,11 +128,11 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         let threads = ThreadPoolBuilder::new()
             .pool_size(4)
             .name_prefix("recovery-service")
-            .after_start(move |_| {
+            .after_start_wrapper(move || {
                 tikv_util::thread_group::set_properties(props.clone());
                 tikv_alloc::add_thread_memory_accessor();
             })
-            .before_stop(move |_| tikv_alloc::remove_thread_memory_accessor())
+            .before_stop_wrapper(|| tikv_alloc::remove_thread_memory_accessor())
             .create()
             .unwrap();
         RecoveryService {
@@ -409,7 +410,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 
         let store_id = self.get_store_id();
         let send_task = async move {
-            let id = store_id.expect("failed to get store id").clone();
+            let id = store_id.expect("failed to get store id");
             let mut s = rx.map(|mut resp| {
                 // TODO: a metric need here
                 resp.set_store_id(id);

@@ -1012,7 +1012,7 @@ where
         self.fsm.peer.flashback_state.take();
     }
 
-    fn on_has_pending_conf(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
+    fn on_has_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
             // in snapshot recovery after we stopped all conf changes from PD.
@@ -1032,7 +1032,8 @@ where
         let region = self.fsm.peer.region();
         let mut resp = CheckAdminResponse::default();
         resp.set_region(region.clone());
-        resp.set_has_pending_admin(self.fsm.peer.raft_group.raft.has_pending_conf());
+        let pending_admin = self.fsm.peer.raft_group.raft.has_pending_conf() || self.fsm.peer.is_merging() || self.fsm.peer.is_splitting();
+        resp.set_has_pending_admin(pending_admin);
         if let Err(err) = ch.unbounded_send(resp) {
             warn!("failed to send check admin response"; "err" => ?err)
         }
@@ -1457,7 +1458,7 @@ where
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
-            SignificantMsg::HasPendingConf(ch) => self.on_has_pending_conf(ch),
+            SignificantMsg::HasPendingAdmin(ch) => self.on_has_pending_admin(ch),
         }
     }
 

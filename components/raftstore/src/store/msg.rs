@@ -462,7 +462,7 @@ where
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     PrepareFlashback(Sender<bool>),
     FinishFlashback,
-    HasPendingConf(UnboundedSender<CheckAdminResponse>),
+    HasPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
 /// Message that will be sent to a peer.

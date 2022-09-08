@@ -1,38 +1,45 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::*;
+use std::marker::PhantomData;
 
-use engine_rocks::RocksEngine;
-use engine_traits::RaftEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
 use raftstore::{
     router::RaftStoreRouter,
-    store::{
-        fsm::RaftRouter,
-        msg::{PeerMsg, SignificantMsg},
-    },
+    store::msg::{PeerMsg, SignificantMsg},
 };
+use engine_traits::KvEngine;
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
 
 /// Service handles the RPC messages for the `Backup` service.
+
 #[derive(Clone)]
-pub struct Service<ER: RaftEngine> {
+pub struct Service<E, RR> {
     scheduler: Scheduler<Task>,
-    router: RaftRouter<RocksEngine, ER>,
+    router: RR,
+    _phantom: PhantomData<E>,
 }
 
-impl<ER: RaftEngine> Service<ER> {
+impl<E, RR> Service<E, RR> 
+where
+    E: KvEngine,
+    RR: RaftStoreRouter<E>,
+{
     /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>, router: RaftRouter<RocksEngine, ER>) -> Service<ER> {
-        Service { scheduler, router }
+    pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
+        Service { scheduler, router, _phantom: PhantomData}
     }
 }
 
-impl<ER: RaftEngine> Backup for Service<ER> {
+impl<E, RR> Backup for Service<E, RR> 
+where
+    E: KvEngine,
+    RR: RaftStoreRouter<E>,
+{
     fn check_admin(
         &mut self,
         ctx: RpcContext<'_>,
@@ -41,7 +48,7 @@ impl<ER: RaftEngine> Backup for Service<ER> {
     ) {
         let (tx, rx) = mpsc::unbounded();
         self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::HasPendingConf(tx.clone()))
+            PeerMsg::SignificantMsg(SignificantMsg::HasPendingAdmin(tx.clone()))
         });
 
         let send_task = async move {
@@ -122,7 +129,9 @@ mod tests {
     use external_storage_export::make_local_backend;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use engine_rocks::RocksEngine;
     use txn_types::TimeStamp;
+    use raftstore::router::RaftStoreBlackHole;
 
     use super::*;
     use crate::endpoint::tests::*;
@@ -130,7 +139,7 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::new(scheduler);
+        let backup_service = super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
