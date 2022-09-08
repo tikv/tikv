@@ -10,7 +10,9 @@ use kvproto::{
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
-use raftstore::store::{metrics::RaftEventDurationType, FetchedLogs, RegionSnapshot};
+use raftstore::store::{
+    metrics::RaftEventDurationType, CasualMessage, FetchedLogs, RegionSnapshot,
+};
 use tikv_util::time::Instant;
 
 use super::{
@@ -113,7 +115,7 @@ impl<C> RaftRequest<C> {
 }
 
 /// Message that can be sent to a peer.
-pub enum PeerMsg {
+pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
@@ -140,9 +142,11 @@ pub enum PeerMsg {
         ready_number: u64,
     },
     QueryDebugInfo(DebugInfoChannel),
+    /// Message that is not important and can be dropped occasionally.
+    CasualMessage(CasualMessage<EK>),
 }
 
-impl PeerMsg {
+impl<EK: KvEngine> PeerMsg<EK> {
     pub fn raft_query(req: RaftCmdRequest) -> (Self, QueryResSubscriber) {
         let (ch, sub) = QueryResChannel::pair();
         (PeerMsg::RaftQuery(RaftRequest::new(req, ch)), sub)
@@ -154,7 +158,7 @@ impl PeerMsg {
     }
 }
 
-impl fmt::Debug for PeerMsg {
+impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
@@ -162,7 +166,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
-                "{:?}",
+                "Tick {:?}",
                 tick
             },
             PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
@@ -178,6 +182,8 @@ impl fmt::Debug for PeerMsg {
             ),
             PeerMsg::FetchedLogs(fetched) => write!(fmt, "FetchedLogs {:?}", fetched),
             PeerMsg::QueryDebugInfo(_) => write!(fmt, "QueryDebugInfo"),
+            /// Message that is not important and can be dropped occasionally.
+            PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
         }
     }
 }

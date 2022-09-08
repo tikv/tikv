@@ -6,7 +6,7 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
-mod metrics;
+pub mod metrics;
 mod pd;
 mod query_stats;
 mod raftlog_fetch;

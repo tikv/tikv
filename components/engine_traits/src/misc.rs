@@ -5,6 +5,8 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
+use std::path::PathBuf;
+
 use crate::{
     cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, range::Range,
 };
@@ -95,4 +97,5 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     ) -> Result<Option<(u64, u64)>>;
 
     fn is_stalled_or_stopped(&self) -> bool;
+    fn checkpoint_to(&self, path: &[PathBuf], size_to_flush: u64) -> Result<()>;
 }

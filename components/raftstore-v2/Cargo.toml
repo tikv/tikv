@@ -45,11 +45,16 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raft-proto = { version = "0.7.0" }
 raftstore = { path = "../raftstore" }
 slog = "2.3"
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 smallvec = "1.4"
 tikv_util = { path = "../tikv_util", default-features = false }
 time = "0.1"
 tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
+yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+tikv_alloc = { path = "../tikv_alloc" }
+file_system = { path = "../file_system" }
+into_other = { path = "../into_other",  default-features = false }
 
 [dev-dependencies]
 engine_test = { path = "../engine_test", default-features = false }

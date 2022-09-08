@@ -1,8 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    cell::RefCell,
+    fmt::{self, Debug, Formatter},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
+        Arc,
+    },
+};
 
-use engine_traits::{RaftEngine, RaftLogBatch};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletFactory};
 use kvproto::{
     metapb::{self, Region},
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -12,13 +20,16 @@ use raft::{
     GetEntriesContext, RaftState, INVALID_ID,
 };
 use raftstore::store::{
+    fsm::GenSnapTask,
     util::{self, find_peer},
-    EntryStorage, RaftlogFetchTask, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    EntryStorage, RaftlogFetchTask, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
-use slog::{o, Logger};
+use slog::{error, info, o, warn, Logger};
 use tikv_util::{box_err, worker::Scheduler};
 
-use crate::{Error, Result};
+use crate::{worker::SnapshotTask, Result};
+
+const MAX_SNAP_TRY_CNT: usize = 5;
 
 pub fn write_initial_states(wb: &mut impl RaftLogBatch, region: Region) -> Result<()> {
     let region_id = region.get_id();
@@ -59,9 +70,15 @@ pub struct Storage<ER> {
     /// at least once dispite whether the state changes since create.
     ever_persisted: bool,
     logger: Logger,
+
+    /// Snapshot state
+    snap_state: RefCell<SnapState>,
+    gen_snap_task: RefCell<Option<GenSnapTask>>,
+    region_scheduler: Scheduler<SnapshotTask>,
+    snap_tried_cnt: RefCell<usize>,
 }
 
-impl<ER> Debug for Storage<ER> {
+impl<ER: RaftEngine> Debug for Storage<ER> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -72,7 +89,7 @@ impl<ER> Debug for Storage<ER> {
     }
 }
 
-impl<ER> Storage<ER> {
+impl<ER: RaftEngine> Storage<ER> {
     #[inline]
     pub fn entry_storage(&self) -> &EntryStorage<ER> {
         &self.entry_storage
@@ -104,7 +121,10 @@ impl<ER> Storage<ER> {
     }
 }
 
-impl<ER: RaftEngine> Storage<ER> {
+impl<ER> Storage<ER>
+where
+    ER: RaftEngine,
+{
     /// Creates a new storage with uninit states.
     ///
     /// This should only be used for creating new peer from raft message.
@@ -113,6 +133,7 @@ impl<ER: RaftEngine> Storage<ER> {
         region: Region,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        region_scheduler: Scheduler<SnapshotTask>,
         logger: &Logger,
     ) -> Result<Self> {
         let mut region_state = RegionLocalState::default();
@@ -124,6 +145,7 @@ impl<ER: RaftEngine> Storage<ER> {
             RaftApplyState::default(),
             engine,
             log_fetch_scheduler,
+            region_scheduler,
             false,
             logger,
         )
@@ -138,6 +160,7 @@ impl<ER: RaftEngine> Storage<ER> {
         store_id: u64,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        region_scheduler: Scheduler<SnapshotTask>,
         logger: &Logger,
     ) -> Result<Option<Storage<ER>>> {
         let region_state = match engine.get_region_state(region_id) {
@@ -176,6 +199,7 @@ impl<ER: RaftEngine> Storage<ER> {
             apply_state,
             engine,
             log_fetch_scheduler,
+            region_scheduler,
             true,
             logger,
         )
@@ -189,6 +213,7 @@ impl<ER: RaftEngine> Storage<ER> {
         apply_state: RaftApplyState,
         engine: ER,
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        region_scheduler: Scheduler<SnapshotTask>,
         persisted: bool,
         logger: &Logger,
     ) -> Result<Self> {
@@ -216,6 +241,10 @@ impl<ER: RaftEngine> Storage<ER> {
             region_state,
             ever_persisted: persisted,
             logger,
+            snap_state: RefCell::new(SnapState::Relax),
+            gen_snap_task: RefCell::new(None),
+            region_scheduler,
+            snap_tried_cnt: RefCell::new(0),
         })
     }
 
@@ -240,6 +269,104 @@ impl<ER: RaftEngine> Storage<ER> {
 
     pub fn set_ever_persisted(&mut self) {
         self.ever_persisted = true;
+    }
+
+    /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
+    /// unavailable snapshot.
+    pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
+        let mut snap_state = self.snap_state.borrow_mut();
+        let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
+
+        let mut tried = false;
+        let mut last_canceled = false;
+        if let SnapState::Generating {
+            ref canceled,
+            ref receiver,
+            ..
+        } = *snap_state
+        {
+            tried = true;
+            last_canceled = canceled.load(Ordering::SeqCst);
+            match receiver.try_recv() {
+                Err(TryRecvError::Empty) => {
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
+                Ok(s) if !last_canceled => {
+                    *snap_state = SnapState::Relax;
+                    *tried_cnt = 0;
+                    // if self.validate_snap(&s, request_index) {
+                    //     return Ok(s);
+                    // }
+                }
+                Err(TryRecvError::Disconnected) | Ok(_) => {
+                    *snap_state = SnapState::Relax;
+                    warn!(
+                        self.logger(),
+                        "failed to try generating snapshot";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer().get_id(),
+                        "times" => *tried_cnt,
+                        "request_peer" => to,
+                    );
+                }
+            }
+        }
+
+        if SnapState::Relax != *snap_state {
+            panic!(
+                "[region {}] unexpected state: {:?}",
+                self.region().get_id(),
+                *snap_state
+            );
+        }
+
+        if *tried_cnt >= MAX_SNAP_TRY_CNT {
+            let cnt = *tried_cnt;
+            *tried_cnt = 0;
+            return Err(raft::Error::Store(box_err!(
+                "failed to get snapshot after {} times",
+                cnt
+            )));
+        }
+        if !tried || !last_canceled {
+            *tried_cnt += 1;
+        }
+
+        info!(
+            self.logger(),
+            "requesting snapshot";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer().get_id(),
+            "request_index" => request_index,
+            "request_peer" => to,
+        );
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        *snap_state = SnapState::Generating {
+            canceled: canceled.clone(),
+            index: index.clone(),
+            receiver,
+        };
+
+        let store_id = self
+            .region()
+            .get_peers()
+            .iter()
+            .find(|p| p.id == to)
+            .map(|p| p.store_id)
+            .unwrap_or(0);
+        let task = GenSnapTask::new(self.region().get_id(), index, canceled, sender, store_id);
+
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(task);
+        Err(raft::Error::Store(
+            raft::StorageError::SnapshotTemporarilyUnavailable,
+        ))
     }
 }
 
@@ -296,7 +423,7 @@ impl<ER: RaftEngine> raft::Storage for Storage<ER> {
     }
 
     fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
-        unimplemented!()
+        self.snapshot(request_index, to)
     }
 }
 

@@ -208,12 +208,12 @@ mod tests {
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
-            // Create read_delegate with region id 1
+            // Create read_delegate with region id 2
             let mut read_delegate = ReadDelegate::mock(2);
             let cache = CachedTablet::new(Some(read_delegate.clone()));
             meta.readers.insert(2, read_delegate);
 
-            // create tablet with region_id 1 and prepare some data
+            // create tablet with region_id 2 and prepare some data
             tablet2 = factory
                 .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();

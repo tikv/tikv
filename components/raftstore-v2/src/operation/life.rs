@@ -110,6 +110,7 @@ impl Store {
             return;
         };
         let msg_type = msg.get_message().get_msg_type();
+
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
         // Now the peer should not exist.
@@ -182,6 +183,7 @@ impl Store {
             region,
             ctx.engine.clone(),
             ctx.log_fetch_scheduler.clone(),
+            ctx.snapshot_scheduler.clone(),
             &ctx.logger,
         )
         .and_then(|s| PeerFsm::new(&ctx.cfg, &*ctx.tablet_factory, s))

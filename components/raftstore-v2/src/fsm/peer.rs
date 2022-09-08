@@ -6,13 +6,15 @@ use std::borrow::Cow;
 
 use batch_system::{BasicMailbox, Fsm};
 use crossbeam::channel::TryRecvError;
-use engine_traits::{KvEngine, RaftEngine, TabletFactory};
+use engine_traits::{KvEngine, Peekable, RaftEngine, TabletFactory};
 use kvproto::metapb;
+use raft::eraftpb::MessageType;
 use raftstore::store::{Config, Transport};
 use slog::{debug, error, info, trace, Logger};
 use tikv_util::{
     is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver, Sender},
+    sys::DiskExt,
     time::{duration_to_sec, Instant},
 };
 
@@ -23,12 +25,12 @@ use crate::{
     Result,
 };
 
-pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg>, Box<PeerFsm<EK, ER>>);
+pub type SenderFsmPair<EK, ER> = (LooseBoundedSender<PeerMsg<EK>>, Box<PeerFsm<EK, ER>>);
 
 pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     peer: Peer<EK, ER>,
     mailbox: Option<BasicMailbox<PeerFsm<EK, ER>>>,
-    receiver: Receiver<PeerMsg>,
+    receiver: Receiver<PeerMsg<EK>>,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks
     /// twice accidentally.
     tick_registry: u16,
@@ -73,7 +75,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
     /// capacity is reached or there is no more pending messages.
     ///
     /// Returns how many messages are fetched.
-    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg>, batch_size: usize) -> usize {
+    pub fn recv(&mut self, peer_msg_buf: &mut Vec<PeerMsg<EK>>, batch_size: usize) -> usize {
         let l = peer_msg_buf.len();
         for i in l..batch_size {
             match self.receiver.try_recv() {
@@ -91,7 +93,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
-    type Message = PeerMsg;
+    type Message = PeerMsg<EK>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -162,6 +164,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             // This can happen only when the peer is about to be destroyed
             // or the node is shutting down. So it's OK to not to clean up
             // registry.
+
             if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                 debug!(
                     logger,
@@ -187,6 +190,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
     }
 
     fn on_tick(&mut self, tick: PeerTick) {
+        let idx = tick as usize;
+        let key = 1u16 << (idx as u16);
+        self.fsm.tick_registry &= !key;
         match tick {
             PeerTick::Raft => self.on_raft_tick(),
             PeerTick::RaftLogGc => unimplemented!(),
@@ -202,7 +208,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         }
     }
 
-    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg>) {
+    pub fn on_msgs(&mut self, peer_msgs_buf: &mut Vec<PeerMsg<EK>>) {
         for msg in peer_msgs_buf.drain(..) {
             match msg {
                 PeerMsg::RaftMessage(msg) => self.fsm.peer.on_raft_message(self.store_ctx, msg),
@@ -229,6 +235,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                     self.fsm.peer_mut().on_fetched_logs(fetched_logs)
                 }
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
+                PeerMsg::CasualMessage(_) => unimplemented!(),
             }
         }
         // TODO: instead of propose pending commands immediately, we should use timeout.

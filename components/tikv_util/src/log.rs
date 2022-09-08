@@ -68,7 +68,7 @@ macro_rules! warn(($($args:tt)+) => {
 /// Logs a info level message using the slog global logger.
 #[macro_export]
 macro_rules! info(($($args:tt)+) => {
-    ::slog_global::info!($($args)+)
+::slog_global::info!($($args)+)
 };);
 
 /// Logs a debug level message using the slog global logger.
