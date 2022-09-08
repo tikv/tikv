@@ -1,6 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{atomic::Ordering, Arc, Mutex};
+use std::{
+    fmt::Debug,
+    sync::{atomic::Ordering, Arc, Mutex},
+};
 
 use parking_lot_core::SpinWait;
 use rocksdb::{EventListener, FlushJobInfo, MemTableInfo};
@@ -33,6 +36,11 @@ impl FlushListener {
     pub fn update_notifier(&self, notifier: impl Notifier + 'static) {
         let mut n = self.notifier.lock().unwrap();
         *n = Box::new(notifier);
+    }
+
+    pub fn notify_flush_cfs(&self, seqno: u64) {
+        let n = self.notifier.lock().unwrap();
+        n.notify_flush_cfs(seqno);
     }
 }
 
@@ -81,6 +89,12 @@ impl EventListener for FlushListener {
     }
 }
 
+impl Debug for FlushListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlushListener").finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
@@ -97,6 +111,7 @@ mod tests {
     impl Notifier for TestNotifier {
         fn notify_memtable_sealed(&self, _seqno: u64) {}
         fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
+        fn notify_flush_cfs(&self, _seqno: u64) {}
     }
 
     #[test]

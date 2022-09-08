@@ -53,6 +53,20 @@ impl FlushedSeqno {
         }
     }
 
+    pub fn update_all(&mut self, seqno: u64) -> Option<u64> {
+        self.seqno
+            .iter_mut()
+            .for_each(|(_, v)| *v = u64::max(*v, seqno));
+        let min = self.seqno.values().min().copied();
+        match min {
+            Some(min) if min > self.min_seqno => {
+                self.min_seqno = min;
+                Some(min)
+            }
+            _ => None,
+        }
+    }
+
     pub fn min_seqno(&self) -> u64 {
         self.min_seqno
     }

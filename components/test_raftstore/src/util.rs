@@ -632,6 +632,7 @@ struct TestNotifier;
 impl SeqnoNotifier for TestNotifier {
     fn notify_memtable_sealed(&self, _seqno: u64) {}
     fn notify_memtable_flushed(&self, _cf: &str, _seqno: u64) {}
+    fn notify_flush_cfs(&self, _seqno: u64) {}
 }
 
 #[allow(clippy::type_complexity)]

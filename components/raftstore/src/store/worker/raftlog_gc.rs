@@ -25,7 +25,7 @@ const FLUSH_MEMTABLE_LOG_COUNT_THRESHOLD: u64 = 1024 * 10;
 
 pub enum Task {
     Gc(GcTask),
-    MemtableFlushed { cf: String, seqno: u64 },
+    MemtableFlushed { cf: Option<String>, seqno: u64 },
 }
 
 impl Task {
@@ -74,7 +74,7 @@ impl Display for Task {
                 )
             }
             Task::MemtableFlushed { cf, seqno } => {
-                write!(f, "MemtableFlushed [cf: {}, seqno: {}]", cf, seqno)
+                write!(f, "MemtableFlushed [cf: {:?}, seqno: {}]", cf, seqno)
             }
         }
     }
@@ -263,7 +263,10 @@ where
             }
             Task::MemtableFlushed { cf, seqno } => {
                 if let Some(flushed_seqno) = self.flushed_seqno.as_mut() {
-                    let min_flushed = flushed_seqno.update(&cf, seqno);
+                    let min_flushed = match cf {
+                        Some(cf) => flushed_seqno.update(&cf, seqno),
+                        None => flushed_seqno.update_all(seqno),
+                    };
                     if min_flushed.is_some() {
                         for (region_id, (end_idx, gap_count)) in self.residual_log_regions.drain() {
                             self.tasks.push(GcTask {
@@ -468,7 +471,7 @@ mod tests {
                 raft_wb.put_seqno_relation(region_id, &relation).unwrap();
                 raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
                 runner.run(Task::MemtableFlushed {
-                    cf: CF_DEFAULT.to_string(),
+                    cf: Some(CF_DEFAULT.to_string()),
                     seqno: r.0,
                 });
             }

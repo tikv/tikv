@@ -39,7 +39,6 @@ use kvproto::{
     raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState},
     replication_modepb::{ReplicationMode, ReplicationStatus},
 };
-use once_cell::sync::OnceCell;
 use pd_client::{Feature, FeatureGate, PdClient};
 use protobuf::Message;
 use raft::StateRole;
@@ -405,7 +404,6 @@ where
 pub struct ApplyResNotifier<EK: KvEngine, ER: RaftEngine> {
     router: RaftRouter<EK, ER>,
     seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
-    raftlog_gc_scheduler: OnceCell<Scheduler<RaftlogGcTask>>,
 }
 
 impl<EK, ER> ApplyResNotifier<EK, ER>
@@ -417,24 +415,19 @@ where
         router: RaftRouter<EK, ER>,
         seqno_scheduler: Option<Scheduler<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> ApplyResNotifier<EK, ER> {
-        let raftlog_gc_scheduler = OnceCell::new();
-        if let Some(scheduler) = seqno_scheduler.as_ref() {
-            if let Err(e) = scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(
-                raftlog_gc_scheduler.clone(),
-            )) {
-                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
-            }
-        }
         ApplyResNotifier {
             router,
             seqno_scheduler,
-            raftlog_gc_scheduler,
         }
     }
 
     pub fn init_raftlog_gc_scheduler(&self, scheduler: Scheduler<RaftlogGcTask>) {
-        if self.raftlog_gc_scheduler.set(scheduler).is_err() {
-            panic!("raft log gc scheduler is already initialized")
+        if let Some(seqno_scheduler) = self.seqno_scheduler.as_ref() {
+            if let Err(e) =
+                seqno_scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(scheduler))
+            {
+                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
+            }
         }
     }
 }
@@ -448,7 +441,6 @@ where
         Self {
             router: self.router.clone(),
             seqno_scheduler: self.seqno_scheduler.clone(),
-            raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
         }
     }
 }
@@ -516,9 +508,23 @@ where
                 .as_ref()
                 .unwrap()
                 .schedule(SeqnoRelationTask::MemtableFlushed {
-                    cf: cf.to_string(),
+                    cf: Some(cf.to_string()),
                     seqno,
                 })
+        {
+            warn!(
+                "failed to schedule memtable flushed seqno to seqno relation worker";
+                "err" => ?e,
+            );
+        }
+    }
+
+    fn notify_flush_cfs(&self, seqno: u64) {
+        if let Err(e) = self
+            .seqno_scheduler
+            .as_ref()
+            .unwrap()
+            .schedule(SeqnoRelationTask::MemtableFlushed { cf: None, seqno })
         {
             warn!(
                 "failed to schedule memtable flushed seqno to seqno relation worker";
@@ -1894,24 +1900,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         range
                     );
                     let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap();
-                    let raft_state = engines.raft.get_raft_state(region_id).unwrap().unwrap();
                     let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
                     if !matches!(
                         region_state.get_state(),
                         PeerState::Applying | PeerState::Tombstone
                     ) {
                         let version = region_state.get_region().get_region_epoch().get_version();
-                        let regions = recover_regions
-                            .entry(version)
-                            .or_insert_with(HashMap::default);
-                        regions.insert(
-                            region_id,
-                            (
-                                raft_state,
-                                apply_state.applied_index + 1,
-                                relation.get_apply_state().applied_index + 1,
-                            ),
-                        );
+                        let start = apply_state.applied_index + 1;
+                        let end = relation.get_apply_state().applied_index + 1;
+                        assert!(start <= end);
+                        if start != end {
+                            let regions = recover_regions
+                                .entry(version)
+                                .or_insert_with(HashMap::default);
+                            regions.insert(region_id, (start, end));
+                        }
                     }
                 }
                 EngineTraitsResult::Ok(())
@@ -1926,11 +1929,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         while let Some((_, regions)) = recover_regions.pop_first() {
             let results: Vec<_> = regions
                 .into_iter()
-                .map(|(region_id, (raft_state, start, end))| {
+                .map(|(region_id, (start, end))| {
                     let (tx, rx) = std::sync::mpsc::sync_channel(1);
                     let router = self.apply_router.clone();
                     let raftdb = engines.raft.clone();
-                    let hard_state = raft_state.get_hard_state().clone();
                     pool.spawn(async move {
                         let mut entries = vec![];
                         if let Err(e) =
@@ -1941,13 +1943,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                                 e, region_id, start, end
                             );
                         }
+                        let term = entries.last().unwrap().get_term();
+                        let commit_index = entries.last().unwrap().get_index();
                         router.schedule_task(
                             region_id,
                             ApplyTask::recover(
                                 region_id,
-                                hard_state.term,
-                                hard_state.commit,
-                                hard_state.term,
+                                term,
+                                commit_index,
+                                term,
                                 entries,
                                 Box::new(move |status| {
                                     tx.send(status).unwrap();
@@ -1955,20 +1959,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             ),
                         );
                     });
-                    (rx, region_id, raft_state, end)
+                    (rx, region_id, end)
                 })
                 .collect();
-            for (rx, region_id, raft_state, end) in results {
+            for (rx, region_id, end) in results {
                 let status = rx.recv().unwrap();
                 match status {
                     RecoverStatus::VersionChanged {
                         new_version,
                         applied_index,
                     } => {
+                        assert!(applied_index < end);
+                        if applied_index + 1 == end {
+                            continue;
+                        }
                         let regions = recover_regions
                             .entry(new_version)
                             .or_insert_with(HashMap::default);
-                        regions.insert(region_id, (raft_state, applied_index + 1, end));
+                        regions.insert(region_id, (applied_index + 1, end));
                     }
                     RecoverStatus::Finished => info!("region {} recover finished", region_id),
                 }

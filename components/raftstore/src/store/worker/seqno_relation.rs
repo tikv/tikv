@@ -12,7 +12,6 @@ use engine_traits::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RegionLocalState, RegionSequenceNumberRelation,
 };
-use once_cell::sync::OnceCell;
 use tikv_util::{
     debug, error,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
@@ -33,8 +32,8 @@ const RAFT_WB_MAX_KEYS: usize = 256;
 pub enum Task<S: Snapshot> {
     ApplyRes(Vec<ApplyRes<S>>),
     MemtableSealed(u64),
-    MemtableFlushed { cf: String, seqno: u64 },
-    InitRaftlogGcScheduler(OnceCell<Scheduler<RaftlogGcTask>>),
+    MemtableFlushed { cf: Option<String>, seqno: u64 },
+    InitRaftlogGcScheduler(Scheduler<RaftlogGcTask>),
 }
 
 impl<S: Snapshot> fmt::Display for Task<S> {
@@ -77,7 +76,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     inflight_seqno_relations: HashMap<u64, SeqnoRelation>,
     last_persisted_seqno: u64,
     flushed_seqno: FlushedSeqno,
-    raftlog_gc_scheduler: Option<OnceCell<Scheduler<RaftlogGcTask>>>,
+    raftlog_gc_scheduler: Option<Scheduler<RaftlogGcTask>>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
@@ -146,19 +145,18 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     }
 
     // GC relations
-    fn on_memtable_flushed(&mut self, cf: &str, seqno: u64) {
-        let min_flushed = self.flushed_seqno.update(cf, seqno);
+    fn on_memtable_flushed(&mut self, cf: Option<String>, seqno: u64) {
+        let min_flushed = match cf.as_ref() {
+            Some(cf) => self.flushed_seqno.update(cf, seqno),
+            None => self.flushed_seqno.update_all(seqno),
+        };
         self.engines
             .raft
             .put_flushed_seqno(&self.flushed_seqno)
             .unwrap();
-        if let Some(scheduler) = self.raftlog_gc_scheduler.as_ref().unwrap().get() {
-            if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed {
-                cf: cf.to_string(),
-                seqno,
-            }) {
-                error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
-            }
+        let scheduler = self.raftlog_gc_scheduler.as_ref().unwrap();
+        if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed { cf, seqno }) {
+            error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
         }
         if let Some(min) = min_flushed {
             gc_seqno_relations(min, &self.engines.raft, &mut self.wb).unwrap();
@@ -373,7 +371,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
         match task {
             Task::ApplyRes(apply_res) => self.on_apply_res(apply_res),
             Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),
-            Task::MemtableFlushed { cf, seqno } => self.on_memtable_flushed(&cf, seqno),
+            Task::MemtableFlushed { cf, seqno } => self.on_memtable_flushed(cf, seqno),
             Task::InitRaftlogGcScheduler(scheduler) => self.raftlog_gc_scheduler = Some(scheduler),
         }
     }
