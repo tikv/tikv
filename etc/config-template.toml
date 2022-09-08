@@ -1092,16 +1092,16 @@
 ##   1: Can be read by TiKV release 6.1 and above.
 ##   2: Can be read by TiKV release 6.3 and above. Supports log recycling.
 ##
-## Default: 1.
-# format-version = 1
+## Default: 2.
+# format-version = 2
 
 ## Whether to recycle stale log files in Raft Engine.
 ## If `true`, logically purged log files will be reserved for recycling.
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: false.
-# enable-log-recycle = false
+## Default: true.
+# enable-log-recycle = true
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
