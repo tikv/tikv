@@ -17,7 +17,6 @@ log_wrappers = { path = "../log_wrappers" }
 protobuf = "2"
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
 serde = "1.0"
-serde_derive = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 thiserror = "1.0"
@@ -27,4 +26,5 @@ tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
+serde_derive = "1.0"
 toml = "0.5"
