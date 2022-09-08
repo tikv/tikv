@@ -753,9 +753,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.69"
+version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e70cc2f62c6ce1868963827bd677764c62d07c3d9a3e1fb1177ee1a9ab199eb2"
+checksum = "2fff2a6927b3bb87f9595d67196a70493f627687a71d87a0d692242c33f58c11"
 dependencies = [
  "jobserver",
 ]
@@ -935,9 +935,8 @@ dependencies = [
 
 [[package]]
 name = "cmake"
-version = "0.1.45"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb6210b637171dfba4cda12e579ac6dc73f5165ad56133e5d72ef3131f320855"
+version = "0.1.48"
+source = "git+https://github.com/rust-lang/cmake-rs#00e6b220342a8b0ec4548071928ade38fd5f691b"
 dependencies = [
  "cc",
 ]
@@ -2630,7 +2629,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#2e37953b2b435961ad5b4f0e36b32c53f4777b23"
+source = "git+https://github.com/pingcap/kvproto.git#7c004f4daf21e0677b0ceca50a723377a3968022"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
