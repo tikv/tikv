@@ -219,7 +219,7 @@ impl OpenOptions {
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK>: TabletAccessor<EK> {
+pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     /// Open the tablet with id and suffix according to the OpenOptions.
     ///
     /// The id is likely the region Id, the suffix could be the current raft log
@@ -287,7 +287,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: CfOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + Sync + 'static,
 {
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())

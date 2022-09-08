@@ -252,6 +252,8 @@ impl RaftEngine for RocksEngine {
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
+        batch.delete(&keys::region_state_key(raft_group_id))?;
+        batch.delete(&keys::apply_state_key(raft_group_id))?;
         if first_index == 0 {
             let seek_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
