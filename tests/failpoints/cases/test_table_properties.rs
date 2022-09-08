@@ -107,37 +107,6 @@ fn test_check_need_gc() {
         0
     );
 
-    // TEST 3: props.num_deletes as f64 > props.num_puts as f64 * ratio_threshold
-    // return true.
-    do_write(&engine, false, 5);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
-
-    do_gc(&raw_engine, 2, &mut gc_runner, &dir);
-
-    do_write(&engine, false, 5);
-    do_write(&engine, true, 25);
-    engine.get_rocksdb().flush_cfs(true).unwrap();
-
-    // Now props.num_versions = 3 , props.num_rows = 1
-    // set ratio_threshold = 4.0, let (props.num_versions as f64 > props.num_rows as
-    // f64 * ratio_threshold) return false
-    gc_runner.ratio_threshold = Option::Some(30.0);
-
-    // is_bottommost_level = false
-    do_gc(&raw_engine, 1, &mut gc_runner, &dir);
-
-    assert_eq!(
-        GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&[STAT_RAW_KEYMODE])
-            .get(),
-        5
-    );
-    assert_eq!(
-        GC_COMPACTION_FILTER_SKIP
-            .with_label_values(&[STAT_RAW_KEYMODE])
-            .get(),
-        0
-    );
 }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
