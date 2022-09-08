@@ -158,16 +158,26 @@ where
         req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         let region_id = req.header.get_ref().region_id;
-        loop {
-            if let Some(snap) = self.try_get_snapshot(req.clone())? {
-                return Ok(snap);
-            }
-
-            // try to renew the lease
-            let (msg, mut sub) = PeerMsg::raft_query(req.clone());
-            MsgRouter::send(&self.router, region_id, msg);
-            sub.result();
+        if let Some(snap) = self.try_get_snapshot(req.clone())? {
+            return Ok(snap);
         }
+
+        // try to renew the lease
+        let (msg, mut sub) = PeerMsg::raft_query(req.clone());
+        MsgRouter::send(&self.router, region_id, msg);
+        sub.result();
+
+        // try again
+        if let Some(snap) = self.try_get_snapshot(req)? {
+            return Ok(snap);
+        }
+
+        let mut err = errorpb::Error::default();
+        err.set_not_leader(Default::default());
+        err.set_message(format!("region {}: renew lease fail", region_id));
+        let mut resp = RaftCmdResponse::default();
+        resp.mut_header().set_error(err);
+        Err(resp)
     }
 }
 
