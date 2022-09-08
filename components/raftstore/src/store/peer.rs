@@ -2782,9 +2782,18 @@ where
                     // command, which was proposed in another thread while this thread receives its
                     // AppendEntriesResponse and is ready to calculate its commit-log-duration.
                     ctx.current_time.replace(monotonic_raw_now());
-                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                    ));
+
+                    let elapsed = duration_to_sec((ctx.current_time.unwrap() - propose_time).to_std().unwrap());
+                    ctx.raft_metrics.commit_log.observe(elapsed);
+                    if elapsed > 0.1 {
+                        warn!(
+                            "（this_pr) commit log duration is slow";
+                            "takes" => elapsed,
+                            "region_id" => self.region_id,
+                            "peer_id" => self.peer.get_id(),
+                        );
+                    }
+
                     self.maybe_renew_leader_lease(propose_time, ctx, None);
                     lease_to_be_updated = false;
                 }
