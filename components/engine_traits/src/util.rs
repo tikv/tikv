@@ -6,8 +6,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use lazy_static::lazy_static;
-
 use super::{Error, Result};
 
 /// Check if key in range [`start_key`, `end_key`).
@@ -30,13 +28,11 @@ pub fn check_key_in_range(
     }
 }
 
-lazy_static! {
-    static ref SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-    // Everytime active memtable switched, this version should be increased.
-    pub static ref VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-    // Max sequence number that was synced and persisted.
-    pub static ref SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
-}
+static SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+// Everytime active memtable switched, this version should be increased.
+pub static VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+// Max sequence number that was synced and persisted.
+pub static SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
 pub trait Notifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);

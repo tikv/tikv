@@ -1546,7 +1546,6 @@ dependencies = [
  "fail",
  "file_system",
  "kvproto",
- "lazy_static",
  "log_wrappers",
  "protobuf",
  "raft",
