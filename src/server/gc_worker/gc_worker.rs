@@ -698,7 +698,7 @@ where
         ctx: &Context,
         start_key: &Key,
         end_key: &Key,
-        _regions_provider: Arc<dyn RegionInfoProvider>,
+        regions_provider: Arc<dyn RegionInfoProvider>,
     ) -> Result<()> {
         info!(
             "unsafe destroy range started";
@@ -775,6 +775,38 @@ where
                 "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
             );
         } else {
+            let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+            let keys = vec![start_key.clone(), end_key.clone()];
+            let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
+            let count = regions.len();
+
+            let mut region_modifies = std::collections::HashMap::new();
+            for i in 0..count {
+                let range_start = if i == 0 {
+                    start_key.clone()
+                } else {
+                    Key::from_raw(regions[i].get_start_key())
+                };
+                let range_end = if i == count - 1 {
+                    end_key.clone()
+                } else {
+                    Key::from_raw(regions[i].get_end_key())
+                };
+
+                let mut modifies = Vec::new();
+                for cf in cfs {
+                    modifies.push(Modify::DeleteRange(
+                        cf,
+                        range_start.clone(),
+                        range_end.clone(),
+                        false,
+                    ));
+                }
+                region_modifies.insert(regions[i].id, modifies);
+            }
+
+            // todo(SpadeA): this method may not be handled synchronously in v2, so the follower FLowInfo may not be send as the way in v1.
+            self.engine.tmp_modify_on_kv_engine(region_modifies)?;
         }
 
         self.flow_info_sender

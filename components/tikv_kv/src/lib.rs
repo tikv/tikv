@@ -23,6 +23,7 @@ mod stats;
 
 use std::{
     cell::UnsafeCell,
+    collections::HashMap,
     error,
     num::NonZeroU64,
     ptr, result,
@@ -276,6 +277,10 @@ pub trait Engine: Send + Clone + 'static {
 
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
+
+    fn tmp_modify_on_kv_engine(&self, _modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        unimplemented!();
+    }
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 
