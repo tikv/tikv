@@ -950,6 +950,14 @@ where
         let logger = slog_global::get_global().new(slog::o!("region_id" => region.get_id()));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
 
+        // Let raft read an entries from raftdb and fill the entry cache.
+        let has_ready = raft_group.has_ready();
+        info!(
+            "(this_pr) has ready";
+            "has_ready" => has_ready,
+            "cache_first_index" => raft_group.store().entry_cache_first_index(),
+        );
+
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -4463,7 +4471,14 @@ where
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.get_id(),
                         "min_matched" => min_matched,
+                        "cache_first_index" => first_index,
                     );
+                    self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
+                        msg,
+                        receive_time: TiInstant::now(),
+                        min_matched,
+                        high,
+                    });
                     return true;
                 }
                 high = first_index;
@@ -4487,6 +4502,12 @@ where
                     "peer_id" => self.peer.get_id(),
                     "low" => low,
                 );
+                self.pre_ack_transfer_leader_meta = Some(PreAckTransferLeaderMeta {
+                    msg,
+                    receive_time: TiInstant::now(),
+                    min_matched: low,
+                    high,
+                });
                 true
             } else {
                 // Fill entry cache.

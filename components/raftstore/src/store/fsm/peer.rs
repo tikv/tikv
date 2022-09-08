@@ -5220,12 +5220,6 @@ where
             Callback::None,
             DiskFullOpt::AllowedOnAlmostFull,
         );
-        info!(
-            "(this_pr) compact log";
-            "region_id" => self.fsm.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "compact_idx" => compact_idx,
-        );
 
         self.fsm.skip_gc_raft_log_ticks = 0;
         self.register_raft_gc_log_tick();
