@@ -1419,9 +1419,11 @@ pub struct RaftEngineConfig {
 
 impl Default for RaftEngineConfig {
     fn default() -> Self {
+        let mut config = RawRaftEngineConfig::default();
+        config.target_file_size = RaftEngineReadableSize::mb(512);
         Self {
             enable: true,
-            config: RawRaftEngineConfig::default(),
+            config,
         }
     }
 }

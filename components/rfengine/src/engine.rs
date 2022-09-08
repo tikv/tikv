@@ -108,7 +108,7 @@ impl RfEngine {
         let mut epoches = read_epoches(dir)?;
         let epoch_id = epoches.last().map(|e| e.id).unwrap_or(1);
 
-        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         let writer = WalWriter::new(dir, epoch_id, wal_size);
         let mut en = Self {
             dir: dir.to_owned(),
@@ -197,7 +197,7 @@ impl RfEngine {
             // In rfstore, we always truncate logs before appending logs in such a case, so we
             // don't handle it here.
             if !truncated.is_empty() || prev_truncated_idx != truncated_index {
-                wb.truncate_tasks.push(Task::Truncate {
+                wb.truncates.push(Truncate {
                     region_id,
                     truncated_index,
                     truncated,
@@ -227,8 +227,10 @@ impl RfEngine {
     }
 
     pub fn schedule_truncate_tasks(&self, wb: WriteBatch) {
-        for task in wb.truncate_tasks {
-            self.task_sender.send(task).unwrap();
+        if !wb.truncates.is_empty() {
+            self.task_sender
+                .send(Task::Truncates(wb.truncates))
+                .unwrap();
         }
     }
 

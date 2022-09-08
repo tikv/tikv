@@ -6,21 +6,20 @@ use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes};
 use raft_proto::eraftpb;
 
-use crate::log_batch::RaftLogOp;
-use crate::Task;
+use crate::{log_batch::RaftLogOp, Truncate};
 
 /// `WriteBatch` contains multiple regions' `RegionBatch`.
 #[derive(Default)]
 pub struct WriteBatch {
     pub(crate) regions: HashMap<u64, RegionBatch>,
-    pub(crate) truncate_tasks: Vec<Task>,
+    pub(crate) truncates: Vec<Truncate>,
 }
 
 impl WriteBatch {
     pub fn new() -> Self {
         Self {
             regions: Default::default(),
-            truncate_tasks: vec![],
+            truncates: vec![],
         }
     }
 

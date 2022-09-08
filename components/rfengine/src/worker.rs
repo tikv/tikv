@@ -84,12 +84,15 @@ impl Worker {
                 Task::Rotate { epoch_id } => {
                     self.handle_rotate_task(epoch_id);
                 }
-                Task::Truncate {
-                    region_id,
-                    truncated_index,
-                    truncated,
-                } => {
-                    self.handle_truncate_task(region_id, truncated_index, truncated);
+                Task::Truncates(truncates) => {
+                    for Truncate {
+                        region_id,
+                        truncated_index,
+                        truncated,
+                    } in truncates
+                    {
+                        self.handle_truncate_task(region_id, truncated_index, truncated);
+                    }
                 }
                 Task::Close => return,
             }
@@ -149,6 +152,7 @@ impl Worker {
 
     fn compact(&mut self, epoch_idx: usize) -> Result<()> {
         assert!(self.epoches[epoch_idx].has_wal_file);
+        let timer = Instant::now_coarse();
         let epoch_id = self.epoches[epoch_idx].id;
         let mut batch = WriteBatch::default();
         let mut it = WALIterator::new(self.dir.clone(), epoch_id);
@@ -186,6 +190,7 @@ impl Worker {
             warn!("{}: failed to recycle wal file", engine_id; "epoch_id" => epoch_id, "err" => %e);
         }
         self.epoches[epoch_idx].has_wal_file = false;
+        ENGINE_COMPACT_WAL_DURATION_HISTOGRAM.observe(timer.saturating_elapsed_secs());
         Ok(())
     }
 
@@ -425,14 +430,14 @@ pub(crate) fn wal_file_name(dir: &Path, epoch_id: u32) -> PathBuf {
     dir.join(format!("{:08x}.wal", epoch_id))
 }
 
+pub(crate) struct Truncate {
+    pub(crate) region_id: u64,
+    pub(crate) truncated_index: u64,
+    pub(crate) truncated: Vec<RaftLogBlock>,
+}
+
 pub(crate) enum Task {
-    Rotate {
-        epoch_id: u32,
-    },
-    Truncate {
-        region_id: u64,
-        truncated_index: u64,
-        truncated: Vec<RaftLogBlock>,
-    },
+    Rotate { epoch_id: u32 },
+    Truncates(Vec<Truncate>),
     Close,
 }

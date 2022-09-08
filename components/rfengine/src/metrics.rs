@@ -64,4 +64,10 @@ lazy_static! {
         exponential_buckets(0.00005, 1.8, 26).unwrap()
     )
     .unwrap();
+    pub static ref ENGINE_COMPACT_WAL_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "raft_engine_compact_wal_duration_seconds",
+        "Bucketed histogram of Raft Engine compact WAL duration",
+        exponential_buckets(0.0005, 1.8, 26).unwrap()
+    )
+    .unwrap();
 }
