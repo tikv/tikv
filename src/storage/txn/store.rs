@@ -809,21 +809,27 @@ mod tests {
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn iter(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
             Ok(MockRangeSnapshotIter::default())
         }
+
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
         }
+
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
         }
+
         fn ext(&self) -> DummySnapshotExt {
             DummySnapshotExt
         }
