@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::*;
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::atomic::*};
 
+use engine_traits::KvEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
@@ -10,7 +10,6 @@ use raftstore::{
     router::RaftStoreRouter,
     store::msg::{PeerMsg, SignificantMsg},
 };
-use engine_traits::KvEngine;
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
@@ -24,18 +23,22 @@ pub struct Service<E, RR> {
     _phantom: PhantomData<E>,
 }
 
-impl<E, RR> Service<E, RR> 
+impl<E, RR> Service<E, RR>
 where
     E: KvEngine,
     RR: RaftStoreRouter<E>,
 {
     /// Create a new backup service.
     pub fn new(scheduler: Scheduler<Task>, router: RR) -> Self {
-        Service { scheduler, router, _phantom: PhantomData}
+        Service {
+            scheduler,
+            router,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl<E, RR> Backup for Service<E, RR> 
+impl<E, RR> Backup for Service<E, RR>
 where
     E: KvEngine,
     RR: RaftStoreRouter<E>,
@@ -126,12 +129,12 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+    use engine_rocks::RocksEngine;
     use external_storage_export::make_local_backend;
+    use raftstore::router::RaftStoreBlackHole;
     use tikv::storage::txn::tests::{must_commit, must_prewrite_put};
     use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
-    use engine_rocks::RocksEngine;
     use txn_types::TimeStamp;
-    use raftstore::router::RaftStoreBlackHole;
 
     use super::*;
     use crate::endpoint::tests::*;
@@ -139,7 +142,8 @@ mod tests {
     fn new_rpc_suite() -> (Server, BackupClient, ReceiverWrapper<Task>) {
         let env = Arc::new(EnvBuilder::new().build());
         let (scheduler, rx) = dummy_scheduler();
-        let backup_service = super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
+        let backup_service =
+            super::Service::<RocksEngine, RaftStoreBlackHole>::new(scheduler, RaftStoreBlackHole);
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_backup(backup_service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();

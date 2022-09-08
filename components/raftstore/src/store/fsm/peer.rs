@@ -1032,7 +1032,9 @@ where
         let region = self.fsm.peer.region();
         let mut resp = CheckAdminResponse::default();
         resp.set_region(region.clone());
-        let pending_admin = self.fsm.peer.raft_group.raft.has_pending_conf() || self.fsm.peer.is_merging() || self.fsm.peer.is_splitting();
+        let pending_admin = self.fsm.peer.raft_group.raft.has_pending_conf()
+            || self.fsm.peer.is_merging()
+            || self.fsm.peer.is_splitting();
         resp.set_has_pending_admin(pending_admin);
         if let Err(err) = ch.unbounded_send(resp) {
             warn!("failed to send check admin response"; "err" => ?err)
