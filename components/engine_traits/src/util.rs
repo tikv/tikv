@@ -29,9 +29,9 @@ pub fn check_key_in_range(
 }
 
 static SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-// Everytime active memtable switched, this version should be increased.
+/// Everytime active memtable switched, this version should be increased.
 pub static VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-// Max sequence number that was synced and persisted.
+//. Max sequence number that was synced and persisted.
 pub static SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
 pub trait Notifier: Send {
@@ -86,9 +86,9 @@ impl SequenceNumber {
     }
 }
 
-// Receive all seqno and their counters, check the last committed seqno (a seqno
-// is considered committed if all seqno before it was received), and return the
-// largest sequence number received.
+/// Receive all seqno and their counters, check the last committed seqno (a
+/// seqno is considered committed if all seqno before it was received), and
+/// return the largest sequence number received.
 #[derive(Default)]
 pub struct SequenceNumberWindow {
     // The sequence number doesn't be received in order, we need a buffer to
