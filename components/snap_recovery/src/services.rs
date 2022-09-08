@@ -104,7 +104,7 @@ impl LocalRegion {
         region_meta.last_log_term = self.raft_local_state.get_hard_state().term;
         region_meta.last_index = self.raft_local_state.last_index;
 
-        return region_meta;
+        region_meta
     }
 }
 
@@ -146,7 +146,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // trigger closure to send finish info back.
     pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
         // PR https://github.com/tikv/tikv/pull/13374
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender.clone());
+        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
         // ensure recovery cmd be executed so the leader apply to last index
         router.broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
@@ -187,7 +187,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
             .collect::<Vec<_>>();
 
         info!("region metas to report, total {}", region_metas.len());
-        return region_metas;
+        region_metas
     }
 
     /// Get all regions holding region meta data from raft CF in KV storage.
@@ -259,7 +259,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
 impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     fn read_region_meta(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         _req: ReadRegionMetaRequest,
         mut sink: ServerStreamingSink<RegionMeta>,
     ) {
@@ -289,7 +289,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 
     fn recover_region(
         &mut self,
-        _ctx: RpcContext,
+        _ctx: RpcContext<'_>,
         mut stream: RequestStream<RecoverRegionRequest>,
         sink: ClientStreamingSink<RecoverRegionResponse>,
     ) {
@@ -372,7 +372,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 
     fn wait_apply(
         &mut self,
-        _ctx: RpcContext,
+        _ctx: RpcContext<'_>,
         _req: WaitApplyRequest,
         sink: UnarySink<WaitApplyResponse>,
     ) {
@@ -396,7 +396,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
 
     fn resolve_kv_data(
         &mut self,
-        _ctx: RpcContext,
+        _ctx: RpcContext<'_>,
         req: ResolveKvDataRequest,
         mut sink: ServerStreamingSink<ResolveKvDataResponse>,
     ) {

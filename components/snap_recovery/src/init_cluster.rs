@@ -104,7 +104,7 @@ pub fn start_recovery(config: TikvConfig, cluster_id: u64, pd_client: Arc<dyn Pd
     let local_engine_service = create_local_engine_service(&config)
         .unwrap_or_else(|e| panic!("create a local engine reader failure, error is {}", e));
 
-    local_engine_service.set_cluster_id(cluster_id.clone());
+    local_engine_service.set_cluster_id(cluster_id);
     info!("update cluster id {} from pd in recovery mode", cluster_id);
     let store_id = local_engine_service.get_store_id().unwrap_or_else(|e| {
         panic!(
