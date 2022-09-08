@@ -5,8 +5,9 @@ use std::cmp;
 
 use fail::fail_point;
 use kvproto::kvrpcpb::{
-    Assertion, AssertionLevel,
+    self, Assertion, AssertionLevel,
     PrewriteRequestPessimisticAction::{self, *},
+    WriteConflictReason,
 };
 use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
@@ -361,7 +362,11 @@ impl<'a> PrewriteMutation<'a> {
                     TransactionKind::Optimistic(_) => {
                         if commit_ts > self.txn_props.start_ts {
                             MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                            self.write_conflict_error(&write, commit_ts)?;
+                            self.write_conflict_error(
+                                &write,
+                                commit_ts,
+                                WriteConflictReason::Optimistic,
+                            )?;
                         }
                     }
                     // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
@@ -370,7 +375,11 @@ impl<'a> PrewriteMutation<'a> {
                         if let DoConstraintCheck = self.pessimistic_action {
                             if commit_ts > self.txn_props.start_ts {
                                 MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                                self.write_conflict_error(&write, commit_ts)?;
+                                self.write_conflict_error(
+                                    &write,
+                                    commit_ts,
+                                    WriteConflictReason::LazyUniquenessCheck,
+                                )?;
                             }
                         } else if commit_ts > for_update_ts {
                             warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
@@ -395,7 +404,11 @@ impl<'a> PrewriteMutation<'a> {
                 {
                     MVCC_CONFLICT_COUNTER.rolled_back.inc();
                     // TODO: Maybe we need to add a new error for the rolled back case.
-                    self.write_conflict_error(&write, commit_ts)?;
+                    self.write_conflict_error(
+                        &write,
+                        commit_ts,
+                        WriteConflictReason::SelfRolledBack,
+                    )?;
                 }
                 // Should check it when no lock exists, otherwise it can report error when there
                 // is a lock belonging to a committed transaction which deletes the key.
@@ -465,13 +478,19 @@ impl<'a> PrewriteMutation<'a> {
         final_min_commit_ts
     }
 
-    fn write_conflict_error(&self, write: &Write, commit_ts: TimeStamp) -> Result<()> {
+    fn write_conflict_error(
+        &self,
+        write: &Write,
+        commit_ts: TimeStamp,
+        reason: kvrpcpb::WriteConflictReason,
+    ) -> Result<()> {
         Err(ErrorInner::WriteConflict {
             start_ts: self.txn_props.start_ts,
             conflict_start_ts: write.start_ts,
             conflict_commit_ts: commit_ts,
             key: self.key.to_raw()?,
             primary: self.txn_props.primary.to_vec(),
+            reason,
         }
         .into())
     }
@@ -2075,7 +2094,13 @@ pub mod tests {
         must_pessimistic_prewrite_insert(&engine, key2, value, key, 3, 3, SkipPessimisticCheck);
         let err =
             must_pessimistic_prewrite_insert_err(&engine, key, value, key, 3, 3, DoConstraintCheck);
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::WriteConflict {
+                reason: WriteConflictReason::LazyUniquenessCheck,
+                ..
+            })
+        ));
 
         // 2. unique constraint fail
         must_prewrite_put(&engine, key, value, key, 11);

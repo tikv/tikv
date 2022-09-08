@@ -32,7 +32,7 @@ use tikv_util::{
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    operation::AsyncWriter,
+    operation::{AsyncWriter, DestroyProgress},
     router::{CmdResChannel, QueryResChannel},
     tablet::{self, CachedTablet},
     Result,
@@ -49,11 +49,11 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
     pub(crate) async_writer: AsyncWriter<EK, ER>,
+    destroy_progress: DestroyProgress,
     has_ready: bool,
     pub(crate) logger: Logger,
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
-
     leader_lease: Lease,
 }
 
@@ -63,21 +63,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
-        region_id: u64,
-        store_id: u64,
         tablet_factory: &dyn TabletFactory<EK>,
-        engine: ER,
-        scheduler: Scheduler<RaftlogFetchTask>,
-        logger: &Logger,
-    ) -> Result<Option<Self>> {
-        let s = match Storage::new(region_id, store_id, engine, scheduler, logger)? {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        let logger = s.logger().clone();
+        storage: Storage<ER>,
+    ) -> Result<Self> {
+        let logger = storage.logger().clone();
 
-        let applied_index = s.apply_state().get_applied_index();
-        let peer_id = s.peer().get_id();
+        let applied_index = storage.apply_state().get_applied_index();
+        let peer_id = storage.peer().get_id();
 
         let raft_cfg = raft::Config {
             id: peer_id,
@@ -95,7 +87,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ..Default::default()
         };
 
-        let tablet_index = s.region_state().get_tablet_index();
+        let region_id = storage.region().get_id();
+        let tablet_index = storage.region_state().get_tablet_index();
         // Another option is always create tablet even if tablet index is 0. But this
         // can introduce race when gc old tablet and create new peer.
         let tablet = if tablet_index != 0 {
@@ -116,16 +109,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
-        let raft_group = RawNode::new(&raft_cfg, s, &logger)?;
+        let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
             raft_group,
             tablet: CachedTablet::new(tablet),
-            has_ready: false,
-            async_writer: AsyncWriter::new(region_id, peer_id),
-            logger,
             peer_cache: vec![],
+            async_writer: AsyncWriter::new(region_id, peer_id),
+            has_ready: false,
+            destroy_progress: DestroyProgress::None,
+            logger,
             pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
                 &region,
@@ -140,11 +134,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         // If this region has only one peer and I am the one, campaign directly.
-        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
+        let region = peer.region();
+        if region.get_peers().len() == 1
+            && region.get_peers()[0] == *peer.peer()
+            && tablet_index != 0
+        {
             peer.raft_group.campaign()?;
         }
 
-        Ok(Some(peer))
+        Ok(peer)
     }
 
     #[inline]
@@ -329,5 +327,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn has_pending_merge_state(&self) -> bool {
         // TODOTODO
         false
+    }
+
+    pub fn serving(&self) -> bool {
+        matches!(self.destroy_progress, DestroyProgress::None)
+    }
+
+    #[inline]
+    pub fn destroy_progress(&self) -> &DestroyProgress {
+        &self.destroy_progress
+    }
+
+    #[inline]
+    pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
+        &mut self.destroy_progress
     }
 }

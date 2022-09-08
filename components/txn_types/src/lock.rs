@@ -3,7 +3,7 @@
 use std::{borrow::Cow, mem::size_of};
 
 use byteorder::ReadBytesExt;
-use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op};
+use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
 use tikv_util::codec::{
     bytes::{self, BytesEncoder},
     number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
@@ -395,6 +395,7 @@ impl Lock {
             conflict_commit_ts: Default::default(),
             key: key.to_raw()?,
             primary: lock.primary.to_vec(),
+            reason: WriteConflictReason::RcCheckTs,
         }))
     }
 

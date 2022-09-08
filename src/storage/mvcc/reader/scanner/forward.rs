@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -350,6 +350,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         conflict_commit_ts: key_commit_ts,
                         key: current_key.into(),
                         primary: vec![],
+                        reason: WriteConflictReason::RcCheckTs,
                     }
                     .into());
                 }
