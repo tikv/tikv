@@ -183,7 +183,13 @@ impl RaftEngine for PanicEngine {
         panic!()
     }
 
-    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, f: F) -> Result<()>
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
     where
         F: FnMut(u64, &RegionSequenceNumberRelation),
     {
@@ -278,6 +284,10 @@ impl RaftLogBatch for PanicWriteBatch {
     }
 
     fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
+        panic!()
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
         panic!()
     }
 }

@@ -3543,6 +3543,11 @@ where
             self.delegate.apply_state.get_commit_term(),
         );
         let cur_state = (apply.commit_index, apply.commit_term);
+        if apply.commit_index <= self.delegate.last_recover_index {
+            assert!(prev_state.0 >= cur_state.0);
+            assert!(prev_state.1 >= cur_state.1);
+            return;
+        }
         if prev_state.0 > cur_state.0 || prev_state.1 > cur_state.1 {
             panic!(
                 "{} commit state jump backward {:?} -> {:?}",

@@ -23,6 +23,7 @@ use super::metrics::*;
 use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
     fsm::{store::ApplyResNotifier, ApplyNotifier, ApplyRes, ExecResult, StoreMeta},
+    peer_storage::write_initial_apply_state_raft,
     util::gc_seqno_relations,
     worker::RaftlogGcTask,
 };
@@ -253,7 +254,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         )
                         .unwrap();
                 }
-                ExecResult::SplitRegion { regions, .. } => {
+                ExecResult::SplitRegion {
+                    regions,
+                    new_split_regions,
+                    ..
+                } => {
                     for region in regions {
                         let applied_index = if region.get_id() == region_id {
                             apply_state.applied_index
@@ -263,13 +268,23 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         region_local_state.set_region(region.clone());
                         region_local_state.set_state(PeerState::Normal);
                         region_local_state.clear_merge_state();
-                        self.wb
-                            .put_pending_region_state(
-                                region.get_id(),
-                                applied_index,
-                                &region_local_state,
-                            )
-                            .unwrap();
+                        if let Some(new_split_peer) = new_split_regions.get(&region.get_id()) {
+                            if new_split_peer.result.is_some() {
+                                continue;
+                            }
+                            self.wb
+                                .put_region_state(region.get_id(), &region_local_state)
+                                .unwrap();
+                            write_initial_apply_state_raft(&mut self.wb, region.get_id()).unwrap();
+                        } else {
+                            self.wb
+                                .put_pending_region_state(
+                                    region.get_id(),
+                                    applied_index,
+                                    &region_local_state,
+                                )
+                                .unwrap();
+                        }
                     }
                 }
                 ExecResult::PrepareMerge { region, state } => {

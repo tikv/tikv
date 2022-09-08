@@ -1213,7 +1213,9 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             let mut kv_wb = kv_engine.write_batch();
             raft_engine
                 .for_each_raft_group(&mut |region_id| {
-                    let region_state = raft_engine.get_region_state(region_id)?.unwrap();
+                    let region_state = raft_engine
+                        .get_region_state(region_id)?
+                        .expect(&format!("region_id: {}", region_id));
                     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
                     let apply_state = raft_engine.get_apply_state(region_id)?.unwrap();
                     kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
@@ -1350,7 +1352,8 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             None => return,
             Some(value) => value,
         };
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, 0, &raft_state).unwrap();
+        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, 0, &raft_state, false)
+            .unwrap();
         let key = keys::region_state_key(rid);
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }
@@ -1782,6 +1785,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         if let Some(range) = raft_builder.seqno_recover_range.as_ref() {
             self.replay_raft_logs_between_seqnos(range, &raft_builder.engines);
         }
+        if raft_builder.cfg.value().disable_kv_wal {
+            let seqno = raft_builder.engines.kv.get_latest_sequence_number();
+            raft_builder
+                .engines
+                .raft
+                .put_recover_from_raft_db(seqno)
+                .unwrap();
+        }
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
         self.system.spawn(tag, builder);
@@ -1799,15 +1810,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
             self.router.force_send(addr, PeerMsg::Start).unwrap();
-        }
-
-        if raft_builder.cfg.value().disable_kv_wal {
-            let seqno = raft_builder.engines.kv.get_latest_sequence_number();
-            raft_builder
-                .engines
-                .raft
-                .put_recover_from_raft_db(seqno)
-                .unwrap();
         }
 
         let refresh_config_runner = RefreshConfigRunner::new(
@@ -1907,7 +1909,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                             (
                                 raft_state,
                                 apply_state.applied_index + 1,
-                                relation.get_apply_state().applied_index,
+                                relation.get_apply_state().applied_index + 1,
                             ),
                         );
                     }
@@ -1932,14 +1934,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                     pool.spawn(async move {
                         let mut entries = vec![];
                         if let Err(e) =
-                            raftdb.fetch_entries_to(region_id, start, end + 1, None, &mut entries)
+                            raftdb.fetch_entries_to(region_id, start, end, None, &mut entries)
                         {
                             panic!(
                                 "fetch entries failed: {:?}, region_id: {}, start:{}, end: {}",
-                                e,
-                                region_id,
-                                start,
-                                end + 1
+                                e, region_id, start, end
                             );
                         }
                         router.schedule_task(
@@ -1969,13 +1968,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         let regions = recover_regions
                             .entry(new_version)
                             .or_insert_with(HashMap::default);
-                        regions.insert(region_id, (raft_state, applied_index + 1, end + 1));
+                        regions.insert(region_id, (raft_state, applied_index + 1, end));
                     }
                     RecoverStatus::Finished => info!("region {} recover finished", region_id),
                 }
             }
         }
         engines.kv.flush_cfs(true).unwrap();
+        info!("all regions recover finished")
     }
 }
 

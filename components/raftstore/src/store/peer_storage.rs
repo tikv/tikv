@@ -597,7 +597,7 @@ where
             // It's possible that there will be some logs between `last_compacted_idx` and
             // `first_index` are not deleted. So a cleanup task for the range should be
             // triggered after applying the snapshot.
-            self.clear_meta(first_index, kv_wb, raft_wb)?;
+            self.clear_meta(first_index, kv_wb, raft_wb, false)?;
         }
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
@@ -669,6 +669,7 @@ where
         first_index: u64,
         kv_wb: &mut EK::WriteBatch,
         raft_wb: &mut ER::LogBatch,
+        keep_raft_meta: bool,
     ) -> Result<()> {
         let region_id = self.get_region_id();
         clear_meta(
@@ -678,6 +679,7 @@ where
             region_id,
             first_index,
             self.raft_state(),
+            keep_raft_meta,
         )?;
         self.entry_storage.clear();
         Ok(())
@@ -986,6 +988,7 @@ pub fn clear_meta<EK, ER>(
     region_id: u64,
     first_index: u64,
     raft_state: &RaftLocalState,
+    keep_raft_meta: bool,
 ) -> Result<()>
 where
     EK: KvEngine,
@@ -994,11 +997,13 @@ where
     let t = Instant::now();
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
-    box_try!(
-        engines
-            .raft
-            .clean(region_id, first_index, raft_state, raft_wb)
-    );
+    if !keep_raft_meta {
+        box_try!(
+            engines
+                .raft
+                .clean(region_id, first_index, raft_state, raft_wb)
+        );
+    }
 
     info!(
         "finish clear peer meta";
@@ -1182,7 +1187,8 @@ pub fn write_peer_state_to_raft<EK: KvEngine, ER: RaftEngine>(
             .raft
             .scan_seqno_relations(
                 region_id,
-                engines.kv.get_latest_sequence_number(),
+                None,
+                Some(engines.kv.get_latest_sequence_number()),
                 |seqno, relation| {
                     raft_wb.delete_seqno_relation(region_id, seqno).unwrap();
                     raft_wb
@@ -1447,7 +1453,7 @@ pub mod tests {
             let mut kv_wb = store.engines.kv.write_batch();
             let mut raft_wb = store.engines.raft.log_batch(0);
             store
-                .clear_meta(first_index, &mut kv_wb, &mut raft_wb)
+                .clear_meta(first_index, &mut kv_wb, &mut raft_wb, false)
                 .unwrap();
             kv_wb.write().unwrap();
             store

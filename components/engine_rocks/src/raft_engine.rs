@@ -411,12 +411,20 @@ impl RaftEngine for RocksEngine {
         self.put(keys::RECOVER_FROM_RAFT_DB_KEY, &u64::to_be_bytes(seqno))
     }
 
-    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, mut f: F) -> Result<()>
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
     where
         F: FnMut(u64, &RegionSequenceNumberRelation),
     {
-        let start_key = keys::sequence_number_relation_key(raft_group_id, 0);
-        let end_key = keys::sequence_number_relation_key(raft_group_id, seqno);
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(u64::MAX);
+        let start_key = keys::sequence_number_relation_key(raft_group_id, start);
+        let end_key = keys::sequence_number_relation_key(raft_group_id, end);
         self.scan(
             CF_DEFAULT,
             &start_key,
@@ -539,6 +547,10 @@ impl RaftLogBatch for RocksWriteBatchVec {
 
     fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()> {
         self.delete(&keys::sequence_number_relation_key(raft_group_id, seqno))
+    }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::apply_state_key(raft_group_id))
     }
 }
 

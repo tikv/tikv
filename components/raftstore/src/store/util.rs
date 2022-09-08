@@ -19,7 +19,7 @@ use kvproto::{
     kvrpcpb::{self, KeyRange, LeaderInfo},
     metapb::{self, Peer, PeerRole, Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, ChangePeerRequest, ChangePeerV2Request, RaftCmdRequest},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage},
 };
 use protobuf::{self, Message};
 use raft::{
@@ -1360,20 +1360,36 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
     wb: &mut ER::LogBatch,
 ) -> Result<()> {
     raft_engine.for_each_raft_group(&mut |region_id| {
-        raft_engine
-            .scan_seqno_relations(region_id, seqno + 1, |s, relation| {
-                wb.delete_seqno_relation(region_id, s).unwrap();
-                wb.put_apply_state(region_id, relation.get_apply_state())
+        if let Some(relation) = raft_engine
+            .get_seqno_relation(region_id, seqno + 1)
+            .unwrap()
+        {
+            wb.put_apply_state(region_id, relation.get_apply_state())
+                .unwrap();
+            let applied_index = relation.get_apply_state().get_applied_index();
+            if let Some(state) = raft_engine
+                .get_pending_region_state(region_id, applied_index)
+                .unwrap()
+            {
+                wb.delete_pending_region_state(region_id, applied_index)
                     .unwrap();
-                let applied_index = relation.get_apply_state().get_applied_index();
-                if let Some(state) = raft_engine
-                    .get_pending_region_state(region_id, applied_index)
-                    .unwrap()
-                {
-                    wb.put_region_state(region_id, &state).unwrap();
-                    wb.delete_pending_region_state(region_id, applied_index)
+                if state.get_state() == PeerState::Tombstone {
+                    wb.delete_apply_state(region_id).unwrap();
+                    raft_engine
+                        .clean(
+                            region_id,
+                            0,
+                            &raft_engine.get_raft_state(region_id).unwrap().unwrap(),
+                            wb,
+                        )
                         .unwrap();
                 }
+                wb.put_region_state(region_id, &state).unwrap();
+            }
+        }
+        raft_engine
+            .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, _| {
+                wb.delete_seqno_relation(region_id, s).unwrap();
             })
             .unwrap();
         Ok(())

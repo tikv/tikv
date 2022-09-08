@@ -504,6 +504,11 @@ impl RaftLogBatchTrait for RaftLogBatch {
         self.0.delete(raft_group_id, raft_seqno_relation_key(seqno));
         Ok(())
     }
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0.delete(raft_group_id, APPLY_STATE_KEY.to_vec());
+        Ok(())
+    }
 }
 
 impl RaftEngineReadOnly for RaftLogEngine {
@@ -784,15 +789,23 @@ impl RaftEngine for RaftLogEngine {
         Ok(())
     }
 
-    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, mut f: F) -> Result<()>
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut f: F,
+    ) -> Result<()>
     where
         F: FnMut(u64, &RegionSequenceNumberRelation),
     {
+        let start = start.map(|s| raft_seqno_relation_key(s));
+        let end = end.map(|s| raft_seqno_relation_key(s));
         self.0
             .scan_messages(
                 raft_group_id,
-                Some(SEQNO_RELATION_KEY),
-                Some(&raft_seqno_relation_key(seqno)),
+                start.as_ref().map(Vec::as_slice),
+                end.as_ref().map(Vec::as_slice),
                 true,
                 |key, value| {
                     let index = parse_raft_seqno_relation_key(key).unwrap();

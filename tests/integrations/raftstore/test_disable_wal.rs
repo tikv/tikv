@@ -2,14 +2,16 @@
 
 use std::sync::Arc;
 
-use engine_traits::MiscExt;
+use engine_traits::{MiscExt, CF_LOCK};
 use grpcio::{ChannelBuilder, Environment};
+use keys::DATA_PREFIX_KEY;
 use kvproto::{
     kvrpcpb::{Context, Op},
     tikvpb::TikvClient,
 };
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
+use tikv_util::{keybuilder::KeyBuilder, HandyRwLock};
+use txn_types::Key;
 
 #[test]
 fn test_disable_wal_recovery() {
@@ -19,6 +21,12 @@ fn test_disable_wal_recovery() {
     cluster.cfg.raft_store.disable_kv_wal = true;
     cluster.run();
     let region = cluster.get_region(b"");
+    let leader = region
+        .get_peers()
+        .into_iter()
+        .find(|p| p.store_id == 1)
+        .unwrap();
+    cluster.must_transfer_leader(region.get_id(), leader.clone());
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(1));
     let client = TikvClient::new(channel);
@@ -43,17 +51,49 @@ fn test_disable_wal_recovery() {
         30,
     );
     must_kv_commit(&client, ctx.clone(), vec![b"k2".to_vec()], 30, 40, 40);
-    cluster.get_engine(1).flush_cfs(true).unwrap();
 
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    must_kv_read_equal(&client, ctx.clone(), b"k1".to_vec(), b"v1".to_vec(), 50);
+    must_kv_read_equal(&client, ctx.clone(), b"k2".to_vec(), b"v2".to_vec(), 50);
+
+    cluster.must_split(&region, b"k3");
+    let region = cluster.get_region(b"k3");
+    let leader = region
+        .get_peers()
+        .into_iter()
+        .find(|p| p.store_id == 1)
+        .unwrap();
+    cluster.must_transfer_leader(region.get_id(), leader.clone());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
     must_kv_prewrite(
         &client,
         ctx.clone(),
-        vec![new_mutation(Op::Put, b"k3", b"v3")],
-        b"k3".to_vec(),
-        50,
+        vec![new_mutation(Op::Put, b"k4", b"v4")],
+        b"k4".to_vec(),
+        60,
     );
+    cluster
+        .pd_client
+        .must_merge(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k3"));
+    cluster.stop_node(1);
+    let key = Key::from_raw(b"k4").append_ts(60.into());
+    let mut key_builder = KeyBuilder::from_slice(key.as_encoded(), 1, 0);
+    key_builder.set_prefix(DATA_PREFIX_KEY);
+    must_get_cf_none(&cluster.get_engine(1), CF_LOCK, key_builder.as_slice());
+    cluster.run_node(1).unwrap();
+    let region = cluster.get_region(b"k3");
+    let leader = region
+        .get_peers()
+        .into_iter()
+        .find(|p| p.store_id == 1)
+        .unwrap();
+    cluster.must_transfer_leader(region.get_id(), leader.clone());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    must_kv_commit(&client, ctx.clone(), vec![b"k4".to_vec()], 60, 70, 70);
+    cluster.must_split(&region, b"k3");
+    cluster.must_try_merge(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k3"));
+    cluster.get_engine(1).flush_cfs(true).unwrap();
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
-    must_kv_read_equal(&client, ctx.clone(), b"k1".to_vec(), b"v1".to_vec(), 60);
-    must_kv_read_equal(&client, ctx.clone(), b"k2".to_vec(), b"v2".to_vec(), 60);
 }

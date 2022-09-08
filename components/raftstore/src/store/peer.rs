@@ -1332,8 +1332,16 @@ where
             // Raft log gc should be flushed before being destroyed, so last_compacted_idx
             // has to be the minimal index that may still have logs.
             let last_compacted_idx = self.last_compacted_idx;
-            self.mut_store()
-                .clear_meta(last_compacted_idx, &mut kv_wb, &mut raft_wb)?;
+            self.mut_store().clear_meta(
+                last_compacted_idx,
+                &mut kv_wb,
+                &mut raft_wb,
+                save_states_to_raft_db && keep_data,
+            )?;
+
+            // false + true/false => true
+            // true + false => true
+            // true + true => false
 
             // StoreFsmDelegate::check_msg use both epoch and region peer list to check
             // whether a message is targeting a staled peer. But for an uninitialized peer,
@@ -5572,7 +5580,6 @@ where
         _: Option<ThreadReadId>,
         _: &mut Option<LocalReadContext<'_, EK>>,
     ) -> Arc<EK::Snapshot> {
-        println!("get snapshot");
         Arc::new(self.engines.kv.snapshot())
     }
 }

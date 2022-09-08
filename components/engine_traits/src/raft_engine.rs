@@ -170,7 +170,13 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
 
     fn put_recover_from_raft_db(&self, seqno: u64) -> Result<()>;
 
-    fn scan_seqno_relations<F>(&self, raft_group_id: u64, seqno: u64, f: F) -> Result<()>
+    fn scan_seqno_relations<F>(
+        &self,
+        raft_group_id: u64,
+        start: Option<u64>,
+        end: Option<u64>,
+        f: F,
+    ) -> Result<()>
     where
         F: FnMut(u64, &RegionSequenceNumberRelation);
 
@@ -192,6 +198,8 @@ pub trait RaftLogBatch: Send {
     fn put_raft_state(&mut self, raft_group_id: u64, state: &RaftLocalState) -> Result<()>;
     fn put_region_state(&mut self, raft_group_id: u64, state: &RegionLocalState) -> Result<()>;
     fn put_apply_state(&mut self, raft_group_id: u64, state: &RaftApplyState) -> Result<()>;
+
+    fn delete_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     fn put_seqno_relation(
         &mut self,
