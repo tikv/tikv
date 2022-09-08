@@ -914,9 +914,10 @@ where
             "peer_id" => self.fsm.peer_id(),
             "target_index" => target_index,
             "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+
         );
-    
-        // during the snapshot recovery, follower unconditionaly forward the commit_index.
+
+        // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             // self.fsm
             // .peer
@@ -927,8 +928,16 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "leader_id" => self.fsm.peer.leader_id(),
+                "pending_remove" => self.fsm.peer.pending_remove,
+                "voter" => self.fsm.peer.raft_group.raft.vote,
             );
-           // self.fsm.has_ready = true;
+            // if it is learner during backup and never vote before, vote is 0, return;
+            // if peer is suppose to removed, return;
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+                info!("this peer is never vote before, it should be stale");
+                return;
+            }
         }
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {

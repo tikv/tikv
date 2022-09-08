@@ -611,7 +611,7 @@ pub struct SnapshotRecoveryWaitApplySyncer {
 }
 
 impl SnapshotRecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>,) -> Self {
+    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
@@ -2102,8 +2102,8 @@ where
         true
     }
 
-    // during the snapshot recovery, follower unconditionaly forward the commit_index.
-    // pub fn force_forward_commit_index(&mut self) -> bool {
+    // during the snapshot recovery, follower unconditionaly forward the
+    // commit_index. pub fn force_forward_commit_index(&mut self) -> bool {
 
     //     let persisted = self.raft_group.raft.raft_log.persisted;
 
@@ -5056,7 +5056,21 @@ where
         if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
             &self.snapshot_recovery_state
         {
-            if self.raft_group.raft.raft_log.applied >= *target_index || force {
+            // if (! self.is_leader()) && self.is_handling_snapshot() {
+            //     info!("snapshot recovery follower waiting apply snapshot";
+            //     "region_id" => self.region().get_id(),
+            //     "peer_id" => self.peer_id(),
+            //     "target_index" => target_index,
+            //     "applied" =>  self.raft_group.raft.raft_log.applied,
+            //     "force" => force,
+            //     );
+            //     return;
+            // }
+
+            if self.raft_group.raft.raft_log.applied >= *target_index
+                || force
+                || self.pending_remove
+            {
                 info!("snapshot recovery wait apply finished";
                     "region_id" => self.region().get_id(),
                     "peer_id" => self.peer_id(),

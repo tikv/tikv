@@ -50,7 +50,7 @@ const MAX_SPLIT_KEY: u64 = 1 << 31;
 /// index) are safe
 pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // TOOD: if we do not have to restart TiKV, then, we need exit the recovery mode
-    // and bring the following parameter back. 
+    // and bring the following parameter back.
     info!("adjust the raft configure and rocksdb config.");
     let bt = config.raft_store.raft_base_tick_interval.0;
 
@@ -76,7 +76,7 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // applied snapshot mem size
     config.raft_store.snap_apply_batch_size = ReadableSize::gb(1);
     // max snapshot file size, if larger than it, file be splitted.
-    config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1); 
+    config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1);
     config.raft_store.hibernate_regions = false;
 
     // disable auto compactions during the restore
@@ -104,7 +104,7 @@ pub fn start_recovery(config: TikvConfig, cluster_id: u64, pd_client: Arc<dyn Pd
     let local_engine_service = create_local_engine_service(&config)
         .unwrap_or_else(|e| panic!("create a local engine reader failure, error is {}", e));
 
-    local_engine_service.set_cluster_id(cluster_id.clone());
+    local_engine_service.set_cluster_id(cluster_id);
     info!("update cluster id {} from pd in recovery mode", cluster_id);
     let store_id = local_engine_service.get_store_id().unwrap_or_else(|e| {
         panic!(
