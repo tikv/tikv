@@ -268,9 +268,17 @@ pub trait Engine: Send + Clone + 'static {
     type Local: LocalEngine;
 
     /// Local storage engine.
+    ///
+    /// In the single rocksdb version, the return value is guaranteed to be Some
+    /// where as in the multi-rocksdb version, the None will be returned.
     fn kv_engine(&self) -> Option<Self::Local>;
 
     /// Write modifications into internal local engine directly.
+    ///
+    /// region_modifies records each region's modifications. In the single
+    /// rocksdb version, they are flattened to handle together whereas in the
+    /// multi-rocksdb version, the modifications of each region will be handled
+    /// separately.
     fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
