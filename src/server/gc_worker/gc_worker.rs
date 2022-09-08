@@ -1672,7 +1672,7 @@ mod tests {
             kv::{metrics::GcKeyMode, Modify, TestEngineBuilder, WriteData},
             lock_manager::DummyLockManager,
             mvcc::{
-                tests::{must_get_none, must_get_none_v2, must_get_v2},
+                tests::{must_get_none, must_get_none_on_region, must_get_on_region},
                 MAX_TXN_WRITE_SIZE,
             },
             txn::{
@@ -2673,7 +2673,7 @@ mod tests {
             let k = format!("k{:02}", i).into_bytes();
 
             // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-            must_get_none_v2(&engine, region_id, &k, 150);
+            must_get_none_on_region(&engine, region_id, &k, 150);
 
             // MVCC-DELETIONs is cleaned
             let mut raw_k = vec![b'z'];
@@ -2729,9 +2729,9 @@ mod tests {
 
             if i % 2 == 0 {
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
-                must_get_v2(&engine, region_id, &k, 150, b"value");
+                must_get_on_region(&engine, region_id, &k, 150, b"value");
             } else {
-                must_get_none_v2(&engine, region_id, &k, 150);
+                must_get_none_on_region(&engine, region_id, &k, 150);
                 assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
         }

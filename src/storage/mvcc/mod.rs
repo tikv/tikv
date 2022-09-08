@@ -438,7 +438,7 @@ pub mod tests {
         must_get_impl(engine, None, key, ts, expect);
     }
 
-    pub fn must_get_v2<E: Engine>(
+    pub fn must_get_on_region<E: Engine>(
         engine: &E,
         region_id: u64,
         key: &[u8],
@@ -513,7 +513,7 @@ pub mod tests {
         must_get_none_impl(engine, key, ts, None);
     }
 
-    pub fn must_get_none_v2<E: Engine>(
+    pub fn must_get_none_on_region<E: Engine>(
         engine: &E,
         region_id: u64,
         key: &[u8],
