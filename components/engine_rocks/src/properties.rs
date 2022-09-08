@@ -395,25 +395,12 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
-    key_mode: KeyMode,
+    key_mode: KeyMode, // When key_mode is KeyMode::Txn, it represents TiDB or Txn senario.
     current_ts: u64,
 }
 
 impl MvccPropertiesCollector {
-    fn new() -> MvccPropertiesCollector {
-        MvccPropertiesCollector {
-            props: MvccProperties::new(),
-            last_row: Vec::new(),
-            num_errors: 0,
-            row_versions: 0,
-            cur_index_handle: IndexHandle::default(),
-            row_index_handles: IndexHandles::new(),
-            key_mode: KeyMode::Txn,
-            current_ts: ttl_current_ts(),
-        }
-    }
-
-    fn new_by_keymode(key_mode: KeyMode) -> MvccPropertiesCollector {
+    fn new(key_mode: KeyMode) -> MvccPropertiesCollector {
         MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
@@ -482,7 +469,6 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
                 }
                 Err(_) => {
                     self.num_errors += 1;
-                    return;
                 }
             }
         } else {
@@ -534,7 +520,7 @@ pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new()
+        MvccPropertiesCollector::new(KeyMode::Txn)
     }
 }
 
@@ -545,7 +531,7 @@ impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
     for RawMvccPropertiesCollectorFactory
 {
     fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new_by_keymode(KeyMode::Raw)
+        MvccPropertiesCollector::new(KeyMode::Raw)
     }
 }
 
@@ -810,7 +796,7 @@ mod tests {
             ("ef", 6, WriteType::Put, DBEntryType::Delete),
             ("gh", 7, WriteType::Delete, DBEntryType::Put),
         ];
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         for &(key, ts, write_type, entry_type) in &cases {
             let ts = ts.into();
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
@@ -842,7 +828,7 @@ mod tests {
             entries.push((k, w.as_ref().to_bytes()));
         }
 
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
             for &(ref k, ref v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);

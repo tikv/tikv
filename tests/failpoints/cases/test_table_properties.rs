@@ -106,7 +106,6 @@ fn test_check_need_gc() {
             .get(),
         0
     );
-
 }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
