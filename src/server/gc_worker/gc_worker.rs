@@ -805,7 +805,8 @@ where
                 region_modifies.insert(regions[i].id, modifies);
             }
 
-            // todo(SpadeA): this method may not be handled synchronously in v2, so the follower FLowInfo may not be send as the way in v1.
+            // todo(SpadeA): this method may not be handled synchronously in v2, so the
+            // follower FLowInfo may not be send as the way in v1.
             self.engine.tmp_modify_on_kv_engine(region_modifies)?;
         }
 
