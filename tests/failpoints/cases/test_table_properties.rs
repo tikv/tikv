@@ -86,10 +86,9 @@ fn test_check_need_gc() {
     do_write(&engine, false, 5);
     engine.get_rocksdb().flush_cfs(true).unwrap();
 
-    // Now props.num_versions = 5 , props.num_rows = 1
-    // set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
+    // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
     // f64 * ratio_threshold) return true
-    gc_runner.ratio_threshold = Option::Some(2.0);
+    gc_runner.ratio_threshold = Option::Some(f64::MIN);
 
     // is_bottommost_level = false
     do_gc(&raw_engine, 1, &mut gc_runner, &dir);
@@ -210,10 +209,9 @@ fn test_skip_gc_by_check() {
     do_write(&engine, false, 5);
     engine.get_rocksdb().flush_cfs(true).unwrap();
 
-    // Now props.num_versions = 5 , props.num_rows = 1
-    // set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
+    // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
     // f64 * ratio_threshold) return false
-    gc_runner.ratio_threshold = Option::Some(6.0);
+    gc_runner.ratio_threshold = Option::Some(f64::MAX);
 
     // is_bottommost_level = false
     do_gc(&raw_engine, 1, &mut gc_runner, &dir);
