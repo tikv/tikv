@@ -68,10 +68,10 @@ where
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D> + Clone,
 {
-    pub fn new(kv_engine: E, store_meta: S, router: C, logger: Logger) -> Self {
+    pub fn new(store_meta: S, router: C, logger: Logger) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
-            local_reader: LocalReaderCore::new(kv_engine, store_meta),
+            local_reader: LocalReaderCore::new(store_meta),
             router,
             logger,
         }
@@ -94,7 +94,7 @@ where
                 Err(e) => Err(e),
             }
         } else {
-            Ok(None)
+            Err(Error::RegionNotFound(req.get_header().get_region_id()))
         }
     }
 
@@ -172,13 +172,24 @@ where
             return Ok(snap);
         }
 
-        let mut err = errorpb::Error::default();
-        err.set_not_leader(Default::default());
-        err.set_message(format!("region {}: renew lease fail", region_id));
-        let mut resp = RaftCmdResponse::default();
-        resp.mut_header().set_error(err);
-        Err(resp)
+        Err(not_leader_err(region_id))
     }
+}
+
+fn not_leader_err(region_id: u64) -> RaftCmdResponse {
+    let mut err = errorpb::Error::default();
+    err.set_not_leader(Default::default());
+    let mut resp = RaftCmdResponse::default();
+    resp.mut_header().set_error(err);
+    resp
+}
+
+fn delegate_not_found_err(region_id: u64) -> RaftCmdResponse {
+    let mut err = errorpb::Error::default();
+    err.set_region_not_found(Default::default());
+    let mut resp = RaftCmdResponse::default();
+    resp.mut_header().set_error(err);
+    resp
 }
 
 /// CachedReadDelegate is a wrapper the ReadDelegate and CachedTablet.
@@ -359,6 +370,7 @@ mod tests {
         kv::{KvTestEngine, KvTestSnapshot, TestTabletFactoryV2},
     };
     use engine_traits::{OpenOptions, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+    use futures::executor::block_on;
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::{new_peer, Lease},
@@ -386,14 +398,14 @@ mod tests {
     }
 
     struct MockRouter {
-        p_router: SyncSender<PeerMsg>,
+        p_router: SyncSender<(u64, PeerMsg)>,
         c_router: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
     }
 
     impl MockRouter {
         fn new() -> (
             MockRouter,
-            Receiver<PeerMsg>,
+            Receiver<(u64, PeerMsg)>,
             Receiver<(u64, CasualMessage<KvTestEngine>)>,
         ) {
             let (p_ch, p_rx) = sync_channel(1);
@@ -411,7 +423,8 @@ mod tests {
 
     impl MsgRouter for MockRouter {
         fn send(&self, addr: u64, cmd: PeerMsg) -> Result<()> {
-            unimplemented!()
+            self.p_router.send((addr, cmd)).unwrap();
+            Ok(())
         }
     }
 
@@ -423,30 +436,25 @@ mod tests {
 
     #[allow(clippy::type_complexity)]
     fn new_reader(
-        path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta<KvTestEngine>>>,
     ) -> (
-        TempDir,
         LocalReader<
             KvTestEngine,
             MockRouter,
             CachedReadDelegate<KvTestEngine>,
             StoreMetaDelegate<KvTestEngine>,
         >,
-        Receiver<PeerMsg>,
+        Receiver<(u64, PeerMsg)>,
     ) {
-        let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
         let mut reader = LocalReader::new(
-            db,
             StoreMetaDelegate::new(store_meta),
             ch,
             Logger::root(slog::Discard, o!("key1" => "value1")),
         );
         reader.local_reader.store_id = Cell::new(Some(store_id));
-        (path, reader, rx)
+        (reader, rx)
     }
 
     fn new_peers(store_id: u64, pr_ids: Vec<u64>) -> Vec<metapb::Peer> {
@@ -463,13 +471,23 @@ mod tests {
 
     #[test]
     fn test_read() {
-        let store_id = 2;
+        let store_id = 1;
+
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new()
+            .prefix("test-local-reader")
+            .tempdir()
+            .unwrap();
+        let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
+
         let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
-        let (_tmp, mut reader, _rx) = new_reader("test-local-reader", store_id, store_meta);
+        let (mut reader, rx) = new_reader(store_id, store_meta.clone());
 
         let mut region1 = metapb::Region::default();
         region1.set_id(1);
-        let prs = new_peers(store_id, vec![2, 3, 4]);
+        let prs = new_peers(store_id, vec![1, 2, 3]);
         region1.set_peers(prs.clone().into());
         let epoch13 = {
             let mut ep = metapb::RegionEpoch::default();
@@ -493,6 +511,61 @@ mod tests {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
+
+        let res = block_on(reader.snapshot(cmd.clone())).unwrap_err();
+        assert!(
+            res.header
+                .as_ref()
+                .unwrap()
+                .get_error()
+                .has_region_not_found()
+        );
+
+        lease.renew(monotonic_raw_now());
+        let remote = lease.maybe_new_remote_lease(term6).unwrap();
+        {
+            let mut meta = store_meta.as_ref().lock().unwrap();
+
+            // Create read_delegate with region id 1
+            let read_delegate = ReadDelegate {
+                tag: String::new(),
+                region: Arc::new(region1.clone()),
+                peer_id: 1,
+                term: term6,
+                applied_term: term6 - 1,
+                leader_lease: Some(remote),
+                last_valid_ts: Timespec::new(0, 0),
+                txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::default())),
+                txn_ext: Arc::new(TxnExt::default()),
+                read_progress: read_progress.clone(),
+                pending_remove: false,
+                track_ver: TrackVer::new(),
+                bucket_meta: None,
+            };
+            meta.readers.insert(1, read_delegate);
+            // create tablet with region_id 1 and prepare some data
+            let tablet1 = factory
+                .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+                .unwrap();
+            let cache = CachedTablet::new(Some(tablet1));
+            meta.tablet_caches.insert(1, cache);
+        }
+
+        let res = block_on(reader.snapshot(cmd.clone())).unwrap_err();
+        println!("{:?}", rx.recv().unwrap());
+        assert!(res.header.as_ref().unwrap().get_error().has_not_leader());
+
+        {
+            let mut meta = store_meta.lock().unwrap();
+
+            meta.readers
+                .get_mut(&1)
+                .unwrap()
+                .update(ReadProgress::applied_term(term6));
+        }
+
+        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        assert!(snap.get_region().id == 1);
     }
 
     #[test]

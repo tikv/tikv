@@ -4,6 +4,7 @@
 use std::{
     cell::Cell,
     fmt::{self, Display, Formatter},
+    marker::PhantomData,
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -541,10 +542,11 @@ where
 {
     pub store_id: Cell<Option<u64>>,
     store_meta: S,
-    kv_engine: E,
     // region id -> ReadDelegate
     // The use of `Arc` here is a workaround, see the comment at `get_delegate`
     pub delegates: LruCache<u64, D>,
+
+    phantom_data: PhantomData<E>,
 }
 
 impl<E, D, S> LocalReaderCore<E, D, S>
@@ -553,10 +555,10 @@ where
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D>,
 {
-    pub fn new(kv_engine: E, store_meta: S) -> Self {
+    pub fn new(store_meta: S) -> Self {
         LocalReaderCore {
             store_meta,
-            kv_engine,
+            phantom_data: PhantomData,
             store_id: Cell::new(None),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -659,7 +661,7 @@ where
     fn clone(&self) -> Self {
         LocalReaderCore {
             store_meta: self.store_meta.clone(),
-            kv_engine: self.kv_engine.clone(),
+            phantom_data: self.phantom_data,
             store_id: self.store_id.clone(),
             delegates: LruCache::with_capacity_and_sample(0, 7),
         }
@@ -674,6 +676,8 @@ where
     S: ReadExecutorProvider<E, Executor = D>,
 {
     local_reader: LocalReaderCore<E, D, S>,
+    kv_engine: E,
+
     snap_cache: Box<Option<Arc<E::Snapshot>>>,
     cache_read_id: ThreadReadId,
 
@@ -691,7 +695,8 @@ where
     pub fn new(kv_engine: E, store_meta: S, router: C) -> Self {
         let cache_read_id = ThreadReadId::new();
         Self {
-            local_reader: LocalReaderCore::new(kv_engine, store_meta),
+            local_reader: LocalReaderCore::new(store_meta),
+            kv_engine,
             snap_cache: Box::new(None),
             cache_read_id,
             router,
@@ -890,6 +895,7 @@ where
     fn clone(&self) -> Self {
         Self {
             local_reader: self.local_reader.clone(),
+            kv_engine: self.kv_engine.clone(),
             snap_cache: self.snap_cache.clone(),
             cache_read_id: self.cache_read_id.clone(),
             router: self.router.clone(),
@@ -971,7 +977,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{SyncMutable, ALL_CFS, Peekable};
+    use engine_traits::{Peekable, SyncMutable, ALL_CFS};
     use kvproto::raft_cmdpb::*;
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
