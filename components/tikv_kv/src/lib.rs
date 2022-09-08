@@ -269,8 +269,9 @@ pub trait Engine: Send + Clone + 'static {
 
     /// Local storage engine.
     ///
-    /// In the single rocksdb version, the return value is guaranteed to be `Some`
-    /// where as in the multi-rocksdb version, the `None` will be returned.
+    /// In the single rocksdb version, the return value is guaranteed to be
+    /// `Some` where as in the multi-rocksdb version, the `None` will be
+    /// returned.
     fn kv_engine(&self) -> Option<Self::Local>;
 
     /// Write modifications into internal local engine directly.
