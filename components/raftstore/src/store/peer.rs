@@ -611,7 +611,7 @@ pub struct SnapshotRecoveryWaitApplySyncer {
 }
 
 impl SnapshotRecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>,) -> Self {
+    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
         let thread_safe_router = Mutex::new(sender);
         let abort = Arc::new(Mutex::new(false));
         let abort_clone = abort.clone();
@@ -2102,8 +2102,8 @@ where
         true
     }
 
-    // during the snapshot recovery, follower unconditionaly forward the commit_index.
-    // pub fn force_forward_commit_index(&mut self) -> bool {
+    // during the snapshot recovery, follower unconditionaly forward the
+    // commit_index. pub fn force_forward_commit_index(&mut self) -> bool {
 
     //     let persisted = self.raft_group.raft.raft_log.persisted;
 

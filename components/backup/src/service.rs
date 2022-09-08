@@ -2,27 +2,65 @@
 
 use std::sync::atomic::*;
 
+use engine_rocks::RocksEngine;
+use engine_traits::RaftEngine;
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use grpcio::{self, *};
 use kvproto::brpb::*;
+use raftstore::{
+    router::RaftStoreRouter,
+    store::{
+        fsm::RaftRouter,
+        msg::{PeerMsg, SignificantMsg},
+    },
+};
 use tikv_util::{error, info, worker::*};
 
 use super::Task;
 
 /// Service handles the RPC messages for the `Backup` service.
 #[derive(Clone)]
-pub struct Service {
+pub struct Service<ER: RaftEngine> {
     scheduler: Scheduler<Task>,
+    router: RaftRouter<RocksEngine, ER>,
 }
 
-impl Service {
+impl<ER: RaftEngine> Service<ER> {
     /// Create a new backup service.
-    pub fn new(scheduler: Scheduler<Task>) -> Service {
-        Service { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, router: RaftRouter<RocksEngine, ER>) -> Service<ER> {
+        Service { scheduler, router }
     }
 }
 
-impl Backup for Service {
+impl<ER: RaftEngine> Backup for Service<ER> {
+    fn check_admin(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: CheckAdminRequest,
+        mut sink: ServerStreamingSink<CheckAdminResponse>,
+    ) {
+        let (tx, rx) = mpsc::unbounded();
+        self.router.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::HasPendingConf(tx.clone()))
+        });
+
+        let send_task = async move {
+            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
+            sink.send_all(&mut s).await?;
+            sink.close().await?;
+            Ok(())
+        }
+        .map(|res: Result<()>| match res {
+            Ok(_) => {
+                info!("check admin closed");
+            }
+            Err(e) => {
+                error!("check admin canceled"; "error" => ?e);
+            }
+        });
+        ctx.spawn(send_task);
+    }
+
     fn backup(
         &mut self,
         ctx: RpcContext<'_>,

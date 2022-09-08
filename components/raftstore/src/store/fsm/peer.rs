@@ -21,9 +21,10 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::oneshot::Sender;
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
+    brpb::CheckAdminResponse,
     errorpb,
     import_sstpb::SwitchMode,
     kvrpcpb::DiskFullOpt,
@@ -915,8 +916,9 @@ where
             "target_index" => target_index,
             "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
         );
-    
-        // during the snapshot recovery, follower unconditionaly forward the commit_index.
+
+        // during the snapshot recovery, follower unconditionaly forward the
+        // commit_index.
         if !self.fsm.peer.is_leader() {
             // self.fsm
             // .peer
@@ -928,7 +930,7 @@ where
                 "target_index" => target_index,
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
             );
-           // self.fsm.has_ready = true;
+            // self.fsm.has_ready = true;
         }
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
@@ -1000,6 +1002,29 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
+    }
+
+    fn on_has_pending_conf(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
+        if !self.fsm.peer.is_leader() {
+            // no need check non-leader pending conf.
+            // in snapshot recovery after we stopped all conf changes from PD.
+            // if the follower slow than leader and has the pending conf change.
+            // that's means the follower cannot be select to leader during recovery.
+            return;
+        }
+        debug!(
+            "check pending conf for leader";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        let region = self.fsm.peer.region();
+        let mut resp = CheckAdminResponse::default();
+        resp.set_start_key(region.start_key.clone());
+        resp.set_end_key(region.end_key.clone());
+        resp.set_has_pending_admin(self.fsm.peer.raft_group.raft.has_pending_conf());
+        if let Err(err) = ch.unbounded_send(resp) {
+            warn!("failed to send check admin response"; "err" => ?err)
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1421,6 +1446,7 @@ where
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
+            SignificantMsg::HasPendingConf(ch) => self.on_has_pending_conf(ch),
         }
     }
 

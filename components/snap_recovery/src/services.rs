@@ -144,12 +144,14 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>,) {
+    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
         // PR https://github.com/tikv/tikv/pull/13374
         let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender.clone());
         // ensure recovery cmd be executed so the leader apply to last index
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()))
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+                wait_apply.clone(),
+            ))
         });
     }
 
@@ -380,7 +382,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             let now = Instant::now();
             let (tx, rx) = sync_channel::<u64>(1);
             RecoveryService::wait_apply_last(router, tx.clone());
-            let _ = rx.recv().unwrap();    
+            let _ = rx.recv().unwrap();
             info!(
                 "all region apply to last log takes {}",
                 now.elapsed().as_secs()
