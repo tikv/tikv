@@ -706,7 +706,6 @@ pub fn check_need_gc(
         if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
             return (true, false);
         }
-
         (props.max_row_versions > 1024, false)
     };
 
