@@ -895,6 +895,9 @@ where
             .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
+    // func be invoked firstly after assigned leader by BR, wait all leader apply to
+    // last log index func be invoked secondly wait follower apply to last
+    // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
         if self.fsm.peer.snapshot_recovery_state.is_some() {
             warn!(
@@ -907,6 +910,37 @@ where
         }
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+
+        // print some info and do some sanity check
+        if !self.fsm.peer.is_leader() {
+            info!(
+                "snapshot follower wait apply started";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "pending_remove" => self.fsm.peer.pending_remove,
+                "voter" => self.fsm.peer.raft_group.raft.vote,
+            );
+
+            // do some sanity check
+            // if it is learner during backup and never vote before, vote is 0
+            // if peer is suppose to remove
+            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+                info!(
+                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                );
+                return;
+            }
+        } else {
+            info!(
+                "snapshot leader wait apply started";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+            );
+        }
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
             target_index,
