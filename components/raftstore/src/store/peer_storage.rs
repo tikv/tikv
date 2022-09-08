@@ -1130,10 +1130,7 @@ pub mod tests {
         Error as RaftError, GetEntriesContext, StorageError,
     };
     use tempfile::{Builder, TempDir};
-    use tikv_util::{
-        config::{ReadableDuration, ReadableSize, VersionTrack},
-        worker::{dummy_scheduler, LazyWorker, Scheduler, Worker},
-    };
+    use tikv_util::worker::{dummy_scheduler, LazyWorker, Scheduler, Worker};
 
     use super::*;
     use crate::{
@@ -1145,25 +1142,11 @@ pub mod tests {
             fsm::apply::compact_raft_log,
             initial_region, prepare_bootstrap_cluster,
             worker::{
-                FetchedLogs, LogFetchedNotifier, RaftlogFetchRunner, RegionRunner, RegionTask,
+                make_region_worker_raftstore_cfg, FetchedLogs, LogFetchedNotifier,
+                RaftlogFetchRunner, RegionRunner, RegionTask,
             },
-            Config,
         },
     };
-
-    const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
-    const STALE_PEER_CHECK_TICK: usize = 1;
-
-    fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
-        let mut store_cfg = Config::default();
-        store_cfg.snap_apply_batch_size = ReadableSize(0);
-        store_cfg.region_worker_tick_interval =
-            ReadableDuration::millis(PENDING_APPLY_CHECK_INTERVAL);
-        store_cfg.clean_stale_ranges_tick = STALE_PEER_CHECK_TICK;
-        store_cfg.use_delete_range = use_delete_range;
-        store_cfg.snap_generator_pool_size = 2;
-        Arc::new(VersionTrack::new(store_cfg))
-    }
 
     fn new_storage(
         region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
@@ -1571,7 +1554,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_raftstore_cfg(true);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
             mgr,
@@ -1718,7 +1701,7 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
-        let cfg = make_raftstore_cfg(true);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
             mgr,
@@ -1783,7 +1766,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_raftstore_cfg(true);
+        let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s1.engines.kv.clone(),
             mgr,

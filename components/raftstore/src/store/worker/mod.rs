@@ -42,7 +42,10 @@ pub use self::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
     },
-    region::{Runner as RegionRunner, Task as RegionTask},
+    region::{
+        tests::make_raftstore_cfg as make_region_worker_raftstore_cfg, Runner as RegionRunner,
+        Task as RegionTask,
+    },
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },

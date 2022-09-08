@@ -888,7 +888,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{
         io,
         sync::{atomic::AtomicUsize, mpsc, Arc},
@@ -929,7 +929,7 @@ mod tests {
     const PENDING_APPLY_CHECK_INTERVAL: u64 = 200;
     const STALE_PEER_CHECK_TICK: usize = 1;
 
-    fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
+    pub fn make_raftstore_cfg(use_delete_range: bool) -> Arc<VersionTrack<Config>> {
         let mut store_cfg = Config::default();
         store_cfg.snap_apply_batch_size = ReadableSize(0);
         store_cfg.region_worker_tick_interval =
@@ -1255,6 +1255,7 @@ mod tests {
             }
         };
 
+        #[allow(dead_code)]
         let must_not_finish = |ids: &[u64]| {
             for id in ids {
                 let region_key = keys::region_state_key(*id);
