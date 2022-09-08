@@ -333,6 +333,8 @@ where
     /// If this is not supported or any error happens, returns true to do
     /// further check after getting snapshot.
     fn need_gc(&self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> bool {
+        // todo(SpadeA): multi-rocks db version should handle with this differently
+        // which will be reflected in the imlementation of the v2's RaftKv.
         let props = match self
             .engine
             .get_mvcc_properties_cf(CF_WRITE, safe_point, start_key, end_key)
