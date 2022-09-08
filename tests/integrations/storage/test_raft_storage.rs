@@ -208,7 +208,7 @@ fn test_engine_leader_change_twice() {
 }
 
 fn write_test_data<E: Engine, F: KvFormat>(
-    storage: &SyncTestStorage<E, F, causal_ts::tests::TestProvider>,
+    storage: &SyncTestStorage<E, F>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
@@ -235,7 +235,7 @@ fn write_test_data<E: Engine, F: KvFormat>(
 
 fn check_data<E: Engine, F: KvFormat>(
     cluster: &mut Cluster<ServerCluster>,
-    storages: &HashMap<u64, SyncTestStorage<E, F, causal_ts::tests::TestProvider>>,
+    storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,
     expect_success: bool,

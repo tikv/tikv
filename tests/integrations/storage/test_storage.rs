@@ -1174,7 +1174,7 @@ impl Oracle {
 const INC_MAX_RETRY: usize = 100;
 
 fn inc<E: Engine, F: KvFormat>(
-    store: &SyncTestStorage<E, F, causal_ts::tests::TestProvider>,
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     key: &[u8],
 ) -> Result<i32, ()> {
@@ -1259,7 +1259,7 @@ fn format_key(x: usize) -> Vec<u8> {
 }
 
 fn inc_multi<E: Engine, F: KvFormat>(
-    store: &SyncTestStorage<E, F, causal_ts::tests::TestProvider>,
+    store: &SyncTestStorage<E, F>,
     oracle: &Oracle,
     n: usize,
 ) -> bool {

@@ -4489,7 +4489,7 @@ mod tests {
     fn new_engines<F: KvFormat>(
         cfg: TikvConfig,
     ) -> (
-        Storage<RocksDBEngine, DummyLockManager, F, causal_ts::tests::TestProvider>,
+        Storage<RocksDBEngine, DummyLockManager, F>,
         ConfigController,
         ReceiverWrapper<TtlCheckerTask>,
         Arc<FlowController>,

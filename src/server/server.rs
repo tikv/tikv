@@ -9,7 +9,6 @@ use std::{
 };
 
 use api_version::KvFormat;
-use causal_ts::CausalTsProvider;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
@@ -88,11 +87,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     Server<T, S, E>
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<L: LockManager, F: KvFormat, Ts: CausalTsProvider + 'static>(
+    pub fn new<L: LockManager, F: KvFormat>(
         store_id: u64,
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E, L, F, Ts>,
+        storage: Storage<E, L, F>,
         copr: Endpoint<E>,
         copr_v2: coprocessor_v2::Endpoint,
         raft_router: T,

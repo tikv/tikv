@@ -86,6 +86,7 @@ engine_rocks = { path = "components/engine_rocks", default-features = false }
 engine_test = { path = "components/engine_test", default-features = false }
 engine_traits = { path = "components/engine_traits", default-features = false }
 engine_traits_tests = { path = "components/engine_traits_tests", default-features = false }
+enum_dispatch = "0.3.8"
 error_code = { path = "components/error_code", default-features = false }
 fail = "0.5"
 file_system = { path = "components/file_system", default-features = false }
@@ -151,6 +152,7 @@ strum = { version = "0.20", features = ["derive"] }
 sysinfo = "0.16"
 tempfile = "3.0"
 thiserror = "1.0"
+test_pd = { path = "components/test_pd" }
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }

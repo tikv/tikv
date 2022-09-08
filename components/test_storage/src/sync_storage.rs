@@ -6,7 +6,6 @@ use std::{
 };
 
 use api_version::{ApiV1, KvFormat};
-use causal_ts::CausalTsProvider;
 use collections::HashMap;
 use futures::executor::block_on;
 use kvproto::{
@@ -88,7 +87,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
     pub fn build(
         mut self,
         store_id: u64,
-    ) -> Result<SyncTestStorage<E, F, causal_ts::tests::TestProvider>> {
+    ) -> Result<SyncTestStorage<E, F>> {
         let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
             DummyLockManager,
@@ -109,19 +108,19 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
 ///
 /// Only used for test purpose.
 #[derive(Clone)]
-pub struct SyncTestStorage<E: Engine, F: KvFormat, Ts: CausalTsProvider + 'static> {
+pub struct SyncTestStorage<E: Engine, F: KvFormat> {
     gc_worker: GcWorker<E, RaftStoreBlackHole>,
-    store: Storage<E, DummyLockManager, F, Ts>,
+    store: Storage<E, DummyLockManager, F>,
 }
 
 /// SyncTestStorage for Api V1
 /// To be convenience for test cases unrelated to RawKV.
-pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1, causal_ts::tests::TestProvider>;
+pub type SyncTestStorageApiV1<E> = SyncTestStorage<E, ApiV1>;
 
-impl<E: Engine, F: KvFormat, Ts: CausalTsProvider> SyncTestStorage<E, F, Ts> {
+impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
     pub fn from_storage(
         store_id: u64,
-        storage: Storage<E, DummyLockManager, F, Ts>,
+        storage: Storage<E, DummyLockManager, F>,
         config: GcConfig,
     ) -> Result<Self> {
         let (tx, _rx) = std::sync::mpsc::channel();
@@ -150,7 +149,7 @@ impl<E: Engine, F: KvFormat, Ts: CausalTsProvider> SyncTestStorage<E, F, Ts> {
             .unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F, Ts> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager, F> {
         self.store.clone()
     }
 

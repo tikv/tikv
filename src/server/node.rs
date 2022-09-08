@@ -7,14 +7,14 @@ use std::{
 };
 
 use api_version::{api_v2::TIDB_RANGES_COMPLEMENT, KvFormat};
-use causal_ts::CausalTsProvider;
+use causal_ts::BatchTsoProvider;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use grpcio_health::HealthService;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
-use pd_client::{Error as PdError, FeatureGate, PdClient, INVALID_ID};
+use pd_client::{Error as PdError, FeatureGate, PdClient, RpcClient, INVALID_ID};
 use raftstore::{
     coprocessor::dispatcher::CoprocessorHost,
     router::{LocalReadRouter, RaftStoreRouter},
@@ -48,13 +48,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_INTERVAL: Duration = Duration::from_secs(
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<
-    S,
-    EK,
-    R: FlowStatsReporter,
-    F: KvFormat,
-    Ts: CausalTsProvider + 'static,
->(
+pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -66,8 +60,8 @@ pub fn create_raft_storage<
     resource_tag_factory: ResourceTagFactory,
     quota_limiter: Arc<QuotaLimiter>,
     feature_gate: FeatureGate,
-    causal_ts_provider: Option<Arc<Ts>>,
-) -> Result<Storage<RaftKv<EK, S>, LockManager, F, Ts>>
+    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>,
+) -> Result<Storage<RaftKv<EK, S>, LockManager, F>>
 where
     S: RaftStoreRouter<EK> + LocalReadRouter<EK> + 'static,
     EK: KvEngine,
