@@ -2629,7 +2629,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0e2f26c0a46ae7d666d6ca4410046a39e0c96f36"
+source = "git+https://github.com/pingcap/kvproto.git#d88fa382391ec305e879be7635e39beae6a19890"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2758,7 +2758,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2777,7 +2777,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3495,16 +3495,28 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "openssl"
-version = "0.10.38"
+version = "0.10.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c7ae222234c30df141154f159066c5093ff73b63204dcda7121eb082fc56a95"
+checksum = "618febf65336490dfcf20b73f885f5651a0c89c64c2d4a8c3662585a70bf5bd0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
  "foreign-types",
  "libc 0.2.125",
  "once_cell",
+ "openssl-macros",
  "openssl-sys",
+]
+
+[[package]]
+name = "openssl-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b501e44f11665960c7e7fcf062c7d96a14ade4aa98116c004b2e37b5be7d736c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -3524,9 +3536,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.72"
+version = "0.9.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e46109c383602735fa0a2e48dd2b7c892b048e1bf69e5c3b1d804b7d9c203cb"
+checksum = "e5f9bd0c2710541a3cda73d6f9ac4f1b240de4ae261065d309dbe73d9dceb42f"
 dependencies = [
  "autocfg",
  "cc",
@@ -4701,7 +4713,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#de8310c3983a30236ea03f802ed0c2401a4908ae"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2e00e78b945194e8a672e8e078b6c73956e9ace0"
 dependencies = [
  "libc 0.2.125",
  "librocksdb_sys",
@@ -6182,9 +6194,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
+checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc 0.2.125",
  "paste",
@@ -6193,9 +6205,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.3+5.2.1-patched.2"
+version = "0.5.1+5.3.0-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
+checksum = "931e876f91fed0827f863a2d153897790da0b24d882c721a79cb3beb0b903261"
 dependencies = [
  "cc",
  "fs_extra",
@@ -6204,9 +6216,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemallocator"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b7bcecfafe4998587d636f9ae9d55eb9d0499877b88757767c346875067098"
+checksum = "20612db8a13a6c06d57ec83953694185a367e16945f66565e8028d2c0bd76979"
 dependencies = [
  "libc 0.2.125",
  "tikv-jemalloc-sys",
@@ -7080,12 +7092,10 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.19+zstd.1.4.8"
+version = "2.0.1+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec24a9273d24437afb8e71b16f3d9a5d569193cccdb7896213b59f552f387674"
+checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
 dependencies = [
  "cc",
- "glob",
- "itertools 0.9.0",
  "libc 0.2.125",
 ]

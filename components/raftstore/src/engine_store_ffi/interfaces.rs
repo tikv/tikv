@@ -33,6 +33,7 @@ pub mod root {
             Aes128Ctr = 2,
             Aes192Ctr = 3,
             Aes256Ctr = 4,
+            SM4Ctr = 5,
         }
         #[repr(C)]
         #[derive(Debug)]
@@ -443,7 +444,7 @@ pub mod root {
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 794398293737678384;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 14699247891578305166;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

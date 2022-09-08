@@ -1341,10 +1341,9 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                     stats.stats.write_scan_detail(scan_detail_v2);
                     stats.perf_stats.write_scan_detail(scan_detail_v2);
                     let time_detail = exec_detail_v2.mut_time_detail();
-                    time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
-                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
-                    time_detail
-                        .set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms as i64);
+                    time_detail.set_kv_read_wall_time_ms(duration_ms);
+                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
+                    time_detail.set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms);
                     match val {
                         Some(val) => resp.set_value(val),
                         None => resp.set_not_found(true),
@@ -1421,10 +1420,9 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     stats.stats.write_scan_detail(scan_detail_v2);
                     stats.perf_stats.write_scan_detail(scan_detail_v2);
                     let time_detail = exec_detail_v2.mut_time_detail();
-                    time_detail.set_kv_read_wall_time_ms(duration_ms as i64);
-                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms as i64);
-                    time_detail
-                        .set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms as i64);
+                    time_detail.set_kv_read_wall_time_ms(duration_ms);
+                    time_detail.set_wait_wall_time_ms(stats.latency_stats.wait_wall_time_ms);
+                    time_detail.set_process_wall_time_ms(stats.latency_stats.process_wall_time_ms);
                     resp.set_pairs(pairs.into());
                 }
                 Err(e) => {

@@ -197,9 +197,9 @@ impl Tracker {
         let mut exec_details = kvrpcpb::ExecDetails::default();
 
         let mut td = kvrpcpb::TimeDetail::default();
-        td.set_process_wall_time_ms(time::duration_to_ms(measure) as i64);
-        td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time) as i64);
-        td.set_kv_read_wall_time_ms(self.scan_process_time_ms as i64);
+        td.set_process_wall_time_ms(time::duration_to_ms(measure));
+        td.set_wait_wall_time_ms(time::duration_to_ms(self.wait_time));
+        td.set_kv_read_wall_time_ms(self.scan_process_time_ms);
         exec_details.set_time_detail(td.clone());
 
         let detail = self.total_storage_stats.scan_detail();

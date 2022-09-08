@@ -64,6 +64,7 @@ fn convert_encryption_method(input: EncryptionMethod) -> DBEncryptionMethod {
         EncryptionMethod::Aes128Ctr => DBEncryptionMethod::Aes128Ctr,
         EncryptionMethod::Aes192Ctr => DBEncryptionMethod::Aes192Ctr,
         EncryptionMethod::Aes256Ctr => DBEncryptionMethod::Aes256Ctr,
+        EncryptionMethod::Sm4Ctr => DBEncryptionMethod::Sm4Ctr,
         EncryptionMethod::Unknown => DBEncryptionMethod::Unknown,
     }
 }

@@ -128,7 +128,10 @@ pub struct TitanCfConfig {
     pub max_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub discardable_ratio: f64,
+    // deprecated.
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub sample_ratio: f64,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
@@ -139,7 +142,10 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+    // deprecated.
     #[online_config(skip)]
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     pub gc_merge_rewrite: bool,
 }
 
@@ -172,13 +178,11 @@ impl TitanCfConfig {
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
-        opts.set_sample_ratio(self.sample_ratio);
         opts.set_merge_small_file_threshold(self.merge_small_file_threshold.0 as u64);
         opts.set_blob_run_mode(self.blob_run_mode.into());
         opts.set_level_merge(self.level_merge);
         opts.set_range_merge(self.range_merge);
         opts.set_max_sorted_runs(self.max_sorted_runs);
-        opts.set_gc_merge_rewrite(self.gc_merge_rewrite);
         opts
     }
 }
@@ -472,7 +476,7 @@ macro_rules! build_cf_opt {
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
         if $opt.use_bloom_filter {
             block_base_opts.set_bloom_filter(
-                $opt.bloom_filter_bits_per_key,
+                $opt.bloom_filter_bits_per_key as f64,
                 $opt.block_based_bloom_filter,
             );
             block_base_opts.set_whole_key_filtering($opt.whole_key_filtering);
@@ -493,6 +497,7 @@ macro_rules! build_cf_opt {
             0,     /* strategy */
             $opt.bottommost_zstd_compression_dict_size,
             $opt.bottommost_zstd_compression_sample_size,
+            1, // parallel_threads
         );
         cf_opts.set_write_buffer_size($opt.write_buffer_size.0);
         cf_opts.set_max_write_buffer_number($opt.max_write_buffer_number);
@@ -1098,8 +1103,8 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
-        let enable_pipelined_commit = !self.enable_pipelined_write && !self.enable_unordered_write;
-        opts.enable_pipelined_commit(enable_pipelined_commit);
+        let enable_multi_batch_write = !self.enable_pipelined_write && !self.enable_unordered_write;
+        opts.enable_multi_batch_write(enable_multi_batch_write);
         opts.enable_unordered_write(self.enable_unordered_write);
         opts.set_info_log(RocksdbLogger::default());
         opts.set_info_log_level(self.info_log_level.into());
