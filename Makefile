@@ -299,6 +299,13 @@ pre-format: unset-override
 	@rustup component add rustfmt
 	@cargo install --force -q cargo-sort
 
+ci_fmt_check:
+	M="fmt" ./ci_check.sh
+
+ci_test:
+	M="testold" ./ci_check.sh
+	M="testnew" ./ci_check.sh
+
 gen_proxy_ffi: pre-format
 	./gen-proxy-ffi.sh
 
