@@ -779,7 +779,6 @@ pub mod test_utils {
         pub gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         pub gc_receiver: ReceiverWrapper<GcTask<RocksEngine>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
-        pub feature_gate_version: String,
     }
 
     impl<'a> TestGcRunner<'a> {
@@ -795,7 +794,6 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
-                feature_gate_version: "5.0.0".to_string(),
             }
         }
     }
@@ -818,9 +816,7 @@ pub mod test_utils {
             };
             let feature_gate = {
                 let feature_gate = FeatureGate::default();
-                feature_gate
-                    .set_version(self.feature_gate_version.as_str())
-                    .unwrap();
+                feature_gate.set_version("5.0.0").unwrap();
                 feature_gate
             };
 

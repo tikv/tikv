@@ -61,17 +61,13 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             return std::ptr::null_mut();
         }
 
-        let (skip_vcheck, ratio_threshold) = {
+        let ratio_threshold = {
             let value = &*gc_context.cfg_tracker.value();
-            (
-                value.compaction_filter_skip_version_check,
-                value.ratio_threshold,
-            )
+            value.ratio_threshold
         };
 
         debug!(
             "creating rawkv compaction filter";
-            "skip_version_check" => skip_vcheck,
             "ratio_threshold" => ratio_threshold,
         );
 
