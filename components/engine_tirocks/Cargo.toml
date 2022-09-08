@@ -1,0 +1,9 @@
+[package]
+name = "engine_tirocks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engine_traits = { path = "../engine_traits" }
+tikv_alloc = { path = "../tikv_alloc" }
+tirocks = { git = "https://github.com/busyjay/tirocks.git", branch = "dev" }
