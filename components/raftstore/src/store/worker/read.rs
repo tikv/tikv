@@ -416,6 +416,8 @@ impl ReadDelegate {
     }
 
     pub fn is_in_leader_lease(&self, ts: Timespec) -> bool {
+        fail_point!("perform_read_local", |_| true);
+
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
