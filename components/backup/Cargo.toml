@@ -37,6 +37,7 @@ api_version = { path = "../api_version", default-features = false }
 async-channel = "1.4"
 aws = { path = "../cloud/aws" }
 causal_ts = { path = "../causal_ts" }
+codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crc64fast = "0.1"

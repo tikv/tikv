@@ -36,7 +36,6 @@ use raftstore::{
 };
 use slog::{debug, error, info, o, warn, Logger};
 use tikv_util::{
-    codec::number::decode_u64,
     lru::LruCache,
     time::{monotonic_raw_now, Instant, ThreadReadId},
 };
@@ -149,6 +148,7 @@ where
 mod tests {
     use std::{borrow::Borrow, sync::mpsc::*, thread};
 
+    use codec::number_v1::NumberEncoder;
     use crossbeam::channel::TrySendError;
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -161,7 +161,7 @@ mod tests {
         RaftCommand,
     };
     use tempfile::{Builder, TempDir};
-    use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use tikv_util::time::monotonic_raw_now;
     use time::Duration;
     use txn_types::{Key, Lock, LockType, WriteBatchFlags};
 

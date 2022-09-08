@@ -2,7 +2,7 @@
 
 use std::iter::*;
 
-use codec::prelude::BufferWriter;
+use codec::{buffer::BufferWriter, Result};
 
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]`
 /// slice in arbitrary length.
@@ -350,7 +350,7 @@ impl<'a> BufferWriter for WithConcatExtend<'a> {
     }
 
     #[inline]
-    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
+    fn write_bytes(&mut self, values: &[u8]) -> Result<()> {
         self.0.data.write_bytes(values)
     }
 }

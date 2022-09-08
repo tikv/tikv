@@ -228,12 +228,13 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 mod tests {
     use std::{io::Write, sync::mpsc};
 
+    use codec::number_v1::NumberEncoder;
     use engine_test::kv::new_engine;
     use engine_traits::{SyncMutable, ALL_CFS};
     use kvproto::{metapb::Peer, pdpb::CheckPolicy};
     use tempfile::Builder;
     use tidb_query_datatype::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use tikv_util::{codec::number::NumberEncoder, config::ReadableSize, worker::Runnable};
+    use tikv_util::{config::ReadableSize, worker::Runnable};
     use txn_types::Key;
 
     use super::*;

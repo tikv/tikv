@@ -181,7 +181,7 @@ where
 {
     let bytes_len = std::mem::size_of::<T>() * len;
     if buf.len() < bytes_len {
-        return Err(Error::unexpected_eof());
+        return Err(Error::unexpected_eof().into());
     }
     let slice = &buf[..bytes_len];
     buf.advance(bytes_len);

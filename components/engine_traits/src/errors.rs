@@ -144,7 +144,7 @@ pub enum Error {
     #[error("CF {0} not found")]
     CfName(String),
     #[error("Codec {0}")]
-    Codec(#[from] tikv_util::codec::Error),
+    Codec(#[from] codec::Error),
     #[error("The entries of region is unavailable")]
     EntriesUnavailable,
     #[error("The entries of region is compacted")]

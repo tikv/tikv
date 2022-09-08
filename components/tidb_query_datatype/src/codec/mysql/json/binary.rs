@@ -2,7 +2,7 @@
 
 use std::convert::TryInto;
 
-use codec::number::NumberCodec;
+use codec::number_v2::NumberCodec;
 
 use super::{constants::*, JsonRef, JsonType, ERR_CONVERT_FAILED};
 use crate::codec::Result;

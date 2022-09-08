@@ -2,7 +2,7 @@
 
 //! A compatible layer for converting V2 row datum into V1 row datum.
 
-use codec::{number::NumberCodec, prelude::BufferWriter};
+use codec::{number_v2::NumberCodec, prelude::BufferWriter};
 
 use crate::{
     codec::{datum, datum_codec::DatumFlagAndPayloadEncoder, Error, Result},

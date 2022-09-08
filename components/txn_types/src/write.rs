@@ -2,8 +2,10 @@
 
 use std::mem::size_of;
 
-use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use codec::{
+    number_v1::{self, NumberEncoder, MAX_VAR_U64_LEN},
+    prelude::NumberDecoder,
+};
 
 use crate::{
     lock::LockType,
@@ -295,7 +297,7 @@ impl WriteRef<'_> {
                 FLAG_OVERLAPPED_ROLLBACK => {
                     has_overlapped_rollback = true;
                 }
-                GC_FENCE_PREFIX => gc_fence = Some(number::decode_u64(&mut b)?.into()),
+                GC_FENCE_PREFIX => gc_fence = Some(number_v1::decode_u64(&mut b)?.into()),
                 _ => {
                     // To support forward compatibility, all fields should be serialized in order
                     // and stop parsing if meets an unknown byte.

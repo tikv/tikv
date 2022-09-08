@@ -1,12 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::byte::MemComparableByteCodec;
-use engine_traits::Result;
-use tikv_util::codec::{
-    bytes,
-    number::{self, NumberEncoder},
-    Error,
+use codec::{
+    byte_v1,
+    byte_v2::MemComparableByteCodec,
+    number_v1::{self, NumberEncoder},
+    ErrorInner,
 };
+use engine_traits::Result;
 use txn_types::{Key, TimeStamp};
 
 use super::*;
@@ -71,15 +71,19 @@ impl KvFormat for ApiV2 {
     }
 
     fn decode_raw_value(bytes: &[u8]) -> Result<RawValue<&[u8]>> {
-        let mut rest_len = bytes.len().checked_sub(1).ok_or(Error::ValueLength)?;
-        let flags = ValueMeta::from_bits(bytes[rest_len]).ok_or(Error::ValueMeta)?;
+        let mut rest_len = bytes
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| codec::Error::from(ErrorInner::ValueLength))?;
+        let flags = ValueMeta::from_bits(bytes[rest_len])
+            .ok_or_else(|| codec::Error::from(ErrorInner::ValueMeta))?;
         let is_delete = flags.contains(ValueMeta::DELETE_FLAG);
         let expire_ts = if flags.contains(ValueMeta::EXPIRE_TS) {
             rest_len = rest_len
-                .checked_sub(number::U64_SIZE)
-                .ok_or(Error::ValueLength)?;
-            let mut expire_ts_slice = &bytes[rest_len..rest_len + number::U64_SIZE];
-            Some(number::decode_u64(&mut expire_ts_slice)?)
+                .checked_sub(number_v1::U64_SIZE)
+                .ok_or_else(|| codec::Error::from(ErrorInner::ValueLength))?;
+            let mut expire_ts_slice = &bytes[rest_len..rest_len + number_v1::U64_SIZE];
+            Some(number_v1::decode_u64(&mut expire_ts_slice)?)
         } else {
             None
         };
@@ -95,7 +99,7 @@ impl KvFormat for ApiV2 {
         let mut meta_size = 1;
         if value.expire_ts.is_some() {
             flags.insert(ValueMeta::EXPIRE_TS);
-            meta_size += number::U64_SIZE;
+            meta_size += number_v1::U64_SIZE;
         }
         if value.is_delete {
             flags.insert(ValueMeta::DELETE_FLAG);
@@ -114,7 +118,7 @@ impl KvFormat for ApiV2 {
         let mut meta_size = 1;
         if value.expire_ts.is_some() {
             flags.insert(ValueMeta::EXPIRE_TS);
-            meta_size += number::U64_SIZE;
+            meta_size += number_v1::U64_SIZE;
         }
         if value.is_delete {
             flags.insert(ValueMeta::DELETE_FLAG);
@@ -164,7 +168,7 @@ impl KvFormat for ApiV2 {
 
         // always reserve more U64_SIZE for ts, as it's likely to "append_ts" later,
         // especially in raw write procedures.
-        user_key.reserve(encoded_len - src_len + number::U64_SIZE);
+        user_key.reserve(encoded_len - src_len + number_v1::U64_SIZE);
         user_key.resize(encoded_len, 0u8);
         MemComparableByteCodec::encode_all_in_place(&mut user_key, src_len);
 
@@ -220,7 +224,7 @@ impl ApiV2 {
     }
 
     fn get_encode_len(src_len: usize) -> usize {
-        MemComparableByteCodec::encoded_len(src_len) + number::U64_SIZE
+        MemComparableByteCodec::encoded_len(src_len) + number_v1::U64_SIZE
     }
 
     pub fn get_rawkv_range() -> (u8, u8) {
@@ -253,8 +257,8 @@ impl ApiV2 {
 // keys. The validity is ensured by client & Storage interfaces.
 #[inline]
 fn is_valid_encoded_bytes(mut encoded_bytes: &[u8], with_ts: bool) -> bool {
-    bytes::decode_bytes(&mut encoded_bytes, false).is_ok()
-        && encoded_bytes.len() == number::U64_SIZE * (with_ts as usize)
+    byte_v1::decode_bytes(&mut encoded_bytes, false).is_ok()
+        && encoded_bytes.len() == number_v1::U64_SIZE * (with_ts as usize)
 }
 
 #[inline]

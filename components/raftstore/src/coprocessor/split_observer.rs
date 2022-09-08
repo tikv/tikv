@@ -1,18 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::byte_v1;
 use itertools::Itertools;
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
 };
-use tikv_util::{box_err, box_try, codec::bytes, error, warn};
+use tikv_util::{box_err, box_try, error, warn};
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::{store::util, Error};
 
 pub fn strip_timestamp_if_exists(mut key: Vec<u8>) -> Vec<u8> {
     let mut slice = key.as_slice();
-    let strip_len = match bytes::decode_bytes(&mut slice, false) {
+    let strip_len = match byte_v1::decode_bytes(&mut slice, false) {
         // It is an encoded key and the slice points to the remaining unparsable
         // part which most likely is timestamp. Note that the key can be a raw key
         // in valid encoded form, but treat it as a encoded key anyway.
@@ -157,6 +158,7 @@ impl AdminObserver for SplitObserver {
 #[cfg(test)]
 mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
+    use codec::byte_v1::encode_bytes;
     use kvproto::{
         metapb::Region,
         raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest},
@@ -165,7 +167,6 @@ mod tests {
         codec::{datum, table, Datum},
         expr::EvalContext,
     };
-    use tikv_util::codec::bytes::encode_bytes;
 
     use super::*;
     use crate::coprocessor::{AdminObserver, ObserverContext};

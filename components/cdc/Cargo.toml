@@ -31,6 +31,7 @@ failpoints = ["tikv/failpoints"]
 api_version = { path = "../api_version" }
 bitflags = "1.0"
 causal_ts = { path = "../causal_ts" }
+codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 crossbeam = "0.8"

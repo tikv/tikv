@@ -8,11 +8,12 @@ use std::{
 };
 
 use codec::{
-    byte::{CompactByteCodec, MemComparableByteCodec},
-    number::{self, NumberCodec},
+    byte_v2::{CompactByteCodec, MemComparableByteCodec},
+    number_v2::{self, NumberCodec},
     prelude::*,
+    BytesSlice,
 };
-use tikv_util::{codec::BytesSlice, escape};
+use tikv_util::escape;
 
 use super::{
     mysql::{
@@ -1032,26 +1033,26 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
             1 + match *v {
                 Datum::I64(_) => {
                     if comparable {
-                        number::I64_SIZE
+                        number_v2::I64_SIZE
                     } else {
-                        number::MAX_VARINT64_LENGTH
+                        number_v2::MAX_VARINT64_LENGTH
                     }
                 }
                 Datum::U64(_) => {
                     if comparable {
-                        number::U64_SIZE
+                        number_v2::U64_SIZE
                     } else {
-                        number::MAX_VARINT64_LENGTH
+                        number_v2::MAX_VARINT64_LENGTH
                     }
                 }
-                Datum::F64(_) => number::F64_SIZE,
-                Datum::Time(_) => number::U64_SIZE,
-                Datum::Dur(_) => number::I64_SIZE,
+                Datum::F64(_) => number_v2::F64_SIZE,
+                Datum::Time(_) => number_v2::U64_SIZE,
+                Datum::Dur(_) => number_v2::I64_SIZE,
                 Datum::Bytes(ref bs) => {
                     if comparable {
                         MemComparableByteCodec::encoded_len(bs.len())
                     } else {
-                        bs.len() + number::MAX_VARINT64_LENGTH
+                        bs.len() + number_v2::MAX_VARINT64_LENGTH
                     }
                 }
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
@@ -1105,8 +1106,8 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         return Err(box_err!("{} is too short", escape(buf)));
     }
     let pos = match buf[0] {
-        INT_FLAG => number::I64_SIZE,
-        UINT_FLAG => number::U64_SIZE,
+        INT_FLAG => number_v2::I64_SIZE,
+        UINT_FLAG => number_v2::U64_SIZE,
         BYTES_FLAG => {
             if desc {
                 MemComparableByteCodec::get_first_encoded_len_desc(&buf[1..])
@@ -1116,8 +1117,8 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
         }
         COMPACT_BYTES_FLAG => CompactByteCodec::get_first_encoded_len(&buf[1..]),
         NIL_FLAG => 0,
-        FLOAT_FLAG => number::F64_SIZE,
-        DURATION_FLAG => number::I64_SIZE,
+        FLOAT_FLAG => number_v2::F64_SIZE,
+        DURATION_FLAG => number_v2::I64_SIZE,
         DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
         VAR_INT_FLAG | VAR_UINT_FLAG => NumberCodec::get_first_encoded_var_int_len(&buf[1..]),
         JSON_FLAG => {

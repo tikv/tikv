@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use api_version::ApiV2;
+use codec::number_v1;
 use crossbeam::atomic::AtomicCell;
 use engine_rocks::{ReadPerfContext, ReadPerfInstant, PROP_MAX_TS};
 use engine_traits::{
@@ -33,9 +34,7 @@ use tikv::storage::{
 };
 use tikv_kv::Iterator;
 use tikv_util::{
-    box_err,
-    codec::number,
-    debug, error, info,
+    box_err, debug, error, info,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{Instant, Limiter},
     warn,
@@ -541,7 +540,7 @@ impl<E: KvEngine> Initializer<E> {
         field: &str,
     ) -> Option<u64> {
         prop.get(field.as_bytes())
-            .and_then(|mut x| number::decode_u64(&mut x).ok())
+            .and_then(|mut x| number_v1::decode_u64(&mut x).ok())
     }
 }
 

@@ -21,6 +21,7 @@ test-engines-panic = [
 
 [dependencies]
 api_version = { path = "../api_version" }
+codec = { path = "../codec", default-features = false }
 collections = { path = "../collections" }
 concurrency_manager = { path = "../concurrency_manager", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }

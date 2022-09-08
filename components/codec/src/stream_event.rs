@@ -4,7 +4,7 @@ use std::io::{prelude::*, Cursor};
 use byteorder::ByteOrder;
 use bytes::{Buf, Bytes};
 
-use crate::{codec::Result, Either};
+use crate::Result;
 
 pub trait Iterator {
     fn next(&mut self) -> Result<()>;
@@ -68,6 +68,28 @@ impl Iterator for EventIterator {
 
     fn value(&self) -> &[u8] {
         &self.buf[self.value_offset..self.value_offset + self.value_len]
+    }
+}
+
+// TODO: It's added to solve the dependency problem. Remove it in the future
+// since there is a same implementation in tikv_util.
+#[derive(Debug, Clone, Copy)]
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L, R, T> AsRef<T> for Either<L, R>
+where
+    T: ?Sized,
+    L: AsRef<T>,
+    R: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        match self {
+            Self::Left(l) => l.as_ref(),
+            Self::Right(r) => r.as_ref(),
+        }
     }
 }
 

@@ -3,10 +3,8 @@
 #![cfg_attr(test, feature(test))]
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
+#![feature(core_intrinsics)]
 #![feature(vec_into_raw_parts)]
-
-#[cfg(test)]
-extern crate test;
 
 use std::{
     cmp,
@@ -38,7 +36,6 @@ use crate::sys::thread::StdThreadBuildWrapper;
 #[macro_use]
 pub mod log;
 pub mod buffer_vec;
-pub mod codec;
 pub mod config;
 pub mod future;
 #[macro_use]

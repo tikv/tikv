@@ -80,10 +80,7 @@ impl Chunk {
     }
 
     #[cfg(test)]
-    pub fn decode(
-        buf: &mut tikv_util::codec::BytesSlice<'_>,
-        field_types: &[FieldType],
-    ) -> Result<Chunk> {
+    pub fn decode(buf: &mut codec::BytesSlice<'_>, field_types: &[FieldType]) -> Result<Chunk> {
         let mut chunk = Chunk {
             columns: Vec::with_capacity(field_types.len()),
         };

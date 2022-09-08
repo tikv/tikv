@@ -1639,6 +1639,7 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
+    use codec::number_v1::NumberEncoder;
     use engine_rocks::{util::get_cf_handle, RocksEngine};
     use engine_test::{
         ctor::{CfOptions, DbOptions},
@@ -1661,7 +1662,7 @@ mod tests {
     };
     use tempfile::Builder;
     use tikv_kv::Snapshot;
-    use tikv_util::{codec::number::NumberEncoder, future::paired_future_callback};
+    use tikv_util::future::paired_future_callback;
     use txn_types::Mutation;
 
     use super::{test_gc_worker::MultiRocksEngine, *};

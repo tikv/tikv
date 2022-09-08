@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, convert::TryInto, f64, str};
 
-use codec::{number::NumberCodec, prelude::*};
+use codec::{number_v2::NumberCodec, prelude::*};
 
 use super::{constants::*, Json, JsonRef, JsonType};
 use crate::{

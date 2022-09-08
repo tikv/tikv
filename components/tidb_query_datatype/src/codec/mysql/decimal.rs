@@ -2133,7 +2133,7 @@ fn read_word<T: BufferReader + ?Sized>(
     // In TiKV, we do zero copy so that we need `is_first` flag.
     let buf = data.bytes();
     if buf.len() < size {
-        return Err(Error::unexpected_eof());
+        return Err(Error::unexpected_eof().into());
     }
     let mut first = buf[0];
     if *is_first {

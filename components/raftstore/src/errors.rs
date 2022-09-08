@@ -2,12 +2,13 @@
 
 use std::{error::Error as StdError, io, net, result};
 
+use codec::{self};
 use crossbeam::channel::TrySendError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, metapb};
 use protobuf::ProtobufError;
 use thiserror::Error;
-use tikv_util::{codec, deadline::DeadlineError};
+use tikv_util::deadline::DeadlineError;
 
 use super::{coprocessor::Error as CopError, store::SnapError};
 

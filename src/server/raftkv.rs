@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use codec::number_v1::NumberEncoder;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
@@ -37,7 +38,7 @@ use raftstore::{
 };
 use thiserror::Error;
 use tikv_kv::write_modifies;
-use tikv_util::{codec::number::NumberEncoder, time::Instant};
+use tikv_util::time::Instant;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;

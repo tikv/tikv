@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 
+use codec::stream_event::EventEncoder;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
@@ -32,9 +33,7 @@ use raftstore::coprocessor::CmdBatch;
 use slog_global::debug;
 use tidb_query_datatype::codec::table::decode_table_id;
 use tikv_util::{
-    box_err,
-    codec::stream_event::EventEncoder,
-    error, info,
+    box_err, error, info,
     time::{Instant, Limiter},
     warn,
     worker::Scheduler,
@@ -1508,15 +1507,13 @@ struct TaskRange {
 mod tests {
     use std::{ffi::OsStr, marker::Unpin, time::Duration};
 
+    use codec::number_v1::NumberEncoder;
     use external_storage::NoopStorage;
     use futures::AsyncReadExt;
     use futures_io::AsyncRead;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
-    use tikv_util::{
-        codec::number::NumberEncoder,
-        worker::{dummy_scheduler, ReceiverWrapper},
-    };
-    use tokio::fs::File;
+    use tikv_util::worker::{dummy_scheduler, ReceiverWrapper};
+    use tokio::{fs::File, sync::Mutex};
     use txn_types::{Write, WriteType};
 
     use super::*;

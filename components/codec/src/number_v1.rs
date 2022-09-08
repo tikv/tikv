@@ -7,7 +7,7 @@ use std::{
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian, WriteBytesExt};
 
-use super::{BytesSlice, Error, Result};
+use super::{BytesSlice, ErrorInner, Result};
 
 const SIGN_MARK: u64 = 0x8000000000000000;
 pub const MAX_VAR_I64_LEN: usize = 10;
@@ -167,7 +167,7 @@ where
         *data = &data[size..];
         return Ok(f(buf));
     }
-    Err(Error::unexpected_eof())
+    Err(ErrorInner::eof().into())
 }
 
 /// Decodes value encoded by `encode_i64` before.
@@ -248,10 +248,7 @@ pub fn decode_var_u64(data: &mut BytesSlice<'_>) -> Result<u64> {
                 *data = unsafe { data.get_unchecked(10..) };
                 return Ok(res);
             }
-            return Err(Error::Io(io::Error::new(
-                ErrorKind::InvalidData,
-                "overflow",
-            )));
+            return Err(ErrorInner::Io(io::Error::new(ErrorKind::InvalidData, "overflow")).into());
         }
     }
 
@@ -265,7 +262,7 @@ pub fn decode_var_u64(data: &mut BytesSlice<'_>) -> Result<u64> {
             return Ok(res);
         }
     }
-    Err(Error::unexpected_eof())
+    Err(ErrorInner::eof().into())
 }
 
 /// Decodes value encoded by `encode_f64` before.
@@ -330,7 +327,7 @@ pub fn read_u8(data: &mut BytesSlice<'_>) -> Result<u8> {
         *data = &data[1..];
         Ok(v)
     } else {
-        Err(Error::unexpected_eof())
+        Err(ErrorInner::eof().into())
     }
 }
 
@@ -341,7 +338,7 @@ mod tests {
     use protobuf::CodedOutputStream;
 
     use super::*;
-    use crate::codec::Error;
+    use crate::{Error, ErrorInner};
 
     const U16_TESTS: &[u16] = &[
         i16::MIN as u16,
@@ -508,7 +505,7 @@ mod tests {
             #[allow(clippy::float_cmp)]
             mod $enc {
                 use super::{F64_TESTS, I64_TESTS, U16_TESTS, U32_TESTS, U64_TESTS};
-                use crate::codec::number::*;
+                use crate::number_v1::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
 
@@ -600,7 +597,10 @@ mod tests {
     macro_rules! check_error {
         ($e:expr, $k:expr) => {
             match $e {
-                Err(Error::Io(e)) => assert_eq!(e.kind(), $k),
+                Err(Error(io)) => match *io {
+                    ErrorInner::Io(err) => assert_eq!(err.kind(), $k),
+                    o => panic!("expect {:?}, got {:?}", $k, o),
+                },
                 o => panic!("expect {:?}, got {:?}", $k, o),
             }
         };

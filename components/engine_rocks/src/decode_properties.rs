@@ -8,8 +8,8 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use tikv_util::codec::{
-    number::{self, NumberEncoder},
+use codec::{
+    number_v1::{self, NumberEncoder},
     Result,
 };
 
@@ -63,12 +63,12 @@ impl IndexHandles {
     pub fn decode(mut buf: &[u8]) -> Result<IndexHandles> {
         let mut res = BTreeMap::new();
         while !buf.is_empty() {
-            let klen = number::decode_u64(&mut buf)?;
+            let klen = number_v1::decode_u64(&mut buf)?;
             let mut k = vec![0; klen as usize];
             buf.read_exact(&mut k)?;
             let v = IndexHandle {
-                size: number::decode_u64(&mut buf)?,
-                offset: number::decode_u64(&mut buf)?,
+                size: number_v1::decode_u64(&mut buf)?,
+                offset: number_v1::decode_u64(&mut buf)?,
             };
             res.insert(k, v);
         }
@@ -81,7 +81,7 @@ pub trait DecodeProperties {
 
     fn decode_u64(&self, k: &str) -> Result<u64> {
         let mut buf = self.decode(k)?;
-        number::decode_u64(&mut buf)
+        number_v1::decode_u64(&mut buf)
     }
 
     fn decode_handles(&self, k: &str) -> Result<IndexHandles> {
@@ -91,8 +91,8 @@ pub trait DecodeProperties {
 }
 
 impl DecodeProperties for rocksdb::UserCollectedProperties {
-    fn decode(&self, k: &str) -> tikv_util::codec::Result<&[u8]> {
+    fn decode(&self, k: &str) -> codec::Result<&[u8]> {
         self.get(k.as_bytes())
-            .ok_or(tikv_util::codec::Error::KeyNotFound)
+            .ok_or_else(|| codec::Error::from(codec::ErrorInner::KeyNotFound))
     }
 }

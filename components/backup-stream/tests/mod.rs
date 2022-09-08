@@ -20,6 +20,10 @@ use backup_stream::{
     router::Router,
     Endpoint, Task,
 };
+use codec::{
+    number_v1::NumberEncoder,
+    stream_event::{EventIterator, Iterator},
+};
 use futures::{executor::block_on, AsyncWriteExt, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{
@@ -33,15 +37,7 @@ use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
-use tikv_util::{
-    codec::{
-        number::NumberEncoder,
-        stream_event::{EventIterator, Iterator},
-    },
-    info,
-    worker::LazyWorker,
-    HandyRwLock,
-};
+use tikv_util::{info, worker::LazyWorker, HandyRwLock};
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 

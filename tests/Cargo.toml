@@ -72,6 +72,7 @@ api_version = { path = "../components/api_version", default-features = false }
 async-trait = "0.1"
 batch-system = { path = "../components/batch-system", default-features = false }
 cdc = { path = "../components/cdc", default-features = false }
+codec = { path = "../components/codec", default-features = false }
 collections = { path = "../components/collections" }
 crc64fast = "0.1"
 crossbeam = "0.8"
