@@ -32,7 +32,7 @@ static SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
 /// Everytime active memtable switched, this version should be increased.
 pub static VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
 //. Max sequence number that was synced and persisted.
-pub static SYNCED_MAX_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
+pub static MAX_SYNCED_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
 pub trait Notifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
