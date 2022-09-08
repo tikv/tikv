@@ -42,13 +42,12 @@ pub use self::{
         BatchComponent as RaftStoreBatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask,
     },
-    region::{
-        tests::make_raftstore_cfg as make_region_worker_raftstore_cfg, Runner as RegionRunner,
-        Task as RegionTask,
-    },
+    region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{
         Bucket, BucketRange, KeyEntry, Runner as SplitCheckRunner, Task as SplitCheckTask,
     },
     split_config::{SplitConfig, SplitConfigManager},
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
 };
+#[cfg(test)]
+use crate::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
