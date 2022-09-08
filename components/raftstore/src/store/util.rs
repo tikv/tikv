@@ -9,7 +9,7 @@ use std::{
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     u64,
 };
@@ -938,7 +938,7 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
-        for leader_info in leaders {
+        for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
                 if rp.consume_leader_info(leader_info, coprocessor) {
@@ -1083,14 +1083,14 @@ impl RegionReadProgress {
     // provided `LeaderInfo` is same as ours
     pub fn consume_leader_info<E: KvEngine>(
         &self,
-        mut leader_info: LeaderInfo,
+        leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
-            let rs = leader_info.take_read_state();
+            let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
                 if let Some(ts) = core.update_safe_ts(apply_index, ts) {
@@ -1111,23 +1111,11 @@ impl RegionReadProgress {
 
     // Dump the `LeaderInfo` and the peer list
     pub fn dump_leader_info(&self) -> (Vec<Peer>, LeaderInfo) {
-        let mut leader_info = LeaderInfo::default();
         let core = self.core.lock().unwrap();
-        let read_state = {
-            // Get the latest `read_state`
-            let ReadState { idx, ts } = core.pending_items.back().unwrap_or(&core.read_state);
-            let mut rs = kvrpcpb::ReadState::default();
-            rs.set_applied_index(*idx);
-            rs.set_safe_ts(*ts);
-            rs
-        };
-        let li = &core.leader_info;
-        leader_info.set_peer_id(li.leader_id);
-        leader_info.set_term(li.leader_term);
-        leader_info.set_region_id(core.region_id);
-        leader_info.set_region_epoch(li.epoch.clone());
-        leader_info.set_read_state(read_state);
-        (li.peers.clone(), leader_info)
+        (
+            core.get_local_leader_info().peers.clone(),
+            core.get_leader_info(),
+        )
     }
 
     pub fn update_leader_info(&self, peer_id: u64, term: u64, region: &Region) {
@@ -1173,10 +1161,15 @@ impl RegionReadProgress {
     pub fn resolved_ts(&self) -> u64 {
         self.safe_ts()
     }
+
+    // Dump the `LeaderInfo` and the peer list
+    pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
+        self.core.lock().unwrap()
+    }
 }
 
 #[derive(Debug)]
-struct RegionReadProgressCore {
+pub struct RegionReadProgressCore {
     tag: String,
     region_id: u64,
     applied_index: u64,
@@ -1222,6 +1215,14 @@ impl LocalLeaderInfo {
             epoch: region.get_region_epoch().clone(),
             peers: region.get_peers().to_vec(),
         }
+    }
+
+    pub fn get_peers(&self) -> &[Peer] {
+        &self.peers
+    }
+
+    pub fn get_leader_id(&self) -> u64 {
+        self.leader_id
     }
 }
 
@@ -1335,6 +1336,29 @@ impl RegionReadProgressCore {
             });
         }
         self.pending_items.push_back(item);
+    }
+
+    pub fn get_leader_info(&self) -> LeaderInfo {
+        let mut leader_info = LeaderInfo::default();
+        let read_state = {
+            // Get the latest `read_state`
+            let ReadState { idx, ts } = self.pending_items.back().unwrap_or(&self.read_state);
+            let mut rs = kvrpcpb::ReadState::default();
+            rs.set_applied_index(*idx);
+            rs.set_safe_ts(*ts);
+            rs
+        };
+        let li = &self.leader_info;
+        leader_info.set_peer_id(li.leader_id);
+        leader_info.set_term(li.leader_term);
+        leader_info.set_region_id(self.region_id);
+        leader_info.set_region_epoch(li.epoch.clone());
+        leader_info.set_read_state(read_state);
+        leader_info
+    }
+
+    pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
+        &self.leader_info
     }
 }
 
