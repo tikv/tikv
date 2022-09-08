@@ -21,7 +21,7 @@ use tikv_util::{
     },
     info,
 };
-use txn_types::{Key, TimeStamp, Write, WriteType};
+use txn_types::{Key, Write, WriteType};
 
 use crate::{
     decode_properties::{DecodeProperties, IndexHandle, IndexHandles},
@@ -396,6 +396,7 @@ pub struct MvccPropertiesCollector {
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
     key_mode: KeyMode,
+    current_ts: u64,
 }
 
 impl MvccPropertiesCollector {
@@ -408,6 +409,7 @@ impl MvccPropertiesCollector {
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
             key_mode: KeyMode::Txn,
+            current_ts: ttl_current_ts(),
         }
     }
 
@@ -420,6 +422,7 @@ impl MvccPropertiesCollector {
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
             key_mode,
+            current_ts: ttl_current_ts(),
         }
     }
 }
@@ -438,32 +441,13 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             return;
         }
 
-        let current_ts = ttl_current_ts();
-
-        let k: &[u8];
-        let ts: TimeStamp;
-        if self.key_mode == KeyMode::Raw {
-            let key_mode = ApiV2::parse_key_mode(keys::origin_key(key));
-            if key_mode != KeyMode::Raw {
+        let (k, ts) = match Key::split_on_ts_for(key) {
+            Ok((k, ts)) => (k, ts),
+            Err(_) => {
+                self.num_errors += 1;
                 return;
             }
-
-            (k, ts) = match ApiV2::split_ts(key) {
-                Ok((k, ts)) => (k, ts),
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-        } else {
-            (k, ts) = match Key::split_on_ts_for(key) {
-                Ok((k, ts)) => (k, ts),
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-        }
+        };
 
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
@@ -488,11 +472,17 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 
         if self.key_mode == KeyMode::Raw {
             let decode_raw_value = ApiV2::decode_raw_value(value);
-            if let Ok(raw_value) = decode_raw_value {
-                if raw_value.is_valid(current_ts) {
-                    self.props.num_puts += 1;
-                } else {
-                    self.props.num_deletes += 1;
+            match decode_raw_value {
+                Ok(raw_value) => {
+                    if raw_value.is_valid(self.current_ts) {
+                        self.props.num_puts += 1;
+                    } else {
+                        self.props.num_deletes += 1;
+                    }
+                }
+                Err(_) => {
+                    self.num_errors += 1;
+                    return;
                 }
             }
         } else {
