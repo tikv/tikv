@@ -507,7 +507,8 @@ impl Peer {
             ..Default::default()
         };
 
-        let logger = slog_global::get_global().new(slog::o!("region" => ps.tag()));
+        let region_tag = format!("[{}:{}:]", store_id, region.clone().get_id());
+        let logger = slog_global::get_global().new(slog::o!("region" => region_tag));
         let raft_group = RawNode::new(&raft_cfg, ps, &logger)?;
 
         let mut peer = Peer {
