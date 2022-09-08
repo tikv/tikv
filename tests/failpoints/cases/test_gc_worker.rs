@@ -7,13 +7,18 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{Peekable, WriteBatch};
+use engine_test::{
+    ctor::{CfOptions, DbOptions},
+    kv::TestTabletFactory,
+};
+use engine_traits::{Peekable, WriteBatch, ALL_CFS};
 use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
 use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
+use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
     server::gc_worker::{
@@ -438,15 +443,32 @@ fn init_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) {
 
     let sim = cluster.sim.rl();
     let gc_worker = sim.get_gc_worker(store_id);
+<<<<<<< HEAD
+=======
+    let kv_engine = cluster.get_engine(store_id);
+    // Building a tablet factory
+    let ops = DbOptions::default();
+    let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+    let path = Builder::new()
+        .prefix("test_gc_keys_with_region_info_provider")
+        .tempdir()
+        .unwrap();
+
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
     gc_worker
         .start_auto_gc(
 <<<<<<< HEAD
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
 =======
             &kv_engine,
+<<<<<<< HEAD
             AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1, None),
 >>>>>>> d05ffa40a (*: address comments and use clean interfaces)
+=======
+            AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
             Arc::new(AtomicU64::new(0)),
+            Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
         )
         .unwrap();
 }

@@ -7,6 +7,11 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
+use engine_test::{
+    ctor::{CfOptions, DbOptions},
+    kv::TestTabletFactory,
+};
+use engine_traits::ALL_CFS;
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
@@ -16,6 +21,7 @@ use raftstore::{
     coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider},
     router::RaftStoreBlackHole,
 };
+use tempfile::Builder;
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -140,8 +146,24 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         &mut self,
         cfg: AutoGcConfig<S, R>,
     ) {
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new()
+            .prefix("test_gc_keys_with_region_info_provider")
+            .tempdir()
+            .unwrap();
         self.gc_worker
+<<<<<<< HEAD
             .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
+=======
+            .start_auto_gc(
+                kv_engine,
+                cfg,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+            )
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
             .unwrap();
     }
 

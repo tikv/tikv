@@ -52,7 +52,6 @@ const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 // these fields are not available when constructing
 // `WriteCompactionFilterFactory`.
 pub struct GcContext {
-    pub(crate) db: RocksEngine,
     pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
     pub(crate) cfg_tracker: GcWorkerConfigManager,
@@ -61,7 +60,7 @@ pub struct GcContext {
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
-    pub(crate) tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+    pub(crate) tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -153,7 +152,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     );
 }
 
@@ -169,7 +168,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
-        _tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+        _tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -184,12 +183,11 @@ impl CompactionFilterInitializer<RocksEngine> for RocksEngine {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
+        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
         *gc_context = Some(GcContext {
-            db: self.clone(),
             store_id,
             safe_point,
             cfg_tracker,
@@ -210,10 +208,9 @@ pub fn get_rocksdb_from_factory(region_id: u64, suffix: u64) -> engine_traits::R
         None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
     };
 
-    match &gc_context.tablet_factory {
-        Some(factory) => factory.open_tablet(region_id, Some(suffix), OpenOptions::default()),
-        None => Ok(gc_context.db.clone()),
-    }
+    gc_context
+        .tablet_factory
+        .open_tablet(region_id, Some(suffix), OpenOptions::default())
 }
 
 pub struct WriteCompactionFilterFactory {
@@ -771,8 +768,13 @@ pub mod test_utils {
         util::get_cf_handle,
         RocksEngine,
     };
-    use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+        kv::TestTabletFactory,
+    };
+    use engine_traits::{SyncMutable, ALL_CFS, CF_DEFAULT, CF_WRITE};
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
+    use tempfile::Builder;
     use tikv_util::{
         config::VersionTrack,
         worker::{dummy_scheduler, ReceiverWrapper},
@@ -836,7 +838,7 @@ pub mod test_utils {
             self
         }
 
-        fn prepare_gc(&self, engine: &RocksEngine) {
+        fn prepare_gc(&self, _engine: &RocksEngine) {
             let safe_point = Arc::new(AtomicU64::new(self.safe_point));
             let cfg_tracker = {
                 let mut cfg = GcConfig::default();
@@ -853,8 +855,11 @@ pub mod test_utils {
             };
 
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
+            // Building a tablet factory
+            let ops = DbOptions::default();
+            let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+            let path = Builder::new().prefix("prepare_gc").tempdir().unwrap();
             *gc_context_opt = Some(GcContext {
-                db: engine.clone(),
                 store_id: 1,
                 safe_point,
                 cfg_tracker,
@@ -862,7 +867,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                tablet_factory: None,
+                tablet_factory: Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
             });
         }
 

@@ -15,10 +15,10 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
+use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    TabletFactory, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -1270,6 +1270,7 @@ where
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>, // Store safe point here.
+        tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Send + Sync>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1284,7 +1285,7 @@ where
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
-            cfg.tablet_factory.clone(),
+            tablet_factory,
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -1634,7 +1635,21 @@ mod tests {
 
     use api_version::{ApiV2, KvFormat, RawValue};
     use engine_rocks::{util::get_cf_handle, RocksEngine};
+<<<<<<< HEAD
     use engine_traits::Peekable as _;
+=======
+    use engine_test::{
+        ctor::{CfOptions, DbOptions},
+<<<<<<< HEAD
+        kv::TestTabletFactoryV2,
+    };
+    use engine_traits::{OpenOptions, TabletFactory, ALL_CFS};
+=======
+        kv::TestTabletFactory,
+    };
+    use engine_traits::ALL_CFS;
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
+>>>>>>> 99ee97858 (*: remove unnecessary db field of GC_Context)
     use futures::executor::block_on;
     use kvproto::{
         kvrpcpb::{ApiVersion, Op},
@@ -2082,9 +2097,29 @@ mod tests {
         r3.mut_peers().push(Peer::default());
         r3.mut_peers()[0].set_store_id(store_id);
 
-        let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1, None);
+        let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
+<<<<<<< HEAD
         gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
+=======
+        let kv_engine = engine.get_rocksdb();
+        // Building a tablet factory
+        let ops = DbOptions::default();
+        let cf_opts = ALL_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
+        let path = Builder::new()
+            .prefix("test_gc_keys_with_region_info_provider")
+            .tempdir()
+            .unwrap();
+
+        gc_worker
+            .start_auto_gc(
+                &kv_engine,
+                auto_gc_cfg,
+                safe_point,
+                Arc::new(TestTabletFactory::new(path.path(), ops, cf_opts)),
+            )
+            .unwrap();
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);

@@ -1060,7 +1060,6 @@ where
             self.pd_client.clone(),
             self.region_info_accessor.clone(),
             node.id(),
-            self.tablet_factory.clone(),
         );
         gc_worker
             .start(node.id())
@@ -1071,7 +1070,18 @@ where
                 self.concurrency_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
+<<<<<<< HEAD
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+=======
+        // table_factory of TiKvServer won't be None
+        assert!(self.tablet_factory.is_some());
+        if let Err(e) = gc_worker.start_auto_gc(
+            &engines.engines.kv,
+            auto_gc_config,
+            safe_point,
+            self.tablet_factory.as_ref().unwrap().clone(),
+        ) {
+>>>>>>> 4869d8714 (*: remove unnecessary db field of GC_Context)
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
