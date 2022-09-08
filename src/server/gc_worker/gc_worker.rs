@@ -1536,9 +1536,9 @@ pub mod test_gc_worker {
 
         fn modify_on_kv_engine(
             &self,
-            mut region_modifies: HashMap<u64, Vec<Modify>>,
+            region_modifies: HashMap<u64, Vec<Modify>>,
         ) -> kv::Result<()> {
-            for modifies in region_modifies.values_mut() {
+            for (region_id, mut modifies) in region_modifies {
                 for modify in modifies.iter_mut() {
                     match modify {
                         Modify::Delete(_, ref mut key) => {
@@ -1561,8 +1561,7 @@ pub mod test_gc_worker {
                         }
                     }
                 }
-            }
-            for (region_id, modifies) in region_modifies {
+
                 let tablet = self
                     .factory
                     .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
@@ -1677,8 +1676,8 @@ mod tests {
             txn::{
                 commands,
                 tests::{
-                    must_commit, must_commit_v2, must_gc, must_prewrite_delete,
-                    must_prewrite_delete_v2, must_prewrite_put, must_prewrite_put_v2,
+                    must_commit, must_commit_on_region, must_gc, must_prewrite_delete,
+                    must_prewrite_delete_on_region, must_prewrite_put, must_prewrite_put_on_region,
                     must_rollback,
                 },
             },
@@ -2632,10 +2631,10 @@ mod tests {
                 region_id += 1;
             }
             let k = format!("k{:02}", i).into_bytes();
-            must_prewrite_put_v2(&engine, region_id, &k, b"value", &k, 101);
-            must_commit_v2(&engine, region_id, &k, 101, 102);
-            must_prewrite_delete_v2(&engine, region_id, &k, &k, 151);
-            must_commit_v2(&engine, region_id, &k, 151, 152);
+            must_prewrite_put_on_region(&engine, region_id, &k, b"value", &k, 101);
+            must_commit_on_region(&engine, region_id, &k, 101, 102);
+            must_prewrite_delete_on_region(&engine, region_id, &k, &k, 151);
+            must_commit_on_region(&engine, region_id, &k, 151, 152);
         }
 
         (factory, engine, ri_provider, gc_runner, vec![r1, r2, r3])

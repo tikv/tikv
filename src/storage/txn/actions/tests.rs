@@ -189,7 +189,7 @@ pub fn must_prewrite_put<E: Engine>(
     );
 }
 
-pub fn must_prewrite_put_v2<E: Engine>(
+pub fn must_prewrite_put_on_region<E: Engine>(
     engine: &E,
     region_id: u64,
     key: &[u8],
@@ -691,7 +691,7 @@ pub fn must_prewrite_delete<E: Engine>(
     );
 }
 
-pub fn must_prewrite_delete_v2<E: Engine>(
+pub fn must_prewrite_delete_on_region<E: Engine>(
     engine: &E,
     region_id: u64,
     key: &[u8],

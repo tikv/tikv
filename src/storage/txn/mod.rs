@@ -239,7 +239,7 @@ pub mod tests {
         },
         commit::tests::{
             must_err as must_commit_err, must_succeed as must_commit,
-            must_succeed_v2 as must_commit_v2,
+            must_succeed_on_region as must_commit_on_region,
         },
         gc::tests::must_succeed as must_gc,
         prewrite::tests::{

@@ -136,7 +136,7 @@ pub mod tests {
         must_succeed_impl(engine, key, start_ts, commit_ts, None);
     }
 
-    pub fn must_succeed_v2<E: Engine>(
+    pub fn must_succeed_on_region<E: Engine>(
         engine: &E,
         region_id: u64,
         key: &[u8],
