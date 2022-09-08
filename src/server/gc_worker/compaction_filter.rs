@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 
-use api_version::KeyMode;
 use engine_rocks::{
     raw::{
         new_compaction_filter_raw, CompactionFilter, CompactionFilterContext,
@@ -251,7 +250,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
             .inc();
-        if !check_need_gc(safe_point.into(), ratio_threshold, context, KeyMode::Txn) {
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_TXN_KEYMODE])
@@ -683,7 +682,6 @@ pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
     context: &CompactionFilterContext,
-    key_mode: KeyMode,
 ) -> bool {
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         if props.min_ts > safe_point {
@@ -701,15 +699,11 @@ pub fn check_need_gc(
             return (true, false);
         }
 
-        if key_mode == KeyMode::Txn || key_mode == KeyMode::Tidb {
-            // When comparing `num_versions` with `num_puts`, trait internal levels
-            // specially because MVCC-deletion marks can't be handled at those
-            // levels.
-            let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
-            if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
-                return (true, false);
-            }
-        } else if props.num_deletes as f64 > props.num_puts as f64 * ratio_threshold {
+        // When comparing `num_versions` with `num_puts`, trait internal levels
+        // specially because MVCC-deletion marks can't be handled at those
+        // levels.
+        let num_rollback_and_locks = (props.num_versions - props.num_deletes) as f64;
+        if num_rollback_and_locks > props.num_puts as f64 * ratio_threshold {
             return (true, false);
         }
 

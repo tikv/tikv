@@ -86,7 +86,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             .with_label_values(&[STAT_RAW_KEYMODE])
             .inc();
 
-        if !check_need_gc(safe_point.into(), ratio_threshold, context, KeyMode::Raw) {
+        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])
