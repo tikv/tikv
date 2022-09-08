@@ -1771,6 +1771,7 @@ where
                 "cache_first_index" => first_index,
                 "low" => low,
                 "ents_len" => ents_len,
+                "context" => ?context,
             );
             self.fsm.peer.raft_group.on_entries_fetched(context);
             // clean the async fetch result immediately if not used to free memory
@@ -5105,6 +5106,7 @@ where
         }
 
         // Find why cache is gced.
+        // Some peers may currently not connected.
         if alive_cache_idx > replicated_idx {
             warn!(
                 "(this_pr) compact entry cache, alive cache idx > replicated idx";
@@ -5112,12 +5114,13 @@ where
                 "replicated_idx" => replicated_idx,
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "drop_cache_duration" => ?drop_cache_duration,
+                // "drop_cache_duration" => ?drop_cache_duration,
 
                 "applied_index" => applied_idx,
                 "first_index" => first_idx,
                 "last_index" => last_idx,
                 "truncated_index" => truncated_idx,
+                "cache_first_index" => self.fsm.peer.get_store().entry_cache_first_index().unwrap_or(0),
             );
 
             for (peer_id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
@@ -5216,6 +5219,12 @@ where
             request,
             Callback::None,
             DiskFullOpt::AllowedOnAlmostFull,
+        );
+        info!(
+            "(this_pr) compact log";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "compact_idx" => compact_idx,
         );
 
         self.fsm.skip_gc_raft_log_ticks = 0;

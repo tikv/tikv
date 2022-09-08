@@ -869,6 +869,15 @@ impl<ER: RaftEngine> EntryStorage<ER> {
                 self.async_fetch(self.region_id, low, high, max_size, context, &mut ents)?;
                 Ok(ents)
             } else {
+                info!(
+                    "(this_pr) sync fetch";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer_id,
+                    "low" => low,
+                    "cache_low" => cache_low,
+                    "high" => high,
+                    "context" => ?context,
+                );
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
@@ -885,6 +894,15 @@ impl<ER: RaftEngine> EntryStorage<ER> {
             let fetched_count = if context.can_async() {
                 self.async_fetch(self.region_id, low, cache_low, max_size, context, &mut ents)?
             } else {
+                info!(
+                    "(this_pr) sync fetch";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer_id,
+                    "low" => low,
+                    "cache_low" => cache_low,
+                    "high" => high,
+                    "context" => ?context,
+                );
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
