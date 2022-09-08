@@ -50,4 +50,4 @@ pub use self::{
     split_controller::{AutoSplitController, ReadStats, SplitConfigChange, WriteStats},
 };
 #[cfg(test)]
-use crate::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
+use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
