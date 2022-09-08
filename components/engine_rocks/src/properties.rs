@@ -538,7 +538,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
-/// Can be used for write/default CF.
+/// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
