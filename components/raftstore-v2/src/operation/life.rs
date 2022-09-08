@@ -36,7 +36,7 @@ use crate::{
 pub enum DestroyProgress {
     /// Alive means destroy is not triggered at all. It's the same as None for
     /// `Option<DestroyProgress>`. Not using Option to avoid unwrap everywhere.
-    Alive,
+    None,
     /// If the destroy is triggered by message, then the message will be used
     /// for creating new peer immediately.
     WaitReady(Option<Box<RaftMessage>>),
@@ -69,7 +69,7 @@ impl DestroyProgress {
     #[inline]
     fn wait_with(&mut self, triggered_msg: Option<Box<RaftMessage>>) {
         match self {
-            DestroyProgress::Alive => *self = DestroyProgress::WaitReady(triggered_msg),
+            DestroyProgress::None => *self = DestroyProgress::WaitReady(triggered_msg),
             _ => panic!("must be alive to wait"),
         }
     }

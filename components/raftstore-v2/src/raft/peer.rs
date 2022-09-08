@@ -88,7 +88,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             peer_cache: vec![],
             async_writer: AsyncWriter::new(region_id, peer_id),
             has_ready: false,
-            destroy_progress: DestroyProgress::Alive,
+            destroy_progress: DestroyProgress::None,
             logger,
         };
 
@@ -242,7 +242,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     #[inline]
     pub fn serving(&self) -> bool {
-        matches!(self.destroy_progress, DestroyProgress::Alive)
+        matches!(self.destroy_progress, DestroyProgress::None)
     }
 
     #[inline]
