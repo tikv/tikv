@@ -504,8 +504,7 @@ where
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            let (_, seqno) = self.write_to_db();
-            if let Some(seqno) = seqno {
+            if let (_, Some(seqno)) = self.write_to_db() {
                 delegate.last_write_seqno.push(seqno);
                 let count = self.uncommitted_res_count;
                 for res in self.apply_res.iter_mut().rev().take(count) {
@@ -546,14 +545,14 @@ where
             write_opts.set_sync(need_sync);
             write_opts.set_disable_wal(self.disable_wal);
             if self.disable_wal {
-                let sn = SequenceNumber::start();
+                let sn = SequenceNumber::pre_write();
                 seqno = Some(sn);
             }
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
             if let Some(seqno) = seqno.as_mut() {
-                seqno.end(seq)
+                seqno.post_write(seq)
             }
             let trackers: Vec<_> = self
                 .applied_batch

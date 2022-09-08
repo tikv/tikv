@@ -28,13 +28,15 @@ pub fn check_key_in_range(
     }
 }
 
-static SEQUENCE_NUMBER_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+/// An auxiliary counter to determine write order. Unlike sequence number, it is
+/// guaranteed to be allocated contiguously.
+static WRITE_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
 /// Everytime active memtable switched, this version should be increased.
-pub static VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
-//. Max sequence number that was synced and persisted.
+pub static MEMTABLE_VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+/// Max sequence number that was synced and persisted.
 pub static MAX_SYNCED_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
 
-pub trait Notifier: Send {
+pub trait MemtableEventNotifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
     fn notify_memtable_flushed(&self, seqno: u64);
 }
@@ -45,7 +47,7 @@ pub struct SequenceNumber {
     // Version is actually the counter of memtables flushed. Once the version increased, indicates
     // a memtable was flushed, then relations of a region buffered in memory could be merged into
     // one and persisted into raftdb.
-    version: u64,
+    memtable_version: u64,
     // start_counter is an identity of a write. It's used to check if all seqno of writes were
     // received in the receiving end.
     start_counter: u64,
@@ -56,18 +58,18 @@ pub struct SequenceNumber {
 }
 
 impl SequenceNumber {
-    pub fn start() -> Self {
+    pub fn pre_write() -> Self {
         SequenceNumber {
             number: 0,
-            start_counter: SEQUENCE_NUMBER_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
+            start_counter: WRITE_COUNTER_ALLOCATOR.fetch_add(1, Ordering::SeqCst) + 1,
             end_counter: 0,
-            version: 0,
+            memtable_version: 0,
         }
     }
 
-    pub fn end(&mut self, number: u64) {
+    pub fn post_write(&mut self, number: u64) {
         self.number = number;
-        self.end_counter = SEQUENCE_NUMBER_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
+        self.end_counter = WRITE_COUNTER_ALLOCATOR.load(Ordering::SeqCst);
     }
 
     pub fn max(left: Self, right: Self) -> Self {
@@ -82,13 +84,14 @@ impl SequenceNumber {
     }
 
     pub fn get_version(&self) -> u64 {
-        self.version
+        self.memtable_version
     }
 }
 
 /// Receive all seqno and their counters, check the last committed seqno (a
-/// seqno is considered committed if all seqno before it was received), and
-/// return the largest sequence number received.
+/// seqno is considered committed if all `start_counter` before its
+/// `end_counter` was received), and return the largest sequence number
+/// received.
 #[derive(Default)]
 pub struct SequenceNumberWindow {
     // The sequence number doesn't be received in order, we need a buffer to
@@ -165,18 +168,18 @@ mod tests {
     #[test]
     fn test_sequence_number_window() {
         let mut window = SequenceNumberWindow::default();
-        let mut sn1 = SequenceNumber::start();
-        sn1.end(1);
+        let mut sn1 = SequenceNumber::pre_write();
+        sn1.post_write(1);
         window.push(sn1);
         assert_eq!(window.committed_seqno(), 1);
-        let mut sn2 = SequenceNumber::start();
-        let mut sn3 = SequenceNumber::start();
-        let mut sn4 = SequenceNumber::start();
-        let mut sn5 = SequenceNumber::start();
-        sn5.end(3);
-        sn2.end(5);
-        sn3.end(2);
-        sn4.end(4);
+        let mut sn2 = SequenceNumber::pre_write();
+        let mut sn3 = SequenceNumber::pre_write();
+        let mut sn4 = SequenceNumber::pre_write();
+        let mut sn5 = SequenceNumber::pre_write();
+        sn5.post_write(3);
+        sn2.post_write(5);
+        sn3.post_write(2);
+        sn4.post_write(4);
         window.push(sn2);
         assert_eq!(window.committed_seqno(), 1);
         window.push(sn5);
@@ -185,12 +188,12 @@ mod tests {
         assert_eq!(window.committed_seqno(), 1);
         window.push(sn4);
         assert_eq!(window.committed_seqno(), 5);
-        let mut sn6 = SequenceNumber::start();
-        let mut sn7 = SequenceNumber::start();
-        sn6.end(7);
-        sn7.end(6);
-        let mut sn8 = SequenceNumber::start();
-        sn8.end(8);
+        let mut sn6 = SequenceNumber::pre_write();
+        let mut sn7 = SequenceNumber::pre_write();
+        sn6.post_write(7);
+        sn7.post_write(6);
+        let mut sn8 = SequenceNumber::pre_write();
+        sn8.post_write(8);
         window.push(sn6);
         assert_eq!(window.committed_seqno(), 5);
         window.push(sn7);
@@ -211,8 +214,8 @@ mod tests {
                     let tx = tx.clone();
                     std::thread::spawn(move || {
                         for _ in 0..count {
-                            let mut sn = SequenceNumber::start();
-                            sn.end(allocator.fetch_add(1, Ordering::AcqRel));
+                            let mut sn = SequenceNumber::pre_write();
+                            sn.post_write(allocator.fetch_add(1, Ordering::AcqRel));
                             tx.send(sn).unwrap();
                         }
                     })
