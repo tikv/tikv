@@ -269,6 +269,11 @@ pub trait Engine: Send + Clone + 'static {
     /// Local storage engine.
     fn kv_engine(&self) -> Self::Local;
 
+    // todo(SpadeA): to be removed
+    fn tmp_kv_engine(&self) -> Option<Self::Local> {
+        Some(self.kv_engine())
+    }
+
     /// Write modifications into internal local engine directly.
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
 

@@ -710,20 +710,20 @@ where
         self.flow_info_sender
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
-        let local_storage = self.engine.kv_engine();
 
-        // Convert keys to RocksDB layer form
-        // TODO: Logic coupled with raftstore's implementation. Maybe better design is
-        // to do it in somewhere of the same layer with apply_worker.
-        let start_data_key = keys::data_key(start_key.as_encoded());
-        let end_data_key = keys::data_end_key(end_key.as_encoded());
+        if let Some(local_storage) = self.engine.tmp_kv_engine() {
+            // Convert keys to RocksDB layer form
+            // TODO: Logic coupled with raftstore's implementation. Maybe better design is
+            // to do it in somewhere of the same layer with apply_worker.
+            let start_data_key = keys::data_key(start_key.as_encoded());
+            let end_data_key = keys::data_end_key(end_key.as_encoded());
 
-        let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
+            let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
-        // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
-        let delete_files_start_time = Instant::now();
-        for cf in cfs {
-            local_storage
+            // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
+            let delete_files_start_time = Instant::now();
+            for cf in cfs {
+                local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteFiles,
@@ -734,30 +734,30 @@ where
                     warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
                     e
                 })?;
-        }
+            }
 
-        info!(
-            "unsafe destroy range finished deleting files in range";
-            "start_key" => %start_key, "end_key" => %end_key,
-            "cost_time" => ?delete_files_start_time.saturating_elapsed(),
-        );
+            info!(
+                "unsafe destroy range finished deleting files in range";
+                "start_key" => %start_key, "end_key" => %end_key,
+                "cost_time" => ?delete_files_start_time.saturating_elapsed(),
+            );
 
-        // Then, delete all remaining keys in the range.
-        let cleanup_all_start_time = Instant::now();
-        for cf in cfs {
-            // TODO: set use_delete_range with config here.
-            local_storage
-                .delete_ranges_cf(
-                    cf,
-                    DeleteStrategy::DeleteByKey,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
-                    e
-                })?;
-            local_storage
+            // Then, delete all remaining keys in the range.
+            let cleanup_all_start_time = Instant::now();
+            for cf in cfs {
+                // TODO: set use_delete_range with config here.
+                local_storage
+                    .delete_ranges_cf(
+                        cf,
+                        DeleteStrategy::DeleteByKey,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_all_in_range_cf"; "err" => ?e);
+                        e
+                    })?;
+                local_storage
                 .delete_ranges_cf(
                     cf,
                     DeleteStrategy::DeleteBlobs,
@@ -768,12 +768,15 @@ where
                     warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
                     e
                 })?;
+            }
+
+            info!(
+                "unsafe destroy range finished cleaning up all";
+                "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
+            );
+        } else {
         }
 
-        info!(
-            "unsafe destroy range finished cleaning up all";
-            "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_start_time.saturating_elapsed(),
-        );
         self.flow_info_sender
             .send(FlowInfo::AfterUnsafeDestroyRange(ctx.region_id))
             .unwrap();
