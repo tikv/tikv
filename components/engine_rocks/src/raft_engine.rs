@@ -8,7 +8,9 @@ use engine_traits::{
 };
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -150,6 +152,10 @@ impl RaftEngineReadOnly for RocksEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         let key = keys::apply_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
     }
 }
 
@@ -363,6 +369,10 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    }
+
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 
