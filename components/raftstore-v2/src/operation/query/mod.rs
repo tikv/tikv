@@ -183,7 +183,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         util::check_region_epoch(msg, self.region(), true)
     }
 
-    // Returns a boolean to indicate whether the `read` is proposed or not.
     // For these cases it won't be proposed:
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
@@ -270,7 +269,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             if is_read_index_request {
                 self.respond_read_index(&mut read, ctx);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                self.respond_replica_read_index(&mut read, ctx);
+                self.respond_replica_read(&mut read, ctx);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads_mut().push_front(read);

@@ -29,7 +29,7 @@ use crate::{
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// read index on follower
     ///
-    /// return true if it's proposed.
+    /// call set_has_ready if it's proposed.
     pub(crate) fn read_index_follower<T: Transport>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -66,7 +66,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.set_has_ready();
     }
 
-    pub(crate) fn respond_replica_read_index<T>(
+    pub(crate) fn respond_replica_read<T>(
         &self,
         read_index_req: &mut ReadIndexRequest<QueryResChannel>,
         ctx: &mut StoreContext<EK, ER, T>,
