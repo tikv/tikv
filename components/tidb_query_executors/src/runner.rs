@@ -441,8 +441,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         loop {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
-            let start = Instant::now();
-            let (drained, record_len) = {
+            let (exec_duration, (drained, record_len)) = {
                 let (cpu_time, res) = sample
                     .observe_cpu_async(self.internal_handle_request(
                         false,
@@ -452,10 +451,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         &mut ctx,
                     ))
                     .await;
-                sample.add_cpu_time(cpu_time);
-                res?
+                (cpu_time, res?)
             };
-            let exec_duration = start.saturating_elapsed();
+            sample.add_cpu_time(exec_duration);
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
             }
