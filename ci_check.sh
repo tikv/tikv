@@ -21,6 +21,8 @@ elif [[ $M == "testold" ]]; then
     cargo test --features compat_old_proxy --package tests --test failpoints cases::test_import_service
     cargo test --features compat_old_proxy --package tests --test failpoints cases::test_proxy_replica_read
 elif [[ $M == "testnew" ]]; then
+    export ENGINE_LABEL_VALUE=tiflash
+    export RUST_BACKTRACE=full
     # tests based on new-mock-engine-store, with compat for new proxy
     cargo test --package tests --test proxy normal::store
     cargo test --package tests --test proxy normal::region
@@ -33,5 +35,9 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package tests --test proxy proxy
 elif [[ $M == "debug" ]]; then
     # export RUSTC_WRAPPER=~/.cargo/bin/sccache
-     make debug
+    export ENGINE_LABEL_VALUE=tiflash
+    make debug
+elif [[ $M == "release" ]]; then
+    export ENGINE_LABEL_VALUE=tiflash
+    make release
 fi
