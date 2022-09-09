@@ -360,7 +360,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             let key_manager = self.key_managers.last().unwrap().clone();
             let node_id = {
                 let mut sim = self.sim.wl();
-                let mut cfg = self.cfg.clone();
+                let cfg = self.cfg.clone();
                 // Like TiKVServer::init
                 sim.run_node(
                     0,

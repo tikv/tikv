@@ -155,7 +155,7 @@ pub fn must_get_mem(
     key: &[u8],
     value: Option<&[u8]>,
 ) {
-    let mut last_res: Option<&Vec<u8>> = None;
+    let last_res: Option<&Vec<u8>> = None;
     let cf = new_mock_engine_store::ffi_interfaces::ColumnFamilyType::Default;
     for _ in 1..300 {
         let res = engine_store_server.get_mem(region_id, cf, &key.to_vec());

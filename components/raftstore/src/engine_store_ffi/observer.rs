@@ -600,6 +600,11 @@ fn retrieve_sst_files(snap: &crate::store::Snapshot) -> Vec<(PathBuf, ColumnFami
         }
         // We have only one file for each cf for now.
         let mut full_paths = cf_file.file_paths();
+        if full_paths.len() != 1 {
+            tikv_util::warn!("observe multi-file snapshot";
+                "snap" => ?snap
+            );
+        }
         assert!(full_paths.len() != 0);
         {
             ssts.push((full_paths.remove(0), name_to_cf(cf_file.cf)));

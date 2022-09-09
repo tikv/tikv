@@ -101,7 +101,12 @@ impl Transport for ChannelTransport {
                 Some(p) => {
                     p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
-                    p.0.get_snapshot_for_receiving(&key, data).unwrap()
+                    match p.0.get_snapshot_for_receiving(&key, data) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(box_err!("bad snapshot {:?}", e));
+                        }
+                    }
                 }
                 None => return Err(box_err!("missing temp dir for store {}", to_store)),
             };
@@ -271,6 +276,8 @@ impl Simulator<TiFlashEngine> for NodeCluster {
                 .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
+                .enable_multi_snapshot_files(true)
+                .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
