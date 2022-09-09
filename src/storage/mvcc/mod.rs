@@ -11,7 +11,7 @@ pub(super) mod txn;
 use std::{error, io};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use kvproto::kvrpcpb::{Assertion, IsolationLevel};
+use kvproto::kvrpcpb::{self, Assertion, IsolationLevel};
 use thiserror::Error;
 use tikv_util::{metrics::CRITICAL_ERROR, panic_when_unexpected_key_or_data, set_panic_mark};
 pub use txn_types::{
@@ -83,9 +83,9 @@ pub enum ErrorInner {
     },
 
     #[error(
-        "write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}",
+        "write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{}, primary:{}, reason: {:?}",
         .start_ts, .conflict_start_ts, .conflict_commit_ts,
-        log_wrappers::Value::key(.key), log_wrappers::Value::key(.primary)
+        log_wrappers::Value::key(.key), log_wrappers::Value::key(.primary), .reason
     )]
     WriteConflict {
         start_ts: TimeStamp,
@@ -93,6 +93,7 @@ pub enum ErrorInner {
         conflict_commit_ts: TimeStamp,
         key: Vec<u8>,
         primary: Vec<u8>,
+        reason: kvrpcpb::WriteConflictReason,
     },
 
     #[error(
@@ -203,12 +204,14 @@ impl ErrorInner {
                 conflict_commit_ts,
                 key,
                 primary,
+                reason,
             } => Some(ErrorInner::WriteConflict {
                 start_ts: *start_ts,
                 conflict_start_ts: *conflict_start_ts,
                 conflict_commit_ts: *conflict_commit_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
+                reason: reason.to_owned(),
             }),
             ErrorInner::Deadlock {
                 start_ts,
@@ -348,12 +351,14 @@ impl From<txn_types::Error> for ErrorInner {
                 conflict_commit_ts,
                 key,
                 primary,
+                reason,
             }) => ErrorInner::WriteConflict {
                 start_ts,
                 conflict_start_ts,
                 conflict_commit_ts,
                 key,
                 primary,
+                reason,
             },
         }
     }

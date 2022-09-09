@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::IsolationLevel;
+use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -274,6 +274,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
                             conflict_commit_ts: last_checked_commit_ts,
                             key: current_key.into(),
                             primary: vec![],
+                            reason: WriteConflictReason::RcCheckTs,
                         }
                         .into());
                     }
