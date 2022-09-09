@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{JsonRef, JsonType};
+use crate::FieldTypeTp;
 
 const JSON_TYPE_BOOLEAN: &[u8] = b"BOOLEAN";
 const JSON_TYPE_NONE: &[u8] = b"NULL";
@@ -10,6 +11,9 @@ const JSON_TYPE_DOUBLE: &[u8] = b"DOUBLE";
 const JSON_TYPE_STRING: &[u8] = b"STRING";
 const JSON_TYPE_OBJECT: &[u8] = b"OBJECT";
 const JSON_TYPE_ARRAY: &[u8] = b"ARRAY";
+const JSON_TYPE_BIT: &[u8] = b"BIT";
+const JSON_TYPE_BLOB: &[u8] = b"BLOB";
+const JSON_TYPE_OPAQUE: &[u8] = b"OPAQUE";
 
 impl<'a> JsonRef<'a> {
     /// `json_type` is the implementation for
@@ -25,6 +29,19 @@ impl<'a> JsonRef<'a> {
             JsonType::Literal => match self.get_literal() {
                 Some(_) => JSON_TYPE_BOOLEAN,
                 None => JSON_TYPE_NONE,
+            },
+            JsonType::Opaque => match self.get_opaque_type() {
+                Ok(
+                    FieldTypeTp::TinyBlob
+                    | FieldTypeTp::MediumBlob
+                    | FieldTypeTp::LongBlob
+                    | FieldTypeTp::Blob
+                    | FieldTypeTp::String
+                    | FieldTypeTp::VarString
+                    | FieldTypeTp::VarChar,
+                ) => JSON_TYPE_BLOB,
+                Ok(FieldTypeTp::Bit) => JSON_TYPE_BIT,
+                _ => JSON_TYPE_OPAQUE,
             },
         }
     }

@@ -552,7 +552,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
+    let region = cluster.get_region(&k);
+    sync_gc(&gc_scheduler, region, gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
@@ -594,6 +595,155 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let del_resp = client.kv_delete_range(&del_req).unwrap();
     assert!(!del_resp.has_region_error());
     assert!(del_resp.error.is_empty());
+}
+
+#[test]
+fn test_mvcc_flashback() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    let mut ts = 0;
+    let k = b"key".to_vec();
+    for i in 0..10 {
+        let v = format!("value@{}", i).into_bytes();
+        // Prewrite
+        ts += 1;
+        let prewrite_start_version = ts;
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(k.clone());
+        mutation.set_value(v.clone());
+        must_kv_prewrite(
+            &client,
+            ctx.clone(),
+            vec![mutation],
+            k.clone(),
+            prewrite_start_version,
+        );
+        // Commit
+        ts += 1;
+        let commit_version = ts;
+        must_kv_commit(
+            &client,
+            ctx.clone(),
+            vec![k.clone()],
+            prewrite_start_version,
+            commit_version,
+            commit_version,
+        );
+        // Get
+        ts += 1;
+        must_kv_read_equal(&client, ctx.clone(), k.clone(), v.clone(), ts)
+    }
+    // Prewrite to leave a lock.
+    ts += 1;
+    let prewrite_start_version = ts;
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(b"value@latest".to_vec());
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        k.clone(),
+        prewrite_start_version,
+    );
+    ts += 1;
+    let get_version = ts;
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    get_req.version = get_version;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(!get_resp.has_region_error());
+    assert!(get_resp.get_error().has_locked());
+    assert!(get_resp.value.is_empty());
+    // Flashback
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.version = 5;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(flashback_resp.get_error().is_empty());
+    // Should not meet the lock and can not get the latest data any more.
+    must_kv_read_equal(&client, ctx, k, b"value@1".to_vec(), ts);
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_block_rw() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
+    // Flashback
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx.clone());
+    flashback_to_version_req.version = 0;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(flashback_resp.get_error().is_empty());
+    // Try to read.
+    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // Get
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx.clone());
+    get_req.key = k.clone();
+    get_req.version = 1;
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(get_resp.get_region_error().has_flashback_in_progress());
+    assert!(!get_resp.has_error());
+    assert!(get_resp.value.is_empty());
+    // Scan
+    let mut scan_req = ScanRequest::default();
+    scan_req.set_context(ctx.clone());
+    scan_req.start_key = k.clone();
+    scan_req.limit = 1;
+    scan_req.version = 1;
+    let scan_resp = client.kv_scan(&scan_req).unwrap();
+    assert!(scan_resp.get_region_error().has_flashback_in_progress());
+    assert!(scan_resp.pairs.is_empty());
+    // Try to write.
+    // Prewrite
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k.clone());
+    mutation.set_value(v);
+    let prewrite_resp = try_kv_prewrite(&client, ctx, vec![mutation], k, 1);
+    assert!(prewrite_resp.get_region_error().has_flashback_in_progress());
+    fail::remove("skip_finish_flashback_to_version");
+}
+
+#[test]
+#[cfg(feature = "failpoints")]
+fn test_mvcc_flashback_block_scheduling() {
+    let (mut cluster, client, ctx) = must_new_cluster_and_kv_client();
+    fail::cfg("skip_finish_flashback_to_version", "return").unwrap();
+    // Flashback
+    let mut flashback_to_version_req = FlashbackToVersionRequest::default();
+    flashback_to_version_req.set_context(ctx);
+    flashback_to_version_req.version = 0;
+    flashback_to_version_req.start_key = b"a".to_vec();
+    flashback_to_version_req.end_key = b"z".to_vec();
+    let flashback_resp = client
+        .kv_flashback_to_version(&flashback_to_version_req)
+        .unwrap();
+    assert!(!flashback_resp.has_region_error());
+    assert!(flashback_resp.get_error().is_empty());
+    // Try to transfer leader.
+    let transfer_leader_resp = cluster.try_transfer_leader(1, new_peer(2, 2));
+    assert!(
+        transfer_leader_resp
+            .get_header()
+            .get_error()
+            .has_flashback_in_progress()
+    );
+    fail::remove("skip_finish_flashback_to_version");
 }
 
 // raft related RPC is tested as parts of test_snapshot.rs, so skip here.

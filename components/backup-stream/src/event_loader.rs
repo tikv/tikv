@@ -152,7 +152,9 @@ impl<S: Snapshot> EventLoader<S> {
                         )
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
-                    resolver.track_phase_one_lock(lock.ts, lock_at)
+                    if utils::should_track_lock(&lock) {
+                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                    }
                 }
                 TxnEntry::Commit { default, write, .. } => {
                     result.push(ApplyEvent {
@@ -487,8 +489,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
     use kvproto::metapb::*;
-    use tikv::storage::{txn::tests::*, Engine, TestEngineBuilder};
+    use tikv::storage::{txn::tests::*, TestEngineBuilder};
+    use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
     use super::EventLoader;
@@ -515,7 +519,9 @@ mod tests {
         r.set_id(42);
         r.set_start_key(b"".to_vec());
         r.set_end_key(b"".to_vec());
-        let snap = engine.snapshot_on_kv_engine(b"", b"").unwrap();
+
+        let snap =
+            block_on(async { tikv_kv::snapshot(&engine, SnapContext::default()).await }).unwrap();
         let mut loader =
             EventLoader::load_from(snap, TimeStamp::zero(), TimeStamp::max(), &r).unwrap();
 
