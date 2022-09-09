@@ -71,8 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
-use causal_ts::BatchTsoProvider;
-use causal_ts::CausalTsProvider;
+use causal_ts::{CausalTs, CausalTsProvider};
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -83,7 +82,7 @@ use kvproto::{
     },
     pdpb::QueryKind,
 };
-use pd_client::{FeatureGate, RpcClient};
+use pd_client::FeatureGate;
 use raftstore::store::{util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_metering::{FutureExt, ResourceTagFactory};
@@ -180,7 +179,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 
     api_version: ApiVersion, // TODO: remove this. Use `Api` instead.
 
-    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>,
+    causal_ts_provider: Option<Arc<CausalTs>>,
 
     quota_limiter: Arc<QuotaLimiter>,
 
@@ -191,9 +190,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 /// To be convenience for test cases unrelated to RawKV.
 pub type StorageApiV1<E, L> = Storage<E, L, ApiV1>;
 
-impl<E: Engine, L: LockManager, F: KvFormat> Clone
-    for Storage<E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -218,9 +215,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone
     }
 }
 
-impl<E: Engine, L: LockManager, F: KvFormat> Drop
-    for Storage<E, L, F>
-{
+impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -266,7 +261,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         resource_tag_factory: ResourceTagFactory,
         quota_limiter: Arc<QuotaLimiter>,
         feature_gate: FeatureGate,
-        causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>,
+        causal_ts_provider: Option<Arc<CausalTs>>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -1851,7 +1846,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         }
     }
 
-    fn get_causal_ts(ts_provider: &Option<Arc<BatchTsoProvider<RpcClient>>>) -> Result<Option<TimeStamp>> {
+    fn get_causal_ts(ts_provider: &Option<Arc<CausalTs>>) -> Result<Option<TimeStamp>> {
         if let Some(p) = ts_provider {
             match p.get_ts() {
                 Ok(ts) => Ok(Some(ts)),
@@ -1863,7 +1858,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     }
 
     async fn get_raw_key_guard(
-        ts_provider: &Option<Arc<BatchTsoProvider<RpcClient>>>,
+        ts_provider: &Option<Arc<CausalTs>>,
         concurrency_manager: ConcurrencyManager,
     ) -> Result<Option<KeyHandleGuard>> {
         // NOTE: the ts cannot be reused as timestamp of data key.
@@ -3108,20 +3103,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             self.engine.clone(),
         );
         let ts_provider = if F::TAG == ApiVersion::V2 {
-            let server = test_pd::Server::new(1);
-            let eps = server.bind_addrs();
-            let cfg = test_pd::util::new_config(eps);
-            let env = Arc::new(grpcio::EnvBuilder::new().cq_count(1).build());
-            let mgr = Arc::new(security::SecurityManager::new(&security::SecurityConfig::default()).unwrap());
-            let client = RpcClient::new(&cfg, Some(env.clone()), mgr.clone()).unwrap();
-            let ts_provider = futures::executor::block_on(BatchTsoProvider::new_opt(
-                Arc::new(client),
-                std::time::Duration::ZERO,
-                std::time::Duration::from_secs(3),
-                100,
-                8192,
-            )).unwrap();
-            Some(Arc::new(ts_provider))
+            let test_provider: causal_ts::CausalTs =
+                causal_ts::tests::TestProvider::default().into();
+            Some(Arc::new(test_provider))
         } else {
             None
         };
@@ -3145,10 +3129,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
         )
     }
 
-    pub fn build_for_txn(
-        self,
-        txn_ext: Arc<TxnExt>,
-    ) -> Result<Storage<TxnTestEngine<E>, L, F>> {
+    pub fn build_for_txn(self, txn_ext: Arc<TxnExt>) -> Result<Storage<TxnTestEngine<E>, L, F>> {
         let engine = TxnTestEngine {
             engine: self.engine,
             txn_ext,
@@ -3312,11 +3293,7 @@ pub mod test_util {
         )
     }
 
-    pub fn delete_pessimistic_lock<
-        E: Engine,
-        L: LockManager,
-        F: KvFormat,
-    >(
+    pub fn delete_pessimistic_lock<E: Engine, L: LockManager, F: KvFormat>(
         storage: &Storage<E, L, F>,
         key: Key,
         start_ts: u64,

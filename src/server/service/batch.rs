@@ -221,11 +221,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
     }
 }
 
-fn future_batch_get_command<
-    E: Engine,
-    L: LockManager,
-    F: KvFormat,
->(
+fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<GetRequest>,
@@ -277,11 +273,7 @@ fn future_batch_get_command<
     poll_future_notify(f);
 }
 
-fn future_batch_raw_get_command<
-    E: Engine,
-    L: LockManager,
-    F: KvFormat,
->(
+fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     requests: Vec<u64>,
     gets: Vec<RawGetRequest>,

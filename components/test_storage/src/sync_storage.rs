@@ -84,10 +84,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorageBuilder<E, F> {
         self
     }
 
-    pub fn build(
-        mut self,
-        store_id: u64,
-    ) -> Result<SyncTestStorage<E, F>> {
+    pub fn build(mut self, store_id: u64) -> Result<SyncTestStorage<E, F>> {
         let mut builder = TestStorageBuilder::<_, _, F>::from_engine_and_lock_mgr(
             self.engine.clone(),
             DummyLockManager,

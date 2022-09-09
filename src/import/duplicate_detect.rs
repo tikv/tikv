@@ -233,7 +233,6 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use api_version::KvFormat;
-    use causal_ts::CausalTsProvider;
     use kvproto::kvrpcpb::Context;
     use tikv_kv::Engine;
     use txn_types::Mutation;

@@ -1496,7 +1496,6 @@ mod tests {
     };
 
     use api_version::{ApiV2, KvFormat, RawValue};
-    use causal_ts::CausalTsProvider;
     use engine_rocks::{util::get_cf_handle, RocksEngine};
     use futures::executor::block_on;
     use kvproto::{

@@ -151,8 +151,8 @@ sst_importer = { path = "components/sst_importer", default-features = false }
 strum = { version = "0.20", features = ["derive"] }
 sysinfo = "0.16"
 tempfile = "3.0"
-thiserror = "1.0"
 test_pd = { path = "components/test_pd" }
+thiserror = "1.0"
 tidb_query_aggr = { path = "components/tidb_query_aggr", default-features = false }
 tidb_query_common = { path = "components/tidb_query_common", default-features = false }
 tidb_query_datatype = { path = "components/tidb_query_datatype", default-features = false }

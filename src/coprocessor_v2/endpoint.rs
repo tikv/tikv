@@ -72,11 +72,7 @@ impl Endpoint {
     }
 
     #[inline]
-    fn handle_request_impl<
-        E: Engine,
-        L: LockManager,
-        F: KvFormat,
-    >(
+    fn handle_request_impl<E: Engine, L: LockManager, F: KvFormat>(
         &self,
         storage: &Storage<E, L, F>,
         mut req: kvrpcpb::RawCoprocessorRequest,

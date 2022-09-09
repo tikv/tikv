@@ -33,7 +33,7 @@ use backup_stream::{
     metadata::{ConnectionConfig, LazyEtcdClient},
     observer::BackupStreamObserver,
 };
-use causal_ts::{BatchTsoProvider, CausalTsProvider};
+use causal_ts::{CausalTs, CausalTsProvider};
 use cdc::{CdcConfigManager, MemoryQuota};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
@@ -233,7 +233,7 @@ struct TikvServer<ER: RaftEngine> {
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
-    causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTs>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
 }
 
@@ -330,7 +330,7 @@ where
             if let Err(e) = tso {
                 fatal!("Causal timestamp provider initialize failed: {:?}", e);
             }
-            causal_ts_provider = Some(Arc::new(tso.unwrap()));
+            causal_ts_provider = Some(Arc::new(tso.unwrap().into()));
             info!("Causal timestamp provider startup.");
         }
 

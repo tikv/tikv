@@ -122,7 +122,7 @@ impl<
     }
 }
 
-impl<T: RaftStoreRouter<E::Local> + 'static,  E: Engine,  L: LockManager,  F: KvFormat>
+impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFormat>
     Service<T, E, L, F>
 {
     /// Constructs a new `Service` which provides the `Tikv` service.

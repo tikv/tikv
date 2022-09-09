@@ -15,12 +15,13 @@ pub use tso::*;
 mod metrics;
 pub use metrics::*;
 mod observer;
+use enum_dispatch::enum_dispatch;
 pub use observer::*;
 use txn_types::TimeStamp;
 
 pub use crate::errors::Result;
-
 /// Trait of causal timestamp provider.
+#[enum_dispatch]
 pub trait CausalTsProvider: Send + Sync {
     /// Get a new timestamp.
     fn get_ts(&self) -> Result<TimeStamp>;
@@ -30,6 +31,12 @@ pub trait CausalTsProvider: Send + Sync {
     fn flush(&self) -> Result<()> {
         Ok(())
     }
+}
+
+#[enum_dispatch(CausalTsProvider)]
+pub enum CausalTs {
+    BatchTsoProvider(BatchTsoProvider<pd_client::RpcClient>),
+    TestProvider(tests::TestProvider),
 }
 
 pub mod tests {
