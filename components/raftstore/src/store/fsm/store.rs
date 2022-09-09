@@ -1496,9 +1496,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
             mgr.clone(),
-            cfg.value().snap_apply_batch_size.0 as usize,
-            cfg.value().use_delete_range,
-            cfg.value().snap_generator_pool_size,
+            cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
