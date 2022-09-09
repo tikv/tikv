@@ -333,13 +333,13 @@ impl ExternalStorage for EncryptedExternalStorage {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        expected_offset: Option<(u64, u64)>,
+        compressed_range: Option<(u64, u64)>,
         expected_length: u64,
         expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let reader = if let Some((off, len)) = expected_offset {
+        let reader = if let Some((off, len)) = compressed_range {
             let r = self.read_part(storage_name, off, len);
             Box::new(ZstdDecoder::new(BufReader::new(r)))
         } else {

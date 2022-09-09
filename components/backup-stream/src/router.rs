@@ -754,7 +754,7 @@ pub struct StreamTaskInfo {
     files: SlotMap<TempFileKey, DataFile>,
     /// flushing_files contains files pending flush.
     flushing_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
-    /// flushing_meta_files contains meta files pending flush. used for V2.
+    /// flushing_meta_files contains meta files pending flush.
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
@@ -775,7 +775,7 @@ pub struct StreamTaskInfo {
     flush_fail_count: AtomicUsize,
     /// global checkpoint ts for this task.
     global_checkpoint_ts: AtomicU64,
-    /// The size limit of merged file per task.
+    /// The size limit of the merged file for this task.
     merged_file_size_limit: u64,
 }
 
@@ -1010,7 +1010,6 @@ impl StreamTaskInfo {
         metadata: &mut MetadataInfo,
         is_meta: bool,
     ) -> Result<()> {
-        // save locks for longer lifetime
         let mut data_files_open = Vec::new();
         let mut data_file_infos = Vec::new();
         let mut merged_file_info = DataFileGroup::new();
@@ -1023,7 +1022,6 @@ impl StreamTaskInfo {
             // Update offset of file_info(DataFileInfo)
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_offset(stat_length);
-            // data_files_open.push(Box::pin(File::open(data_file.local_path.clone())));
             data_files_open.push({
                 let file = File::open(data_file.local_path.clone()).await?;
                 let compress_length = file.metadata().await?.len();
