@@ -225,7 +225,7 @@ impl SstImporter {
 
     fn download_file_from_external_storage(
         &self,
-        expect_file_offset: Option<(u64, u64)>,
+        compressed_range: Option<(u64, u64)>,
         file_length: u64,
         src_file_name: &str,
         dst_file: std::path::PathBuf,
@@ -266,7 +266,7 @@ impl SstImporter {
         let result = ext_storage.restore(
             src_file_name,
             dst_file.clone(),
-            expect_file_offset,
+            compressed_range,
             file_length,
             expect_sha256,
             speed_limiter,
@@ -324,14 +324,13 @@ impl SstImporter {
         }
 
         let length = meta.get_compress_length();
-        let op_offset = if length == 0 {
+        let compressed_range = if length == 0 {
             None
         } else {
             Some((offset, length))
         };
         self.download_file_from_external_storage(
-            op_offset,
-            // don't check file length after download file for now.
+            compressed_range,
             meta.get_length(),
             src_name,
             path.temp.clone(),
