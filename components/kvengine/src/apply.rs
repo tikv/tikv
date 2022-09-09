@@ -70,7 +70,11 @@ impl EngineCore {
             return Err(Error::ShardNotFound);
         }
         let shard = shard.unwrap();
-        info!("{} kvengine apply change set sequence: {}", shard.tag(), cs.sequence);
+        info!(
+            "{} kvengine apply change set sequence: {}",
+            shard.tag(),
+            cs.sequence
+        );
         if shard.ver != cs.shard_ver {
             return Err(Error::ShardNotMatch);
         }

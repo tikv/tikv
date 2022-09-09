@@ -13,6 +13,7 @@ use std::{
 
 use async_stream::stream;
 use collections::HashMap;
+use flate2::{write::GzEncoder, Compression};
 use futures::{
     compat::{Compat01As03, Stream01CompatExt},
     future::{ok, poll_fn},
@@ -20,6 +21,7 @@ use futures::{
 };
 use hyper::{
     self, header,
+    header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE},
     server::{
         accept::Accept,
         conn::{AddrIncoming, AddrStream},
@@ -34,6 +36,7 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
+use prometheus::TEXT_FORMAT;
 use rfstore::RaftRouter;
 use security::{self, SecurityConfig};
 use serde_json::Value;
@@ -44,7 +47,11 @@ use tikv::{
         read_file, start_one_cpu_profile, start_one_heap_profile,
     },
 };
-use tikv_util::{logger::set_log_level, metrics::dump, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    logger::set_log_level,
+    metrics::{dump, dump_to},
+    timer::GLOBAL_TIMER_HANDLE,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     runtime::{Builder, Handle, Runtime},
@@ -440,6 +447,31 @@ impl StatusServer {
         Ok(hyper::Response::new(Body::empty()))
     }
 
+    fn handle_get_metrics(
+        req: Request<Body>,
+        mgr: &ConfigController,
+    ) -> hyper::Result<Response<Body>> {
+        let should_simplify = mgr.get_current().server.simplify_metrics;
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -502,7 +534,9 @@ impl StatusServer {
                         }
 
                         match (method, path.as_ref()) {
-                            (Method::GET, "/metrics") => Ok(Response::new(dump().into())),
+                            (Method::GET, "/metrics") => {
+                                Self::handle_get_metrics(req, &cfg_controller)
+                            }
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
@@ -770,6 +804,21 @@ async fn handle_fail_points_request(req: Request<Body>) -> hyper::Result<Respons
             .body(Body::empty())
             .unwrap()),
     }
+}
+
+// check if the client allow return response with gzip compression
+// the following logic is port from prometheus's golang:
+// https://github.com/prometheus/client_golang/blob/24172847e35ba46025c49d90b8846b59eb5d9ead/prometheus/promhttp/http.go#L155-L176
+fn client_accept_gzip(req: &Request<Body>) -> bool {
+    let encoding = req
+        .headers()
+        .get(ACCEPT_ENCODING)
+        .map(|enc| enc.to_str().unwrap_or_default())
+        .unwrap_or_default();
+    encoding
+        .split(',')
+        .map(|s| s.trim())
+        .any(|s| s == "gzip" || s.starts_with("gzip;"))
 }
 
 // Decode different type of json value to string value

@@ -43,6 +43,7 @@ engine_traits = { path = "../engine_traits", default-features = false }
 error_code = { path = "../error_code", default-features = false }
 fail = "0.4"
 file_system = { path = "../file_system", default-features = false }
+flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 fs2 = "0.4"
 futures = "0.3"
 futures-timer = "3.0"
