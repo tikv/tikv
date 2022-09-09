@@ -65,7 +65,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
             context.statistics,
         );
-        let mut released_locks = ReleasedLocks::new(self.start_ts, TimeStamp::zero());
+        let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
         for key in self.keys {
@@ -76,7 +76,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
                 // The lock exists, the lock information is returned.
                 Some(lock) if lock.ts == self.start_ts => {
                     if lock.lock_type == LockType::Pessimistic {
-                        released_lock = txn.unlock_key(key.clone(), true);
+                        released_lock = txn.unlock_key(key.clone(), true, None);
                         let overlapped_write = reader.get_txn_commit_record(&key)?.unwrap_none();
                         (SecondaryLockStatus::RolledBack, true, overlapped_write)
                     } else {
@@ -142,10 +142,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
         let mut rows = 0;
         if let SecondaryLocksStatus::RolledBack = &result {
-            // Lock is only released when result is `RolledBack`.
-            released_locks.wake_up(context.lock_mgr);
             // One row is mutated only when a secondary lock is rolled back.
             rows = 1;
+        } else {
+            released_locks.0.clear();
         }
         let pr = ProcessResult::SecondaryLocksStatus { status: result };
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
@@ -156,6 +156,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             rows,
             pr,
             lock_info: None,
+            released_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
         })

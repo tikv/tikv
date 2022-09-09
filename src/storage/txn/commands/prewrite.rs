@@ -461,7 +461,6 @@ impl<K: PrewriteKind> Prewriter<K> {
             final_min_commit_ts,
             rows,
             context.async_apply_prewrite,
-            context.lock_mgr,
         ))
     }
 
@@ -645,7 +644,6 @@ impl<K: PrewriteKind> Prewriter<K> {
         final_min_commit_ts: TimeStamp,
         rows: usize,
         async_apply_prewrite: bool,
-        lock_manager: &impl LockManager,
     ) -> WriteResult {
         let async_commit_ts = if self.secondary_keys.is_some() {
             final_min_commit_ts
@@ -654,16 +652,14 @@ impl<K: PrewriteKind> Prewriter<K> {
         };
 
         let mut result = if locks.is_empty() {
+            let (one_pc_commit_ts, released_locks) =
+                one_pc_commit(self.try_one_pc, &mut txn, final_min_commit_ts);
+
             let pr = ProcessResult::PrewriteResult {
                 result: PrewriteResult {
                     locks: vec![],
                     min_commit_ts: async_commit_ts,
-                    one_pc_commit_ts: one_pc_commit_ts(
-                        self.try_one_pc,
-                        &mut txn,
-                        final_min_commit_ts,
-                        lock_manager,
-                    ),
+                    one_pc_commit_ts,
                 },
             };
             let extra = TxnExtra {
@@ -684,6 +680,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 lock_info: None,
+                released_locks,
                 lock_guards,
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -702,6 +699,7 @@ impl<K: PrewriteKind> Prewriter<K> {
                 rows,
                 pr,
                 lock_info: None,
+                released_locks: ReleasedLocks::new(),
                 lock_guards: vec![],
                 response_policy: ResponsePolicy::OnApplied,
             }
@@ -821,31 +819,28 @@ impl MutationLock for (Mutation, PrewriteRequestPessimisticAction) {
     }
 }
 
-/// Compute the commit ts of a 1pc transaction.
-pub fn one_pc_commit_ts(
+/// Commits a 1pc transaction if possible, returns the commit ts and released
+/// locks on success.
+pub fn one_pc_commit(
     try_one_pc: bool,
     txn: &mut MvccTxn,
     final_min_commit_ts: TimeStamp,
-    lock_manager: &impl LockManager,
-) -> TimeStamp {
+) -> (TimeStamp, ReleasedLocks) {
     if try_one_pc {
         assert_ne!(final_min_commit_ts, TimeStamp::zero());
         // All keys can be successfully locked and `try_one_pc` is set. Try to directly
         // commit them.
         let released_locks = handle_1pc_locks(txn, final_min_commit_ts);
-        if !released_locks.is_empty() {
-            released_locks.wake_up(lock_manager);
-        }
-        final_min_commit_ts
+        (final_min_commit_ts, released_locks)
     } else {
         assert!(txn.locks_for_1pc.is_empty());
-        TimeStamp::zero()
+        (TimeStamp::zero(), ReleasedLocks::new())
     }
 }
 
 /// Commit and delete all 1pc locks in txn.
 fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
-    let mut released_locks = ReleasedLocks::new(txn.start_ts, commit_ts);
+    let mut released_locks = ReleasedLocks::new();
 
     for (key, lock, delete_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
         let write = Write::new(
@@ -857,7 +852,7 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
         // records.
         txn.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         if delete_pessimistic_lock {
-            released_locks.push(txn.unlock_key(key, true));
+            released_locks.push(txn.unlock_key(key, true, Some(commit_ts)));
         }
     }
 

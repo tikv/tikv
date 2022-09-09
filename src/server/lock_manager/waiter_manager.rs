@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use collections::HashMap;
@@ -79,12 +79,6 @@ impl Delay {
         }
     }
 
-    fn reset_extending(&self, deadline: Instant) {
-        if deadline > self.deadline {
-            self.inner.borrow_mut().timer.get_mut().reset(deadline);
-        }
-    }
-
     /// Cancels the instance. It will complete with `false` at arbitrary time.
     fn cancel(&self) {
         self.inner.borrow_mut().cancelled = true;
@@ -148,10 +142,9 @@ pub enum Task {
     },
     ChangeConfig {
         timeout: Option<ReadableDuration>,
-        delay: Option<ReadableDuration>,
     },
     #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(ReadableDuration, ReadableDuration) + Send>),
+    Validate(Box<dyn FnOnce(ReadableDuration) + Send>),
 }
 
 /// Debug for task.
@@ -188,10 +181,10 @@ impl Display for Task {
             }
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
-            Task::ChangeConfig { timeout, delay } => write!(
+            Task::ChangeConfig { timeout } => write!(
                 f,
-                "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
-                timeout, delay
+                "change config to default_wait_for_lock_timeout: {:?}",
+                timeout
             ),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(_) => write!(f, "validate waiter manager config"),
@@ -206,9 +199,11 @@ impl Display for Task {
 /// has a timeout. Transaction will be notified when the lock is released
 /// or the corresponding waiter times out.
 pub(crate) struct Waiter {
-    region_id: u64,
-    region_epoch: RegionEpoch,
-    term: u64,
+    // These field will be needed for supporting region-level waking up when region errors
+    // happens.
+    // region_id: u64,
+    // region_epoch: RegionEpoch,
+    // term: u64,
     pub(crate) start_ts: TimeStamp,
     pub(crate) wait_info: KeyLockWaitInfo,
     pub(crate) cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -219,9 +214,9 @@ pub(crate) struct Waiter {
 
 impl Waiter {
     fn new(
-        region_id: u64,
-        region_epoch: RegionEpoch,
-        term: u64,
+        _region_id: u64,
+        _region_epoch: RegionEpoch,
+        _term: u64,
         start_ts: TimeStamp,
         wait_info: KeyLockWaitInfo,
         cancel_callback: Box<dyn FnOnce(StorageError) + Send>,
@@ -230,9 +225,6 @@ impl Waiter {
         start_waiting_time: Instant,
     ) -> Self {
         Self {
-            region_id,
-            region_epoch,
-            term,
             start_ts,
             wait_info,
             cancel_callback,
@@ -279,14 +271,14 @@ impl Waiter {
     }
 
     fn cancel_for_timeout(self, _skip_resolving_lock: bool) -> KeyLockWaitInfo {
-        let mut lock_info = self.wait_info.lock_info.clone();
+        let lock_info = self.wait_info.lock_info.clone();
         // lock_info.set_skip_resolving_lock(skip_resolving_lock);
         let error = MvccError::from(MvccErrorInner::KeyIsLocked(lock_info));
         self.cancel(Some(StorageError::from(TxnError::from(error))))
     }
 
     pub(super) fn cancel_no_timeout(
-        mut wait_info: KeyLockWaitInfo,
+        wait_info: KeyLockWaitInfo,
         cancel_callback: Box<dyn FnOnce(StorageError)>,
     ) {
         let lock_info = wait_info.lock_info;
@@ -309,32 +301,6 @@ impl Waiter {
             wait_chain,
         });
         self.cancel(Some(StorageError::from(TxnError::from(e))))
-    }
-}
-
-struct DelayedLegacyWakeUp {
-    delay: Delay,
-    conflicting_start_ts: TimeStamp,
-    conflicting_commit_ts: TimeStamp,
-    record_time: Instant,
-    is_expiring: bool,
-    clean_up_entry_delay: Option<Delay>,
-}
-
-impl DelayedLegacyWakeUp {
-    fn new(
-        delay: Delay,
-        conflicting_start_ts: TimeStamp,
-        conflicting_commit_ts: TimeStamp,
-    ) -> Self {
-        Self {
-            delay,
-            conflicting_start_ts,
-            conflicting_commit_ts,
-            record_time: Instant::now(),
-            is_expiring: false,
-            clean_up_entry_delay: None,
-        }
     }
 }
 
@@ -519,16 +485,12 @@ impl Scheduler {
         });
     }
 
-    pub fn change_config(
-        &self,
-        timeout: Option<ReadableDuration>,
-        delay: Option<ReadableDuration>,
-    ) {
-        self.notify_scheduler(Task::ChangeConfig { timeout, delay });
+    pub fn change_config(&self, timeout: Option<ReadableDuration>) {
+        self.notify_scheduler(Task::ChangeConfig { timeout });
     }
 
     #[cfg(any(test, feature = "testexport"))]
-    pub fn validate(&self, f: Box<dyn FnOnce(ReadableDuration, ReadableDuration) + Send>) {
+    pub fn validate(&self, f: Box<dyn FnOnce(ReadableDuration) + Send>) {
         self.notify_scheduler(Task::Validate(f));
     }
 }
@@ -539,11 +501,11 @@ pub struct WaiterManager {
     detector_scheduler: DetectorScheduler,
     /// It is the default and maximum timeout of waiter.
     default_wait_for_lock_timeout: ReadableDuration,
-    /// If more than one waiters are waiting for the same lock, only the
-    /// oldest one will be waked up immediately when the lock is released.
-    /// Others will be waked up after `wake_up_delay_duration` to reduce
-    /// contention and make the oldest one more likely acquires the lock.
-    wake_up_delay_duration: ReadableDuration,
+    // /// If more than one waiters are waiting for the same lock, only the
+    // /// oldest one will be waked up immediately when the lock is released.
+    // /// Others will be waked up after `wake_up_delay_duration` to reduce
+    // /// contention and make the oldest one more likely acquires the lock.
+    // wake_up_delay_duration: ReadableDuration,
 }
 
 unsafe impl Send for WaiterManager {}
@@ -554,13 +516,13 @@ impl WaiterManager {
         detector_scheduler: DetectorScheduler,
         cfg: &Config,
     ) -> Self {
-        let mut wait_table = WaitTable::new(waiter_count);
+        let wait_table = WaitTable::new(waiter_count);
 
         Self {
             wait_table: Rc::new(RefCell::new(wait_table)),
             detector_scheduler,
             default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
-            wake_up_delay_duration: cfg.wake_up_delay_duration,
+            // wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
 
@@ -585,88 +547,6 @@ impl WaiterManager {
             spawn_local(f);
         }
     }
-
-    // fn handle_record_legacy_waking_up_keys(&mut self, events:
-    // Vec<KeyWakeUpEvent>) {     use std::collections::hash_map::Entry;
-    //
-    //     let wake_up_delay_duration = self.wake_up_delay_duration.0;
-    //     let spawn_background_timing =
-    //         |key: Key, delay: Delay, wait_table: Rc<RefCell<WaitTable>>| {
-    //             spawn_local(async move {
-    //                 delay.await;
-    //                 let mut ref_mut_wait_table = wait_table.borrow_mut();
-    //                 // To make the borrow checker happy.
-    //                 let wait_table_inner_ref = ref_mut_wait_table.deref_mut();
-    //                 if let Some(expired_entry) =
-    //
-    // wait_table_inner_ref.legacy_wakeup_in_progress.get_mut(&key)
-    // {                     if let Some(cb) =
-    // &wait_table_inner_ref.wake_up_key_delay_callback {
-    // cb(                             &key,
-    //                             expired_entry.conflicting_start_ts,
-    //                             expired_entry.conflicting_commit_ts,
-    //                             expired_entry.record_time,
-    //                         );
-    //                     }
-    //
-    //                     expired_entry.is_expiring = true;
-    //
-    //                     if expired_entry.clean_up_entry_delay.is_some() {
-    //                         return;
-    //                     }
-    //                     let new_deadline = if wake_up_delay_duration <
-    // SKIP_RESOLVING_LOCK_LIMIT {                         Instant::now() +
-    // SKIP_RESOLVING_LOCK_LIMIT - wake_up_delay_duration                     }
-    // else {                         Instant::now()
-    //                     };
-    //
-    //                     let delay = Delay::new(new_deadline);
-    //                     expired_entry.clean_up_entry_delay = Some(delay.clone());
-    //                     drop(ref_mut_wait_table);
-    //
-    //                     if delay.await {
-    //                         let mut wait_table_ref = wait_table.borrow_mut();
-    //
-    // wait_table_ref.legacy_wakeup_in_progress.remove(&key);
-    // }                 }
-    //             });
-    //         };
-    //
-    //     let now = Instant::now();
-    //     let deadline = now + wake_up_delay_duration;
-    //     for event in events {
-    //         // Make borrow checker happy.
-    //         let released_start_ts = event.released_start_ts;
-    //         let released_commit_ts = event.released_commit_ts;
-    //         let mut wait_table = self.wait_table.borrow_mut();
-    //         let mut entry =
-    // wait_table.legacy_wakeup_in_progress.entry(event.key);
-    //
-    //         if let Entry::Occupied(entry) = &mut entry {
-    //             let inner = entry.get_mut();
-    //             inner.conflicting_start_ts = released_start_ts;
-    //             inner.conflicting_commit_ts = released_commit_ts;
-    //             if !inner.is_expiring {
-    //                 inner.delay.reset_shrinking(deadline);
-    //             } else {
-    //                 let delay = Delay::new(deadline);
-    //                 inner.delay = delay.clone();
-    //                 inner.is_expiring = false;
-    //                 spawn_background_timing(entry.key().clone(), delay,
-    // self.wait_table.clone());             }
-    //             if let Some(clean_up_delay) =
-    // entry.get().clean_up_entry_delay.as_ref() {
-    // clean_up_delay.reset_extending(now + SKIP_RESOLVING_LOCK_LIMIT);
-    //             }
-    //         } else {
-    //             entry.or_insert_with_key(|key| {
-    //                 let delay = Delay::new(deadline);
-    //                 spawn_background_timing(key.clone(), delay.clone(),
-    // self.wait_table.clone());                 DelayedLegacyWakeUp::new(delay,
-    // released_start_ts, released_commit_ts)             });
-    //         }
-    //     }
-    // }
 
     fn handle_remove_lock_wait(&mut self, token: LockWaitToken) {
         let mut wait_table = self.wait_table.borrow_mut();
@@ -725,21 +605,13 @@ impl WaiterManager {
         }
     }
 
-    fn handle_config_change(
-        &mut self,
-        timeout: Option<ReadableDuration>,
-        delay: Option<ReadableDuration>,
-    ) {
+    fn handle_config_change(&mut self, timeout: Option<ReadableDuration>) {
         if let Some(timeout) = timeout {
             self.default_wait_for_lock_timeout = timeout;
-        }
-        if let Some(delay) = delay {
-            self.wake_up_delay_duration = delay;
         }
         info!(
             "Waiter manager config changed";
             "default_wait_for_lock_timeout" => self.default_wait_for_lock_timeout.to_string(),
-            "wake_up_delay_duration" => self.wake_up_delay_duration.to_string()
         );
     }
 }
@@ -800,11 +672,11 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
             }
-            Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
+            Task::ChangeConfig { timeout } => self.handle_config_change(timeout),
             #[cfg(any(test, feature = "testexport"))]
             Task::Validate(f) => f(
                 self.default_wait_for_lock_timeout,
-                self.wake_up_delay_duration,
+                // self.wake_up_delay_duration,
             ),
         }
     }
@@ -826,29 +698,8 @@ pub mod tests {
     use super::*;
     use crate::storage::txn::ErrorInner as TxnErrorInner;
 
-    impl Waiter {
-        fn region_id(mut self, id: u64) -> Self {
-            self.region_id = id;
-            self
-        }
-
-        fn epoch(mut self, ver: u64, conf_ver: u64) -> Self {
-            self.region_epoch.set_version(ver);
-            self.region_epoch.set_conf_ver(conf_ver);
-            self
-        }
-
-        fn term(mut self, term: u64) -> Self {
-            self.term = term;
-            self
-        }
-    }
-
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
-            region_id: 1,
-            region_epoch: Default::default(),
-            term: 1,
             start_ts,
             wait_info: KeyLockWaitInfo {
                 key: Key::from_raw(b""),
@@ -963,22 +814,6 @@ pub mod tests {
         );
         (waiter, info, f)
     }
-
-    // #[test]
-    // fn test_waiter_extract_key_info() {
-    //     let (mut waiter, mut lock_info, _) = new_test_waiter(10.into(),
-    // 20.into(), 20);     assert_eq!(
-    //         waiter.extract_key_info(),
-    //         (lock_info.take_key(), lock_info.take_primary_lock())
-    //     );
-    //
-    //     let (mut waiter, mut lock_info, _) = new_test_waiter(10.into(),
-    // 20.into(), 20);     waiter.conflict_with(20.into(), 30.into());
-    //     assert_eq!(
-    //         waiter.extract_key_info(),
-    //         (lock_info.take_key(), lock_info.take_primary_lock())
-    //     );
-    // }
 
     pub(crate) fn expect_key_is_locked(error: StorageError, lock_info: LockInfo) {
         match error {

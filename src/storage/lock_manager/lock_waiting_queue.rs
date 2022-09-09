@@ -5,6 +5,7 @@ use std::{collections::BinaryHeap, convert::TryFrom, num::NonZeroU64, result::Re
 use dashmap;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
+use sync_wrapper::SyncWrapper;
 use thiserror::Error;
 use txn_types::{Key, TimeStamp};
 
@@ -40,19 +41,18 @@ impl TryFrom<SharedError> for StorageError {
     }
 }
 
-pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send>;
+pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
 pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
 
 pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
-    pub hash_for_latch: u64,
     pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Option<Arc<LockWaitContextSharedState>>,
     pub current_legacy_wakeup_cnt: Option<usize>,
-    pub key_cb: Option<PessimisticLockKeyCallback>,
+    pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
 #[repr(transparent)]
@@ -104,9 +104,12 @@ impl Ord for LockWaitEntryComparableWrapper {
 }
 
 pub struct KeyLockWaitState {
+    #[allow(dead_code)]
     current_lock: kvrpcpb::LockInfo,
     legacy_wakeup_cnt: usize,
     queue: BinaryHeap<LockWaitEntryComparableWrapper>,
+    last_conflict_start_ts: TimeStamp,
+    last_conflict_commit_ts: TimeStamp,
 }
 
 impl KeyLockWaitState {
@@ -115,24 +118,28 @@ impl KeyLockWaitState {
             current_lock,
             legacy_wakeup_cnt: 0,
             queue: BinaryHeap::new(),
+            last_conflict_start_ts: TimeStamp::zero(),
+            last_conflict_commit_ts: TimeStamp::zero(),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct LockWaitQueues<L: LockManager> {
     queue_map: Arc<dashmap::DashMap<Key, KeyLockWaitState>>,
+    #[allow(dead_code)]
     lock_mgr: L,
 }
 
 impl<L: LockManager> LockWaitQueues<L> {
-    fn new(lock_mgr: L) -> Self {
+    pub fn new(lock_mgr: L) -> Self {
         Self {
             queue_map: Arc::new(dashmap::DashMap::new()),
             lock_mgr,
         }
     }
 
-    fn enqueue_lock_wait(
+    pub fn push_lock_wait(
         &self,
         mut lock_wait_entry: Box<LockWaitEntry>,
         current_lock: kvrpcpb::LockInfo,
@@ -147,7 +154,22 @@ impl<L: LockManager> LockWaitQueues<L> {
         entry.value_mut().queue.push(lock_wait_entry.into());
     }
 
-    fn dequeue_lock_wait(&self, key: &Key) -> Option<Box<LockWaitEntry>> {
+    /// Dequeues the head of the lock waiting queue of the specified key,
+    /// assuming the popped entry will be woken up.
+    ///
+    /// If it's waking up a legacy request and the queue is not empty, a call to
+    /// `delayed_notify_all` need to be scheduled. This function determines if
+    /// it's needed, and the caller is responsible to actually do it.
+    ///
+    /// Returns the popped out entry if any. Also returns the
+    /// `legacy_wake_up_index` which is needed to call `delayed_notify_all`,
+    /// if necessary.
+    pub fn pop_for_waking_up(
+        &self,
+        key: &Key,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+    ) -> Option<(Box<LockWaitEntry>, Option<usize>)> {
         let mut result = None;
 
         // We don't want other thread insert insert any more entries between finding the
@@ -155,9 +177,12 @@ impl<L: LockManager> LockWaitQueues<L> {
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
         self.queue_map.remove_if_mut(key, |_, v| {
+            v.last_conflict_start_ts = conflicting_start_ts;
+            v.last_conflict_commit_ts = conflicting_commit_ts;
+
             while let Some(front) = v.queue.pop() {
                 // Remove the comparator wrapper.
-                let lock_wait_entry = result.unwrap();
+                let lock_wait_entry = front.unwrap();
 
                 if lock_wait_entry.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
@@ -167,9 +192,16 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
-                    v.legacy_wakeup_cnt += 1
+                    let legacy_wake_up_index = if v.queue.is_empty() {
+                        None
+                    } else {
+                        Some(v.legacy_wakeup_cnt)
+                    };
+                    v.legacy_wakeup_cnt += 1;
+                    result = Some((lock_wait_entry, legacy_wake_up_index));
+                } else {
+                    result = Some((lock_wait_entry, None));
                 }
-                result = Some(result);
                 break;
             }
 
@@ -180,28 +212,31 @@ impl<L: LockManager> LockWaitQueues<L> {
         result
     }
 
-    fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
+    pub fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
         // Implementation of this function is required for supporting acquiring lock
         // after woken up.
         unimplemented!()
     }
 
-    fn delayed_notify_all(
+    pub fn delayed_notify_all(
         &self,
         key: &Key,
-        conflicting_start_ts: TimeStamp,
-        conflicting_commit_ts: TimeStamp,
         legacy_wake_up_index: usize,
     ) -> Option<Box<LockWaitEntry>> {
         let mut popped_lock_wait_entries = SmallVec::<[_; 4]>::new();
 
         let mut woken_up_resumeable_entry = None;
+        let mut conflicting_start_ts = TimeStamp::zero();
+        let mut conflicting_commit_ts = TimeStamp::zero();
 
         // We don't want other thread insert insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
         self.queue_map.remove_if_mut(key, |_, v| {
+            conflicting_start_ts = v.last_conflict_start_ts;
+            conflicting_commit_ts = v.last_conflict_commit_ts;
+
             while let Some(front) = v.queue.peek() {
                 if front.0.req_states.as_ref().unwrap().is_finished() {
                     // Skip already cancelled entries.
@@ -234,7 +269,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         // (if `woken_up_resumeable_entry` is some) if there are too many.
         for lock_wait_entry in popped_lock_wait_entries {
             let lock_wait_entry = *lock_wait_entry;
-            let cb = lock_wait_entry.key_cb.unwrap();
+            let cb = lock_wait_entry.key_cb.unwrap().into_inner();
             let e = StorageError::from(TxnError::from(MvccError::from(
                 MvccErrorInner::WriteConflict {
                     start_ts: lock_wait_entry.parameters.start_ts,

@@ -150,6 +150,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 smallvec = "1.4"
 sst_importer = { path = "components/sst_importer", default-features = false }
 strum = { version = "0.20", features = ["derive"] }
+sync_wrapper = "0.1.1"
 sysinfo = "0.16"
 tempfile = "3.0"
 thiserror = "1.0"

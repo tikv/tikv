@@ -60,6 +60,8 @@ pub struct LockManager {
     pipelined: Arc<AtomicBool>,
 
     in_memory: Arc<AtomicBool>,
+
+    wake_up_delay_duration_ms: Arc<AtomicU64>,
 }
 
 impl Clone for LockManager {
@@ -73,6 +75,7 @@ impl Clone for LockManager {
             token_allocator: self.token_allocator.clone(),
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
+            wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
         }
     }
 }
@@ -92,6 +95,9 @@ impl LockManager {
             token_allocator: Arc::new(AtomicU64::new(0)),
             pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
+            wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
+                cfg.wake_up_delay_duration.as_millis(),
+            )),
         }
     }
 
@@ -214,6 +220,7 @@ impl LockManager {
             self.detector_scheduler.clone(),
             self.pipelined.clone(),
             self.in_memory.clone(),
+            self.wake_up_delay_duration_ms.clone(),
         )
     }
 
@@ -221,6 +228,7 @@ impl LockManager {
         StorageDynamicConfigs {
             pipelined_pessimistic_lock: self.pipelined.clone(),
             in_memory_pessimistic_lock: self.in_memory.clone(),
+            wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
         }
     }
 

@@ -10,7 +10,6 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use tikv_util::time::Instant;
 use txn_types::TimeStamp;
 
 use crate::storage::{
@@ -22,6 +21,7 @@ use crate::storage::{
 };
 
 pub struct LockWaitContextInner {
+    #[allow(dead_code)]
     pr: ProcessResult,
     cb: StorageCallback,
     // result_rx: std::sync::mpsc::Receiver<(
@@ -44,7 +44,7 @@ impl LockWaitContextSharedState {
 }
 
 #[derive(Clone)]
-struct LockWaitContext<L: LockManager> {
+pub struct LockWaitContext<L: LockManager> {
     shared_states: Arc<LockWaitContextSharedState>,
     // tx: std::sync::mpsc::Sender<(
     //     usize,
@@ -59,7 +59,7 @@ struct LockWaitContext<L: LockManager> {
 }
 
 impl<L: LockManager> LockWaitContext<L> {
-    fn new(
+    pub fn new(
         lock_manager: L,
         lock_wait_token: LockWaitToken,
         start_ts: TimeStamp,
@@ -90,17 +90,17 @@ impl<L: LockManager> LockWaitContext<L> {
         }
     }
 
-    fn get_shared_states(&self) -> Arc<LockWaitContextSharedState> {
-        self.shared_states.clone()
+    pub fn get_shared_states(&self) -> &Arc<LockWaitContextSharedState> {
+        &self.shared_states
     }
 
-    fn get_callback_for_first_write_batch(&self) -> StorageCallback {
+    pub fn get_callback_for_first_write_batch(&self) -> StorageCallback {
         StorageCallback::Boolean(Box::new(|res| {
             res.unwrap();
         }))
     }
 
-    fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
+    pub fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
         if self.allow_lock_with_conflict {
             Box::new(move |res| {
@@ -113,7 +113,7 @@ impl<L: LockManager> LockWaitContext<L> {
         }
     }
 
-    fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
+    pub fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
         let ctx = self.clone();
         move |e| {
             ctx.finish_request(Err(e.into()));
@@ -133,9 +133,8 @@ impl<L: LockManager> LockWaitContext<L> {
 
         self.shared_states.finished.store(true, Ordering::Release);
 
-        // TODO: Uncomment this after merging the change to the lock manager.
-        // self.lock_manager
-        //     .remove_lock_wait(ctx_inner.lock_wait_token);
+        self.lock_manager
+            .remove_lock_wait(ctx_inner.lock_wait_token);
 
         // let results_in_pr = match ctx_inner.pr {
         //     ProcessResult::PessimisticLockRes {

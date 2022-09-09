@@ -123,6 +123,7 @@ pub struct PrewriteResult {
 }
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(Default))]
 pub struct PessimisticLockParameters {
     pub pb_ctx: kvrpcpb::Context,
     pub primary: Vec<u8>,
@@ -134,7 +135,6 @@ pub struct PessimisticLockParameters {
     pub min_commit_ts: TimeStamp,
     pub check_existence: bool,
     pub is_first_lock: bool,
-    pub should_not_exist: bool,
     pub allow_lock_with_conflict: bool,
 }
 

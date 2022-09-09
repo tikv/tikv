@@ -46,7 +46,7 @@ use super::{
 };
 use crate::{
     server::resolve::StoreAddrResolver,
-    storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest, LockWaitToken},
+    storage::lock_manager::{DiagnosticContext, KeyLockWaitInfo, LockDigest},
 };
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -825,8 +825,6 @@ where
     ) -> bool {
         assert!(!self.is_leader() && self.leader_info.is_some());
 
-        // TODO: Adapt to new protocol
-
         if self.leader_client.is_none() {
             self.reconnect_leader();
         }
@@ -860,7 +858,7 @@ where
         &self,
         tp: DetectType,
         txn_ts: TimeStamp,
-        mut wait_info: Option<KeyLockWaitInfo>,
+        wait_info: Option<KeyLockWaitInfo>,
         diag_ctx: DiagnosticContext,
     ) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
@@ -878,7 +876,7 @@ where
                     last_entry.set_txn(txn_ts.into_inner());
                     last_entry.set_wait_for_txn(wait_info.lock_digest.ts.into_inner());
                     last_entry.set_key_hash(wait_info.lock_digest.hash);
-                    last_entry.set_key(diag_ctx.key);
+                    last_entry.set_key(diag_ctx.key.clone());
                     last_entry.set_resource_group_tag(diag_ctx.resource_group_tag);
                     wait_chain.push(last_entry);
                     self.waiter_mgr_scheduler.deadlock(
@@ -1207,7 +1205,6 @@ pub mod tests {
             1
         );
 
-        let token = LockWaitToken(None);
         // Clean up entries shrinking the map.
         detect_table.clean_up_wait_for(
             3.into(),
