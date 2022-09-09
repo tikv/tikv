@@ -5726,7 +5726,6 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
- "test_pd",
  "test_util",
  "tikv",
  "tikv_util",
@@ -5752,7 +5751,6 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "causal_ts",
  "collections",
  "futures 0.3.15",
  "kvproto",

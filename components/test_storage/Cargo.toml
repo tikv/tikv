@@ -22,7 +22,6 @@ test-engines-panic = [
 
 [dependencies]
 api_version = { path = "../api_version" }
-causal_ts = { path = "../causal_ts" }
 collections = { path = "../collections" }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
