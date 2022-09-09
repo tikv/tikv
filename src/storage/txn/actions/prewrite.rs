@@ -340,35 +340,6 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<(Write, TimeStamp)>> {
-<<<<<<< HEAD
-        match reader.seek_write(&self.key, TimeStamp::max())? {
-            Some((commit_ts, write)) => {
-                // Abort on writes after our start/for_update timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current start/for_update
-                // timestamp, we should abort current prewrite.
-                match self.txn_props.kind {
-                    TransactionKind::Optimistic(_) => {
-                        if commit_ts > self.txn_props.start_ts {
-                            MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                            self.write_conflict_error(&write, commit_ts)?;
-                        }
-                    }
-                    // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
-                    // if it is a retrying prewrite request.
-                    TransactionKind::Pessimistic(for_update_ts) => {
-                        if commit_ts > for_update_ts {
-                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                                "key" => %self.key, 
-                                "start_ts" => self.txn_props.start_ts, 
-                                "for_update_ts" => for_update_ts,
-                                "conflicting start_ts" => write.start_ts,
-                                "conflicting commit_ts" => commit_ts);
-                            return Err(ErrorInner::PessimisticLockNotFound {
-                                start_ts: self.txn_props.start_ts,
-                                key: self.key.clone().into_raw()?,
-                            }
-                            .into());
-=======
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = reader.seek_write(&self.key, seek_ts)? {
             // If there's a write record whose commit_ts equals to our start ts, the current
@@ -379,17 +350,13 @@ impl<'a> PrewriteMutation<'a> {
             {
                 MVCC_CONFLICT_COUNTER.rolled_back.inc();
                 // TODO: Maybe we need to add a new error for the rolled back case.
-                self.write_conflict_error(&write, commit_ts, WriteConflictReason::SelfRolledBack)?;
+                self.write_conflict_error(&write, commit_ts)?;
             }
             match self.txn_props.kind {
                 TransactionKind::Optimistic(_) => {
                     if commit_ts > self.txn_props.start_ts {
                         MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                        self.write_conflict_error(
-                            &write,
-                            commit_ts,
-                            WriteConflictReason::Optimistic,
-                        )?;
+                        self.write_conflict_error(&write, commit_ts)?;
                     }
                 }
                 // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
@@ -399,11 +366,7 @@ impl<'a> PrewriteMutation<'a> {
                         // Do the same as optimistic transactions if constraint checks are needed.
                         if commit_ts > self.txn_props.start_ts {
                             MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                            self.write_conflict_error(
-                                &write,
-                                commit_ts,
-                                WriteConflictReason::LazyUniquenessCheck,
-                            )?;
+                            self.write_conflict_error(&write, commit_ts)?;
                         }
                     }
                     if commit_ts > for_update_ts {
@@ -429,29 +392,10 @@ impl<'a> PrewriteMutation<'a> {
                         return Err(ErrorInner::PessimisticLockNotFound {
                             start_ts: self.txn_props.start_ts,
                             key: self.key.clone().into_raw()?,
->>>>>>> 3f5acade4... storage: skip Rollback when checking newer version for non-pessimisitc keys (#13426)
                         }
                         .into());
                     }
                 }
-<<<<<<< HEAD
-                // If there's a write record whose commit_ts equals to our start ts, the current
-                // transaction is ok to continue, unless the record means that the current
-                // transaction has been rolled back.
-                if commit_ts == self.txn_props.start_ts
-                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-                {
-                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
-                    // TODO: Maybe we need to add a new error for the rolled back case.
-                    self.write_conflict_error(&write, commit_ts)?;
-                }
-                // Should check it when no lock exists, otherwise it can report error when there is
-                // a lock belonging to a committed transaction which deletes the key.
-                check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
-
-                Ok(Some((write, commit_ts)))
-=======
->>>>>>> 3f5acade4... storage: skip Rollback when checking newer version for non-pessimisitc keys (#13426)
             }
             // Should check it when no lock exists, otherwise it can report error when there
             // is a lock belonging to a committed transaction which deletes the key.
