@@ -18,7 +18,6 @@ use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
-    metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request, Response},
 };
 use raft::{
@@ -37,6 +36,7 @@ use raftstore::{
     },
 };
 use thiserror::Error;
+use tikv_kv::write_modifies;
 use tikv_util::{codec::number::NumberEncoder, time::Instant};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
@@ -44,8 +44,8 @@ use super::metrics::*;
 use crate::storage::{
     self, kv,
     kv::{
-        write_modifies, Callback, Engine, Error as KvError, ErrorInner as KvErrorInner,
-        ExtCallback, Modify, SnapContext, WriteData,
+        Callback, Engine, Error as KvError, ErrorInner as KvErrorInner, ExtCallback, Modify,
+        SnapContext, WriteData,
     },
 };
 
@@ -202,10 +202,10 @@ where
     ) -> Result<()> {
         let mut header = self.new_request_header(ctx.pb_ctx);
         let mut flags = 0;
-        if ctx.pb_ctx.get_stale_read() && !ctx.start_ts.is_zero() {
+        if ctx.pb_ctx.get_stale_read() && ctx.start_ts.map_or(true, |ts| !ts.is_zero()) {
             let mut data = [0u8; 8];
             (&mut data[..])
-                .encode_u64(ctx.start_ts.into_inner())
+                .encode_u64(ctx.start_ts.unwrap_or_default().into_inner())
                 .unwrap();
             flags |= WriteBatchFlags::STALE_READ.bits();
             header.set_flag_data(data.into());
@@ -329,18 +329,6 @@ where
         self.engine.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, start_key: &[u8], end_key: &[u8]) -> kv::Result<Self::Snap> {
-        let mut region = metapb::Region::default();
-        region.set_start_key(start_key.to_owned());
-        region.set_end_key(end_key.to_owned());
-        // Use a fake peer to avoid panic.
-        region.mut_peers().push(Default::default());
-        Ok(RegionSnapshot::<E::Snapshot>::from_raw(
-            self.engine.clone(),
-            region,
-        ))
-    }
-
     fn modify_on_kv_engine(&self, mut modifies: Vec<Modify>) -> kv::Result<()> {
         for modify in &mut modifies {
             match modify {
@@ -438,8 +426,9 @@ where
 
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
-        if !ctx.key_ranges.is_empty() && !ctx.start_ts.is_zero() {
-            req.mut_read_index().set_start_ts(ctx.start_ts.into_inner());
+        if !ctx.key_ranges.is_empty() && ctx.start_ts.map_or(false, |ts| !ts.is_zero()) {
+            req.mut_read_index()
+                .set_start_ts(ctx.start_ts.as_ref().unwrap().into_inner());
             req.mut_read_index()
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }

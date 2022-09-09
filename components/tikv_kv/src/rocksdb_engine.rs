@@ -210,10 +210,6 @@ impl Engine for RocksEngine {
         self.engines.kv.clone()
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> Result<Self::Snap> {
-        self.snapshot(Default::default())
-    }
-
     fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
         write_modifies(&self.engines.kv, modifies)
     }
