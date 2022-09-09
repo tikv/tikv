@@ -53,7 +53,7 @@ impl Clone for DataResolverManager {
             engine: self.engine.clone(),
             tx: self.tx.clone(),
             workers: Arc::new(Mutex::new(Vec::new())),
-            resolved_ts: self.resolved_ts.clone(),
+            resolved_ts: self.resolved_ts,
         }
     }
 }
@@ -266,7 +266,7 @@ impl WriteResolverWorker {
     // delete key.commit_ts > resolved-ts in write cf and default cf
     fn batch_resolve_write(&mut self, wb: &mut RocksWriteBatchVec) -> Result<bool> {
         let Batch { writes, has_more } = self.scan_next_batch()?;
-        if has_more && 0 == writes.len() {
+        if has_more && writes.is_empty() {
             return Ok(has_more);
         }
 

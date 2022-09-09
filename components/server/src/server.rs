@@ -291,7 +291,7 @@ where
             info!("TiKV running in Snapshot Recovery Mode");
             snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
             // connect_to_pd_cluster retreived the cluster id from pd
-            let cluster_id = config.server.cluster_id.clone();
+            let cluster_id = config.server.cluster_id;
             snap_recovery::init_cluster::start_recovery(
                 config.clone(),
                 cluster_id,
@@ -1209,7 +1209,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::new(backup_scheduler);
+        let backup_service = backup::Service::<RocksEngine, RaftRouter<RocksEngine, ER>>::new(
+            backup_scheduler,
+            self.router.clone(),
+        );
         if servers
             .server
             .register_service(create_backup(backup_service))

@@ -7,8 +7,9 @@ use std::{borrow::Cow, fmt};
 
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
-use futures::channel::oneshot::Sender;
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use kvproto::{
+    brpb::CheckAdminResponse,
     import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
@@ -461,6 +462,7 @@ where
     SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
     PrepareFlashback(Sender<bool>),
     FinishFlashback,
+    CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
 /// Message that will be sent to a peer.
