@@ -83,7 +83,7 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError + std::fmt::Display,
 {
-    let id = uuid::Uuid::new_v4();
+    let id = "";
     retry_ext(
         action,
         RetryExt::default().with_fail_hook(move |err: &E| {

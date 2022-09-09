@@ -607,12 +607,13 @@ mod tests {
 
     #[test]
     fn test_s3_get_content_md5() {
-        // md5sum "helloworld"
-        let expect = "d73b04b0e696b0945283defa3eee4538".to_string();
-        let actual = get_content_md5(true, b"helloworld").unwrap();
+        // base64 encode md5sum "helloworld"
+        let code = "helloworld".to_string();
+        let expect = "/F4DjTilcDIIVEHn/nAQsA==".to_string();
+        let actual = get_content_md5(true, code.as_bytes()).unwrap();
         assert_eq!(actual, expect);
 
-        let actual = get_content_md5(false, b"helloworld");
+        let actual = get_content_md5(false, b"xxx");
         assert!(actual.is_none())
     }
 
