@@ -14,7 +14,6 @@ use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
