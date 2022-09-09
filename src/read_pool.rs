@@ -46,6 +46,7 @@ pub enum ReadPool {
     Yatp {
         pool: yatp::ThreadPool<TaskCell>,
         running_tasks: IntGauge,
+        running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
     },
@@ -66,11 +67,13 @@ impl ReadPool {
             ReadPool::Yatp {
                 pool,
                 running_tasks,
+                running_threads,
                 max_tasks,
                 pool_size,
             } => ReadPoolHandle::Yatp {
                 remote: pool.remote().clone(),
                 running_tasks: running_tasks.clone(),
+                running_threads: running_threads.clone(),
                 max_tasks: *max_tasks,
                 pool_size: *pool_size,
             },
@@ -88,6 +91,7 @@ pub enum ReadPoolHandle {
     Yatp {
         remote: Remote<TaskCell>,
         running_tasks: IntGauge,
+        running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
     },
@@ -204,14 +208,16 @@ impl ReadPoolHandle {
             }
             ReadPoolHandle::Yatp {
                 remote,
-                running_tasks: _,
+                running_threads,
                 max_tasks,
                 pool_size,
+                ..
             } => {
                 remote.scale_workers(max_thread_count);
                 *max_tasks = max_tasks
                     .saturating_div(*pool_size)
                     .saturating_mul(max_thread_count);
+                running_threads.set(max_thread_count as i64);
                 *pool_size = max_thread_count;
             }
         }
@@ -284,6 +290,8 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
+        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
+            .with_label_values(&[&unified_read_pool_name]),
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
@@ -307,27 +315,29 @@ impl From<Vec<FuturePool>> for ReadPool {
 
 struct ReadPoolCpuTimeTracker {
     pool_name: String,
-    prev_total_cpu_time_us: u64,
+    // the total time duration of each thread busy with handling tasks. This time also includes
+    // the time when the threads are off-cpu, so it might be much higher than the actual cpu time.
+    prev_total_task_handling_time_us: u64,
     prev_check_time: Instant,
     prev_cpu_per_sec: f64,
 }
 
 impl ReadPoolCpuTimeTracker {
     fn new(pool_name: String) -> Self {
-        let prev_check_time = Instant::now();
+        let prev_check_time = Instant::now_coarse();
         let prev_total_cpu_time_us = MULTILEVEL_LEVEL_ELAPSED
             .with_label_values(&[&pool_name, "total"])
             .get();
         Self {
             pool_name,
-            prev_total_cpu_time_us,
+            prev_total_task_handling_time_us: prev_total_cpu_time_us,
             prev_check_time,
             prev_cpu_per_sec: 0.0,
         }
     }
 
     fn prev_avg_cpu_used(&mut self) -> f64 {
-        let check_time = Instant::now();
+        let check_time = Instant::now_coarse();
         let duration = check_time.saturating_duration_since(self.prev_check_time);
         // if the check duration is too small, just return the latest cached value.
         if duration < Duration::from_millis(100) {
@@ -336,9 +346,9 @@ impl ReadPoolCpuTimeTracker {
         let total_cpu_time = MULTILEVEL_LEVEL_ELAPSED
             .with_label_values(&[&self.pool_name, "total"])
             .get();
-        let total_cpu_per_sec =
-            (total_cpu_time - self.prev_total_cpu_time_us) as f64 / duration.as_micros() as f64;
-        self.prev_total_cpu_time_us = total_cpu_time;
+        let total_cpu_per_sec = (total_cpu_time - self.prev_total_task_handling_time_us) as f64
+            / duration.as_micros() as f64;
+        self.prev_total_task_handling_time_us = total_cpu_time;
         self.prev_check_time = check_time;
         self.prev_cpu_per_sec = total_cpu_per_sec;
         total_cpu_per_sec
@@ -438,9 +448,6 @@ impl ReadPoolConfigRunner {
 
         if new_thread_count != self.cur_thread_count {
             self.handle.scale_pool_size(new_thread_count);
-            info!("auto adjust read pool thread"; "read_pool_cpu" => read_pool_cpu, 
-                "running_tasks" => running_tasks, "current" => self.cur_thread_count, 
-                "new" => new_thread_count);
             self.notify_pool_size_change(new_thread_count);
             self.cur_thread_count = new_thread_count;
         }
@@ -544,6 +551,12 @@ mod metrics {
         pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
             "tikv_unified_read_pool_running_tasks",
             "The number of running tasks in the unified read pool",
+            &["name"]
+        )
+        .unwrap();
+        pub static ref UNIFIED_READ_POOL_RUNNING_THREADS: IntGaugeVec = register_int_gauge_vec!(
+            "tikv_unified_read_pool_thread_count",
+            "The number of running threads in the unified read pool",
             &["name"]
         )
         .unwrap();
