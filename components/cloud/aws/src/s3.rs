@@ -19,6 +19,7 @@ use rusoto_s3::{util::AddressingStyle, *};
 use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
+
 use crate::util::{self, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -303,7 +304,7 @@ impl<'client> S3Uploader<'client> {
     }
 
     fn get_content_md5(&self, content: &[u8]) -> Option<String> {
-        self.object_lock_enabled.then(||{
+        self.object_lock_enabled.then(|| {
             let digest = md5::compute(content);
             base64::encode(digest.0)
         })
