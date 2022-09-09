@@ -51,7 +51,7 @@ where
     ) {
         let (tx, rx) = mpsc::unbounded();
         self.router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::HasPendingAdmin(tx.clone()))
+            PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
         });
 
         let send_task = async move {

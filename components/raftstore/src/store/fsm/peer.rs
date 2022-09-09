@@ -1012,7 +1012,7 @@ where
         self.fsm.peer.flashback_state.take();
     }
 
-    fn on_has_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
+    fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
             // in snapshot recovery after we stopped all conf changes from PD.
@@ -1460,7 +1460,7 @@ where
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
-            SignificantMsg::HasPendingAdmin(ch) => self.on_has_pending_admin(ch),
+            SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
         }
     }
 
