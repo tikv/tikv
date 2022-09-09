@@ -1239,8 +1239,14 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             last_start_key = keys::enc_end_key(region);
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
+        let ranges: Vec<_> = ranges
+            .iter()
+            .map(|(start, end)| Range::new(start, end))
+            .collect();
 
-        self.engines.kv.roughly_cleanup_ranges(&ranges)?;
+        self.engines
+            .kv
+            .delete_ranges_cfs(DeleteStrategy::DeleteFiles, &ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -1490,9 +1496,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
             mgr.clone(),
-            cfg.value().snap_apply_batch_size.0 as usize,
-            cfg.value().use_delete_range,
-            cfg.value().snap_generator_pool_size,
+            cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
@@ -2851,7 +2855,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
         drop(meta);
 
-        if let Err(e) = self.ctx.engines.kv.delete_all_in_range(
+        if let Err(e) = self.ctx.engines.kv.delete_ranges_cfs(
             DeleteStrategy::DeleteByKey,
             &[Range::new(&start_key, &end_key)],
         ) {

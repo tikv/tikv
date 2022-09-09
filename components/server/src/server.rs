@@ -838,7 +838,10 @@ where
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+        let check_leader_runner = CheckLeaderRunner::new(
+            engines.store_meta.clone(),
+            self.coprocessor_host.clone().unwrap(),
+        );
         let check_leader_scheduler = self
             .background_worker
             .start("check-leader", check_leader_runner);

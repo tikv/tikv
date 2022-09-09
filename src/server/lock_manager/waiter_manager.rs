@@ -18,7 +18,7 @@ use futures::{
     future::Future,
     task::{Context, Poll},
 };
-use kvproto::deadlock::WaitForEntry;
+use kvproto::{deadlock::WaitForEntry, kvrpcpb::WriteConflictReason};
 use tikv_util::{
     config::ReadableDuration,
     time::{duration_to_sec, InstantExt},
@@ -247,6 +247,7 @@ impl Waiter {
             conflict_commit_ts: commit_ts,
             key,
             primary,
+            reason: WriteConflictReason::PessimisticRetry,
         });
         self.pr = ProcessResult::Failed {
             err: StorageError::from(TxnError::from(mvcc_err)),
@@ -822,6 +823,7 @@ pub mod tests {
                     conflict_commit_ts,
                     key,
                     primary,
+                    ..
                 }),
             ))))) => {
                 assert_eq!(start_ts, waiter_ts);

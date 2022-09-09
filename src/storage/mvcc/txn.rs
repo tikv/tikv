@@ -205,6 +205,8 @@ pub(crate) fn make_txn_error(
     key: &Key,
     start_ts: TimeStamp,
 ) -> crate::storage::mvcc::ErrorInner {
+    use kvproto::kvrpcpb::WriteConflictReason;
+
     use crate::storage::mvcc::ErrorInner;
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
@@ -244,6 +246,7 @@ pub(crate) fn make_txn_error(
                 conflict_commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 primary: vec![],
+                reason: WriteConflictReason::Optimistic,
             },
             "deadlock" => ErrorInner::Deadlock {
                 start_ts,
