@@ -43,7 +43,7 @@ where
     E: KvEngine,
     RR: RaftStoreRouter<E>,
 {
-    fn check_admin(
+    fn check_pending_admin_op(
         &mut self,
         ctx: RpcContext<'_>,
         _req: CheckAdminRequest,
