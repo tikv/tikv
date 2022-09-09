@@ -325,12 +325,12 @@ struct ReadPoolCpuTimeTracker {
 impl ReadPoolCpuTimeTracker {
     fn new(pool_name: String) -> Self {
         let prev_check_time = Instant::now_coarse();
-        let prev_total_cpu_time_us = MULTILEVEL_LEVEL_ELAPSED
+        let prev_total_task_handling_time_us = MULTILEVEL_LEVEL_ELAPSED
             .with_label_values(&[&pool_name, "total"])
             .get();
         Self {
             pool_name,
-            prev_total_task_handling_time_us: prev_total_cpu_time_us,
+            prev_total_task_handling_time_us,
             prev_check_time,
             prev_cpu_per_sec: 0.0,
         }

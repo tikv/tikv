@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, sync::Arc};
+use std::{convert::TryFrom, sync::Arc, time::Duration};
 
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
@@ -8,7 +8,7 @@ use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
-    storage::{IntervalRange, Storage},
+    storage::{IntervalRange, Storage, scanner::MAX_TIME_SLICE},
     Result,
 };
 use tidb_query_datatype::{
