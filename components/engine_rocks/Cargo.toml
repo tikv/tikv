@@ -55,8 +55,8 @@ txn_types = { path = "../txn_types", default-features = false }
 
 [dependencies.rocksdb]
 git = "https://github.com/tikv/rust-rocksdb.git"
-rev = "e97c9b50d388ac00aae538afcdbb6224a2b12fda"
 package = "rocksdb"
+branch = "tikv-6.1"
 features = ["encryption"]
 
 [dev-dependencies]

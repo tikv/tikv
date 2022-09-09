@@ -275,6 +275,7 @@ pub fn new_test_config(base_dir: &Path, node_id: u16) -> TiKvConfig {
     config.rocksdb.writecf.block_size = ReadableSize::kb(4);
     config.rocksdb.writecf.target_file_size_base = ReadableSize::kb(32);
     config.rocksdb.max_background_jobs = 2;
+    config.rocksdb.max_sub_compactions = 1;
     config.raft_engine.mut_config().target_file_size.0 = ReadableSize::kb(128).0;
     config
 }

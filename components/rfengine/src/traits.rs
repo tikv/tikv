@@ -112,10 +112,6 @@ impl RaftEngine for RfEngine {
         panic!()
     }
 
-    fn has_builtin_entry_cache(&self) -> bool {
-        panic!()
-    }
-
     fn flush_metrics(&self, instance: &str) {
         flush_engine_properties(&self, instance);
     }

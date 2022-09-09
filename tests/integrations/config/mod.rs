@@ -251,13 +251,13 @@ fn test_serde_custom_tikv_config() {
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
         discardable_ratio: 0.00156,
-        sample_ratio: 0.982,
+        sample_ratio: None,
         merge_small_file_threshold: ReadableSize::kb(21),
         blob_run_mode: BlobRunMode::Fallback,
         level_merge: true,
         range_merge: true,
         max_sorted_runs: 100,
-        gc_merge_rewrite: true,
+        gc_merge_rewrite: false,
     };
     let titan_db_config = TitanDBConfig {
         enabled: true,
@@ -396,7 +396,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly,
                 level_merge: false,
@@ -461,7 +461,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
@@ -526,7 +526,7 @@ fn test_serde_custom_tikv_config() {
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
                 discardable_ratio: 0.5,
-                sample_ratio: 0.1,
+                sample_ratio: None,
                 merge_small_file_threshold: ReadableSize::mb(8),
                 blob_run_mode: BlobRunMode::ReadOnly, // default value
                 level_merge: false,
