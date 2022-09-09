@@ -303,12 +303,10 @@ impl<'client> S3Uploader<'client> {
     }
 
     fn get_content_md5(&self, content: &[u8]) -> Option<String> {
-        if self.object_lock_enabled {
+        self.object_lock_enabled.then(||{
             let digest = md5::compute(content);
-            Some(base64::encode(digest.0))
-        } else {
-            None
-        }
+            base64::encode(digest.0)
+        })
     }
 
     /// Executes the upload process.
