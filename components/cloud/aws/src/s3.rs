@@ -280,6 +280,13 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
+fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
+    object_lock_enabled.then(|| {
+        let digest = md5::compute(content);
+        base64::encode(digest.0)
+    })
+}
+
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
@@ -301,13 +308,6 @@ impl<'client> S3Uploader<'client> {
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
-    }
-
-    fn get_content_md5(&self, content: &[u8]) -> Option<String> {
-        self.object_lock_enabled.then(|| {
-            let digest = md5::compute(content);
-            base64::encode(digest.0)
-        })
     }
 
     /// Executes the upload process.
@@ -445,7 +445,7 @@ impl<'client> S3Uploader<'client> {
                     upload_id: self.upload_id.clone(),
                     part_number,
                     content_length: Some(data.len() as i64),
-                    content_md5: self.get_content_md5(data),
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -506,7 +506,7 @@ impl<'client> S3Uploader<'client> {
                     ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
                     storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                     content_length: Some(data.len() as i64),
-                    content_md5: self.get_content_md5(data),
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -604,6 +604,17 @@ mod tests {
     use tikv_util::stream::block_on_external_io;
 
     use super::*;
+
+    #[test]
+    fn test_s3_get_content_md5() {
+        // md5sum "helloworld"
+        let expect = "d73b04b0e696b0945283defa3eee4538".to_string();
+        let actual = get_content_md5(true, b"helloworld").unwrap();
+        assert_eq!(actual, expect);
+
+        let actual = get_content_md5(false, b"helloworld");
+        assert!(actual.is_none())
+    }
 
     #[test]
     fn test_s3_config() {
