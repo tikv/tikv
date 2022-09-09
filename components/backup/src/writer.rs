@@ -197,10 +197,10 @@ impl<E: KvEngine> BackupWriterBuilder<E> {
         }
     }
 
-    pub fn build(&self, start_key: Vec<u8>) -> Result<BackupWriter<E>> {
+    pub fn build(&self, start_key: Vec<u8>, storage_name: &str) -> Result<BackupWriter<E>> {
         let key = file_system::sha256(&start_key).ok().map(hex::encode);
         let store_id = self.store_id;
-        let name = backup_file_name(store_id, &self.region, key);
+        let name = backup_file_name(store_id, &self.region, key, storage_name);
         BackupWriter::new(
             self.engine.clone(),
             &name,
