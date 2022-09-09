@@ -8,7 +8,7 @@ use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
-    storage::{IntervalRange, Storage, scanner::MAX_TIME_SLICE},
+    storage::{scanner::MAX_TIME_SLICE, IntervalRange, Storage},
     Result,
 };
 use tidb_query_datatype::{
