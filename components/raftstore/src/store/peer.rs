@@ -2488,7 +2488,8 @@ where
                 // Resume `read_progress`
                 self.read_progress.resume();
                 // Update apply index to `last_applying_idx`
-                self.read_progress.update_applied(self.last_applying_idx);
+                self.read_progress
+                    .update_applied(self.last_applying_idx, &ctx.coprocessor_host);
             }
             CheckApplyingSnapStatus::Idle => {
                 // FIXME: It's possible that the snapshot applying task is canceled.
@@ -3384,7 +3385,8 @@ where
         }
         self.pending_reads.gc();
 
-        self.read_progress.update_applied(applied_index);
+        self.read_progress
+            .update_applied(applied_index, &ctx.coprocessor_host);
 
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
@@ -5572,6 +5574,8 @@ pub trait RequestInspector {
         }
 
         fail_point!("perform_read_index", |_| Ok(RequestPolicy::ReadIndex));
+
+        fail_point!("perform_read_local", |_| Ok(RequestPolicy::ReadLocal));
 
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {

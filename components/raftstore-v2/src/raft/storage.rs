@@ -54,6 +54,10 @@ pub struct Storage<ER> {
     entry_storage: EntryStorage<ER>,
     peer: metapb::Peer,
     region_state: RegionLocalState,
+    /// Whether states has been persisted before. If a peer is just created by
+    /// by messages, it has not persisted any states, we need to persist them
+    /// at least once dispite whether the state changes since create.
+    ever_persisted: bool,
     logger: Logger,
 }
 
@@ -101,6 +105,30 @@ impl<ER> Storage<ER> {
 }
 
 impl<ER: RaftEngine> Storage<ER> {
+    /// Creates a new storage with uninit states.
+    ///
+    /// This should only be used for creating new peer from raft message.
+    pub fn uninit(
+        store_id: u64,
+        region: Region,
+        engine: ER,
+        log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        logger: &Logger,
+    ) -> Result<Self> {
+        let mut region_state = RegionLocalState::default();
+        region_state.set_region(region);
+        Self::create(
+            store_id,
+            region_state,
+            RaftLocalState::default(),
+            RaftApplyState::default(),
+            engine,
+            log_fetch_scheduler,
+            false,
+            logger,
+        )
+    }
+
     /// Creates a new storage.
     ///
     /// All metadata should be initialized before calling this method. If the
@@ -112,7 +140,7 @@ impl<ER: RaftEngine> Storage<ER> {
         log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         logger: &Logger,
     ) -> Result<Option<Storage<ER>>> {
-        let region_state: RegionLocalState = match engine.get_region_state(region_id) {
+        let region_state = match engine.get_region_state(region_id) {
             Ok(Some(s)) => s,
             res => {
                 return Err(box_err!(
@@ -126,16 +154,6 @@ impl<ER: RaftEngine> Storage<ER> {
         if region_state.get_state() == PeerState::Tombstone {
             return Ok(None);
         }
-
-        let peer = find_peer(region_state.get_region(), store_id);
-        let peer = match peer {
-            Some(p) if p.get_id() != INVALID_ID => p,
-            _ => {
-                return Err(box_err!("no valid peer found in {:?}", region_state));
-            }
-        };
-
-        let logger = logger.new(o!("region_id" => region_id, "peer_id" => peer.get_id()));
 
         let raft_state = match engine.get_raft_state(region_id) {
             Ok(Some(s)) => s,
@@ -151,8 +169,38 @@ impl<ER: RaftEngine> Storage<ER> {
             }
         };
 
-        let region = region_state.get_region();
+        Self::create(
+            store_id,
+            region_state,
+            raft_state,
+            apply_state,
+            engine,
+            log_fetch_scheduler,
+            true,
+            logger,
+        )
+        .map(Some)
+    }
 
+    fn create(
+        store_id: u64,
+        region_state: RegionLocalState,
+        raft_state: RaftLocalState,
+        apply_state: RaftApplyState,
+        engine: ER,
+        log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+        persisted: bool,
+        logger: &Logger,
+    ) -> Result<Self> {
+        let peer = find_peer(region_state.get_region(), store_id);
+        let peer = match peer {
+            Some(p) if p.get_id() != INVALID_ID => p,
+            _ => {
+                return Err(box_err!("no valid peer found in {:?}", region_state));
+            }
+        };
+        let region = region_state.get_region();
+        let logger = logger.new(o!("region_id" => region.id, "peer_id" => peer.get_id()));
         let entry_storage = EntryStorage::new(
             peer.get_id(),
             engine,
@@ -162,12 +210,13 @@ impl<ER: RaftEngine> Storage<ER> {
             log_fetch_scheduler,
         )?;
 
-        Ok(Some(Storage {
+        Ok(Storage {
             entry_storage,
             peer: peer.clone(),
             region_state,
+            ever_persisted: persisted,
             logger,
-        }))
+        })
     }
 
     #[inline]
@@ -183,6 +232,14 @@ impl<ER: RaftEngine> Storage<ER> {
     #[inline]
     pub fn is_initialized(&self) -> bool {
         self.region_state.get_tablet_index() != 0
+    }
+
+    pub fn ever_persisted(&self) -> bool {
+        self.ever_persisted
+    }
+
+    pub fn set_ever_persisted(&mut self) {
+        self.ever_persisted = true;
     }
 }
 
