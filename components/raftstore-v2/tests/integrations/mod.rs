@@ -10,11 +10,13 @@
 
 use std::{
     ops::{Deref, DerefMut},
+    path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use crossbeam::channel::{self, Receiver, Sender};
@@ -31,10 +33,10 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use pd_client::RpcClient;
-use raftstore::store::{Config, Transport, RAFT_INIT_LOG_INDEX};
+use raftstore::store::{region_meta::RegionMeta, Config, Transport, RAFT_INIT_LOG_INDEX};
 use raftstore_v2::{
     create_store_batch_system,
-    router::{PeerMsg, QueryResult},
+    router::{DebugInfoChannel, PeerMsg, QueryResult},
     Bootstrap, StoreRouter, StoreSystem,
 };
 use slog::{o, Logger};
@@ -42,6 +44,7 @@ use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 
+mod test_life;
 mod test_status;
 
 struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
@@ -67,6 +70,20 @@ impl TestRouter {
         block_on(sub.result())
     }
 
+    fn must_query_debug_info(&self, region_id: u64, timeout: Duration) -> Option<RegionMeta> {
+        let timer = Instant::now();
+        while timer.elapsed() < timeout {
+            let (ch, sub) = DebugInfoChannel::pair();
+            let msg = PeerMsg::QueryDebugInfo(ch);
+            if self.send(region_id, msg).is_err() {
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            return block_on(sub.result());
+        }
+        None
+    }
+
     fn command(&self, region_id: u64, req: RaftCmdRequest) -> Option<RaftCmdResponse> {
         let (msg, sub) = PeerMsg::raft_command(req);
         self.send(region_id, msg).unwrap();
@@ -74,15 +91,92 @@ impl TestRouter {
     }
 }
 
+struct RunningState {
+    raft_engine: RaftTestEngine,
+    factory: Arc<TestTabletFactoryV2>,
+    system: StoreSystem<KvTestEngine, RaftTestEngine>,
+    cfg: Arc<VersionTrack<Config>>,
+    transport: TestTransport,
+}
+
+impl RunningState {
+    fn new(
+        pd_client: &RpcClient,
+        path: &Path,
+        cfg: Arc<VersionTrack<Config>>,
+        transport: TestTransport,
+        logger: &Logger,
+    ) -> (TestRouter, Self) {
+        let cf_opts = ALL_CFS
+            .iter()
+            .copied()
+            .map(|cf| (cf, CfOptions::default()))
+            .collect();
+        let factory = Arc::new(TestTabletFactoryV2::new(
+            path,
+            DbOptions::default(),
+            cf_opts,
+        ));
+        let raft_engine =
+            engine_test::raft::new_engine(&format!("{}", path.join("raft").display()), None)
+                .unwrap();
+        let mut bootstrap = Bootstrap::new(&raft_engine, 0, pd_client, logger.clone());
+        let store_id = bootstrap.bootstrap_store().unwrap();
+        let mut store = Store::default();
+        store.set_id(store_id);
+        if let Some(region) = bootstrap.bootstrap_first_region(&store, store_id).unwrap() {
+            if factory.exists(region.get_id(), RAFT_INIT_LOG_INDEX) {
+                factory
+                    .destroy_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
+                    .unwrap();
+            }
+            factory
+                .open_tablet(
+                    region.get_id(),
+                    Some(RAFT_INIT_LOG_INDEX),
+                    OpenOptions::default().set_create_new(true),
+                )
+                .unwrap();
+        }
+
+        let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
+            &cfg.value(),
+            store_id,
+            logger.clone(),
+        );
+        system
+            .start(
+                store_id,
+                cfg.clone(),
+                raft_engine.clone(),
+                factory.clone(),
+                transport.clone(),
+                &router,
+            )
+            .unwrap();
+
+        let state = Self {
+            raft_engine,
+            factory,
+            system,
+            cfg,
+            transport,
+        };
+        (TestRouter(router), state)
+    }
+}
+
+impl Drop for RunningState {
+    fn drop(&mut self) {
+        self.system.shutdown();
+    }
+}
+
 struct TestNode {
     _pd_server: test_pd::Server<Service>,
-    _pd_client: RpcClient,
-    _path: TempDir,
-    store: Store,
-    raft_engine: Option<RaftTestEngine>,
-    factory: Option<Arc<TestTabletFactoryV2>>,
-    system: Option<StoreSystem<KvTestEngine, RaftTestEngine>>,
-    cfg: Option<Arc<VersionTrack<Config>>>,
+    pd_client: RpcClient,
+    path: TempDir,
+    running_state: Option<RunningState>,
     logger: Logger,
 }
 
@@ -93,94 +187,42 @@ impl TestNode {
         let pd_client = test_pd::util::new_client(pd_server.bind_addrs(), None);
         let path = TempDir::new().unwrap();
 
-        let cf_opts = ALL_CFS
-            .iter()
-            .copied()
-            .map(|cf| (cf, CfOptions::default()))
-            .collect();
-        let factory = Arc::new(TestTabletFactoryV2::new(
-            path.path(),
-            DbOptions::default(),
-            cf_opts,
-        ));
-        let raft_engine =
-            engine_test::raft::new_engine(&format!("{}", path.path().join("raft").display()), None)
-                .unwrap();
-        let mut bootstrap = Bootstrap::new(&raft_engine, 0, &pd_client, logger.clone());
-        let store_id = bootstrap.bootstrap_store().unwrap();
-        let mut store = Store::default();
-        store.set_id(store_id);
-        let region = bootstrap
-            .bootstrap_first_region(&store, store_id)
-            .unwrap()
-            .unwrap();
-        if factory.exists(region.get_id(), RAFT_INIT_LOG_INDEX) {
-            factory
-                .destroy_tablet(region.get_id(), RAFT_INIT_LOG_INDEX)
-                .unwrap();
-        }
-        factory
-            .open_tablet(
-                region.get_id(),
-                Some(RAFT_INIT_LOG_INDEX),
-                OpenOptions::default().set_create_new(true),
-            )
-            .unwrap();
-
         TestNode {
             _pd_server: pd_server,
-            _pd_client: pd_client,
-            _path: path,
-            store,
-            raft_engine: Some(raft_engine),
-            factory: Some(factory),
-            system: None,
-            cfg: None,
+            pd_client,
+            path,
+            running_state: None,
             logger,
         }
     }
 
-    fn start(
-        &mut self,
-        cfg: Arc<VersionTrack<Config>>,
-        trans: impl Transport + 'static,
-    ) -> TestRouter {
-        let (router, mut system) = create_store_batch_system::<KvTestEngine, RaftTestEngine>(
-            &cfg.value(),
-            self.store.clone(),
-            self.logger.clone(),
-        );
-        system
-            .start(
-                self.store.clone(),
-                cfg.clone(),
-                self.raft_engine.clone().unwrap(),
-                self.factory.clone().unwrap(),
-                trans,
-                &router,
-            )
-            .unwrap();
-        self.cfg = Some(cfg);
-        self.system = Some(system);
-        TestRouter(router)
+    fn start(&mut self, cfg: Arc<VersionTrack<Config>>, trans: TestTransport) -> TestRouter {
+        let (router, state) =
+            RunningState::new(&self.pd_client, self.path.path(), cfg, trans, &self.logger);
+        self.running_state = Some(state);
+        router
     }
 
     fn config(&self) -> &Arc<VersionTrack<Config>> {
-        self.cfg.as_ref().unwrap()
+        &self.running_state.as_ref().unwrap().cfg
     }
 
     fn stop(&mut self) {
-        if let Some(mut system) = self.system.take() {
-            system.shutdown();
-        }
+        self.running_state.take();
+    }
+
+    fn restart(&mut self) -> TestRouter {
+        let state = self.running_state.as_ref().unwrap();
+        let prev_transport = state.transport.clone();
+        let cfg = state.cfg.clone();
+        self.stop();
+        self.start(cfg, prev_transport)
     }
 }
 
 impl Drop for TestNode {
     fn drop(&mut self) {
         self.stop();
-        self.raft_engine.take();
-        self.factory.take();
     }
 }
 

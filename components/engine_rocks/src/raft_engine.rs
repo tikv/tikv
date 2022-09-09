@@ -8,7 +8,9 @@ use engine_traits::{
 };
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -151,6 +153,10 @@ impl RaftEngineReadOnly for RocksEngine {
         let key = keys::apply_state_key(raft_group_id);
         self.get_msg_cf(CF_DEFAULT, &key)
     }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.get_msg_cf(CF_DEFAULT, keys::RECOVER_STATE_KEY)
+    }
 }
 
 impl RaftEngineDebug for RocksEngine {
@@ -252,6 +258,8 @@ impl RaftEngine for RocksEngine {
         batch: &mut Self::LogBatch,
     ) -> Result<()> {
         batch.delete(&keys::raft_state_key(raft_group_id))?;
+        batch.delete(&keys::region_state_key(raft_group_id))?;
+        batch.delete(&keys::apply_state_key(raft_group_id))?;
         if first_index == 0 {
             let seek_key = keys::raft_log_key(raft_group_id, 0);
             let prefix = keys::raft_log_prefix(raft_group_id);
@@ -312,10 +320,6 @@ impl RaftEngine for RocksEngine {
         Ok(total)
     }
 
-    fn purge_expired_files(&self) -> Result<Vec<u64>> {
-        Ok(vec![])
-    }
-
     fn flush_metrics(&self, instance: &str) {
         KvEngine::flush_metrics(self, instance)
     }
@@ -365,6 +369,10 @@ impl RaftEngine for RocksEngine {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    }
+
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        self.put_msg(keys::RECOVER_STATE_KEY, state)
     }
 }
 

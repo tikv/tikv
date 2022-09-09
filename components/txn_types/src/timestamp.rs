@@ -12,7 +12,7 @@ use collections::HashSet;
 #[repr(transparent)]
 pub struct TimeStamp(u64);
 
-const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
 
 impl TimeStamp {
     /// Create a time stamp from physical and logical components.

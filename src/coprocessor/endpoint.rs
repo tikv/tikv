@@ -355,7 +355,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
-            start_ts: ctx.txn_start_ts,
+            start_ts: Some(ctx.txn_start_ts),
             ..Default::default()
         };
         // need to pass start_ts and ranges to check memory locks for replica read
@@ -501,9 +501,16 @@ impl<E: Engine> Endpoint<E> {
         async move {
             let res = match result_of_future {
                 Err(e) => make_error_response(e).into(),
-                Ok(handle_fut) => handle_fut
-                    .await
-                    .unwrap_or_else(|e| make_error_response(e).into()),
+                Ok(handle_fut) => {
+                    let mut response = handle_fut
+                        .await
+                        .unwrap_or_else(|e| make_error_response(e).into());
+                    let scan_detail_v2 = response.mut_exec_details_v2().mut_scan_detail_v2();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
+                    response
+                }
             };
             GLOBAL_TRACKERS.remove(tracker);
             res
@@ -551,7 +558,7 @@ impl<E: Engine> Endpoint<E> {
                 let result = {
                     tracker.on_begin_item();
 
-                    let result = handler.handle_streaming_request();
+                    let result = handler.handle_streaming_request().await;
 
                     let mut storage_stats = Statistics::default();
                     handler.collect_scan_statistics(&mut storage_stats);
@@ -796,8 +803,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFixture {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let is_finished = if self.result_len == 0 {
                 true
             } else {
@@ -841,8 +849,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for StreamFromClosure {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        async fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
             let result = (self.result_generator)(self.nth);
             self.nth += 1;
             result

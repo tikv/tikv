@@ -64,6 +64,14 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+
+    /// Returns false if KvEngine can't apply snapshot for this region now.
+    /// Some KvEngines need to do some transforms before apply data from
+    /// snapshot. These procedures can be batched in background if there are
+    /// more than one incoming snapshots, thus not blocking applying thread.
+    fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
+        true
+    }
 }
 
 /// TabletAccessor is the trait to access all the tablets with provided accessor
@@ -219,7 +227,7 @@ impl OpenOptions {
 /// A factory trait to create new engine.
 // It should be named as `EngineFactory` for consistency, but we are about to
 // rename engine to tablet, so always use tablet for new traits/types.
-pub trait TabletFactory<EK>: TabletAccessor<EK> {
+pub trait TabletFactory<EK>: TabletAccessor<EK> + Send + Sync {
     /// Open the tablet with id and suffix according to the OpenOptions.
     ///
     /// The id is likely the region Id, the suffix could be the current raft log
@@ -287,7 +295,7 @@ where
 
 impl<EK> TabletFactory<EK> for DummyFactory<EK>
 where
-    EK: CfOptionsExt + Clone + Send + 'static,
+    EK: CfOptionsExt + Clone + Send + Sync + 'static,
 {
     fn create_shared_db(&self) -> Result<EK> {
         Ok(self.engine.as_ref().unwrap().clone())
