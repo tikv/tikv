@@ -87,7 +87,16 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 self.end_key.as_ref(),
                 // To flashback the data, we need to get all the latest writes first by scanning
                 // every unique key in `CF_WRITE`.
-                move |key| {
+                |key| {
+                    // No need to flashback the key if its `commit_ts` is smaller than
+                    // `self.version`.
+                    if let Ok(commit_ts) = key.decode_ts() {
+                        if commit_ts <= self.version {
+                            return false;
+                        }
+                    }
+                    // Only scan the latest version for each key, i.e, the first version we meet
+                    // for each key.
                     if let Ok(truncated_key) = key.clone().truncate_ts() {
                         let mut cur_key_rc = cur_key.borrow_mut();
                         if cur_key_rc.is_some() && truncated_key == *cur_key_rc.as_ref().unwrap() {
