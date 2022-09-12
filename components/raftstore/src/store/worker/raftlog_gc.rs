@@ -148,12 +148,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         }
     }
 
-    fn seqno_flushed_index(&self, region_id: u64, seqno: u64) -> Option<u64> {
+    fn region_flushed_index(&self, region_id: u64) -> Option<u64> {
         self.engines
             .raft
-            .get_seqno_relation(region_id, seqno)
+            .get_apply_state(region_id)
             .unwrap()
-            .map(|relation| relation.get_apply_state().get_applied_index())
+            .map(|state| state.get_applied_index())
     }
 
     fn flush(&mut self) {
@@ -180,10 +180,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 // It's only for flush.
                 continue;
             }
-            if let Some(flushed_seqno) = self.flushed_seqno.as_ref() {
-                let max_compact_to = self
-                    .seqno_flushed_index(t.region_id, flushed_seqno.min_seqno())
-                    .unwrap_or_default();
+            if self.flushed_seqno.is_some() {
+                let max_compact_to = self.region_flushed_index(t.region_id).unwrap_or_default();
                 if t.end_idx > max_compact_to {
                     let end_idx = t.end_idx;
                     let gap_count = end_idx - max_compact_to;

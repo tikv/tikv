@@ -503,7 +503,6 @@ where
         delegate.update_metrics(self);
         if persistent {
             let (_, seqno) = self.write_to_db();
-            info!("write seqno at commit"; "seqno" => ?seqno);
             if let Some(seqno) = seqno {
                 delegate.last_write_seqno.push(seqno);
                 for res in self
@@ -670,7 +669,6 @@ where
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
         let (is_synced, seqno) = self.write_to_db();
-        info!("write seqno at flush"; "seqno" => ?seqno);
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
@@ -678,7 +676,6 @@ where
             if let Some(seqno) = seqno {
                 for res in apply_res.iter_mut().rev().take(self.uncommitted_res_count) {
                     res.write_seqno.push(seqno);
-                    info!("set seqno for res"; "res"=> ?res);
                 }
             }
             self.uncommitted_res_count = 0;

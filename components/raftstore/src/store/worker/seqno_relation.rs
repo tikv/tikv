@@ -154,10 +154,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             .raft
             .put_flushed_seqno(&self.flushed_seqno)
             .unwrap();
-        let scheduler = self.raftlog_gc_scheduler.as_ref().unwrap();
-        if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed { cf, seqno }) {
-            error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
-        }
         if let Some(min) = min_flushed {
             gc_seqno_relations(min, &self.engines.raft, &mut self.wb).unwrap();
             if !self.wb.is_empty() {
@@ -170,6 +166,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         RAFT_WB_DEFAULT_SIZE,
                     )
                     .unwrap();
+            }
+            let scheduler = self.raftlog_gc_scheduler.as_ref().unwrap();
+            if let Err(e) = scheduler.schedule(RaftlogGcTask::MemtableFlushed { cf, seqno }) {
+                error!("failed to notify memtable flushed to raftlog gc worker"; "err" => ?e);
             }
         }
     }

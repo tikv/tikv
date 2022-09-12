@@ -68,10 +68,6 @@ pub struct SequenceNumberWindow {
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) {
-        info!(
-            "push seqno {:?} to window, ack_counter: {}",
-            sn, self.ack_counter,
-        );
         let start_delta = match sn.start_counter.checked_sub(self.ack_counter) {
             Some(delta) if delta > 0 => delta as usize,
             _ => {

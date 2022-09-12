@@ -1205,6 +1205,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut recover_from_raft_db = false;
 
         if let Some(seqno) = raft_engine.recover_from_raft_db().unwrap() {
+            info!("start to recover states from raftdb"; "seqno" => seqno);
             recover_from_raft_db = true;
             let flushed_seqnos = raft_engine.get_flushed_seqno().unwrap();
             let min_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.min_seqno());
@@ -1224,6 +1225,11 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                         .expect(&format!("region_id: {}", region_id));
                     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
                     let apply_state = raft_engine.get_apply_state(region_id)?.unwrap();
+                    info!("recover region from raftdb";
+                        "region_id" => region_id,
+                        "region_state" => ?region_state,
+                        "apply_state" => ?apply_state,
+                    );
                     kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
                 })
                 .unwrap();
