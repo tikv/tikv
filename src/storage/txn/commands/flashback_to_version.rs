@@ -20,7 +20,7 @@ use crate::storage::{
 command! {
     FlashbackToVersion:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version @{} | {:?}", (version ,ctx),
+        display => "kv::command::flashback_to_version -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
