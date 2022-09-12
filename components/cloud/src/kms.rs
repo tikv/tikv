@@ -64,6 +64,10 @@ impl EncryptedKey {
             Ok(Self(key))
         }
     }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
 }
 
 // PlainKey is a newtype used to mark a vector a plaintext key.
@@ -75,6 +79,10 @@ impl PlainKey {
     pub fn new(key: Vec<u8>) -> Result<Self> {
         // TODO: crypter.rs in encryption performs additional validation
         Ok(Self(key))
+    }
+
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
     }
 }
 
