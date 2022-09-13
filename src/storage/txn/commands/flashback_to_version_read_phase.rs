@@ -49,10 +49,10 @@ pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for mul
 ///   1. Read phase:
 ///     - Scan all locks to delete them all later.
 ///     - Scan all the latest writes to flashback them all later.
-///  2. Write phase:
-///    - Delete all locks we scanned at the read phase.
-///    - Write the old MVCC version writes for the keys we scanned at the read
-///      phase.
+///   2. Write phase:
+///     - Delete all locks we scanned at the read phase.
+///     - Write the old MVCC version writes for the keys we scanned at the read
+///       phase.
 impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         if self.commit_ts <= self.start_ts {

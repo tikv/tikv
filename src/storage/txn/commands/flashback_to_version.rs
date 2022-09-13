@@ -84,8 +84,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             }
         }
         // To flashback the `CF_WRITE` and `CF_DEFAULT`, we need to write a new MVCC
-        // record for each key in `self.keys` with its old value at
-        // `self.version`, specifically, the flashback will have the following behavior:
+        // record for each key in `self.keys` with its old value at `self.version`,
+        // specifically, the flashback will have the following behavior:
         //   - If a key doesn't exist at `self.version`, it will be put a
         //     `WriteType::Delete`.
         //   - If a key exists at `self.version`, it will be put the exact same record
