@@ -337,8 +337,9 @@ impl ServerCluster {
             tx,
             cfg.gc.clone(),
             Default::default(),
+            Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start().unwrap();
+        gc_worker.start(node_id).unwrap();
         gc_worker
             .start_observe_lock_apply(&mut coprocessor_host, concurrency_manager.clone())
             .unwrap();
@@ -389,7 +390,8 @@ impl ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_runner =
+            CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
