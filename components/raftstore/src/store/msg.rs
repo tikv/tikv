@@ -73,19 +73,6 @@ where
     }
 }
 
-impl<S> Default for ReadResponse<S>
-where
-    S: Snapshot,
-{
-    fn default() -> Self {
-        ReadResponse {
-            response: RaftCmdResponse::default(),
-            snapshot: None,
-            txn_extra_op: TxnExtraOp::Noop,
-        }
-    }
-}
-
 pub type BoxReadCallback<S> = Box<dyn FnOnce(ReadResponse<S>) + Send>;
 pub type BoxWriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 pub type ExtCallback = Box<dyn FnOnce() + Send>;
