@@ -83,19 +83,10 @@ impl RaftState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RaftTruncatedState {
     pub(crate) truncated_index: u64,
     pub(crate) truncated_index_term: u64,
-}
-
-impl Default for RaftTruncatedState {
-    fn default() -> Self {
-        Self {
-            truncated_index: RAFT_INIT_LOG_INDEX,
-            truncated_index_term: RAFT_INIT_LOG_TERM,
-        }
-    }
 }
 
 impl RaftTruncatedState {

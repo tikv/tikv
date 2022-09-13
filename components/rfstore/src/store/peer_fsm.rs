@@ -102,12 +102,16 @@ impl PeerFsm {
         cfg: &Config,
         engines: Engines,
         region_id: u64,
+        region_epoch: metapb::RegionEpoch,
         peer: metapb::Peer,
     ) -> Result<PeerFsm> {
         // We will remove tombstone key when apply snapshot
 
         let mut region = metapb::Region::default();
         region.set_id(region_id);
+        // Peer state key contains version, so that we have to set it to prevent destroyed
+        // uninitialized peer from being created by raft msg again.
+        region.set_region_epoch(region_epoch);
         let peer = Peer::new(store_id, cfg, engines, &region, peer)?;
         info!(
             "replicate peer";

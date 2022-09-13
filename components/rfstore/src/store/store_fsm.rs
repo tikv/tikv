@@ -757,8 +757,11 @@ impl<'a> StoreMsgHandler<'a> {
 
     fn on_raft_message(&mut self, msg: RaftMessage) {
         let region_id = msg.get_region_id();
-        let region_ver = msg.get_region_epoch().version;
-        let tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, region_ver));
+        let region_epoch = msg.get_region_epoch();
+        let tag = PeerTag::new(
+            self.store.id,
+            RegionIDVer::new(region_id, region_epoch.version),
+        );
         info!("{} store handle raft message {}", tag, MsgDebug(&msg));
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
@@ -793,7 +796,7 @@ impl<'a> StoreMsgHandler<'a> {
             CheckMsgStatus::NewPeer | CheckMsgStatus::NewPeerFirst => {
                 if self.maybe_create_peer(
                     region_id,
-                    region_ver,
+                    region_epoch.clone(),
                     &msg,
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 ) {
@@ -843,11 +846,14 @@ impl<'a> StoreMsgHandler<'a> {
     fn maybe_create_peer(
         &mut self,
         region_id: u64,
-        region_ver: u64,
+        region_epoch: metapb::RegionEpoch,
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> bool {
-        let tag = PeerTag::new(self.store.id, RegionIDVer::new(region_id, region_ver));
+        let tag = PeerTag::new(
+            self.store.id,
+            RegionIDVer::new(region_id, region_epoch.version),
+        );
         if !is_initial_msg(msg.get_message()) {
             info!(
                 "target peer doesn't exist, stale message";
@@ -858,7 +864,7 @@ impl<'a> StoreMsgHandler<'a> {
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return false;
         }
-        match self.maybe_create_peer_internal(region_id, region_ver, msg, is_local_first) {
+        match self.maybe_create_peer_internal(region_id, region_epoch, msg, is_local_first) {
             Ok(created) => created,
             Err(err) => {
                 error!("{} failed to create peer {:?}", tag, err);
@@ -870,7 +876,7 @@ impl<'a> StoreMsgHandler<'a> {
     fn maybe_create_peer_internal(
         &mut self,
         region_id: u64,
-        _region_ver: u64,
+        region_epoch: metapb::RegionEpoch,
         msg: &RaftMessage,
         _is_local_first: bool,
     ) -> Result<bool> {
@@ -884,6 +890,7 @@ impl<'a> StoreMsgHandler<'a> {
             &self.ctx.cfg,
             self.ctx.global.engines.clone(),
             region_id,
+            region_epoch,
             target.clone(),
         )?;
         fail_point!("after_acquire_store_meta_on_maybe_create_peer_internal");

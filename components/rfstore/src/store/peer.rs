@@ -584,7 +584,7 @@ impl Peer {
     pub(crate) fn destroy(&mut self, raft_wb: &mut rfengine::WriteBatch) -> Result<()> {
         let t = Instant::now();
 
-        let region = self.region().clone();
+        let mut region = self.region().clone();
         info!(
             "begin to destroy";
             "tag" => self.tag(),
@@ -592,20 +592,28 @@ impl Peer {
         );
         raft_wb.clear_region(self.region_id);
         self.mut_store().clear_meta(raft_wb, true);
+
+        // StoreMsgHandler::check_msg use both epoch and region peer list to check whether
+        // a message is targing a staled peer. But for an uninitialized peer, peer list is empty,
+        // so a removed peer will be created again. Saving current peer into the peer list of
+        // region will fix this problem.
+        if !self.get_store().is_initialized() {
+            region.mut_peers().push(self.peer.clone());
+        }
+        let epoch = region.get_region_epoch().clone();
         let mut tomb_stone = RegionLocalState::new();
         tomb_stone.set_state(PeerState::Tombstone);
-        tomb_stone.set_region(region.clone());
-        let epoch = region.get_region_epoch();
+        tomb_stone.set_region(region);
         raft_wb.set_state(
             self.region_id,
             &region_state_key(epoch.version, epoch.conf_ver),
             &tomb_stone.write_to_bytes().unwrap(),
         );
 
-        self.pending_reads.clear_all(Some(region.get_id()));
+        self.pending_reads.clear_all(Some(self.region_id));
 
         for Proposal { cb, .. } in self.proposals.queue.drain(..) {
-            notify_req_region_removed(region.get_id(), cb);
+            notify_req_region_removed(self.region_id, cb);
         }
         info!(
             "peer destroy itself";

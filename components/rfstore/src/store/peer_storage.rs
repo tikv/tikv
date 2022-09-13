@@ -527,7 +527,7 @@ fn init_raft_state(raft_engine: &rfengine::RfEngine, region: &metapb::Region) ->
     let rs_val = raft_engine.get_state(region.id, rs_key.chunk());
     if let Some(val) = rs_val {
         rs.unmarshal(&val);
-    } else if region.peers.len() > 0 {
+    } else if !region.peers.is_empty() {
         // new split region.
         rs.last_index = RAFT_INIT_LOG_INDEX;
         rs.term = RAFT_INIT_LOG_TERM;
@@ -558,7 +558,14 @@ fn init_truncated_state(
 ) -> RaftTruncatedState {
     match load_raft_truncated_state(raft_engine, region.get_id()) {
         Some(ts) if ts.truncated_index != rfengine::TRUNCATE_ALL_INDEX => ts,
-        _ => RaftTruncatedState::default(),
+        _ => {
+            let mut ts = RaftTruncatedState::default();
+            if !region.get_peers().is_empty() {
+                ts.truncated_index = RAFT_INIT_LOG_INDEX;
+                ts.truncated_index_term = RAFT_INIT_LOG_TERM;
+            }
+            ts
+        }
     }
 }
 
