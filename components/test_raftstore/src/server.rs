@@ -41,8 +41,8 @@ use raftstore::{
         },
         msg::RaftCmdExtraOpts,
         AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot,
-        SeqnoRelationRunner, SeqnoRelationTask, SnapManager, SnapManagerBuilder, SplitCheckRunner,
-        SplitConfigManager, StoreMetaDelegate,
+        SeqnoRelationRunner, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     Result,
 };
@@ -135,7 +135,6 @@ struct ServerMeta {
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>, SimulateStoreTransport>,
     rts_worker: Option<LazyWorker<resolved_ts::Task<RocksSnapshot>>>,
-    seqno_worker: Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -586,18 +585,16 @@ impl ServerCluster {
             None,
         );
         let mut seqno_worker = None;
-        let seqno_scheduler = flush_listener.map(|listener| {
+        if let Some(listener) = flush_listener {
             let mut worker = LazyWorker::new("seqno-relation");
             let scheduler = worker.scheduler();
-            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler.clone()));
+            let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
             let seqno_runner =
                 SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
             listener.update_notifier(notifier);
             worker.start(seqno_runner);
             seqno_worker = Some(worker);
-            scheduler
-        });
-        let apply_notifier = ApplyResNotifier::new(router.clone(), seqno_scheduler);
+        };
         node.start(
             engines,
             simulate_trans.clone(),
@@ -610,7 +607,7 @@ impl ServerCluster {
             auto_split_controller,
             concurrency_manager.clone(),
             collector_reg_handle,
-            apply_notifier,
+            seqno_worker,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
@@ -645,7 +642,6 @@ impl ServerCluster {
                 sim_trans: simulate_trans,
                 gc_worker,
                 rts_worker,
-                seqno_worker,
                 rsmeter_cleanup,
             },
         );
@@ -702,9 +698,6 @@ impl Simulator for ServerCluster {
             meta.node.stop();
             // resolved ts worker started, let's stop it
             if let Some(worker) = meta.rts_worker {
-                worker.stop_worker();
-            }
-            if let Some(worker) = meta.seqno_worker {
                 worker.stop_worker();
             }
             (meta.rsmeter_cleanup)();

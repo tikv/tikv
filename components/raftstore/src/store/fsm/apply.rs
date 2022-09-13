@@ -3672,6 +3672,7 @@ where
         if self.delegate.pending_remove {
             self.destroy(apply_ctx);
         }
+        apply_ctx.flush();
     }
 
     /// Handles proposals, and appends the commands to the apply delegate.

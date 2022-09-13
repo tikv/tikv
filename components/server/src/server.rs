@@ -234,8 +234,7 @@ struct TikvServer<ER: RaftEngine> {
     env: Arc<Environment>,
     background_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
-    seqno_worker: Option<Box<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>>,
-    apply_notifier: Option<ApplyResNotifier<RocksEngine, ER>>,
+    seqno_worker: Option<LazyWorker<SeqnoRelationTask<RocksSnapshot>>>,
     quota_limiter: Arc<QuotaLimiter>,
     causal_ts_provider: Option<Arc<BatchTsoProvider<RpcClient>>>, // used for rawkv apiv2
     tablet_factory: Option<Arc<dyn TabletFactory<RocksEngine> + Send + Sync>>,
@@ -366,7 +365,6 @@ where
             causal_ts_provider,
             tablet_factory: None,
             seqno_worker: None,
-            apply_notifier: None,
         }
     }
 
@@ -1036,7 +1034,7 @@ where
             auto_split_controller,
             self.concurrency_manager.clone(),
             collector_reg_handle,
-            self.apply_notifier.take().unwrap(),
+            self.seqno_worker.take(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
@@ -1507,7 +1505,7 @@ where
         &mut self,
     ) -> Option<Scheduler<SeqnoRelationTask<RocksSnapshot>>> {
         if self.config.raft_store.disable_kv_wal {
-            let seqno_worker = Box::new(LazyWorker::new("seqno-relation"));
+            let seqno_worker = LazyWorker::new("seqno-relation");
             let scheduler = seqno_worker.scheduler();
             self.seqno_worker = Some(seqno_worker);
             Some(scheduler)
@@ -1569,10 +1567,6 @@ where
 
         if let Some(sst_worker) = self.sst_worker {
             sst_worker.stop_worker();
-        }
-
-        if let Some(seqno_worker) = self.seqno_worker {
-            seqno_worker.stop_worker();
         }
 
         self.to_stop.into_iter().for_each(|s| s.stop());
@@ -1710,14 +1704,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             .region_info_accessor(self.region_info_accessor.clone())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
-        let apply_notifier = if let Some(scheduler) = self.init_seqno_relation_sender() {
+        if let Some(scheduler) = self.init_seqno_relation_sender() {
             let notifier = ApplyResNotifier::new(self.router.clone(), Some(scheduler));
-            builder = builder.flush_listener(FlushListener::new(notifier.clone()));
-            notifier
-        } else {
-            ApplyResNotifier::new(self.router.clone(), None)
-        };
-        self.apply_notifier = Some(apply_notifier);
+            builder = builder.flush_listener(FlushListener::new(notifier));
+        }
         if let Some(cache) = block_cache {
             builder = builder.block_cache(cache);
         }

@@ -14,7 +14,7 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     store::{
         config::{Config, RaftstoreConfigManager},
-        fsm::{store::ApplyResNotifier, StoreMeta, *},
+        fsm::{StoreMeta, *},
         AutoSplitController, SnapManager, StoreMsg, Transport,
     },
     Result,
@@ -91,7 +91,6 @@ fn start_raftstore(
     let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
     let pd_worker = LazyWorker::new("store-config");
     let (split_check_scheduler, _) = dummy_scheduler();
-    let apply_notifier = ApplyResNotifier::new(raft_router.clone(), None);
 
     system
         .spawn(
@@ -112,7 +111,7 @@ fn start_raftstore(
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
-            apply_notifier,
+            None,
         )
         .unwrap();
 

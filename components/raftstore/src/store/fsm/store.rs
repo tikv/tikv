@@ -89,7 +89,7 @@ use crate::{
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
-        migrate_states::mrigrate_states_from_kvdb_to_raftdb,
+        migrate_states::migrate_states_from_kvdb_to_raftdb,
         peer_storage,
         transport::Transport,
         util::{self, gc_seqno_relations, is_initial_msg, RegionReadProgressRegistry},
@@ -419,16 +419,6 @@ where
         ApplyResNotifier {
             router,
             seqno_scheduler,
-        }
-    }
-
-    pub fn init_raftlog_gc_scheduler(&self, scheduler: Scheduler<RaftlogGcTask>) {
-        if let Some(seqno_scheduler) = self.seqno_scheduler.as_ref() {
-            if let Err(e) =
-                seqno_scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(scheduler))
-            {
-                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
-            }
         }
     }
 }
@@ -1240,7 +1230,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .unwrap();
             kv_wb.write().unwrap();
         } else if self.cfg.value().disable_kv_wal {
-            mrigrate_states_from_kvdb_to_raftdb(&self.engines)?;
+            migrate_states_from_kvdb_to_raftdb(&self.engines)?;
         }
 
         let mut total_count = 0;
@@ -1553,6 +1543,7 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+    seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1602,7 +1593,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
-        apply_notifier: ApplyResNotifier<EK, ER>,
+        seqno_worker: Option<LazyWorker<SeqnoRelationTask<EK::Snapshot>>>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1642,6 +1633,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             cleanup_worker: Worker::new("cleanup-worker"),
             region_worker: Worker::new("region-worker"),
             purge_worker,
+            seqno_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
@@ -1669,7 +1661,14 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-        apply_notifier.init_raftlog_gc_scheduler(raftlog_gc_scheduler.clone());
+        if let Some(w) = workers.seqno_worker.as_ref() {
+            let scheduler = w.scheduler();
+            if let Err(e) = scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(
+                raftlog_gc_scheduler.clone(),
+            )) {
+                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
+            }
+        }
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(
             "raftlog-fetch-worker",
@@ -1746,7 +1745,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             collector_reg_handle,
             region_read_progress,
             health_service,
-            apply_notifier,
         )?;
         Ok(())
     }
@@ -1763,13 +1761,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         region_read_progress: RegionReadProgressRegistry,
         health_service: Option<HealthService>,
-        apply_notifier: ApplyResNotifier<EK, ER>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
         let apply_poller_builder = ApplyPollerBuilder::<EK>::new(
             &builder,
-            Box::new(apply_notifier),
+            Box::new(ApplyResNotifier::new(
+                self.router.clone(),
+                workers.seqno_worker.as_ref().map(|w| w.scheduler()),
+            )),
             self.apply_router.clone(),
         );
         self.apply_system
@@ -1812,6 +1812,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .raft
                 .put_recover_from_raft_db(seqno)
                 .unwrap();
+            let workers = self.workers.as_ref().unwrap();
+            let seqno_worker = workers.seqno_worker.as_ref().unwrap();
+            let scheduler = seqno_worker.scheduler();
+            scheduler.schedule(SeqnoRelationTask::Start).unwrap();
         }
         let tag = format!("raftstore-{}", store.get_id());
         let coprocessor_host = builder.coprocessor_host.clone();
@@ -1895,6 +1899,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         }
         workers.refresh_config_worker.stop();
         workers.raftlog_fetch_worker.stop();
+        if let Some(mut w) = workers.seqno_worker {
+            w.stop();
+        }
     }
 
     fn replay_raft_logs_between_seqnos(
@@ -1914,16 +1921,24 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         range
                     );
                     let region_state = engines.raft.get_region_state(region_id).unwrap().unwrap();
-                    let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
                     if !matches!(
                         region_state.get_state(),
                         PeerState::Applying | PeerState::Tombstone
                     ) {
+                        let apply_state = engines.raft.get_apply_state(region_id).unwrap().unwrap();
                         let version = region_state.get_region().get_region_epoch().get_version();
                         let start = apply_state.applied_index + 1;
                         let end = relation.get_apply_state().applied_index + 1;
-                        assert!(start <= end);
+                        assert!(
+                            start <= end,
+                            "region {} apply_state {:?}, relation {:?}, region_state {:?}",
+                            region_id,
+                            apply_state,
+                            relation,
+                            region_state
+                        );
                         if start != end {
+                            info!("replay raft logs"; "region_id" => region_id, "start" => start, "end" => end, "version" => version);
                             let regions = recover_regions
                                 .entry(version)
                                 .or_insert_with(HashMap::default);

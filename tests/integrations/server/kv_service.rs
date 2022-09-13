@@ -28,10 +28,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{
-        fsm::store::{ApplyResNotifier, StoreMeta},
-        AutoSplitController, SnapManager,
-    },
+    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
 use tempfile::Builder;
@@ -1117,14 +1114,12 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
-    let coprocessor_host =
-        CoprocessorHost::new(router.clone(), raftstore::coprocessor::Config::default());
+    let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SstImporter::new(&ImportConfig::default(), dir, None, ApiVersion::V1).unwrap())
     };
     let (split_check_scheduler, _) = dummy_scheduler();
-    let apply_notifier = ApplyResNotifier::new(router, None);
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
     let e = node
@@ -1140,7 +1135,7 @@ fn test_double_run_node() {
             AutoSplitController::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
-            apply_notifier,
+            None,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

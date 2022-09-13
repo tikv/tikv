@@ -34,6 +34,7 @@ pub enum Task<S: Snapshot> {
     MemtableSealed(u64),
     MemtableFlushed { cf: Option<String>, seqno: u64 },
     InitRaftlogGcScheduler(Scheduler<RaftlogGcTask>),
+    Start,
 }
 
 impl<S: Snapshot> fmt::Display for Task<S> {
@@ -56,6 +57,7 @@ impl<S: Snapshot> fmt::Display for Task<S> {
             Task::InitRaftlogGcScheduler(_) => {
                 de.field("name", &"init_raftlog_gc_scheduler").finish()
             }
+            Task::Start => de.field("name", &"start").finish(),
         }
     }
 }
@@ -77,6 +79,7 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
     last_persisted_seqno: u64,
     flushed_seqno: FlushedSeqno,
     raftlog_gc_scheduler: Option<Scheduler<RaftlogGcTask>>,
+    started: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
@@ -96,12 +99,13 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             inflight_seqno_relations: HashMap::default(),
             last_persisted_seqno: 0,
             raftlog_gc_scheduler: None,
+            started: false,
         }
     }
 
-    fn on_apply_res(&mut self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
+    fn on_apply_res(&mut self, apply_res: &[ApplyRes<EK::Snapshot>]) {
         let mut sync_relations = HashMap::default();
-        for res in &apply_res {
+        for res in apply_res {
             for seqno in &res.write_seqno {
                 let relation = SeqnoRelation {
                     region_id: res.region_id,
@@ -135,7 +139,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
 
         SEQNO_UNCOMMITTED_COUNT.set(self.seqno_window.pending_count() as i64);
         debug!("pending seqno count"; "count" => self.seqno_window.pending_count());
-        self.apply_res_notifier.notify(apply_res);
     }
 
     fn on_memtable_sealed(&mut self, seqno: u64) {
@@ -369,10 +372,24 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
     type Task = Task<EK::Snapshot>;
     fn run(&mut self, task: Task<EK::Snapshot>) {
         match task {
-            Task::ApplyRes(apply_res) => self.on_apply_res(apply_res),
-            Task::MemtableSealed(seqno) => self.on_memtable_sealed(seqno),
-            Task::MemtableFlushed { cf, seqno } => self.on_memtable_flushed(cf, seqno),
+            Task::ApplyRes(apply_res) => {
+                if self.started {
+                    self.on_apply_res(&apply_res);
+                }
+                self.apply_res_notifier.notify(apply_res);
+            }
+            Task::MemtableSealed(seqno) => {
+                if self.started {
+                    self.on_memtable_sealed(seqno)
+                }
+            }
+            Task::MemtableFlushed { cf, seqno } => {
+                if self.started {
+                    self.on_memtable_flushed(cf, seqno)
+                }
+            }
             Task::InitRaftlogGcScheduler(scheduler) => self.raftlog_gc_scheduler = Some(scheduler),
+            Task::Start => self.started = true,
         }
     }
 }
