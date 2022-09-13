@@ -60,6 +60,7 @@ crc64fast = "0.1"
 crossbeam = "0.8"
 encryption = { path = "../components/encryption", default-features = false }
 engine_rocks_helper = { path = "../components/engine_rocks_helper" }
+engine_store_ffi = { path = "../components/engine_store_ffi", default-features = false }
 engine_tiflash = { path = "../engine_tiflash", default-features = false }
 error_code = { path = "../components/error_code", default-features = false }
 fail = "0.5"

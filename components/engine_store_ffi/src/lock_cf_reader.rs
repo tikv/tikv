@@ -7,12 +7,10 @@ use std::{
 
 use encryption::DataKeyManager;
 use file_system::File;
+use raftstore::store::snap::snap_io::get_decrypter_reader;
 use tikv_util::codec::bytes::CompactBytesFromFileDecoder;
 
-use crate::{
-    engine_store_ffi::interfaces::root::DB::{BaseBuffView, RawVoidPtr},
-    store::snap::snap_io::get_decrypter_reader,
-};
+use crate::interfaces::root::DB::{BaseBuffView, RawVoidPtr};
 
 type LockCFDecoder = BufReader<Box<dyn Read + Send>>;
 

@@ -1,5 +1,5 @@
-use raftstore::engine_store_ffi::interfaces::root::DB::RawRustPtr;
-use raftstore::engine_store_ffi::{
+use engine_store_ffi::interfaces::root::DB::RawRustPtr;
+use engine_store_ffi::{
     ffi_gc_rust_ptr, ffi_make_async_waker, ffi_make_read_index_task, ffi_make_timer_task,
     ffi_poll_read_index_task, ffi_poll_timer_task, ProtoMsgBaseBuff, RawVoidPtr,
 };
@@ -98,7 +98,7 @@ impl Waker {
 
 fn blocked_read_index(
     req: &kvproto::kvrpcpb::ReadIndexRequest,
-    ffi_helper: &raftstore::engine_store_ffi::RaftStoreProxyFFIHelper,
+    ffi_helper: &engine_store_ffi::RaftStoreProxyFFIHelper,
     waker: Option<&Waker>,
 ) -> Option<kvproto::kvrpcpb::ReadIndexResponse> {
     let mut resp = kvproto::kvrpcpb::ReadIndexResponse::default();

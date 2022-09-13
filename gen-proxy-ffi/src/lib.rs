@@ -93,7 +93,7 @@ pub fn gen_ffi_code() {
         manifest_dir
     );
     let tar_file = format!(
-        "{}/../components/raftstore/src/engine_store_ffi/interfaces.rs",
+        "{}/../components/engine_store_ffi/src/interfaces.rs",
         manifest_dir
     );
     let version_cpp_file = format!("{}/@version", src_dir);

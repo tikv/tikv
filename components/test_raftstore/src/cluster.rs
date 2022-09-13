@@ -16,6 +16,7 @@ use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use encryption_export::DataKeyManager;
 use engine_rocks::{raw::DB, Compat, RocksEngine, RocksSnapshot};
+use engine_store_ffi::TiFlashEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, WriteBatch,
@@ -38,7 +39,6 @@ use mock_engine_store::EngineStoreServerWrap;
 use pd_client::{BucketStat, PdClient};
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    engine_store_ffi::TiFlashEngine,
     store::{
         fsm::{
             create_raft_batch_system,
@@ -158,17 +158,17 @@ pub trait Simulator {
 }
 
 pub struct FFIHelperSet {
-    pub proxy: Box<raftstore::engine_store_ffi::RaftStoreProxy>,
-    pub proxy_helper: Box<raftstore::engine_store_ffi::RaftStoreProxyFFIHelper>,
+    pub proxy: Box<engine_store_ffi::RaftStoreProxy>,
+    pub proxy_helper: Box<engine_store_ffi::RaftStoreProxyFFIHelper>,
     pub engine_store_server: Box<mock_engine_store::EngineStoreServer>,
     pub engine_store_server_wrap: Box<mock_engine_store::EngineStoreServerWrap>,
-    pub engine_store_server_helper: Box<raftstore::engine_store_ffi::EngineStoreServerHelper>,
+    pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
 }
 
 pub struct EngineHelperSet {
     pub engine_store_server: Box<mock_engine_store::EngineStoreServer>,
     pub engine_store_server_wrap: Box<mock_engine_store::EngineStoreServerWrap>,
-    pub engine_store_server_helper: Box<raftstore::engine_store_ffi::EngineStoreServerHelper>,
+    pub engine_store_server_helper: Box<engine_store_ffi::EngineStoreServerHelper>,
 }
 
 pub struct Cluster<T: Simulator> {
@@ -297,9 +297,8 @@ impl<T: Simulator> Cluster<T> {
             ));
 
         unsafe {
-            raftstore::engine_store_ffi::init_engine_store_server_helper(
-                &*engine_store_server_helper
-                    as *const raftstore::engine_store_ffi::EngineStoreServerHelper
+            engine_store_ffi::init_engine_store_server_helper(
+                &*engine_store_server_helper as *const engine_store_ffi::EngineStoreServerHelper
                     as *mut u8,
             );
         }
@@ -320,19 +319,17 @@ impl<T: Simulator> Cluster<T> {
     ) -> (FFIHelperSet, Config) {
         // This TiFlash engine is a dummy TiFlash engine.
         let engine = TiFlashEngine::from_rocks(engines.kv.clone());
-        let proxy = Box::new(raftstore::engine_store_ffi::RaftStoreProxy::new(
-            AtomicU8::new(raftstore::engine_store_ffi::RaftProxyStatus::Idle as u8),
+        let proxy = Box::new(engine_store_ffi::RaftStoreProxy::new(
+            AtomicU8::new(engine_store_ffi::RaftProxyStatus::Idle as u8),
             key_mgr.clone(),
-            Some(Box::new(raftstore::engine_store_ffi::ReadIndexClient::new(
+            Some(Box::new(engine_store_ffi::ReadIndexClient::new(
                 router.clone(),
                 SysQuota::cpu_cores_quota() as usize * 2,
             ))),
             std::sync::RwLock::new(Some(engine)),
         ));
 
-        let mut proxy_helper = Box::new(raftstore::engine_store_ffi::RaftStoreProxyFFIHelper::new(
-            &proxy,
-        ));
+        let mut proxy_helper = Box::new(engine_store_ffi::RaftStoreProxyFFIHelper::new(&proxy));
         let mut engine_store_server =
             Box::new(mock_engine_store::EngineStoreServer::new(id, Some(engines)));
         engine_store_server.proxy_compat = self.proxy_compat;

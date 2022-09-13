@@ -48,10 +48,9 @@ pub unsafe fn run_proxy(
     argv: *const *const c_char,
     engine_store_server_helper: *const u8,
 ) {
-    raftstore::engine_store_ffi::init_engine_store_server_helper(engine_store_server_helper);
-    let engine_store_server_helper = raftstore::engine_store_ffi::gen_engine_store_server_helper(
-        engine_store_server_helper as isize,
-    );
+    engine_store_ffi::init_engine_store_server_helper(engine_store_server_helper);
+    let engine_store_server_helper =
+        engine_store_ffi::gen_engine_store_server_helper(engine_store_server_helper as isize);
 
     let mut args = vec![];
 

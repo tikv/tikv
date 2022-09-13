@@ -18,7 +18,6 @@ use kvproto::{
 use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
-    engine_store_ffi,
     errors::Error as RaftError,
     router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
     store::{
@@ -43,9 +42,10 @@ use tikv_util::{
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
+pub use crate::mock_cluster::TiFlashEngine;
 use crate::{
     config::Config,
-    mock_cluster::{Simulator, TestPdClient, TiFlashEngine},
+    mock_cluster::{Simulator, TestPdClient},
     transport_simulate::{Filter, SimulateTransport},
 };
 

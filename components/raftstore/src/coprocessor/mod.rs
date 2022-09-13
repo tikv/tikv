@@ -198,8 +198,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _: u64,
         _: &crate::store::SnapKey,
         _snapshot: Option<&crate::store::Snapshot>,
-    ) -> Result<()> {
-        Ok(())
+    ) {
     }
 
     /// We call pre_apply_snapshot only when one of the observer returns true.

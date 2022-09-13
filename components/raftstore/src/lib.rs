@@ -23,7 +23,6 @@ pub use self::{
     coprocessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback},
     errors::{DiscardReason, Error, Result},
 };
-pub mod engine_store_ffi;
 
 // `bytes::Bytes` is generated for `bytes` in protobuf.
 fn bytes_capacity(b: &bytes::Bytes) -> usize {

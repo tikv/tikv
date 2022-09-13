@@ -13,6 +13,7 @@ use std::{
 };
 
 use clap::{App, Arg, ArgMatches};
+use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
 use engine_traits::{
     Error, ExternalSstFileInfo, Iterable, Iterator, MiscExt, Mutable, Peekable, Result, SeekKey,
     SstExt, SstReader, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
@@ -46,8 +47,6 @@ use proxy_server::{
 use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, Coprocessor},
-    engine_store_ffi,
-    engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI},
     store::util::find_peer,
 };
 use sst_importer::SstImporter;

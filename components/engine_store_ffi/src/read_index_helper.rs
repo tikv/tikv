@@ -12,13 +12,13 @@ use kvproto::{
     kvrpcpb::{ReadIndexRequest, ReadIndexResponse},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
 };
-use tikv_util::{debug, error, future::paired_future_callback};
-
-use super::utils::ArcNotifyWaker;
-use crate::{
+use raftstore::{
     router::RaftStoreRouter,
     store::{Callback, RaftCmdExtraOpts, RaftRouter, ReadResponse},
 };
+use tikv_util::{debug, error, future::paired_future_callback};
+
+use super::utils::ArcNotifyWaker;
 
 pub trait ReadIndex: Sync + Send {
     // To remove

@@ -25,6 +25,10 @@ use engine_rocks::{
     FlowInfo, RocksEngine,
 };
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
+use engine_store_ffi::{
+    self, EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
+    RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
+};
 use engine_traits::{
     CFOptionsExt, ColumnFamilyOptions, Engines, FlowControlFactorsExt, KvEngine, MiscExt,
     RaftEngine, TabletFactory, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -47,10 +51,6 @@ use raftstore::{
     coprocessor::{
         config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
         CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
-    },
-    engine_store_ffi::{
-        self, EngineStoreServerHelper, EngineStoreServerStatus, RaftProxyStatus, RaftStoreProxy,
-        RaftStoreProxyFFI, RaftStoreProxyFFIHelper, ReadIndexClient, TiFlashEngine,
     },
     router::ServerRaftStoreRouter,
     store::{
@@ -1122,10 +1122,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
         {
-            raftstore::engine_store_ffi::gen_engine_store_server_helper(
-                self.engine_store_server_helper_ptr,
-            )
-            .set_store(node.store());
+            engine_store_ffi::gen_engine_store_server_helper(self.engine_store_server_helper_ptr)
+                .set_store(node.store());
             info!("set store {} to engine-store", node.id());
         }
 
@@ -1514,7 +1512,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         let status_enabled = !self.config.server.status_addr.is_empty();
         if status_enabled {
             let mut status_server = match StatusServer::new(
-                raftstore::engine_store_ffi::gen_engine_store_server_helper(
+                engine_store_ffi::gen_engine_store_server_helper(
                     self.engine_store_server_helper_ptr,
                 ),
                 self.config.server.status_thread_pool_size,

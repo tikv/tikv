@@ -17,6 +17,7 @@ protobuf-codec = [
 
 [dependencies]
 engine_rocks = { path = "../components/engine_rocks", default-features = false }
+engine_store_ffi = { path = "../components/engine_store_ffi", default-features = false }
 engine_test = { path = "../components/engine_test", default-features = false }
 engine_traits = { path = "../components/engine_traits", default-features = false }
 fail = "0.5"

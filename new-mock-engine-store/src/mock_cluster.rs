@@ -17,6 +17,11 @@ use std::{
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
 use engine_rocks::raw::DB;
+// mock cluster
+pub use engine_store_ffi::{
+    interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
+    RawCppPtr, TiFlashEngine, UnwrapExternCFunc,
+};
 use engine_traits::{Engines, KvEngine, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
@@ -30,14 +35,7 @@ use lazy_static::lazy_static;
 use pd_client::PdClient;
 pub use proxy_server::config::ProxyConfig;
 use proxy_server::fatal;
-// mock cluster
-pub use raftstore::engine_store_ffi::TiFlashEngine;
 use raftstore::{
-    engine_store_ffi,
-    engine_store_ffi::{
-        interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
-        RawCppPtr, UnwrapExternCFunc,
-    },
     store::{
         bootstrap_store,
         fsm::{

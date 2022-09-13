@@ -2,8 +2,8 @@
 
 use std::{error::Error, net::SocketAddr, sync::Arc};
 
+use engine_store_ffi::EngineStoreServerHelper;
 use hyper::{body, Client, StatusCode, Uri};
-use raftstore::engine_store_ffi::EngineStoreServerHelper;
 use security::SecurityConfig;
 use test_raftstore::{new_server_cluster, Simulator};
 use tikv::{

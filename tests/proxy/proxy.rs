@@ -11,7 +11,8 @@ use std::{
     },
 };
 
-// use raftstore::engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
+use engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI};
+// use engine_store_ffi::config::{ensure_no_common_unrecognized_keys, ProxyConfig};
 use engine_traits::{
     Error, ExternalSstFileInfo, Iterable, Iterator, MiscExt, Mutable, Peekable, Result, SeekKey,
     SstExt, SstReader, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
@@ -34,8 +35,6 @@ use proxy_server::config::{ensure_no_common_unrecognized_keys, validate_and_pers
 use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, Coprocessor},
-    engine_store_ffi,
-    engine_store_ffi::{KVGetStatus, RaftStoreProxyFFI},
     store::util::find_peer,
 };
 use sst_importer::SstImporter;

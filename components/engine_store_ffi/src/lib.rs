@@ -1,4 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
+#![feature(drain_filter)]
 
 #[allow(dead_code)]
 pub mod interfaces;
@@ -34,14 +35,12 @@ pub use self::interfaces::root::DB::{
     KVGetStatus, RaftCmdHeader, RaftProxyStatus, RaftStoreProxyFFIHelper, RawCppPtr,
     RawCppStringPtr, RawVoidPtr, SSTReaderPtr, StoreStats, WriteCmdType, WriteCmdsView,
 };
-use self::{
-    interfaces::root::DB::{
-        ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
-        SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
-        RAFT_STORE_PROXY_VERSION,
-    },
-    lock_cf_reader::LockCFFileReader,
+use self::interfaces::root::DB::{
+    ConstRawVoidPtr, FileEncryptionInfoRaw, RaftStoreProxyPtr, RawCppPtrType, RawRustPtr,
+    SSTReaderInterfaces, SSTView, SSTViewVec, RAFT_STORE_PROXY_MAGIC_NUMBER,
+    RAFT_STORE_PROXY_VERSION,
 };
+use crate::lock_cf_reader::LockCFFileReader;
 
 pub type TiFlashEngine = engine_tiflash::RocksEngine;
 

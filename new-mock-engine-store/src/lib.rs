@@ -12,7 +12,7 @@ use std::{
 use engine_rocks::RocksEngine;
 pub use engine_store_ffi::{
     interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
-    UnwrapExternCFunc,
+    RawCppPtr, UnwrapExternCFunc,
 };
 use engine_traits::{
     Engines, Iterable, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
@@ -23,12 +23,11 @@ use kvproto::{
         MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
     },
 };
-pub use mock_cluster::{Cluster, ProxyConfig, Simulator, TestPdClient};
+pub use mock_cluster::{Cluster, ProxyConfig, Simulator, TestPdClient, TiFlashEngine};
 use protobuf::Message;
-use raftstore::{engine_store_ffi, engine_store_ffi::RawCppPtr};
 use tikv_util::{debug, error, info, warn};
 
-use crate::{config::MockConfig, mock_cluster::TiFlashEngine};
+use crate::config::MockConfig;
 
 pub mod config;
 pub mod mock_cluster;

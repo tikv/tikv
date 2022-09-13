@@ -78,7 +78,7 @@ struct LogLevelRequest {
 }
 
 pub struct StatusServer<E, R> {
-    engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
+    engine_store_server_helper: &'static engine_store_ffi::EngineStoreServerHelper,
     thread_pool: Runtime,
     tx: Sender<()>,
     rx: Option<Receiver<()>>,
@@ -136,7 +136,7 @@ where
     R: 'static + Send,
 {
     pub fn new(
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
+        engine_store_server_helper: &'static engine_store_ffi::EngineStoreServerHelper,
         status_thread_pool_size: usize,
         cfg_controller: ConfigController,
         security_config: Arc<SecurityConfig>,
@@ -285,7 +285,7 @@ where
     async fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
+        engine_store_server_helper: &'static engine_store_ffi::EngineStoreServerHelper,
     ) -> hyper::Result<Response<Body>> {
         let mut full = false;
         if let Some(query) = req.uri().query() {
@@ -582,7 +582,7 @@ where
 
     pub async fn handle_http_request(
         req: Request<Body>,
-        engine_store_server_helper: &'static raftstore::engine_store_ffi::EngineStoreServerHelper,
+        engine_store_server_helper: &'static engine_store_ffi::EngineStoreServerHelper,
     ) -> hyper::Result<Response<Body>> {
         let (head, body) = req.into_parts();
         let body = hyper::body::to_bytes(body).await;
@@ -594,7 +594,7 @@ where
                     head.uri.query(),
                     &s,
                 );
-                if res.status != raftstore::engine_store_ffi::HttpRequestStatus::Ok {
+                if res.status != engine_store_ffi::HttpRequestStatus::Ok {
                     return Ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "engine-store fails to build response".to_string(),
