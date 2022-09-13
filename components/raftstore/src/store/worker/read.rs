@@ -759,7 +759,7 @@ where
             txn_extra_op: TxnExtraOp::Noop,
         };
 
-        cmd.callback.invoke_read(read_resp);
+        cmd.callback.set_result(read_resp);
     }
 
     pub fn propose_raft_command(
