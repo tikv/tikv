@@ -568,7 +568,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     pb_ctx: task.cmd.ctx(),
                     ..Default::default()
                 };
-                if let Command::FlashbackToVersionReadPhase { .. } = task.cmd {
+                if matches!(
+                    task.cmd,
+                    Command::FlashbackToVersionReadPhase { .. }
+                        | Command::FlashbackToVersion { .. }
+                ) {
                     snap_ctx.for_flashback = true;
                 }
                 // The program is currently in scheduler worker threads.
