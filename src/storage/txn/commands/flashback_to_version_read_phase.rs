@@ -1,8 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::cell::RefCell;
-
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -77,51 +75,31 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             (key_locks, has_remain_locks) = key_locks_result?;
         }
         // Scan the writes.
-        let mut keys = Vec::with_capacity(0);
+        let mut key_old_writes = Vec::with_capacity(0);
         let mut has_remain_writes = false;
         // The batch is not full, we can still read.
         if self.next_write_key.is_some() && key_locks.len() < FLASHBACK_BATCH_SIZE {
-            let cur_key = RefCell::new(None);
-            let key_writes_result = reader.scan_writes(
+            // To flashback the data, we need to get all the latest keys first by scanning
+            // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
+            // record if exists.
+            let key_ts_old_writes;
+            (key_ts_old_writes, has_remain_writes) = reader.scan_old_writes(
                 self.next_write_key.as_ref(),
                 self.end_key.as_ref(),
-                // To flashback the data, we need to get all the latest writes first by scanning
-                // every unique key in `CF_WRITE`.
-                |key| {
-                    // No need to flashback the key if its `commit_ts` is smaller than
-                    // `self.version`.
-                    if let Ok(commit_ts) = key.decode_ts() {
-                        if commit_ts <= self.version {
-                            return false;
-                        }
-                    }
-                    // Only scan the latest version for each key, i.e, the first version we meet
-                    // for each key.
-                    if let Ok(truncated_key) = key.clone().truncate_ts() {
-                        let mut cur_key_rc = cur_key.borrow_mut();
-                        if cur_key_rc.is_some() && truncated_key == *cur_key_rc.as_ref().unwrap() {
-                            return false;
-                        }
-                        *cur_key_rc = Some(truncated_key);
-                        return true;
-                    }
-                    false
-                },
+                self.version,
                 FLASHBACK_BATCH_SIZE - key_locks.len(),
-                None,
-            );
+            )?;
             statistics.add(&reader.statistics);
-            // Truncate the timestamps of all the keys.
-            let key_writes;
-            (key_writes, has_remain_writes) = key_writes_result?;
-            for (key, _) in key_writes {
-                if key.decode_ts()? >= self.commit_ts {
+            // Check the latest commit ts to make sure there is no commit change during the
+            // flashback, otherwise, we need to abort the flashback.
+            for (key, commit_ts, old_write) in key_ts_old_writes {
+                if commit_ts >= self.commit_ts {
                     return Err(Error::from(ErrorInner::InvalidTxnTso {
                         start_ts: self.start_ts,
                         commit_ts: self.commit_ts,
                     }));
                 }
-                keys.push(key.truncate_ts()?);
+                key_old_writes.push((key, old_write));
             }
         } else if self.next_write_key.is_some() && key_locks.len() >= FLASHBACK_BATCH_SIZE {
             // The batch is full, we need to read the writes in the next batch later.
@@ -129,10 +107,10 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
         }
         tls_collect_keyread_histogram_vec(
             self.tag().get_str(),
-            (key_locks.len() + keys.len()) as f64,
+            (key_locks.len() + key_old_writes.len()) as f64,
         );
 
-        if key_locks.is_empty() && keys.is_empty() {
+        if key_locks.is_empty() && key_old_writes.is_empty() {
             Ok(ProcessResult::Res)
         } else {
             let next_lock_key = if has_remain_locks {
@@ -140,9 +118,9 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             } else {
                 None
             };
-            let next_write_key = if has_remain_writes && !keys.is_empty() {
-                keys.pop()
-            } else if has_remain_writes && keys.is_empty() {
+            let next_write_key = if has_remain_writes && !key_old_writes.is_empty() {
+                key_old_writes.pop().map(|(key, _)| key)
+            } else if has_remain_writes && key_old_writes.is_empty() {
                 // We haven't read any write yet, so we need to read the writes in the next
                 // batch later.
                 self.next_write_key
@@ -157,7 +135,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                 version: self.version,
                 end_key: self.end_key,
                 key_locks,
-                keys,
+                key_old_writes,
                 next_lock_key,
                 next_write_key,
             };

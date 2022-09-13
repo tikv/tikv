@@ -29,7 +29,7 @@ command! {
             next_lock_key: Option<Key>,
             next_write_key: Option<Key>,
             key_locks: Vec<(Key, Lock)>,
-            keys: Vec<Key>,
+            key_old_writes: Vec<(Key, Option<Write>)>,
         }
 }
 
@@ -43,7 +43,7 @@ impl CommandExt for FlashbackToVersion {
             self.key_locks
                 .iter()
                 .map(|(key, _)| key)
-                .chain(self.keys.iter()),
+                .chain(self.key_old_writes.iter().map(|(key, _)| key)),
         )
     }
 
@@ -51,7 +51,11 @@ impl CommandExt for FlashbackToVersion {
         self.key_locks
             .iter()
             .map(|(key, _)| key.as_encoded().len())
-            .chain(self.keys.iter().map(|key| key.as_encoded().len()))
+            .chain(
+                self.key_old_writes
+                    .iter()
+                    .map(|(key, _)| key.as_encoded().len()),
+            )
             .sum()
     }
 }
@@ -91,12 +95,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
         //   - If a key exists at `self.version`, it will be put the exact same record
         //     in `CF_WRITE` and `CF_DEFAULT` if needed with `self.commit_ts` and
         //     `self.start_ts`.
-        for key in self.keys {
+        for (key, old_write) in self.key_old_writes {
             if txn.write_size() >= MAX_TXN_WRITE_SIZE {
                 next_write_key = Some(key);
                 break;
             }
-            let old_write = reader.seek_write(&key, self.version)?;
             // If the old write doesn't exist, we should put a `WriteType::Delete` record to
             // delete the current key.
             if old_write.is_none() {
@@ -105,7 +108,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 rows += 1;
                 continue;
             }
-            let old_write = old_write.unwrap().1;
+            let old_write = old_write.unwrap();
             // If it's not a short value and it's a `WriteType::Put`, we should put the old
             // value in `CF_DEFAULT` with `self.start_ts` as well.
             if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
