@@ -697,7 +697,7 @@ mod tests {
             tablet1 = factory
                 .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet1.put(&keys::data_key(b"a1"), b"val1").unwrap();
+            tablet1.put(b"a1", b"val1").unwrap();
             let cache = CachedTablet::new(Some(tablet1.clone()));
             meta.tablet_caches.insert(1, cache);
 
@@ -710,7 +710,7 @@ mod tests {
             tablet2 = factory
                 .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
                 .unwrap();
-            tablet2.put(&keys::data_key(b"a2"), b"val2").unwrap();
+            tablet2.put(b"a2", b"val2").unwrap();
             let cache = CachedTablet::new(Some(tablet2.clone()));
             meta.tablet_caches.insert(2, cache);
         }
