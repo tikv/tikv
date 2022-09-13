@@ -704,7 +704,7 @@ impl TempFileKey {
     /// For v2, we merged the small files (partition by table_id) into one file.
     fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/{:012}-{}.log",
+            "v1/{}/{}/{}/{:018}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some
             // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
@@ -723,7 +723,7 @@ impl TempFileKey {
     /// For v2, we merged the small files (partition by table_id) into one file.
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/schema-meta/{:012}-{}.log",
+            "v1/{}/{}/{}/schema-meta/{:018}-{}.log",
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
