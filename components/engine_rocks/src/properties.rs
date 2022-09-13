@@ -569,6 +569,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
+    use api_version::RawValue;
     use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
@@ -805,6 +806,41 @@ mod tests {
             let v = Write::new(write_type, ts, None).as_ref().to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
+        let result = UserProperties(collector.finish());
+
+        let props = RocksMvccProperties::decode(&result).unwrap();
+        assert_eq!(props.min_ts, 1.into());
+        assert_eq!(props.max_ts, 7.into());
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 7);
+        assert_eq!(props.max_row_versions, 3);
+    }
+
+    #[test]
+    fn test_mvcc_properties_raw_mode() {
+        let test_raws = vec![
+            (b"r\0a", 1, false, u64::MAX),
+            (b"r\0a", 5, false, u64::MAX),
+            (b"r\0a", 7, false, u64::MAX),
+            (b"r\0b", 1, false, u64::MAX),
+            (b"r\0b", 1, true, u64::MAX),
+            (b"r\0c", 1, true, 10),
+            (b"r\0d", 1, true, 10),
+        ];
+
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Raw);
+        for &(key, ts, is_delete, expire_ts) in &test_raws {
+            let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+            let k = keys::data_key(encode_key.as_encoded());
+            let v = ApiV2::encode_raw_value(RawValue {
+                user_value: &[0; 10][..],
+                expire_ts: Some(expire_ts),
+                is_delete,
+            });
+            collector.add(&k, &v, DBEntryType::Put, 0, 0);
+        }
+
         let result = UserProperties(collector.finish());
 
         let props = RocksMvccProperties::decode(&result).unwrap();
