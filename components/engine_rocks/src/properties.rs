@@ -387,7 +387,8 @@ impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangeProperti
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF in TiDB & TxnKV scenario, or be used for default CF
+/// in RawKV scenario.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -395,7 +396,7 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
-    key_mode: KeyMode, // When key_mode is KeyMode::Txn, it represents TiDB or Txn senario.
+    key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
     current_ts: u64,
 }
 
