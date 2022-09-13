@@ -145,9 +145,9 @@ pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
     default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     default.raft_store.region_worker_tick_interval = ReadableDuration::millis(500);
-    let stale_peer_check_tick =
+    let clean_stale_ranges_tick =
         (10_000 / default.raft_store.region_worker_tick_interval.as_millis()) as usize;
-    default.raft_store.stale_peer_check_tick = stale_peer_check_tick;
+    default.raft_store.clean_stale_ranges_tick = clean_stale_ranges_tick;
 
     // Unlike TiKV, in TiFlash, we use the low-priority pool to both decode snapshots
     // (transform from row to column) and ingest SST. These operations are pretty heavy.
@@ -170,9 +170,9 @@ pub fn address_proxy_config(config: &mut TiKvConfig) {
         .server
         .labels
         .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
-    let stale_peer_check_tick =
+    let clean_stale_ranges_tick =
         (10_000 / config.raft_store.region_worker_tick_interval.as_millis()) as usize;
-    config.raft_store.stale_peer_check_tick = stale_peer_check_tick;
+    config.raft_store.clean_stale_ranges_tick = clean_stale_ranges_tick;
 }
 
 pub fn validate_and_persist_config(config: &mut TiKvConfig, persist: bool) {

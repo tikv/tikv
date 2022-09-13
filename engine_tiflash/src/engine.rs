@@ -75,7 +75,7 @@ impl RocksEngine {
     ) {
         self.engine_store_server_helper = engine_store_server_helper;
         self.pool_capacity = snap_handle_pool_size;
-        self.pending_applies_count.store(0, Ordering::Relaxed);
+        self.pending_applies_count.store(0, Ordering::SeqCst);
         self.ffi_hub = ffi_hub;
     }
 
@@ -151,24 +151,27 @@ impl KvEngine for RocksEngine {
         self.rocks.bad_downcast()
     }
 
-    // TODO(tiflash) enable this after merge
     // The whole point is:
     // 1. When `handle_pending_applies` is called by `on_timeout`, we can handle at least one.
     // 2. When `handle_pending_applies` is called when we receive a new task,
     //    or when `handle_pending_applies` need to handle multiple snapshots.
     //    We need to compare to what's in queue.
 
-    // fn can_apply_snapshot(&self) -> bool {
-    //     // is called after calling observer's pre_handle_snapshot
-    //     let in_queue = self.pending_applies_count.load(Ordering::Relaxed);
-    //     // if queue is full, we should begin to handle
-    //     let can = in_queue > self.pool_capacity;
-    //     fail::fail_point!("on_can_apply_snapshot", |e| e
-    //         .unwrap()
-    //         .parse::<bool>()
-    //         .unwrap());
-    //     can
-    // }
+    fn can_apply_snapshot(&self, is_timeout: bool, new_batch: bool, _region_id: u64) -> bool {
+        // is called after calling observer's pre_handle_snapshot
+        let in_queue = self.pending_applies_count.load(Ordering::SeqCst);
+        // if queue is full, we should begin to handle
+        let can = if is_timeout && new_batch {
+            true
+        } else {
+            in_queue > self.pool_capacity
+        };
+        fail::fail_point!("on_can_apply_snapshot", |e| e
+            .unwrap()
+            .parse::<bool>()
+            .unwrap());
+        can
+    }
 }
 
 impl Iterable for RocksEngine {

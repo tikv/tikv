@@ -62,6 +62,10 @@ impl RocksEngine {
     pub fn set_shared_block_cache(&mut self, enable: bool) {
         self.shared_block_cache = enable;
     }
+
+    pub fn shared_block_cache(&self) -> bool {
+        self.shared_block_cache
+    }
 }
 
 impl KvEngine for RocksEngine {

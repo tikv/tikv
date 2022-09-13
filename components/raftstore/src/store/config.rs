@@ -147,16 +147,16 @@ pub struct Config {
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
-    #[online_config(skip)]
-    pub snap_handle_pool_size: usize,
-
+    // used to periodically check whether schedule pending applies in region runner
     #[doc(hidden)]
     #[online_config(skip)]
     pub region_worker_tick_interval: ReadableDuration,
 
+    // used to periodically check whether we should delete a stale peer's range in
+    // region runner
     #[doc(hidden)]
     #[online_config(skip)]
-    pub stale_peer_check_tick: usize,
+    pub clean_stale_ranges_tick: usize,
 
     // Interval (ms) to check region whether the data is consistent.
     pub consistency_check_interval: ReadableDuration,
@@ -349,13 +349,12 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
-            snap_handle_pool_size: 2,
             region_worker_tick_interval: if cfg!(feature = "test") {
                 ReadableDuration::millis(200)
             } else {
                 ReadableDuration::millis(1000)
             },
-            stale_peer_check_tick: if cfg!(feature = "test") { 1 } else { 10 },
+            clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.
@@ -833,10 +832,6 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_apply_batch_size"])
             .set(self.snap_apply_batch_size.0 as f64);
-
-        CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["snap_handle_pool_size"])
-            .set(self.snap_handle_pool_size as f64);
 
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["store_batch_retry_recv_timeout"])

@@ -56,6 +56,14 @@ pub trait KvEngine:
     /// This only exists as a temporary hack during refactoring.
     /// It cannot be used forever.
     fn bad_downcast<T: 'static>(&self) -> &T;
+
+    /// Returns false if KvEngine can't apply snapshot for this region now.
+    /// Some KvEngines need to do some transforms before apply data from
+    /// snapshot. These procedures can be batched in background if there are
+    /// more than one incoming snapshots, thus not blocking applying thread.
+    fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
+        true
+    }
 }
 
 /// A factory trait to create new engine.

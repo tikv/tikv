@@ -21,7 +21,7 @@ use kvproto::{
 };
 use raft::{eraftpb, StateRole};
 use sst_importer::SstImporter;
-use tikv_util::{box_err, debug, error, info};
+use tikv_util::{box_err, debug, error, info, warn};
 use yatp::{
     pool::{Builder, ThreadPool},
     task::future::TaskCell,
@@ -668,11 +668,11 @@ impl ApplySnapshotObserver for TiFlashObserver {
         let region = ob_ctx.region().clone();
         let snap_key = snap_key.clone();
         let ssts = retrieve_sst_files(snap);
-        self.engine
-            .pending_applies_count
-            .fetch_add(1, Ordering::SeqCst);
         match self.apply_snap_pool.as_ref() {
             Some(p) => {
+                self.engine
+                    .pending_applies_count
+                    .fetch_add(1, Ordering::SeqCst);
                 p.spawn(async move {
                     // The original implementation is in `Snapshot`, so we don't need to care abort lifetime.
                     fail::fail_point!("before_actually_pre_handle", |_| {});
@@ -690,10 +690,8 @@ impl ApplySnapshotObserver for TiFlashObserver {
                 });
             }
             None => {
-                self.engine
-                    .pending_applies_count
-                    .fetch_sub(1, Ordering::SeqCst);
-                error!("apply_snap_pool is not initialized, quit background pre apply";
+                // quit background pre handling
+                warn!("apply_snap_pool is not initialized";
                     "peer_id" => peer_id,
                     "region_id" => ob_ctx.region().get_id()
                 );
@@ -758,8 +756,9 @@ impl ApplySnapshotObserver for TiFlashObserver {
                 neer_retry
             }
             None => {
-                // We can't find background pre-handle task,
-                // maybe we can't get snapshot at that time.
+                // We can't find background pre-handle task, maybe:
+                // 1. we can't get snapshot from snap manager at that time.
+                // 2. we disabled background pre handling.
                 info!("pre-handled snapshot not found";
                     "snap_key" => ?snap_key,
                     "region" => ?ob_ctx.region(),

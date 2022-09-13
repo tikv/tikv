@@ -304,13 +304,13 @@ mod config {
 
         let mut unrecognized_keys: Vec<String> = vec![];
         let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
-        assert_eq!(config.raft_store.stale_peer_check_tick, 9999);
+        assert_eq!(config.raft_store.clean_stale_ranges_tick, 9999);
         address_proxy_config(&mut config);
-        let stale_peer_check_tick =
+        let clean_stale_ranges_tick =
             (10_000 / config.raft_store.region_worker_tick_interval.as_millis()) as usize;
         assert_eq!(
-            config.raft_store.stale_peer_check_tick,
-            stale_peer_check_tick
+            config.raft_store.clean_stale_ranges_tick,
+            clean_stale_ranges_tick
         );
     }
 
@@ -1714,7 +1714,6 @@ mod snapshot {
         let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
         disable_auto_gen_compact_log(&mut cluster);
-        assert_eq!(cluster.cfg.tikv.raft_store.snap_handle_pool_size, 2);
         assert_eq!(cluster.cfg.proxy_cfg.raft_store.snap_handle_pool_size, 2);
 
         // Disable default max peer count check.
