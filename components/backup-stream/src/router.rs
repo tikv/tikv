@@ -1341,7 +1341,7 @@ impl MetadataInfo {
 
     fn path_to_meta(&self) -> String {
         format!(
-            "v1/backupmeta/{:012}-{}.meta",
+            "v1/backupmeta/{:018}-{}.meta",
             self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
