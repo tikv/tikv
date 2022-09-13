@@ -26,7 +26,7 @@ fn test_read_index() {
     let mut region = detail.get_region().clone();
 
     let mut read_index_req = ReadIndexRequest::default();
-    read_index_req.set_start_ts(100);
+    read_index_req.set_start_ts(5);
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_peer(new_peer(1, 3));
     req.mut_header().set_term(6);
@@ -105,6 +105,6 @@ fn test_read_stale() {
         .set_region_epoch(region.take_region_epoch());
     req.mut_requests().push(request_inner);
     let res = router.query(region.get_id(), req.clone()).unwrap();
-    let read_index = res.read().unwrap().read_index;
-    assert_eq!(read_index, 0);
+    let resp = res.response().unwrap();
+    assert!(resp.get_header().has_error());
 }

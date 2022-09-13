@@ -10,7 +10,6 @@
 //! Status query is implemented in the root module directly.
 //! Follower's read index and replica read is implemenented replica module.
 //! Leader's read index and lease renew is implemented in lease module.
-//! Stale read check is implemented stale module.
 
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
@@ -44,17 +43,11 @@ use crate::{
 mod lease;
 mod local;
 mod replica;
-mod stale;
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
     PeerFsmDelegate<'a, EK, ER, T>
 {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
-        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
-        if flags.contains(WriteBatchFlags::STALE_READ) {
-            return Ok(RequestPolicy::StaleRead);
-        }
-
         if req.get_header().get_read_quorum() {
             return Ok(RequestPolicy::ReadIndex);
         }
@@ -96,10 +89,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                     let read_resp = ReadResponse::new(0);
                     ch.set_result(QueryResult::Read(read_resp));
                 }
-                Ok(RequestPolicy::StaleRead) => {
-                    self.store_ctx.raft_metrics.propose.local_read.inc();
-                    self.fsm.peer_mut().respond_stale_read(req, true, None, ch);
-                }
                 _ => {
                     unimplemented!();
                 }
@@ -138,6 +127,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = util::check_store_id(msg, self.peer().get_store_id()) {
             raft_metrics.invalid_proposal.mismatch_store_id.inc();
             return Err(e);
+        }
+
+        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
+        if flags.contains(WriteBatchFlags::STALE_READ) {
+            return Err(box_err!(
+                "PeerMsg::RaftQuery should not get stale read requests"
+            ));
         }
 
         // TODO: add flashback_state check
