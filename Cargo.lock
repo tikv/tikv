@@ -149,6 +149,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+ "zstd",
+ "zstd-safe",
+]
+
+[[package]]
 name = "async-speed-limit"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +270,7 @@ name = "aws"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "cloud",
  "fail",
@@ -266,6 +282,7 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "lazy_static",
+ "md5",
  "prometheus",
  "rusoto_core",
  "rusoto_credential",
@@ -443,6 +460,7 @@ dependencies = [
 name = "backup-stream"
 version = "0.1.0"
 dependencies = [
+ "async-compression",
  "async-trait",
  "bytes",
  "chrono",
@@ -1652,6 +1670,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "async-compression",
  "async-trait",
  "bytes",
  "encryption",
@@ -1689,6 +1708,7 @@ dependencies = [
 name = "external_storage_export"
 version = "0.0.1"
 dependencies = [
+ "async-compression",
  "async-trait",
  "aws",
  "azure",
@@ -7187,6 +7207,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e12b8667a4fff63d236f8363be54392f93dbb13616be64a83e761a9319ab589"
 dependencies = [
  "rand 0.7.3",
+]
+
+[[package]]
+name = "zstd"
+version = "0.11.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+dependencies = [
+ "libc 0.2.125",
+ "zstd-sys",
 ]
 
 [[package]]
