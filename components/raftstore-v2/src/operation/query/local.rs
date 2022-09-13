@@ -31,13 +31,14 @@ use raftstore::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         CasualRouter, LocalReaderCore, ProposalRouter, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, ReadProgress, ReadResponse, RegionSnapshot, RequestInspector,
-        RequestPolicy, TrackVer, TxnExt,
+        ReadExecutorProvider, ReadProgress, RegionSnapshot, RequestInspector, RequestPolicy,
+        TrackVer, TxnExt, TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
 use slog::{debug, error, info, o, warn, Logger};
 use tikv_util::{
+    box_err,
     codec::number::decode_u64,
     lru::LruCache,
     time::{monotonic_raw_now, Instant, ThreadReadId},
@@ -155,7 +156,7 @@ where
 
     pub async fn snapshot(
         &mut self,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
     ) -> std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         let region_id = req.header.get_ref().region_id;
         if let Some(snap) = self.try_get_snapshot(req.clone())? {
@@ -165,11 +166,15 @@ where
         // try to renew the lease
         let (msg, mut sub) = PeerMsg::raft_query(req.clone());
         MsgRouter::send(&self.router, region_id, msg);
-        sub.result();
+        if let Some(query_res) = sub.result().await {
+            if query_res.read().is_some() {
+                // Query successful, so try again.
 
-        // try again
-        if let Some(snap) = self.try_get_snapshot(req)? {
-            return Ok(snap);
+                req.mut_header().set_read_quorum(false);
+                if let Some(snap) = self.try_get_snapshot(req)? {
+                    return Ok(snap);
+                }
+            }
         }
 
         Err(not_leader_err(region_id))
@@ -301,14 +306,21 @@ struct SnapRequestInspector<'r> {
 impl<'r> RequestInspector for SnapRequestInspector<'r> {
     fn inspect(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         assert!(!req.has_admin_request());
-        assert!(
-            req.get_requests().len() == 1
-                && req.get_requests().first().unwrap().get_cmd_type() == CmdType::Snap
-        );
+        if req.get_requests().len() != 1
+            || req.get_requests().first().unwrap().get_cmd_type() != CmdType::Snap
+        {
+            return Err(box_err!(
+                "LocalReader can only serve for exactly one Snap request"
+            ));
+        }
 
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(RequestPolicy::StaleRead);
+        }
+
+        if req.get_header().get_read_quorum() {
+            return Ok(RequestPolicy::ReadIndex);
         }
 
         // If applied index's term is differ from current raft's term, leader transfer
@@ -341,8 +353,7 @@ impl<'r> RequestInspector for SnapRequestInspector<'r> {
             );
 
             // only for metric.
-            // TLS_LOCAL_READ_METRICS.with(|m|
-            // m.borrow_mut().reject_reason.applied_term.inc());
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.applied_term.inc());
             false
         }
     }
@@ -362,7 +373,11 @@ impl<'r> RequestInspector for SnapRequestInspector<'r> {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Borrow, sync::mpsc::*, thread};
+    use std::{
+        borrow::Borrow,
+        sync::mpsc::*,
+        thread::{self, JoinHandle},
+    };
 
     use crossbeam::channel::TrySendError;
     use engine_test::{
@@ -375,6 +390,7 @@ mod tests {
     use raftstore::store::{
         util::{new_peer, Lease},
         Callback, CasualMessage, CasualRouter, LocalReaderCore, ProposalRouter, RaftCommand,
+        ReadCallback, TLS_LOCAL_READ_METRICS,
     };
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -382,6 +398,7 @@ mod tests {
     use txn_types::{Key, Lock, LockType, WriteBatchFlags};
 
     use super::*;
+    use crate::router::{QueryResult, ReadResponse};
 
     fn new_read_delegate(
         region: &Region,
@@ -471,6 +488,29 @@ mod tests {
 
     #[test]
     fn test_read() {
+        fn handle_msg<F: FnOnce() + Send + 'static>(
+            f: F,
+            rx: Receiver<(u64, PeerMsg)>,
+            ch_tx: SyncSender<Receiver<(u64, PeerMsg)>>,
+        ) -> JoinHandle<()> {
+            thread::spawn(move || {
+                // Msg for query will be sent
+                let (region_id, msg) = rx.recv().unwrap();
+
+                f();
+                match msg {
+                    PeerMsg::RaftQuery(query) => ReadCallback::set_result(
+                        query.ch,
+                        QueryResult::Read(ReadResponse {
+                            txn_extra_op: Default::default(),
+                        }),
+                    ),
+                    _ => unreachable!(),
+                }
+                ch_tx.send(rx);
+            })
+        }
+
         let store_id = 1;
 
         // Building a tablet factory
@@ -483,7 +523,7 @@ mod tests {
         let factory = Arc::new(TestTabletFactoryV2::new(path.path(), ops, cf_opts));
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new()));
-        let (mut reader, rx) = new_reader(store_id, store_meta.clone());
+        let (mut reader, mut rx) = new_reader(store_id, store_meta.clone());
 
         let mut region1 = metapb::Region::default();
         region1.set_id(1);
@@ -512,6 +552,7 @@ mod tests {
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 
+        // The region is not register yet.
         let res = block_on(reader.snapshot(cmd.clone())).unwrap_err();
         assert!(
             res.header
@@ -520,7 +561,19 @@ mod tests {
                 .get_error()
                 .has_region_not_found()
         );
+        // No msg will ben sent
+        rx.try_recv().unwrap_err();
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.no_region.get()),
+            1
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            1
+        );
+        assert!(reader.local_reader.delegates.get(&1).is_none());
 
+        // Register region 1
         lease.renew(monotonic_raw_now());
         let remote = lease.maybe_new_remote_lease(term6).unwrap();
         {
@@ -551,21 +604,70 @@ mod tests {
             meta.tablet_caches.insert(1, cache);
         }
 
-        let res = block_on(reader.snapshot(cmd.clone())).unwrap_err();
-        println!("{:?}", rx.recv().unwrap());
-        assert!(res.header.as_ref().unwrap().get_error().has_not_leader());
+        let (ch_tx, ch_rx) = sync_channel(1);
 
-        {
-            let mut meta = store_meta.lock().unwrap();
+        let handler = handle_msg(
+            move || {
+                let mut meta = store_meta.lock().unwrap();
 
-            meta.readers
-                .get_mut(&1)
-                .unwrap()
-                .update(ReadProgress::applied_term(term6));
-        }
+                meta.readers
+                    .get_mut(&1)
+                    .unwrap()
+                    .update(ReadProgress::applied_term(term6));
+            },
+            rx,
+            ch_tx.clone(),
+        );
 
+        // The first try will be rejected due to unmatched applied term but after update
+        // the applied term by the above thread, the snapshot will be acquired by
+        // retrying.
         let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
-        assert!(snap.get_region().id == 1);
+        assert_eq!(*snap.get_region(), region1);
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.cache_miss.get()),
+            3
+        );
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.applied_term.get()),
+            1
+        );
+        handler.join();
+        rx = ch_rx.recv().unwrap();
+
+        // Read quorum.
+        let mut cmd_read_quorum = cmd.clone();
+        cmd_read_quorum.mut_header().set_read_quorum(true);
+        let handler = handle_msg(|| {}, rx, ch_tx);
+        let snap = block_on(reader.snapshot(cmd_read_quorum.clone())).unwrap();
+        handler.join();
+        rx = ch_rx.recv().unwrap();
+
+        // Stale read
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
+            0
+        );
+        read_progress.update_safe_ts(1, 1);
+        assert_eq!(read_progress.safe_ts(), 1);
+        let data = {
+            let mut d = [0u8; 8];
+            (&mut d[..]).encode_u64(2).unwrap();
+            d
+        };
+        cmd.mut_header()
+            .set_flags(WriteBatchFlags::STALE_READ.bits());
+        cmd.mut_header().set_flag_data(data.into());
+        let res = block_on(reader.snapshot(cmd.clone())).unwrap_err();
+        assert!(res.get_header().get_error().has_data_is_not_ready());
+        assert_eq!(
+            TLS_LOCAL_READ_METRICS.with(|m| m.borrow().reject_reason.safe_ts.get()),
+            1
+        );
+        read_progress.update_safe_ts(1, 2);
+        assert_eq!(read_progress.safe_ts(), 2);
+        let snap = block_on(reader.snapshot(cmd.clone())).unwrap();
+        assert_eq!(*snap.get_region(), region1);
     }
 
     #[test]

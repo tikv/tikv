@@ -281,24 +281,24 @@ members = [
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [profile.dev.package.grpcio-sys]
-debug = true
-opt-level = 0
+debug = false
+opt-level = 1
 
 [profile.dev.package.librocksdb_sys]
-debug = true
-opt-level = 0
+debug = false
+opt-level = 1
 
 [profile.dev.package.libtitan_sys]
-debug = true
-opt-level = 0
+debug = false
+opt-level = 1
 
 [profile.dev.package.tests]
-debug = true
-opt-level = 0
+debug = 1
+opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
@@ -324,7 +324,7 @@ codegen-units = 4
 
 [profile.test]
 opt-level = 0
-debug = true
+debug = 0
 codegen-units = 16
 lto = false
 incremental = true

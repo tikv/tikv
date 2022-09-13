@@ -73,5 +73,6 @@ pub use self::{
         RaftlogFetchRunner, RaftlogFetchTask, ReadDelegate, ReadExecutor, ReadExecutorProvider,
         ReadProgress, ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask,
         SplitConfig, SplitConfigManager, StoreMetaDelegate, TrackVer, WriteStats,
+        TLS_LOCAL_READ_METRICS,
     },
 };
