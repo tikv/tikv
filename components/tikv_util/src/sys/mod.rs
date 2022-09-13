@@ -5,6 +5,7 @@ mod cgroup;
 pub mod cpu_time;
 pub mod disk;
 pub mod inspector;
+pub mod ioload;
 pub mod thread;
 
 // re-export some traits for ease of use

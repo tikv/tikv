@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use kvproto::kvrpcpb::WriteConflictReason;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, LockType, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
@@ -173,6 +174,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
                 conflict_commit_ts: commit_ts,
                 key: key.into_raw()?,
                 primary: primary.to_vec(),
+                reason: WriteConflictReason::PessimisticRetry,
             }
             .into());
         }
