@@ -382,18 +382,14 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
         ));
 
-        // we don't care since we don't start this service
-        let dummy_dynamic_configs = crate::server::storage::DynamicConfigs {
-            pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-            in_memory_pessimistic_lock: Arc::new(AtomicBool::new(true)),
-        };
+        let dynamic_config = lock_mgr.get_storage_dynamic_configs();
         let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr,
             concurrency_manager.clone(),
-            dummy_dynamic_configs,
+            dynamic_config,
             Arc::new(FlowController::empty()),
             pd_sender,
             res_tag_factory.clone(),

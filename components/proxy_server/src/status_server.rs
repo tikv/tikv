@@ -44,11 +44,9 @@ use tikv::{
     config::{log_level_serde, ConfigController},
     server::{
         status_server::{
-            profile::{
-                activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile,
-                list_heap_profiles, read_file, start_one_cpu_profile, start_one_heap_profile,
-            },
-            region_meta,
+            activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile,
+            list_heap_profiles, read_file, region_meta, start_one_cpu_profile,
+            start_one_heap_profile,
         },
         Result,
     },

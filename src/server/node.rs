@@ -37,9 +37,8 @@ use crate::{
     read_pool::ReadPoolHandle,
     server::Config as ServerConfig,
     storage::{
-        config::Config as StorageConfig, kv::FlowStatsReporter,
-        lock_manager::LockManager as LockManagerTrait, txn::flow_controller::FlowController,
-        DynamicConfigs as StorageDynamicConfigs, Storage,
+        config::Config as StorageConfig, kv::FlowStatsReporter, lock_manager,
+        txn::flow_controller::FlowController, DynamicConfigs as StorageDynamicConfigs, Storage,
     },
 };
 
@@ -48,7 +47,13 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
-pub fn create_raft_storage<S, EK, R: FlowStatsReporter, F: KvFormat, LM: LockManagerTrait>(
+pub fn create_raft_storage<
+    S,
+    EK,
+    R: FlowStatsReporter,
+    F: KvFormat,
+    LM: lock_manager::LockManager,
+>(
     engine: RaftKv<EK, S>,
     cfg: &StorageConfig,
     read_pool: ReadPoolHandle,
@@ -120,22 +125,27 @@ where
             Some(s) => s,
         };
         store.set_id(INVALID_ID);
-        if store.get_address() == "" {
+        if store.get_address().is_empty() {
             if cfg.advertise_addr.is_empty() {
                 store.set_address(cfg.addr.clone());
+                if store.get_peer_address().is_empty() {
+                    store.set_peer_address(cfg.addr.clone());
+                }
             } else {
-                store.set_address(cfg.advertise_addr.clone())
+                store.set_address(cfg.advertise_addr.clone());
+                if store.get_peer_address().is_empty() {
+                    store.set_peer_address(cfg.advertise_addr.clone());
+                }
             }
         }
-        if store.get_status_address() == "" {
+        if store.get_status_address().is_empty() {
             if cfg.advertise_status_addr.is_empty() {
                 store.set_status_address(cfg.status_addr.clone());
             } else {
                 store.set_status_address(cfg.advertise_status_addr.clone())
             }
         }
-
-        if store.get_version() == "" {
+        if store.get_version().is_empty() {
             store.set_version(env!("CARGO_PKG_VERSION").to_string());
         }
 
@@ -146,7 +156,7 @@ where
         };
 
         store.set_start_timestamp(chrono::Local::now().timestamp());
-        if store.get_git_hash() == "" {
+        if store.get_git_hash().is_empty() {
             store.set_git_hash(
                 option_env!("TIKV_BUILD_GIT_HASH")
                     .unwrap_or("Unknown git hash")
@@ -255,11 +265,13 @@ where
         self.store.get_id()
     }
 
+    /// Gets a copy of Store which is registered to Pd.
     pub fn store(&self) -> metapb::Store {
         self.store.clone()
     }
 
-    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after start.
+    /// Gets the Scheduler of RaftstoreConfigTask, it must be called after
+    /// start.
     pub fn refresh_config_scheduler(&mut self) -> Scheduler<RefreshConfigTask> {
         self.system.refresh_config_scheduler()
     }
