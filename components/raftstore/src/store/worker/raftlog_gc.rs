@@ -310,7 +310,7 @@ mod tests {
     use std::{sync::mpsc, time::Duration};
 
     use engine_traits::{MiscExt, RaftEngine, RaftLogBatch, ALL_CFS, CF_DEFAULT};
-    use kvproto::raft_serverpb::RegionSequenceNumberRelation;
+    use kvproto::raft_serverpb::RaftApplyState;
     use raft::eraftpb::Entry;
     use tempfile::Builder;
 
@@ -462,11 +462,10 @@ mod tests {
             tbls
         {
             if let Some(r) = relation {
-                let mut relation = RegionSequenceNumberRelation::default();
-                relation.set_sequence_number(r.0);
-                relation.mut_apply_state().set_applied_index(r.1);
+                let mut apply_state = RaftApplyState::default();
+                apply_state.set_applied_index(r.1);
                 let mut raft_wb = raft_db.log_batch(0);
-                raft_wb.put_seqno_relation(region_id, &relation).unwrap();
+                raft_wb.put_apply_state(region_id, &apply_state).unwrap();
                 raft_db.consume(&mut raft_wb, false /* sync */).unwrap();
                 runner.run(Task::MemtableFlushed {
                     cf: Some(CF_DEFAULT.to_string()),
