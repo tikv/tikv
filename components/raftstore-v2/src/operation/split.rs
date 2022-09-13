@@ -14,7 +14,11 @@ use tikv_util::box_err;
 use crate::{batch::ApplyContext, fsm::ApplyFsmDelegate};
 
 impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
-    pub fn exec_batch_split(&mut self, ctx: &mut ApplyContext, req: &AdminRequest) -> Result<()> {
+    pub fn exec_batch_split(
+        &mut self,
+        ctx: &mut ApplyContext<ER>,
+        req: &AdminRequest,
+    ) -> Result<()> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
         let split_reqs = req.get_splits();
         let right_derive = split_reqs.get_right_derive();
@@ -104,7 +108,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
-            for (region_id, new_split_peer) in new_split_regions {
+            for (region_id, new_split_peer) in new_split_regions.iter_mut() {
                 match pending_create_peers.entry(*region_id) {
                     HashMapEntry::Occupied(mut v) => {
                         if *v.get() != (new_split_peer.peer_id, false) {
@@ -123,12 +127,23 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
         }
 
         // region_id -> peer_id
-        let mut alread_exist_regions = Vec::new();
+        let mut already_exist_regions = Vec::new();
         for (region_id, new_split_peer) in new_split_regions.iter_mut() {
             let region_state_key = keys::region_state_key(*region_id);
             match ctx.raft_engine.get_region_state(*region_id) {
                 Ok(None) => (),
-                Ok(Some(state)) => {}
+                Ok(Some(state)) => {
+                    if replace_regions.get(region_id).is_some() {
+                        // It's marked replaced, then further destroy will skip cleanup, so there
+                        // should be no region local state.
+                        panic!(
+                            "{} failed to replace region {} peer {} because state {:?} alread exist in raft engine",
+                            self.tag, region_id, new_split_peer.peer_id, state
+                        )
+                    }
+                    already_exist_regions.push((*region_id, new_split_peer.peer_id));
+                    new_split_peer.result = Some(format!("state {:?} exist in raft engine", state));
+                }
                 e => panic!(
                     "{} failed to get regions state of {}: {:?}",
                     self.tag, region_id, e

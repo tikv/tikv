@@ -357,7 +357,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         let mut builder = StorePollerBuilder::new(
             cfg.clone(),
             store_id,
-            raft_engine,
+            raft_engine.clone(),
             tablet_factory,
             trans,
             router.clone(),
@@ -391,7 +391,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.send_control(StoreMsg::Start).unwrap();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(cfg);
+        let apply_poller_builder = ApplyPollerBuilder::new(cfg, raft_engine);
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())

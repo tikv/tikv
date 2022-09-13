@@ -33,34 +33,40 @@ use crate::{
     router::ApplyTask,
 };
 
-pub struct ApplyContext {
+pub struct ApplyContext<ER: RaftEngine> {
+    pub(crate) store_id: u64,
+
     cfg: Config,
 
     /// region_id -> (peer_id, is_splitting)
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they
     /// are exactly the same peer.
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+    pub(crate) pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
+
+    pub(crate) raft_engine: ER,
 }
 
-impl ApplyContext {
-    pub fn new(cfg: Config) -> Self {
+impl<ER: RaftEngine> ApplyContext<ER> {
+    pub fn new(cfg: Config, raft_engine: ER) -> Self {
         ApplyContext {
+            store_id: 0, // todo(SpadeA)
             cfg,
             pending_create_peers: Arc::default(),
+            raft_engine,
         }
     }
 }
 
-pub struct ApplyPoller {
+pub struct ApplyPoller<ER: RaftEngine> {
     apply_task_buf: Vec<ApplyTask>,
     pending_latency_inspect: Vec<LatencyInspector>,
-    apply_ctx: ApplyContext,
+    apply_ctx: ApplyContext<ER>,
     cfg_tracker: Tracker<Config>,
 }
 
-impl ApplyPoller {
-    pub fn new(apply_ctx: ApplyContext, cfg_tracker: Tracker<Config>) -> ApplyPoller {
+impl<ER: RaftEngine> ApplyPoller<ER> {
+    pub fn new(apply_ctx: ApplyContext<ER>, cfg_tracker: Tracker<Config>) -> ApplyPoller<ER> {
         Self {
             apply_task_buf: Vec::new(),
             pending_latency_inspect: Vec::new(),
@@ -81,9 +87,10 @@ impl ApplyPoller {
     }
 }
 
-impl<EK> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller
+impl<EK, ER> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<ER>
 where
     EK: KvEngine,
+    ER: RaftEngine,
 {
     fn begin<F>(&mut self, _batch_size: usize, update_cfg: F)
     where
@@ -129,21 +136,25 @@ where
     }
 }
 
-pub struct ApplyPollerBuilder {
+pub struct ApplyPollerBuilder<ER> {
     cfg: Arc<VersionTrack<Config>>,
+
+    raft_engine: ER,
 }
 
-impl ApplyPollerBuilder {
-    pub fn new(cfg: Arc<VersionTrack<Config>>) -> Self {
-        Self { cfg }
+impl<ER: RaftEngine> ApplyPollerBuilder<ER> {
+    pub fn new(cfg: Arc<VersionTrack<Config>>, raft_engine: ER) -> Self {
+        Self { cfg, raft_engine }
     }
 }
 
-impl<EK: KvEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm> for ApplyPollerBuilder {
-    type Handler = ApplyPoller;
+impl<EK: KvEngine, ER: RaftEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
+    for ApplyPollerBuilder<ER>
+{
+    type Handler = ApplyPoller<ER>;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
-        let apply_ctx = ApplyContext::new(self.cfg.value().clone());
+        let apply_ctx = ApplyContext::new(self.cfg.value().clone(), self.raft_engine.clone());
         let cfg_tracker = self.cfg.clone().tracker("apply".to_string());
         ApplyPoller::new(apply_ctx, cfg_tracker)
     }
