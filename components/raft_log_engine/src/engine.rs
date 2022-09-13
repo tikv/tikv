@@ -804,8 +804,8 @@ impl RaftEngine for RaftLogEngine {
         self.0
             .scan_messages(
                 raft_group_id,
-                start.as_ref().map(Vec::as_slice),
-                end.as_ref().map(Vec::as_slice),
+                start.as_deref(),
+                end.as_deref(),
                 true,
                 |key, value| {
                     let index = parse_raft_seqno_relation_key(key).unwrap();

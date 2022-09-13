@@ -17,6 +17,7 @@ mod bootstrap;
 mod compaction_guard;
 mod hibernate_state;
 pub mod local_metrics;
+mod migrate_states;
 mod peer;
 mod peer_storage;
 mod read_queue;

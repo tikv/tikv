@@ -21,11 +21,7 @@ fn test_disable_wal_recovery() {
     cluster.cfg.raft_store.disable_kv_wal = true;
     cluster.run();
     let region = cluster.get_region(b"");
-    let leader = region
-        .get_peers()
-        .into_iter()
-        .find(|p| p.store_id == 1)
-        .unwrap();
+    let leader = region.get_peers().iter().find(|p| p.store_id == 1).unwrap();
     cluster.must_transfer_leader(region.get_id(), leader.clone());
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(Arc::clone(&env)).connect(&cluster.sim.rl().get_addr(1));
@@ -59,11 +55,7 @@ fn test_disable_wal_recovery() {
 
     cluster.must_split(&region, b"k3");
     let region = cluster.get_region(b"k3");
-    let leader = region
-        .get_peers()
-        .into_iter()
-        .find(|p| p.store_id == 1)
-        .unwrap();
+    let leader = region.get_peers().iter().find(|p| p.store_id == 1).unwrap();
     cluster.must_transfer_leader(region.get_id(), leader.clone());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     must_kv_prewrite(
@@ -83,11 +75,7 @@ fn test_disable_wal_recovery() {
     must_get_cf_none(&cluster.get_engine(1), CF_LOCK, key_builder.as_slice());
     cluster.run_node(1).unwrap();
     let region = cluster.get_region(b"k3");
-    let leader = region
-        .get_peers()
-        .into_iter()
-        .find(|p| p.store_id == 1)
-        .unwrap();
+    let leader = region.get_peers().iter().find(|p| p.store_id == 1).unwrap();
     cluster.must_transfer_leader(region.get_id(), leader.clone());
     ctx.set_region_epoch(region.get_region_epoch().clone());
     must_kv_commit(&client, ctx.clone(), vec![b"k4".to_vec()], 60, 70, 70);

@@ -383,18 +383,17 @@ where
     }
 
     #[inline]
-    pub fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
+    pub fn save_apply_state_to(
+        &self,
+        kv_wb: &mut impl Mutable,
+        raft_wb: &mut impl RaftLogBatch,
+    ) -> Result<()> {
         kv_wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
             self.apply_state(),
         )?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn save_snapshot_apply_state_to(&self, raft_wb: &mut impl RaftLogBatch) -> Result<()> {
-        raft_wb.put_snapshot_apply_state(self.region.get_id(), self.apply_state())?;
+        raft_wb.put_apply_state(self.region.get_id(), self.apply_state())?;
         Ok(())
     }
 
@@ -926,8 +925,10 @@ where
                 ready.snapshot().get_metadata().get_index(),
                 write_task.extra_write.v1_mut().unwrap(),
             )?;
-            self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
-            self.save_snapshot_apply_state_to(write_task.raft_wb.as_mut().unwrap())?;
+            self.save_apply_state_to(
+                write_task.extra_write.v1_mut().unwrap(),
+                write_task.raft_wb.as_mut().unwrap(),
+            )?;
         }
 
         if !write_task.has_data() {
@@ -1305,7 +1306,11 @@ pub mod tests {
         let kv_wb = write_task
             .extra_write
             .ensure_v1(|| store.engines.kv.write_batch());
-        store.save_apply_state_to(kv_wb).unwrap();
+        if write_task.raft_wb.is_none() {
+            write_task.raft_wb = Some(store.engines.raft.log_batch(64));
+        }
+        let raft_wb = write_task.raft_wb.as_mut().unwrap();
+        store.save_apply_state_to(kv_wb, raft_wb).unwrap();
         write_task.raft_state = Some(store.raft_state().clone());
         write_to_db_for_test(&store.engines, write_task);
         store
@@ -1600,7 +1605,8 @@ pub mod tests {
             }
             if res.is_ok() {
                 let mut kv_wb = store.engines.kv.write_batch();
-                store.save_apply_state_to(&mut kv_wb).unwrap();
+                let mut raft_wb = store.engines.raft.log_batch(0);
+                store.save_apply_state_to(&mut kv_wb, &mut raft_wb).unwrap();
                 kv_wb.write().unwrap();
             }
         }
@@ -1720,12 +1726,17 @@ pub mod tests {
         let kv_wb = write_task
             .extra_write
             .ensure_v1(|| s.engines.kv.write_batch());
-        s.save_apply_state_to(kv_wb).unwrap();
+        if write_task.raft_wb.is_none() {
+            write_task.raft_wb = Some(s.engines.raft.log_batch(64));
+        }
+        let raft_wb = write_task.raft_wb.as_mut().unwrap();
+        s.save_apply_state_to(kv_wb, raft_wb).unwrap();
         write_to_db_for_test(&s.engines, write_task);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, s.entry_storage.apply_state_mut(), 7, term).unwrap();
         let mut kv_wb = s.engines.kv.write_batch();
-        s.save_apply_state_to(&mut kv_wb).unwrap();
+        let mut raft_wb = s.engines.raft.log_batch(64);
+        s.save_apply_state_to(&mut kv_wb, &mut raft_wb).unwrap();
         kv_wb.write().unwrap();
 
         let (tx, rx) = channel();

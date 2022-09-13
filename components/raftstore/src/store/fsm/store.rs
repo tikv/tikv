@@ -89,6 +89,7 @@ use crate::{
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
+        migrate_states::mrigrate_states_from_kvdb_to_raftdb,
         peer_storage,
         transport::Transport,
         util::{self, gc_seqno_relations, is_initial_msg, RegionReadProgressRegistry},
@@ -1222,18 +1223,24 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 .for_each_raft_group(&mut |region_id| {
                     let region_state = raft_engine
                         .get_region_state(region_id)?
-                        .expect(&format!("region_id: {}", region_id));
+                        .unwrap_or_else(|| panic!("region_id: {}", region_id));
                     kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
-                    let apply_state = raft_engine.get_apply_state(region_id)?.unwrap();
+                    let apply_state = raft_engine.get_apply_state(region_id)?;
                     info!("recover region from raftdb";
                         "region_id" => region_id,
                         "region_state" => ?region_state,
                         "apply_state" => ?apply_state,
                     );
-                    kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
+                    if let Some(apply_state) = apply_state {
+                        kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
+                    } else {
+                        Ok(())
+                    }
                 })
                 .unwrap();
             kv_wb.write().unwrap();
+        } else if self.cfg.value().disable_kv_wal {
+            mrigrate_states_from_kvdb_to_raftdb(&self.engines)?;
         }
 
         let mut total_count = 0;
@@ -1366,6 +1373,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         };
         peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, rid, 0, &raft_state, false)
             .unwrap();
+        raft_wb.put_region_state(rid, origin_state).unwrap();
         let key = keys::region_state_key(rid);
         kv_wb.put_msg_cf(CF_RAFT, &key, origin_state).unwrap();
     }
