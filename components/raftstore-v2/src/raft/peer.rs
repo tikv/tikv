@@ -11,7 +11,7 @@ use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
 use super::storage::Storage;
 use crate::{
-    operation::AsyncWriter,
+    operation::{AsyncWriter, DestroyProgress},
     tablet::{self, CachedTablet},
     Result,
 };
@@ -25,6 +25,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
     pub(crate) async_writer: AsyncWriter<EK, ER>,
+    destroy_progress: DestroyProgress,
     has_ready: bool,
     pub(crate) logger: Logger,
 }
@@ -35,21 +36,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// If peer is destroyed, `None` is returned.
     pub fn new(
         cfg: &Config,
-        region_id: u64,
-        store_id: u64,
         tablet_factory: &dyn TabletFactory<EK>,
-        engine: ER,
-        scheduler: Scheduler<RaftlogFetchTask>,
-        logger: &Logger,
-    ) -> Result<Option<Self>> {
-        let s = match Storage::new(region_id, store_id, engine, scheduler, logger)? {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        let logger = s.logger().clone();
+        storage: Storage<ER>,
+    ) -> Result<Self> {
+        let logger = storage.logger().clone();
 
-        let applied_index = s.apply_state().get_applied_index();
-        let peer_id = s.peer().get_id();
+        let applied_index = storage.apply_state().get_applied_index();
+        let peer_id = storage.peer().get_id();
 
         let raft_cfg = raft::Config {
             id: peer_id,
@@ -67,7 +60,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ..Default::default()
         };
 
-        let tablet_index = s.region_state().get_tablet_index();
+        let region_id = storage.region().get_id();
+        let tablet_index = storage.region_state().get_tablet_index();
         // Another option is always create tablet even if tablet index is 0. But this
         // can introduce race when gc old tablet and create new peer.
         let tablet = if tablet_index != 0 {
@@ -89,21 +83,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         };
 
         let mut peer = Peer {
-            raft_group: RawNode::new(&raft_cfg, s, &logger)?,
+            raft_group: RawNode::new(&raft_cfg, storage, &logger)?,
             tablet: CachedTablet::new(tablet),
-            has_ready: false,
-            async_writer: AsyncWriter::new(region_id, peer_id),
-            logger,
             peer_cache: vec![],
+            async_writer: AsyncWriter::new(region_id, peer_id),
+            has_ready: false,
+            destroy_progress: DestroyProgress::None,
+            logger,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
         let region = peer.region();
-        if region.get_peers().len() == 1 && region.get_peers()[0].get_store_id() == store_id {
+        if region.get_peers().len() == 1
+            && region.get_peers()[0] == *peer.peer()
+            && tablet_index != 0
+        {
             peer.raft_group.campaign()?;
         }
 
-        Ok(Some(peer))
+        Ok(peer)
     }
 
     #[inline]
@@ -240,5 +238,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn term(&self) -> u64 {
         self.raft_group.raft.term
+    }
+
+    #[inline]
+    pub fn serving(&self) -> bool {
+        matches!(self.destroy_progress, DestroyProgress::None)
+    }
+
+    #[inline]
+    pub fn destroy_progress(&self) -> &DestroyProgress {
+        &self.destroy_progress
+    }
+
+    #[inline]
+    pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
+        &mut self.destroy_progress
     }
 }

@@ -205,6 +205,8 @@ pub(crate) fn make_txn_error(
     key: &Key,
     start_ts: TimeStamp,
 ) -> crate::storage::mvcc::ErrorInner {
+    use kvproto::kvrpcpb::WriteConflictReason;
+
     use crate::storage::mvcc::ErrorInner;
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
@@ -244,6 +246,7 @@ pub(crate) fn make_txn_error(
                 conflict_commit_ts: TimeStamp::zero(),
                 key: key.to_raw().unwrap(),
                 primary: vec![],
+                reason: WriteConflictReason::Optimistic,
             },
             "deadlock" => ErrorInner::Deadlock {
                 start_ts,
@@ -1050,6 +1053,7 @@ pub(crate) mod tests {
                     false,
                     false,
                     TimeStamp::zero(),
+                    false,
                 );
             }
 
@@ -1316,7 +1320,7 @@ pub(crate) mod tests {
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
         must_acquire_pessimistic_lock_impl(
-            &engine, b"key", b"key", 2, false, 20000, 2, false, false, 100,
+            &engine, b"key", b"key", 2, false, 20000, 2, false, false, 100, false,
         );
 
         let snapshot = engine.snapshot(Default::default()).unwrap();

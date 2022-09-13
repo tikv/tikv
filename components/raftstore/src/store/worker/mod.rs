@@ -18,6 +18,8 @@ mod split_check;
 mod split_config;
 mod split_controller;
 
+#[cfg(test)]
+pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
