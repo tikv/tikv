@@ -4203,10 +4203,11 @@ where
         // After the region commit merged, the region's key range is extended and the region's `safe_ts`
         // should reset to `min(source_safe_ts, target_safe_ts)`
         let source_read_progress = meta.region_read_progress.remove(&source.get_id()).unwrap();
-        self.fsm
-            .peer
-            .read_progress
-            .merge_safe_ts(source_read_progress.safe_ts(), merge_index);
+        self.fsm.peer.read_progress.merge_safe_ts(
+            source_read_progress.safe_ts(),
+            merge_index,
+            &self.ctx.coprocessor_host,
+        );
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after

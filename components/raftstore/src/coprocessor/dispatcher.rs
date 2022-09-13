@@ -134,6 +134,11 @@ macro_rules! impl_box_observer_g {
 impl_box_observer!(BoxAdminObserver, AdminObserver, WrappedAdminObserver);
 impl_box_observer!(BoxQueryObserver, QueryObserver, WrappedQueryObserver);
 impl_box_observer!(
+    BoxUpdateSafeTsObserver,
+    UpdateSafeTsObserver,
+    WrappedUpdateSafeTsObserver
+);
+impl_box_observer!(
     BoxApplySnapshotObserver,
     ApplySnapshotObserver,
     WrappedApplySnapshotObserver
@@ -178,6 +183,7 @@ where
     cmd_observers: Vec<Entry<BoxCmdObserver<E>>>,
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
+    update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     // TODO: add endpoint
 }
 
@@ -194,6 +200,7 @@ impl<E: KvEngine> Default for Registry<E> {
             cmd_observers: Default::default(),
             read_index_observers: Default::default(),
             pd_task_observers: Default::default(),
+            update_safe_ts_observers: Default::default(),
         }
     }
 }
@@ -258,6 +265,9 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_read_index_observer(&mut self, priority: u32, rio: BoxReadIndexObserver) {
         push!(priority, rio, self.read_index_observers);
+    }
+    pub fn register_update_safe_ts_observer(&mut self, priority: u32, qo: BoxUpdateSafeTsObserver) {
+        push!(priority, qo, self.update_safe_ts_observers);
     }
 }
 
@@ -660,6 +670,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_update_safe_ts(&self, region_id: u64, self_safe_ts: u64, leader_safe_ts: u64) {
+        if self.registry.query_observers.is_empty() {
+            return;
+        }
+        for observer in &self.registry.update_safe_ts_observers {
+            let observer = observer.observer.inner();
+            observer.on_update_safe_ts(region_id, self_safe_ts, leader_safe_ts)
+        }
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();
@@ -688,7 +708,7 @@ mod tests {
     use tikv_util::box_err;
 
     use crate::{
-        coprocessor::*,
+        coprocessor::{dispatcher::BoxUpdateSafeTsObserver, *},
         store::{SnapKey, Snapshot},
     };
 
@@ -720,6 +740,7 @@ mod tests {
         PreApplySnapshot = 20,
         PostApplySnapshot = 21,
         ShouldPreApplySnapshot = 22,
+        OnUpdateSafeTs = 23,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -937,6 +958,13 @@ mod tests {
         fn on_applied_current_term(&self, _: StateRole, _: &Region) {}
     }
 
+    impl UpdateSafeTsObserver for TestCoprocessor {
+        fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {
+            self.called
+                .fetch_add(ObserverIndex::OnUpdateSafeTs as usize, Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -971,6 +999,8 @@ mod tests {
             .register_region_change_observer(1, BoxRegionChangeObserver::new(ob.clone()));
         host.registry
             .register_cmd_observer(1, BoxCmdObserver::new(ob.clone()));
+        host.registry
+            .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
 
         let mut index: usize = 0;
         let region = Region::default();
@@ -1076,6 +1106,10 @@ mod tests {
 
         host.should_pre_apply_snapshot();
         index += ObserverIndex::ShouldPreApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.on_update_safe_ts(1, 1, 1);
+        index += ObserverIndex::OnUpdateSafeTs as usize;
         assert_all!([&ob.called], &[index]);
     }
 

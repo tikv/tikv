@@ -658,6 +658,7 @@ pub fn gen_engine_store_server_helper(
         fn_get_config: None,
         fn_set_store: None,
         fn_set_pb_msg_by_bytes: Some(ffi_set_pb_msg_by_bytes),
+        fn_handle_safe_ts_update: None,
     }
 }
 

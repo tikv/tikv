@@ -25,8 +25,9 @@ use raftstore::{
     coprocessor::{
         AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
         BoxApplySnapshotObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
-        Cmd, Coprocessor, CoprocessorHost, ObserverContext, PdTaskObserver, QueryObserver,
-        RegionChangeEvent, RegionChangeObserver, RegionState, StoreSizeInfo,
+        BoxUpdateSafeTsObserver, Cmd, Coprocessor, CoprocessorHost, ObserverContext,
+        PdTaskObserver, QueryObserver, RegionChangeEvent, RegionChangeObserver, RegionState,
+        StoreSizeInfo, UpdateSafeTsObserver,
     },
     store,
     store::{check_sst_for_ingestion, snap::plain_file_used, SnapKey},
@@ -169,6 +170,10 @@ impl TiFlashObserver {
         coprocessor_host.registry.register_pd_task_observer(
             TIFLASH_OBSERVER_PRIORITY,
             BoxPdTaskObserver::new(self.clone()),
+        );
+        coprocessor_host.registry.register_update_safe_ts_observer(
+            TIFLASH_OBSERVER_PRIORITY,
+            BoxUpdateSafeTsObserver::new(self.clone()),
         );
     }
 
@@ -549,6 +554,16 @@ impl QueryObserver for TiFlashObserver {
             info!("should persist query"; "region_id" => ob_ctx.region().get_id(), "peer_id" => region_state.peer_id, "state" => ?apply_state);
         }
         persist
+    }
+}
+
+impl UpdateSafeTsObserver for TiFlashObserver {
+    fn on_update_safe_ts(&self, region_id: u64, self_safe_ts: u64, leader_safe_ts: u64) {
+        self.engine_store_server_helper.handle_safe_ts_update(
+            region_id,
+            self_safe_ts,
+            leader_safe_ts,
+        )
     }
 }
 

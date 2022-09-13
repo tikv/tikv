@@ -212,5 +212,6 @@ struct EngineStoreServerHelper {
   void (*fn_set_store)(EngineStoreServerWrap *, BaseBuffView);
   void (*fn_set_pb_msg_by_bytes)(MsgPBType type, RawVoidPtr ptr,
                                  BaseBuffView buff);
+  void (*fn_handle_safe_ts_update)(EngineStoreServerWrap *, uint64_t region_id, uint64_t self_safe_ts, uint64_t leader_safe_ts);
 };
 }  // namespace DB

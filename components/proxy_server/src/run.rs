@@ -1073,11 +1073,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         //     None
         // };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
-        let check_leader_scheduler = self
-            .background_worker
-            .start("check-leader", check_leader_runner);
-
         let server_config = Arc::new(VersionTrack::new(self.config.server.clone()));
 
         self.config
@@ -1126,6 +1121,44 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 .set_store(node.store());
             info!("set store {} to engine-store", node.id());
         }
+
+        let import_path = self.store_path.join("import");
+        let mut importer = SstImporter::new(
+            &self.config.import,
+            import_path,
+            self.encryption_key_manager.clone(),
+            self.config.storage.api_version(),
+        )
+        .unwrap();
+        for (cf_name, compression_type) in &[
+            (
+                CF_DEFAULT,
+                self.config.rocksdb.defaultcf.bottommost_level_compression,
+            ),
+            (
+                CF_WRITE,
+                self.config.rocksdb.writecf.bottommost_level_compression,
+            ),
+        ] {
+            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
+        }
+        let importer = Arc::new(importer);
+
+        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
+            node.id(),
+            self.engines.as_ref().unwrap().engines.kv.clone(),
+            importer.clone(),
+            self.proxy_config.raft_store.snap_handle_pool_size,
+        );
+        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+
+        let check_leader_runner = CheckLeaderRunner::new(
+            engines.store_meta.clone(),
+            self.coprocessor_host.clone().unwrap(),
+        );
+        let check_leader_scheduler = self
+            .background_worker
+            .start("check-leader", check_leader_runner);
 
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
@@ -1191,36 +1224,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
         //     backup_stream_worker.start(backup_stream_endpoint);
         //     self.to_stop.push(backup_stream_worker);
         // }
-
-        let import_path = self.store_path.join("import");
-        let mut importer = SstImporter::new(
-            &self.config.import,
-            import_path,
-            self.encryption_key_manager.clone(),
-            self.config.storage.api_version(),
-        )
-        .unwrap();
-        for (cf_name, compression_type) in &[
-            (
-                CF_DEFAULT,
-                self.config.rocksdb.defaultcf.bottommost_level_compression,
-            ),
-            (
-                CF_WRITE,
-                self.config.rocksdb.writecf.bottommost_level_compression,
-            ),
-        ] {
-            importer.set_compression_type(cf_name, from_rocks_compression_type(*compression_type));
-        }
-        let importer = Arc::new(importer);
-
-        let tiflash_ob = engine_store_ffi::observer::TiFlashObserver::new(
-            node.id(),
-            self.engines.as_ref().unwrap().engines.kv.clone(),
-            importer.clone(),
-            self.proxy_config.raft_store.snap_handle_pool_size,
-        );
-        tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
 
         let split_check_runner = SplitCheckRunner::new(
             engines.engines.kv.clone(),
