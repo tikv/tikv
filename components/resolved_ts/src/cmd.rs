@@ -33,7 +33,7 @@ pub enum ChangeRow {
         commit_ts: TimeStamp,
         value: Option<Value>,
     },
-    IngestSsT {},
+    IngestSsT,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -62,7 +62,7 @@ impl ChangeLog {
                         let (changes, has_ingest_sst) = group_row_changes(request.requests.into());
                         let mut rows = Self::encode_rows(changes, is_one_pc);
                         if has_ingest_sst {
-                            rows.push(ChangeRow::IngestSsT {});
+                            rows.push(ChangeRow::IngestSsT);
                         }
                         ChangeLog::Rows { index, rows }
                     } else {
