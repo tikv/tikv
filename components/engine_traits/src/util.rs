@@ -32,9 +32,17 @@ pub fn check_key_in_range(
 /// guaranteed to be allocated contiguously.
 static WRITE_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
 /// Everytime active memtable switched, this version should be increased.
-pub static MEMTABLE_VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
+static MEMTABLE_VERSION_COUNTER_ALLOCATOR: AtomicU64 = AtomicU64::new(0);
 /// Max sequence number that was synced and persisted.
-pub static MAX_SYNCED_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
+static MAX_SYNCED_SEQUENCE_NUMBER: AtomicU64 = AtomicU64::new(0);
+
+pub fn max_synced_sequence_number() -> u64 {
+    MAX_SYNCED_SEQUENCE_NUMBER.load(Ordering::SeqCst)
+}
+
+pub fn current_memtable_version() -> u64 {
+    MEMTABLE_VERSION_COUNTER_ALLOCATOR.load(Ordering::SeqCst)
+}
 
 pub trait MemtableEventNotifier: Send {
     fn notify_memtable_sealed(&self, seqno: u64);
