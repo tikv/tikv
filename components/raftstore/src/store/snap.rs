@@ -1200,6 +1200,10 @@ impl Snapshot {
         self.hold_tmp_files = false;
         Ok(())
     }
+
+    pub fn cf_files(&self) -> &[CfFile] {
+        &self.cf_files
+    }
 }
 
 // To check whether a procedure about apply snapshot aborts or not.
