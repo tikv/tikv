@@ -55,7 +55,7 @@ pub struct GcContext {
     pub(crate) store_id: u64,
     pub(crate) safe_point: Arc<AtomicU64>,
     pub(crate) cfg_tracker: GcWorkerConfigManager,
-    pub(crate) feature_gate: FeatureGate,
+    feature_gate: FeatureGate,
     pub(crate) gc_scheduler: Scheduler<GcTask<RocksEngine>>,
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
@@ -687,6 +687,10 @@ pub fn check_need_gc(
         if props.min_ts > safe_point {
             return (false, false);
         }
+        println!(
+            "context.is_bottommost_level():{}",
+            context.is_bottommost_level()
+        );
         if ratio_threshold < 1.0 || context.is_bottommost_level() {
             // According to our tests, `split_ts` on keys and `parse_write` on values
             // won't utilize much CPU. So always perform GC at the bottommost level
@@ -869,22 +873,11 @@ pub mod test_utils {
             self.post_gc();
         }
 
-        pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String]) {
+        pub fn gc_on_files(&mut self, engine: &RocksEngine, input_files: &[String], cf: &str) {
             let _guard = LOCK.lock().unwrap();
             self.prepare_gc(engine);
             let db = engine.as_inner();
-            let handle = get_cf_handle(db, CF_WRITE).unwrap();
-            let level = self.target_level.unwrap() as i32;
-            db.compact_files_cf(handle, &CompactionOptions::new(), input_files, level)
-                .unwrap();
-            self.post_gc();
-        }
-
-        pub fn gc_on_files_raw(&mut self, engine: &RocksEngine, input_files: &[String]) {
-            let _guard = LOCK.lock().unwrap();
-            self.prepare_gc(engine);
-            let db = engine.as_inner();
-            let handle = get_cf_handle(db, CF_DEFAULT).unwrap();
+            let handle = get_cf_handle(db, cf).unwrap();
             let level = self.target_level.unwrap() as i32;
             db.compact_files_cf(handle, &CompactionOptions::new(), input_files, level)
                 .unwrap();
@@ -1102,7 +1095,9 @@ pub mod tests {
         let files = &[l0_file.to_str().unwrap().to_owned()];
         gc_runner.target_level = Some(5);
         gc_runner.ratio_threshold = Some(10.0);
-        gc_runner.safe_point(300).gc_on_files(&raw_engine, files);
+        gc_runner
+            .safe_point(300)
+            .gc_on_files(&raw_engine, files, CF_WRITE);
         for commit_ts in &[205, 215, 225, 235] {
             must_get(&engine, b"zkey", commit_ts, &value);
         }
@@ -1150,7 +1145,9 @@ pub mod tests {
         let l0_file = dir.path().join(&level_files[0][0]);
         let files = &[l0_file.to_str().unwrap().to_owned()];
         gc_runner.target_level = Some(5);
-        gc_runner.safe_point(200).gc_on_files(&raw_engine, files);
+        gc_runner
+            .safe_point(200)
+            .gc_on_files(&raw_engine, files, CF_WRITE);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[5], 1);
         assert_eq!(rocksdb_level_file_counts(&raw_engine, CF_WRITE)[6], 1);
         must_get_none(&engine, b"zkey", 200);

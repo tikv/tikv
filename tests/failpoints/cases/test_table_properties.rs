@@ -1,4 +1,4 @@
-// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::RocksEngine;
@@ -105,6 +105,9 @@ fn test_check_need_gc() {
             .get(),
         0
     );
+
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
 }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
@@ -160,7 +163,7 @@ fn do_gc(
     gc_runner.target_level = Some(target_level);
     gc_runner
         .safe_point(gc_safepoint)
-        .gc_on_files_raw(raw_engine, files);
+        .gc_on_files(raw_engine, files, CF_DEFAULT);
 }
 
 #[test]
@@ -230,4 +233,7 @@ fn test_skip_gc_by_check() {
             .get(),
         2
     );
+
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
 }
