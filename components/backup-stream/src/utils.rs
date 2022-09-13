@@ -5,6 +5,7 @@ use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
     ops::{Bound, RangeBounds},
+    path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -16,7 +17,10 @@ use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
-use kvproto::raft_cmdpb::{CmdType, Request};
+use kvproto::{
+    brpb::CompressionType,
+    raft_cmdpb::{CmdType, Request},
+};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
@@ -32,7 +36,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncRead, BufWriter, AsyncWriteExt},
+    io::{AsyncRead, AsyncWriteExt, BufWriter},
     sync::{oneshot, Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};
@@ -635,15 +639,28 @@ pub trait CompressionWriter: Sync + Send + 'static {
     async fn shutdown(&mut self) -> Result<()>;
 }
 
+pub async fn compression_writer_dispatcher(
+    local_path: impl AsRef<Path>,
+    compression_type: CompressionType,
+) -> Result<Box<dyn CompressionWriter>> {
+    let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
+    match compression_type {
+        CompressionType::Unknown => Ok(Box::new(NoneCompressionWriter::new(inner))),
+        CompressionType::Zstd => Ok(Box::new(ZstdCompressionWriter::new(inner))),
+        _ => Err(Error::Other(box_err!(format!(
+            "the compression type is unimplemented, compression type id {:?}",
+            compression_type
+        )))),
+    }
+}
+
 pub struct NoneCompressionWriter {
     inner: BufWriter<File>,
 }
 
 impl NoneCompressionWriter {
     pub fn new(inner: BufWriter<File>) -> Self {
-        NoneCompressionWriter {
-            inner,
-        }
+        NoneCompressionWriter { inner }
     }
 }
 

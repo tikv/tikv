@@ -14,13 +14,15 @@ use std::{
     time::Duration,
 };
 
-
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata, StreamBackupTaskInfo},
+    brpb::{
+        CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
+        StreamBackupTaskInfo,
+    },
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -39,7 +41,6 @@ use tikv_util::{
 };
 use tokio::{
     fs::{remove_file, File},
-    io::BufWriter,
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -54,7 +55,7 @@ use crate::{
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
     try_send,
-    utils::{self, FilesReader, SegmentMap, SlotMap, StopWatch, NoneCompressionWriter, ZstdCompressionWriter, CompressionWriter},
+    utils::{self, CompressionWriter, FilesReader, SegmentMap, SlotMap, StopWatch},
 };
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
@@ -913,9 +914,7 @@ impl StreamTaskInfo {
         futures::future::join_all(
             w.iter_mut()
                 .chain(wm.iter_mut())
-                .map(|(_, f, _)| async move {
-                    f.inner.shutdown().await
-                }),
+                .map(|(_, f, _)| async move { f.inner.shutdown().await }),
         )
         .await
         .into_iter()
@@ -1281,6 +1280,7 @@ struct DataFile {
     sha256: Hasher,
     // TODO: use lz4 with async feature
     inner: Box<dyn CompressionWriter>,
+    compression_type: CompressionType,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     number_of_entries: usize,
@@ -1355,13 +1355,15 @@ impl DataFile {
     async fn new(local_path: impl AsRef<Path>, compression_type: CompressionType) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
-        let inner = Self::compression_dispatcher(local_path.as_ref(), compression_type).await?;
+        let inner =
+            utils::compression_writer_dispatcher(local_path.as_ref(), compression_type).await?;
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
             inner,
+            compression_type,
             sha256,
             number_of_entries: 0,
             file_size: 0,
@@ -1369,17 +1371,6 @@ impl DataFile {
             end_key: vec![],
             local_path: local_path.as_ref().to_owned(),
         })
-    }
-
-    async fn compression_dispatcher(local_path: impl AsRef<Path>, compression_type: CompressionType) -> Result<Box<dyn CompressionWriter>> {
-        let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
-        match compression_type {
-            CompressionType::Unknown => Ok(Box::new(NoneCompressionWriter::new(inner))),
-            CompressionType::Zstd => Ok(Box::new(ZstdCompressionWriter::new(inner))),
-            _ => Err(Error::Other(box_err!(
-                format!("the compression type is unimplemented, compression type id {:?}", compression_type)
-            ))),
-        }
     }
 
     async fn remove_temp_file(&self) -> io::Result<()> {
@@ -1483,6 +1474,8 @@ impl DataFile {
         meta.set_cf(file_key.cf.to_owned());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
+
+        meta.set_compression_type(self.compression_type);
 
         Ok(meta)
     }
@@ -2293,13 +2286,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_est_len_in_flush() -> Result<()> {
+        use tokio::io::AsyncWriteExt;
         let noop_s = NoopStorage::default();
         let ms = MockCheckContentStorage { s: noop_s };
         let file_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let mut f = File::create(file_path.clone()).await?;
         f.write_all("test-data".as_bytes()).await?;
 
-        let data_file = DataFile::new(file_path, CompressionType::Zstd).await.unwrap();
+        let data_file = DataFile::new(file_path, CompressionType::Zstd)
+            .await
+            .unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);

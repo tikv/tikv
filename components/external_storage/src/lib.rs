@@ -99,15 +99,20 @@ pub trait ExternalStorage: 'static + Send + Sync {
             } else {
                 self.read(storage_name)
             };
-            
+
             match compression_type {
                 Some(c) => match c {
                     CompressionType::Unknown => r,
                     CompressionType::Zstd => Box::new(ZstdDecoder::new(BufReader::new(r))),
-                    _ => return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("the compression type is unimplemented, compression type id {:?}", c),
-                    )),
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!(
+                                "the compression type is unimplemented, compression type id {:?}",
+                                c
+                            ),
+                        ));
+                    }
                 },
                 None => r,
             }

@@ -35,7 +35,7 @@ pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
-use kvproto::brpb::{CloudDynamic, Noop, StorageBackend, CompressionType};
+use kvproto::brpb::{CloudDynamic, CompressionType, Noop, StorageBackend};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 use tikv_util::{
@@ -346,15 +346,20 @@ impl ExternalStorage for EncryptedExternalStorage {
             } else {
                 self.read(storage_name)
             };
-            
+
             match compression_type {
                 Some(c) => match c {
                     CompressionType::Unknown => r,
                     CompressionType::Zstd => Box::new(ZstdDecoder::new(BufReader::new(r))),
-                    _ => return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("the compression type is unimplemented, compression type id {:?}", c),
-                    )),
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!(
+                                "the compression type is unimplemented, compression type id {:?}",
+                                c
+                            ),
+                        ));
+                    }
                 },
                 None => r,
             }
