@@ -704,7 +704,7 @@ impl TempFileKey {
     /// For v2, we merged the small files (partition by table_id) into one file.
     fn path_to_log_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/{:018}-{}.log",
+            "v1/{}/{}/{}/{}-{}.log",
             // We may delete a range of files, so using the max_ts for preventing remove some
             // records wrong.
             Self::format_date_time(max_ts, FormatType::Date),
@@ -723,7 +723,7 @@ impl TempFileKey {
     /// For v2, we merged the small files (partition by table_id) into one file.
     fn path_to_schema_file(store_id: u64, min_ts: u64, max_ts: u64) -> String {
         format!(
-            "v1/{}/{}/{}/schema-meta/{:018}-{}.log",
+            "v1/{}/{}/{}/schema-meta/{}-{}.log",
             Self::format_date_time(max_ts, FormatType::Date),
             Self::format_date_time(max_ts, FormatType::Hour),
             store_id,
@@ -1341,7 +1341,7 @@ impl MetadataInfo {
 
     fn path_to_meta(&self) -> String {
         format!(
-            "v1/backupmeta/{:018}-{}.meta",
+            "v1/backupmeta/{}-{}.meta",
             self.min_resolved_ts.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
