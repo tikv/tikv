@@ -3,6 +3,7 @@
 mod life;
 mod query;
 mod ready;
+mod split;
 
 pub use life::DestroyProgress;
 pub use ready::AsyncWriter;

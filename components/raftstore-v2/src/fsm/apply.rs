@@ -2,7 +2,8 @@
 
 use batch_system::Fsm;
 use crossbeam::channel::TryRecvError;
-use engine_traits::KvEngine;
+use engine_traits::{KvEngine, RaftEngine};
+use kvproto::metapb::Region;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{batch::ApplyContext, raft::Apply, router::ApplyTask};
@@ -56,14 +57,23 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
     }
 }
 
-pub struct ApplyFsmDelegate<'a, EK: KvEngine> {
+pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
     fsm: &'a mut ApplyFsm<EK>,
     apply_ctx: &'a mut ApplyContext,
+
+    pub(crate) tag: String,
+    // todo(SpadeA): tmp use.
+    pub(crate) region: Region,
 }
 
-impl<'a, EK: KvEngine> ApplyFsmDelegate<'a, EK> {
+impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
     pub fn new(fsm: &'a mut ApplyFsm<EK>, apply_ctx: &'a mut ApplyContext) -> Self {
-        Self { fsm, apply_ctx }
+        Self {
+            fsm,
+            tag: String::new(),
+            apply_ctx,
+            region: Region::default(),
+        }
     }
 
     pub fn handle_msgs(&self, apply_task_buf: &mut Vec<ApplyTask>) {

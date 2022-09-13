@@ -8,12 +8,13 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
+use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use raftstore::store::{
     fsm::{
@@ -34,11 +35,20 @@ use crate::{
 
 pub struct ApplyContext {
     cfg: Config,
+
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they
+    /// are exactly the same peer.
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl ApplyContext {
     pub fn new(cfg: Config) -> Self {
-        ApplyContext { cfg }
+        ApplyContext {
+            cfg,
+            pending_create_peers: Arc::default(),
+        }
     }
 }
 
