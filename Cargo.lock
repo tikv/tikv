@@ -255,6 +255,7 @@ name = "aws"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "cloud",
  "fail",
@@ -266,6 +267,7 @@ dependencies = [
  "hyper-tls",
  "kvproto",
  "lazy_static",
+ "md5",
  "prometheus",
  "rusoto_core",
  "rusoto_credential",
