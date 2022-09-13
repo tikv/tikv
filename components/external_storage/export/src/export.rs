@@ -35,7 +35,7 @@ pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
-use kvproto::brpb::{CloudDynamic, Noop, StorageBackend};
+use kvproto::brpb::{CloudDynamic, Noop, StorageBackend, CompressionType};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 use tikv_util::{
@@ -333,17 +333,31 @@ impl ExternalStorage for EncryptedExternalStorage {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        compressed_range: Option<(u64, u64)>,
+        range: Option<(u64, u64)>,
+        compression_type: Option<CompressionType>,
         expected_length: u64,
         expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let reader = if let Some((off, len)) = compressed_range {
-            let r = self.read_part(storage_name, off, len);
-            Box::new(ZstdDecoder::new(BufReader::new(r)))
-        } else {
-            self.read(storage_name)
+        let reader = {
+            let r = if let Some((off, len)) = range {
+                self.read_part(storage_name, off, len)
+            } else {
+                self.read(storage_name)
+            };
+            
+            match compression_type {
+                Some(c) => match c {
+                    CompressionType::Unknown => r,
+                    CompressionType::Zstd => Box::new(ZstdDecoder::new(BufReader::new(r))),
+                    _ => return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("the compression type is unimplemented, compression type id {:?}", c),
+                    )),
+                },
+                None => r,
+            }
         };
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;

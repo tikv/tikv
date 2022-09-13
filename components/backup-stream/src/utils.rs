@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
@@ -31,7 +32,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::File,
-    io::AsyncRead,
+    io::{AsyncRead, BufWriter, AsyncWriteExt},
     sync::{oneshot, Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};
@@ -624,6 +625,68 @@ impl AsyncRead for FilesReader {
         }
 
         Poll::Ready(Ok(()))
+    }
+}
+
+#[async_trait::async_trait]
+pub trait CompressionWriter: Sync + Send + 'static {
+    async fn write_all(&mut self, src: &[u8]) -> Result<()>;
+
+    async fn shutdown(&mut self) -> Result<()>;
+}
+
+pub struct NoneCompressionWriter {
+    inner: BufWriter<File>,
+}
+
+impl NoneCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        NoneCompressionWriter {
+            inner,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for NoneCompressionWriter {
+    async fn shutdown(&mut self) -> Result<()> {
+        let file = &mut self.inner;
+        file.flush().await?;
+        file.get_ref().sync_all().await?;
+        Ok(())
+    }
+    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
+        self.inner.write_all(src).await?;
+        Ok(())
+    }
+}
+
+pub struct ZstdCompressionWriter {
+    inner: ZstdEncoder<BufWriter<File>>,
+}
+
+impl ZstdCompressionWriter {
+    pub fn new(inner: BufWriter<File>) -> Self {
+        ZstdCompressionWriter {
+            inner: ZstdEncoder::with_quality(inner, Level::Fastest),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CompressionWriter for ZstdCompressionWriter {
+    async fn shutdown(&mut self) -> Result<()> {
+        let encoder = &mut self.inner;
+        encoder.shutdown().await?;
+        let file = encoder.get_mut();
+        file.flush().await?;
+        file.get_ref().sync_all().await?;
+        Ok(())
+    }
+
+    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
+        self.inner.write_all(src).await?;
+        Ok(())
     }
 }
 

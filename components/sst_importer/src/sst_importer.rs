@@ -21,7 +21,7 @@ use engine_traits::{
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
-    brpb::{CipherInfo, StorageBackend},
+    brpb::{CipherInfo, CompressionType, StorageBackend},
     import_sstpb::*,
     kvrpcpb::ApiVersion,
 };
@@ -225,7 +225,6 @@ impl SstImporter {
 
     fn download_file_from_external_storage(
         &self,
-        compressed_range: Option<(u64, u64)>,
         file_length: u64,
         src_file_name: &str,
         dst_file: std::path::PathBuf,
@@ -234,6 +233,8 @@ impl SstImporter {
         support_kms: bool,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
+        range: Option<(u64, u64)>,
+        compression_type: Option<CompressionType>,
     ) -> Result<()> {
         let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
@@ -266,7 +267,8 @@ impl SstImporter {
         let result = ext_storage.restore(
             src_file_name,
             dst_file.clone(),
-            compressed_range,
+            range,
+            compression_type,
             file_length,
             expect_sha256,
             speed_limiter,
@@ -302,7 +304,7 @@ impl SstImporter {
         backend: &StorageBackend,
         speed_limiter: &Limiter,
     ) -> Result<PathBuf> {
-        let offset = meta.get_offset();
+        let offset = meta.get_range_offset();
         let src_name = meta.get_name();
         let dst_name = format!("{}_{}", src_name, offset);
         let path = self.dir.get_import_path(&dst_name)?;
@@ -323,14 +325,13 @@ impl SstImporter {
             return Ok(path.save);
         }
 
-        let length = meta.get_compress_length();
-        let compressed_range = if length == 0 {
+        let range_length = meta.get_range_length();
+        let range = if range_length == 0 {
             None
         } else {
-            Some((offset, length))
+            Some((offset, range_length))
         };
         self.download_file_from_external_storage(
-            compressed_range,
             meta.get_length(),
             src_name,
             path.temp.clone(),
@@ -344,6 +345,8 @@ impl SstImporter {
             // don't support encrypt for now.
             None,
             speed_limiter,
+            range,
+            Some(meta.compression_type),
         )?;
         info!("download file finished {}, offset {}", src_name, offset);
 
@@ -505,7 +508,6 @@ impl SstImporter {
         });
 
         self.download_file_from_external_storage(
-            None,
             meta.length,
             name,
             path.temp.clone(),
@@ -514,6 +516,8 @@ impl SstImporter {
             true,
             file_crypter,
             speed_limiter,
+            None,
+            None,
         )?;
 
         // now validate the SST file.
@@ -1263,7 +1267,6 @@ mod tests {
         let path = importer.dir.get_import_path(file_name).unwrap();
         importer
             .download_file_from_external_storage(
-                None,
                 meta.get_length(),
                 file_name,
                 path.temp.clone(),
@@ -1272,6 +1275,8 @@ mod tests {
                 true,
                 None,
                 &Limiter::new(f64::INFINITY),
+                None,
+                None,
             )
             .unwrap();
         check_file_exists(&path.temp, Some(&key_manager));
@@ -1298,7 +1303,6 @@ mod tests {
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
         importer
             .download_file_from_external_storage(
-                None,
                 kv_meta.get_length(),
                 kv_meta.get_name(),
                 path.temp.clone(),
@@ -1307,6 +1311,8 @@ mod tests {
                 false,
                 None,
                 &Limiter::new(f64::INFINITY),
+                None,
+                None,
             )
             .unwrap();
 

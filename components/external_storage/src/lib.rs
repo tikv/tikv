@@ -23,6 +23,7 @@ use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
+use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
     stream::{block_on_external_io, READ_BUF_SIZE},
@@ -85,17 +86,31 @@ pub trait ExternalStorage: 'static + Send + Sync {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        compressed_range: Option<(u64, u64)>,
+        range: Option<(u64, u64)>,
+        compression_type: Option<CompressionType>,
         expected_length: u64,
         expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let reader: Box<dyn AsyncRead + Unpin> = if let Some((off, len)) = compressed_range {
-            let r = self.read_part(storage_name, off, len);
-            Box::new(ZstdDecoder::new(BufReader::new(r)))
-        } else {
-            self.read(storage_name)
+        let reader = {
+            let r = if let Some((off, len)) = range {
+                self.read_part(storage_name, off, len)
+            } else {
+                self.read(storage_name)
+            };
+            
+            match compression_type {
+                Some(c) => match c {
+                    CompressionType::Unknown => r,
+                    CompressionType::Zstd => Box::new(ZstdDecoder::new(BufReader::new(r))),
+                    _ => return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("the compression type is unimplemented, compression type id {:?}", c),
+                    )),
+                },
+                None => r,
+            }
         };
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
