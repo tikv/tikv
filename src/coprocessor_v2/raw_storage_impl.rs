@@ -219,7 +219,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api() {
-        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager::new())
             .build()
             .unwrap();
         let ctx = Context {
@@ -255,7 +255,7 @@ mod test {
 
     #[tokio::test]
     async fn test_storage_api_batch() {
-        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager)
+        let storage = TestStorageBuilder::<_, _, ApiV2>::new(DummyLockManager::new())
             .build()
             .unwrap();
         let ctx = Context {

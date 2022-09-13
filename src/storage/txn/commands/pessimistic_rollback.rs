@@ -136,7 +136,7 @@ pub mod tests {
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
-        let lock_mgr = DummyLockManager;
+        let lock_mgr = DummyLockManager::new();
         let write_context = WriteContext {
             lock_mgr: &lock_mgr,
             concurrency_manager: cm,

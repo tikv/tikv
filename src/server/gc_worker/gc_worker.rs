@@ -1480,10 +1480,12 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage =
-            TestStorageBuilderApiV1::from_engine_and_lock_mgr(engine.clone(), DummyLockManager)
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
+            engine.clone(),
+            DummyLockManager::new(),
+        )
+        .build()
+        .unwrap();
         let gate = FeatureGate::default();
         gate.set_version("5.0.0").unwrap();
         let (tx, _rx) = mpsc::channel();
@@ -1644,7 +1646,7 @@ mod tests {
         let prefixed_engine = PrefixedEngine(engine);
         let storage = TestStorageBuilderApiV1::from_engine_and_lock_mgr(
             prefixed_engine.clone(),
-            DummyLockManager,
+            DummyLockManager::new(),
         )
         .build()
         .unwrap();

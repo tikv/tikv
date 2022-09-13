@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BinaryHeap, convert::TryFrom, num::NonZeroU64, result::Result, sync::Arc};
+use std::{collections::BinaryHeap, convert::TryFrom, result::Result, sync::Arc};
 
 use dashmap;
 use kvproto::kvrpcpb;
@@ -10,7 +10,10 @@ use thiserror::Error;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
+    lock_manager::{
+        lock_wait_context::{LockWaitContext, LockWaitContextSharedState},
+        LockManager, LockWaitToken,
+    },
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockParameters, PessimisticLockRes},
@@ -47,7 +50,8 @@ pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes
 pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
-    pub term: Option<NonZeroU64>,
+    // TODO: Use term to filter out stale entries in the queue.
+    // pub term: Option<NonZeroU64>,
     pub parameters: PessimisticLockParameters,
     pub lock_wait_token: LockWaitToken,
     pub req_states: Option<Arc<LockWaitContextSharedState>>,
@@ -106,7 +110,7 @@ impl Ord for LockWaitEntryComparableWrapper {
 pub struct KeyLockWaitState {
     #[allow(dead_code)]
     current_lock: kvrpcpb::LockInfo,
-    legacy_wakeup_cnt: usize,
+    legacy_wake_up_cnt: usize,
     queue: BinaryHeap<LockWaitEntryComparableWrapper>,
     last_conflict_start_ts: TimeStamp,
     last_conflict_commit_ts: TimeStamp,
@@ -116,7 +120,7 @@ impl KeyLockWaitState {
     fn new(current_lock: kvrpcpb::LockInfo) -> Self {
         Self {
             current_lock,
-            legacy_wakeup_cnt: 0,
+            legacy_wake_up_cnt: 0,
             queue: BinaryHeap::new(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
@@ -149,7 +153,7 @@ impl<L: LockManager> LockWaitQueues<L> {
             .entry(lock_wait_entry.key.clone())
             .or_insert_with(|| KeyLockWaitState::new(current_lock));
         if lock_wait_entry.current_legacy_wakeup_cnt.is_none() {
-            lock_wait_entry.current_legacy_wakeup_cnt = Some(entry.value().legacy_wakeup_cnt);
+            lock_wait_entry.current_legacy_wakeup_cnt = Some(entry.value().legacy_wake_up_cnt);
         }
         entry.value_mut().queue.push(lock_wait_entry.into());
     }
@@ -195,9 +199,9 @@ impl<L: LockManager> LockWaitQueues<L> {
                     let legacy_wake_up_index = if v.queue.is_empty() {
                         None
                     } else {
-                        Some(v.legacy_wakeup_cnt)
+                        Some(v.legacy_wake_up_cnt)
                     };
-                    v.legacy_wakeup_cnt += 1;
+                    v.legacy_wake_up_cnt += 1;
                     result = Some((lock_wait_entry, legacy_wake_up_index));
                 } else {
                     result = Some((lock_wait_entry, None));
@@ -225,7 +229,7 @@ impl<L: LockManager> LockWaitQueues<L> {
     ) -> Option<Box<LockWaitEntry>> {
         let mut popped_lock_wait_entries = SmallVec::<[_; 4]>::new();
 
-        let mut woken_up_resumeable_entry = None;
+        let mut woken_up_resumable_entry = None;
         let mut conflicting_start_ts = TimeStamp::zero();
         let mut conflicting_commit_ts = TimeStamp::zero();
 
@@ -254,7 +258,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 }
                 let lock_wait_entry = v.queue.pop().unwrap().unwrap();
                 if lock_wait_entry.parameters.allow_lock_with_conflict {
-                    woken_up_resumeable_entry = Some(lock_wait_entry);
+                    woken_up_resumable_entry = Some(lock_wait_entry);
                     break;
                 }
                 popped_lock_wait_entries.push(lock_wait_entry);
@@ -266,7 +270,7 @@ impl<L: LockManager> LockWaitQueues<L> {
 
         // Call callbacks to cancel these entries here.
         // TODO: Perhaps we'better make it concurrent with scheduling the new command
-        // (if `woken_up_resumeable_entry` is some) if there are too many.
+        // (if `woken_up_resumable_entry` is some) if there are too many.
         for lock_wait_entry in popped_lock_wait_entries {
             let lock_wait_entry = *lock_wait_entry;
             let cb = lock_wait_entry.key_cb.unwrap().into_inner();
@@ -282,15 +286,475 @@ impl<L: LockManager> LockWaitQueues<L> {
             cb(Err(e.into()));
         }
 
-        // Return the item to be woken up in resumeable way.
-        woken_up_resumeable_entry
+        // Return the item to be woken up in resumable way.
+        woken_up_resumable_entry
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::mpsc::{channel, Receiver, RecvTimeoutError, TryRecvError},
+        time::Duration,
+    };
+
     use super::*;
+    use crate::storage::{
+        lock_manager::{DummyLockManager, WaitTimeout},
+        txn::ErrorInner as TxnErrorInner,
+        ProcessResult, StorageCallback,
+    };
+
+    struct TestLockWaitEntryHandle {
+        wake_up_rx: Receiver<Result<PessimisticLockRes, SharedError>>,
+        cancel_cb: Box<dyn FnOnce()>,
+    }
+
+    impl TestLockWaitEntryHandle {
+        fn try_get_result(&self) -> Option<Result<PessimisticLockRes, SharedError>> {
+            match self.wake_up_rx.try_recv() {
+                Ok(res) => Some(res),
+                Err(TryRecvError::Empty) => None,
+                Err(e @ _) => panic!(
+                    "unexpected error when receiving result of a LockWaitEntry: {:?}",
+                    e
+                ),
+            }
+        }
+
+        fn wait_for_result_timeout(
+            &self,
+            timeout: Duration,
+        ) -> Option<Result<PessimisticLockRes, SharedError>> {
+            match self.wake_up_rx.recv_timeout(timeout) {
+                Ok(res) => Some(res),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(e @ _) => panic!(
+                    "unexpected error when receiving result of a LockWaitEntry: {:?}",
+                    e
+                ),
+            }
+        }
+
+        fn wait_for_result(self) -> Result<PessimisticLockRes, SharedError> {
+            self.wake_up_rx
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap()
+        }
+
+        fn cancel(self) {
+            (self.cancel_cb)();
+        }
+    }
+
+    // Additionally add some helper functions to the LockWaitQueues for simplifying
+    // test code.
+    impl<L: LockManager> LockWaitQueues<L> {
+        fn make_lock_info_pb(&self, key: &[u8], ts: impl Into<TimeStamp>) -> kvrpcpb::LockInfo {
+            let ts = ts.into();
+            let mut lock_info = kvrpcpb::LockInfo::default();
+            lock_info.set_lock_version(ts.into_inner());
+            lock_info.set_lock_for_update_ts(ts.into_inner());
+            lock_info.set_key(key.to_owned());
+            lock_info.set_primary_lock(key.to_owned());
+            lock_info
+        }
+
+        fn make_mock_lock_wait_entry(
+            &self,
+            key: &[u8],
+            start_ts: impl Into<TimeStamp>,
+            lock_info_pb: kvrpcpb::LockInfo,
+        ) -> (Box<LockWaitEntry>, TestLockWaitEntryHandle) {
+            let start_ts = start_ts.into();
+            let token = self.lock_mgr.allocate_token();
+            let dummy_request_cb = StorageCallback::PessimisticLock(Box::new(|_| ()));
+            let dummy_ctx = LockWaitContext::new(
+                self.lock_mgr.clone(),
+                token,
+                start_ts,
+                start_ts,
+                ProcessResult::Res,
+                dummy_request_cb,
+                false,
+            );
+
+            let parameters = PessimisticLockParameters {
+                pb_ctx: Default::default(),
+                primary: key.to_owned(),
+                start_ts,
+                lock_ttl: 1000,
+                for_update_ts: start_ts,
+                wait_timeout: Some(WaitTimeout::Default),
+                return_values: false,
+                min_commit_ts: 0.into(),
+                check_existence: false,
+                is_first_lock: false,
+                allow_lock_with_conflict: false,
+            };
+
+            let key = Key::from_raw(key);
+            let lock_hash = key.gen_hash();
+            let (tx, rx) = channel();
+            let lock_wait_entry = Box::new(LockWaitEntry {
+                key,
+                lock_hash,
+                parameters,
+                lock_wait_token: token,
+                req_states: Some(dummy_ctx.get_shared_states().clone()),
+                current_legacy_wakeup_cnt: None,
+                key_cb: Some(SyncWrapper::new(Box::new(move |res| tx.send(res).unwrap()))),
+            });
+
+            let cancel_callback = dummy_ctx.get_callback_for_cancellation();
+            let cancel = move || {
+                cancel_callback(StorageError::from(TxnError::from(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(lock_info_pb),
+                ))))
+            };
+
+            (
+                lock_wait_entry,
+                TestLockWaitEntryHandle {
+                    wake_up_rx: rx,
+                    cancel_cb: Box::new(cancel),
+                },
+            )
+        }
+
+        fn mock_lock_wait(
+            &self,
+            key: &[u8],
+            start_ts: impl Into<TimeStamp>,
+            encountered_lock_ts: impl Into<TimeStamp>,
+            resumable: bool,
+        ) -> TestLockWaitEntryHandle {
+            let lock_info_pb = self.make_lock_info_pb(key, encountered_lock_ts);
+            let (mut entry, handle) =
+                self.make_mock_lock_wait_entry(key, start_ts, lock_info_pb.clone());
+            entry.parameters.allow_lock_with_conflict = resumable;
+            self.push_lock_wait(entry, lock_info_pb);
+            handle
+        }
+
+        fn must_pop(
+            &self,
+            key: &[u8],
+            conflicting_start_ts: impl Into<TimeStamp>,
+            conflicting_commit_ts: impl Into<TimeStamp>,
+        ) -> (Box<LockWaitEntry>, Option<usize>) {
+            self.pop_for_waking_up(
+                &Key::from_raw(key),
+                conflicting_start_ts.into(),
+                conflicting_commit_ts.into(),
+            )
+            .unwrap()
+        }
+
+        fn must_pop_none(
+            &self,
+            key: &[u8],
+            conflicting_start_ts: impl Into<TimeStamp>,
+            conflicting_commit_ts: impl Into<TimeStamp>,
+        ) {
+            let res = self.pop_for_waking_up(
+                &Key::from_raw(key),
+                conflicting_start_ts.into(),
+                conflicting_commit_ts.into(),
+            );
+            assert!(res.is_none());
+        }
+
+        fn must_not_contains_key(&self, key: &[u8]) {
+            assert!(self.queue_map.get(&Key::from_raw(key)).is_none());
+        }
+
+        fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
+            assert_eq!(
+                self.queue_map
+                    .get(&Key::from_raw(key))
+                    .unwrap()
+                    .queue
+                    .peek()
+                    .unwrap()
+                    .0
+                    .parameters
+                    .start_ts,
+                start_ts.into()
+            );
+        }
+    }
+
+    impl LockWaitEntry {
+        fn check_key(&self, expected_key: &[u8]) -> &Self {
+            assert_eq!(self.key, Key::from_raw(expected_key));
+            self
+        }
+
+        fn check_start_ts(&self, expected_start_ts: impl Into<TimeStamp>) -> &Self {
+            assert_eq!(self.parameters.start_ts, expected_start_ts.into());
+            self
+        }
+
+        fn check_legacy_wake_up_cnt(&self, expected: usize) -> &Self {
+            assert_eq!(self.current_legacy_wakeup_cnt.unwrap(), expected);
+            self
+        }
+    }
+
+    fn expect_write_conflict(
+        err: &StorageErrorInner,
+        expect_conflict_start_ts: impl Into<TimeStamp>,
+        expect_conflict_commit_ts: impl Into<TimeStamp>,
+    ) {
+        match err {
+            StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::WriteConflict {
+                    conflict_start_ts,
+                    conflict_commit_ts,
+                    ..
+                },
+            )))) => {
+                assert_eq!(*conflict_start_ts, expect_conflict_start_ts.into());
+                assert_eq!(*conflict_commit_ts, expect_conflict_commit_ts.into());
+            }
+            e @ _ => panic!("unexpected error: {:?}", e),
+        }
+    }
 
     #[test]
-    fn test_basic() {}
+    fn test_simple_push_pop() {
+        let queues = LockWaitQueues::new(DummyLockManager::new());
+
+        queues.mock_lock_wait(b"k1", 10, 5, false);
+        queues.mock_lock_wait(b"k2", 11, 5, false);
+
+        queues
+            .must_pop(b"k1", 5, 6)
+            .0
+            .check_key(b"k1")
+            .check_start_ts(10);
+        queues.must_pop_none(b"k1", 5, 6);
+        queues.must_not_contains_key(b"k1");
+
+        queues
+            .must_pop(b"k2", 5, 6)
+            .0
+            .check_key(b"k2")
+            .check_start_ts(11);
+        queues.must_pop_none(b"k2", 5, 6);
+        queues.must_not_contains_key(b"k2");
+    }
+
+    #[test]
+    fn test_popping_priority() {
+        let queues = LockWaitQueues::new(DummyLockManager::new());
+
+        queues.mock_lock_wait(b"k1", 10, 5, false);
+        queues.mock_lock_wait(b"k1", 20, 5, false);
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+        queues.mock_lock_wait(b"k1", 13, 5, false);
+        // Duplication is possible considering network issues and RPC retrying.
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+
+        // Ordered by start_ts
+        for &expected_start_ts in &[10u64, 12, 12, 13, 20] {
+            queues
+                .must_pop(b"k1", 5, 6)
+                .0
+                .check_key(b"k1")
+                .check_start_ts(expected_start_ts);
+        }
+
+        queues.must_not_contains_key(b"k1");
+
+        // For each legacy waking up, the counter `legacy_wake_up_cnt` is increased. the
+        // counter behaves like an *epoch*, and requests arrives at later epoch
+        // is always ordered later than those at earlier epoch.
+        queues.mock_lock_wait(b"k1", 8, 5, false);
+        queues.mock_lock_wait(b"k1", 9, 5, false);
+
+        queues.mock_lock_wait(b"k1", 11, 5, false);
+        queues.mock_lock_wait(b"k1", 15, 5, false);
+        queues.mock_lock_wait(b"k1", 20, 5, false);
+
+        // Pop an entry and increase the counter
+        queues
+            .must_pop(b"k1", 5, 6)
+            .0
+            .check_key(b"k1")
+            .check_start_ts(8);
+
+        queues.mock_lock_wait(b"k1", 15, 5, false);
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+        queues.mock_lock_wait(b"k1", 17, 5, false);
+
+        queues
+            .must_pop(b"k1", 5, 6)
+            .0
+            .check_key(b"k1")
+            .check_start_ts(9);
+
+        queues.mock_lock_wait(b"k1", 10, 5, false);
+        queues.mock_lock_wait(b"k1", 21, 5, false);
+        queues.mock_lock_wait(b"k1", 13, 5, false);
+
+        for &(expected_start_ts, expected_legacy_wake_up_cnt) in &[
+            (11u64, 0usize),
+            (15, 0),
+            (20, 0),
+            (12, 1),
+            (15, 1),
+            (17, 1),
+            (10, 2),
+            (13, 2),
+            (21, 2),
+        ] {
+            queues
+                .must_pop(b"k1", 5, 6)
+                .0
+                .check_key(b"k1")
+                .check_start_ts(expected_start_ts)
+                .check_legacy_wake_up_cnt(expected_legacy_wake_up_cnt);
+        }
+
+        queues.must_not_contains_key(b"k1");
+    }
+
+    #[test]
+    fn test_dropping_cancelled_entries() {
+        let queues = LockWaitQueues::new(DummyLockManager::new());
+
+        let h10 = queues.mock_lock_wait(b"k1", 10, 5, false);
+        let h11 = queues.mock_lock_wait(b"k1", 11, 5, false);
+        queues.mock_lock_wait(b"k1", 12, 5, false);
+        let h13 = queues.mock_lock_wait(b"k1", 13, 5, false);
+        queues.mock_lock_wait(b"k1", 14, 5, false);
+
+        h10.cancel();
+        h11.cancel();
+        h13.cancel();
+
+        for &expected_start_ts in &[12u64, 14] {
+            queues
+                .must_pop(b"k1", 5, 6)
+                .0
+                .check_start_ts(expected_start_ts);
+        }
+        queues.must_not_contains_key(b"k1");
+    }
+
+    #[test]
+    fn test_delayed_notify_all() {
+        let queues = LockWaitQueues::new(DummyLockManager::new());
+
+        queues.mock_lock_wait(b"k1", 8, 5, false);
+        queues.mock_lock_wait(b"k1", 9, 5, false);
+
+        let handles1 = vec![
+            queues.mock_lock_wait(b"k1", 11, 5, false),
+            queues.mock_lock_wait(b"k1", 12, 5, false),
+            queues.mock_lock_wait(b"k1", 13, 5, false),
+        ];
+
+        let (entry, idx1) = queues.must_pop(b"k1", 5, 6);
+        entry.check_key(b"k1").check_start_ts(8);
+
+        let handles2 = vec![
+            queues.mock_lock_wait(b"k1", 14, 5, false),
+            queues.mock_lock_wait(b"k1", 15, 5, true),
+            queues.mock_lock_wait(b"k1", 16, 5, false),
+        ];
+
+        let (entry, idx2) = queues.must_pop(b"k1", 7, 8);
+        entry.check_key(b"k1").check_start_ts(9);
+
+        queues.mock_lock_wait(b"k1", 17, 5, false);
+
+        assert!(
+            handles1[0]
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+
+        // Wakes up transaction 11 to 13, and cancels them.
+        assert!(
+            queues
+                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
+                .is_none()
+        );
+        handles1
+            .into_iter()
+            .for_each(|h| expect_write_conflict(&h.wait_for_result().unwrap_err().0, 7, 8));
+        // 14 is not woken up.
+        assert!(
+            handles2[0]
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+
+        // Wakes up 14, and stops at 15 which is resumable. Then, 15 should be returned
+        // and the caller should be responsible for waking it up.
+        let entry15 = queues
+            .delayed_notify_all(&Key::from_raw(b"k1"), idx2.unwrap())
+            .unwrap();
+        entry15.check_key(b"k1").check_start_ts(15);
+
+        let mut it = handles2.into_iter();
+        // Receive 14.
+        expect_write_conflict(&it.next().unwrap().wait_for_result().unwrap_err().0, 7, 8);
+        // 15 is not woken up.
+        assert!(
+            it.next()
+                .unwrap()
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+        // Neither did 16.
+        let handle16 = it.next().unwrap();
+        assert!(
+            handle16
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+
+        queues.must_have_next_entry(b"k1", 16);
+
+        // Calls delayed_notify_all when there are no entries can be woken up by it.
+        // Nothing would happen.
+        assert!(
+            queues
+                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
+                .is_none()
+        );
+        queues.must_have_next_entry(b"k1", 16);
+        assert!(
+            handle16
+                .wait_for_result_timeout(Duration::from_millis(100))
+                .is_none()
+        );
+
+        // Remove remaining entries of the key.
+        let (entry, idx) = queues.must_pop(b"k1", 7, 8);
+        // After waking up a legacy lock request, `idx` should be `Some` which indicates
+        // `delayed_notify_all` invocation need to be scheduled (in production).
+        entry.check_key(b"k1").check_start_ts(16);
+        assert!(idx.is_some());
+        let (entry, idx) = queues.must_pop(b"k1", 7, 8);
+        entry.check_key(b"k1").check_start_ts(17);
+        // But `delayed_notify_all` don't need to be invoked if the queue is cleared,
+        // therefore `idx` can be none.
+        assert!(idx.is_none());
+
+        queues.must_not_contains_key(b"k1");
+
+        // Calls delayed_notify_all on keys that not exists (maybe deleted due to
+        // completely waking up). Nothing would happen.
+        assert!(
+            queues
+                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
+                .is_none()
+        );
+        queues.must_not_contains_key(b"k1");
+    }
 }

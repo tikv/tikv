@@ -177,7 +177,7 @@ mod tests {
         use kvproto::kvrpcpb::ExtraOp;
         let mut statistic = Statistics::default();
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistic,

@@ -1494,7 +1494,7 @@ mod tests {
         macro_rules! context {
             () => {
                 WriteContext {
-                    lock_mgr: &DummyLockManager {},
+                    lock_mgr: &DummyLockManager::new(),
                     concurrency_manager: ConcurrencyManager::new(10.into()),
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
@@ -1663,7 +1663,7 @@ mod tests {
                 )
             };
             let context = WriteContext {
-                lock_mgr: &DummyLockManager {},
+                lock_mgr: &DummyLockManager::new(),
                 concurrency_manager: cm.clone(),
                 extra_op: ExtraOp::Noop,
                 statistics: &mut statistics,
@@ -1776,7 +1776,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1803,7 +1803,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1884,7 +1884,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -1915,7 +1915,7 @@ mod tests {
             TimeStamp::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2141,7 +2141,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm.clone(),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2164,7 +2164,7 @@ mod tests {
             10.into(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: cm,
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
@@ -2364,7 +2364,7 @@ mod tests {
             Context::default(),
         );
         let context = WriteContext {
-            lock_mgr: &DummyLockManager {},
+            lock_mgr: &DummyLockManager::new(),
             concurrency_manager: ConcurrencyManager::new(20.into()),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,

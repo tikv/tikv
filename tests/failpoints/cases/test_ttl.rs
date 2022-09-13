@@ -394,7 +394,7 @@ fn test_stoarge_raw_batch_put_ttl() {
 fn test_stoarge_raw_batch_put_ttl_impl<F: KvFormat>() {
     fail::cfg("ttl_current_ts", "return(100)").unwrap();
 
-    let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager)
+    let storage = TestStorageBuilder::<_, _, F>::new(DummyLockManager::new())
         .build()
         .unwrap();
     let (tx, rx) = channel();

@@ -196,7 +196,7 @@ pub mod tests {
             .process_write(
                 snapshot,
                 WriteContext {
-                    lock_mgr: &DummyLockManager,
+                    lock_mgr: &DummyLockManager::new(),
                     concurrency_manager: cm,
                     extra_op: Default::default(),
                     statistics: &mut Default::default(),
@@ -243,7 +243,7 @@ pub mod tests {
                 .process_write(
                     snapshot,
                     WriteContext {
-                        lock_mgr: &DummyLockManager,
+                        lock_mgr: &DummyLockManager::new(),
                         concurrency_manager: cm,
                         extra_op: Default::default(),
                         statistics: &mut Default::default(),

@@ -1410,7 +1410,6 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let lock_wait_entry = Box::new(LockWaitEntry {
             key: lock_info.key,
             lock_hash: lock_info.lock.hash,
-            term: None,
             parameters: lock_info.parameters,
             lock_wait_token,
             req_states: Some(ctx.get_shared_states().clone()),
@@ -1478,7 +1477,7 @@ mod tests {
         (
             Scheduler::new(
                 engine.clone(),
-                DummyLockManager,
+                DummyLockManager::new(),
                 ConcurrencyManager::new(1.into()),
                 &config,
                 DynamicConfigs {
@@ -1624,7 +1623,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1729,7 +1728,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1788,7 +1787,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1855,7 +1854,7 @@ mod tests {
         };
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {
@@ -1917,7 +1916,7 @@ mod tests {
 
         let scheduler = Scheduler::new(
             engine,
-            DummyLockManager,
+            DummyLockManager::new(),
             ConcurrencyManager::new(1.into()),
             &config,
             DynamicConfigs {

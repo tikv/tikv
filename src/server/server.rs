@@ -486,7 +486,7 @@ mod tests {
             ..Default::default()
         };
 
-        let storage = TestStorageBuilderApiV1::new(DummyLockManager)
+        let storage = TestStorageBuilderApiV1::new(DummyLockManager::new())
             .build()
             .unwrap();
 

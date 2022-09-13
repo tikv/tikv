@@ -2,6 +2,10 @@
 
 use std::{
     fmt::{Debug, Formatter},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -173,11 +177,17 @@ pub trait LockManager: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockManager;
+pub struct DummyLockManager(Arc<AtomicU64>);
+
+impl DummyLockManager {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(1)))
+    }
+}
 
 impl LockManager for DummyLockManager {
     fn allocate_token(&self) -> LockWaitToken {
-        LockWaitToken(None)
+        LockWaitToken(Some(self.0.fetch_add(1, Ordering::SeqCst)))
     }
 
     fn wait_for(
