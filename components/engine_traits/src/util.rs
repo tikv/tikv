@@ -94,22 +94,21 @@ impl SequenceNumber {
 /// received.
 #[derive(Default)]
 pub struct SequenceNumberWindow {
-    // The sequence number doesn't be received in order, we need a buffer to
-    // store received start counters which are bigger than ack_counter.
-    pending_start_counter: VecDeque<bool>,
-    // counter start from 1, so ack_counter as 0 means no start counter received.
-    ack_counter: u64,
+    // Status of writes with start_counter starting from ack_start_counter+1.
+    write_status_window: VecDeque<bool>,
+    // writes with start_counter <= ack_start_counter are all committed.
+    ack_start_counter: u64,
     // (end_counter, sequence number)
     pending_sequence: BTreeMap<u64, SequenceNumber>,
-    // max corresponding sequence number before ack_counter.
+    // max corresponding sequence number before ack_start_counter.
     committed_seqno: u64,
     max_received_seqno: u64,
 }
 
 impl SequenceNumberWindow {
     pub fn push(&mut self, sn: SequenceNumber) {
-        // start_delta - 1 is the index of `pending_start_counter`.
-        let start_delta = match sn.start_counter.checked_sub(self.ack_counter) {
+        // start_delta - 1 is the index of `write_status_window`.
+        let start_delta = match sn.start_counter.checked_sub(self.ack_start_counter) {
             Some(delta) if delta > 0 => delta as usize,
             _ => {
                 assert!(sn.number <= self.max_received_seqno);
@@ -117,9 +116,9 @@ impl SequenceNumberWindow {
             }
         };
         self.max_received_seqno = u64::max(sn.number, self.max_received_seqno);
-        // Increase the length of `pending_start_counter`
-        if start_delta > self.pending_start_counter.len() {
-            self.pending_start_counter.resize(start_delta, false);
+        // Increase the length of `write_status_window`
+        if start_delta > self.write_status_window.len() {
+            self.write_status_window.resize(start_delta, false);
         }
         // Insert the seqno of `pending_sequence`. Because an `end_counter`
         // may correspond to multiple seqno, we only keep the max seqno.
@@ -129,19 +128,21 @@ impl SequenceNumberWindow {
                 *value = SequenceNumber::max(*value, sn);
             })
             .or_insert(sn);
-        self.pending_start_counter[start_delta - 1] = true;
+        self.write_status_window[start_delta - 1] = true;
         // Commit seqno of the counter which all smaller counter were received.
         let mut acks = 0;
-        for received in self.pending_start_counter.iter() {
+        for received in self.write_status_window.iter() {
             if *received {
                 acks += 1;
             } else {
                 break;
             }
         }
-        self.pending_start_counter.drain(..acks);
-        self.ack_counter += acks as u64;
-        let mut sequences = self.pending_sequence.split_off(&(self.ack_counter + 1));
+        self.write_status_window.drain(..acks);
+        self.ack_start_counter += acks as u64;
+        let mut sequences = self
+            .pending_sequence
+            .split_off(&(self.ack_start_counter + 1));
         std::mem::swap(&mut sequences, &mut self.pending_sequence);
         if let Some(sequence) = sequences.values().max() {
             self.committed_seqno = sequence.number;
@@ -153,7 +154,7 @@ impl SequenceNumberWindow {
     }
 
     pub fn pending_count(&self) -> usize {
-        self.pending_start_counter.len()
+        self.write_status_window.len()
     }
 }
 
