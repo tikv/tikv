@@ -129,6 +129,8 @@ load-balance-priority = "low"
 gc-priority = "high"
 import-priority = "high"
 export-priority = "high"
+analyze-priority = "high"
+checksum-priority = "low"
 other-priority = "low"
 
 [pd]

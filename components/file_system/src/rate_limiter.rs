@@ -355,8 +355,8 @@ impl IoRateLimiter {
     /// less than the requested bytes, but must be greater than zero.
     pub fn request(&self, io_op: IoOp, bytes: usize) -> usize {
         let mut ctx = io_stats::get_io_context();
-        if ctx.defer_mode {
-            // Bypass all limits in defer mode.
+        if std::intrinsics::unlikely(ctx.async_mode.is_some()) {
+            // Bypass all limits in async mode.
             return bytes;
         }
         if self.mode.contains(io_op) {

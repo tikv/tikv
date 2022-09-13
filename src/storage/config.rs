@@ -300,6 +300,8 @@ pub struct IoRateLimitConfig {
     pub gc_priority: IoPriority,
     pub import_priority: IoPriority,
     pub export_priority: IoPriority,
+    pub analyze_priority: IoPriority,
+    pub checksum_priority: IoPriority,
     pub other_priority: IoPriority,
 }
 
@@ -314,12 +316,14 @@ impl Default for IoRateLimitConfig {
             foreground_write_priority: IoPriority::High,
             flush_priority: IoPriority::High,
             level_zero_compaction_priority: IoPriority::High,
-            compaction_priority: IoPriority::Medium,
+            compaction_priority: IoPriority::Low,
             replication_priority: IoPriority::High,
             load_balance_priority: IoPriority::High,
             gc_priority: IoPriority::High,
-            import_priority: IoPriority::Medium,
-            export_priority: IoPriority::Medium,
+            import_priority: IoPriority::High,
+            export_priority: IoPriority::High,
+            analyze_priority: IoPriority::Medium,
+            checksum_priority: IoPriority::High,
             other_priority: IoPriority::High,
         }
     }
@@ -350,6 +354,8 @@ impl IoRateLimitConfig {
         limiter.set_io_priority(IoType::Gc, self.gc_priority);
         limiter.set_io_priority(IoType::Import, self.import_priority);
         limiter.set_io_priority(IoType::Export, self.export_priority);
+        limiter.set_io_priority(IoType::Analyze, self.analyze_priority);
+        limiter.set_io_priority(IoType::Checksum, self.checksum_priority);
         limiter.set_io_priority(IoType::Other, self.other_priority);
         limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter

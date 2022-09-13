@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(min_specialization)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 pub mod macros;

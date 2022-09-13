@@ -698,6 +698,8 @@ fn test_serde_custom_tikv_config() {
             gc_priority: IoPriority::High,
             import_priority: IoPriority::High,
             export_priority: IoPriority::High,
+            analyze_priority: IoPriority::High,
+            checksum_priority: IoPriority::Low,
             other_priority: IoPriority::Low,
         },
         background_error_recovery_window: ReadableDuration::hours(1),

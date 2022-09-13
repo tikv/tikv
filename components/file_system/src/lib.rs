@@ -2,6 +2,7 @@
 
 #![feature(test)]
 #![feature(duration_consts_float)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -75,6 +76,8 @@ pub enum IoType {
     Gc = 8,
     Import = 9,
     Export = 10,
+    Analyze = 11,
+    Checksum = 12,
 }
 
 impl IoType {
@@ -91,6 +94,8 @@ impl IoType {
             IoType::Gc => "gc",
             IoType::Import => "import",
             IoType::Export => "export",
+            IoType::Analyze => "analyze",
+            IoType::Checksum => "cheskcum",
         }
     }
 }
@@ -110,9 +115,20 @@ pub struct IoContext {
     /// [`IoRateLimiter`].
     pub(crate) outstanding_read_bytes: usize,
 
-    /// For asynchronous read I/O limiting. It is enabled when a
-    /// [`DeferredReadThrottle`] is held.
-    pub(crate) defer_mode: bool,
+    /// A special mode to apply I/O rate limits in async environment.
+    ///
+    /// Usage protocol:
+    /// - `let guard = WithAsyncIoRateLimit::new(IoType)`
+    /// - `let ctx = before_reschedule().await`
+    /// - `<reschedule-point>.await`
+    /// - `after_reschedule(ctx)`
+    /// - `drop(guard)`
+    ///
+    /// `before_reschedule()` is a no-op when `WithAsyncIoRateLimit` isn't held.
+    ///
+    /// This field stores the I/O type before the `WithAsyncIoRateLimit` is
+    /// created.
+    pub(crate) async_mode: Option<IoType>,
 }
 
 impl IoContext {
@@ -121,7 +137,7 @@ impl IoContext {
             io_type,
             total_read_bytes: 0,
             outstanding_read_bytes: 0,
-            defer_mode: false,
+            async_mode: None,
         }
     }
 }
@@ -156,52 +172,57 @@ impl Drop for WithIoType {
     }
 }
 
-/// During the lifetime of this object, bypass all I/O limits.
-///
-/// In [`async_consume`], compensate for I/O flow in this period by submitting
-/// total consumed physical read bytes to [`IoRateLimiter`] again. Write bytes
-/// are simply discarded.
-///
-/// This object is useful for applying read I/O limiting in an async
-/// environment.
-pub struct DeferredReadThrottle {
-    previous_io_type: Option<IoType>,
+pub struct WithAsyncIoRateLimit;
+
+impl WithAsyncIoRateLimit {
+    pub fn new(new_io_type: IoType) -> WithAsyncIoRateLimit {
+        let mut ctx = io_stats::get_io_context();
+        ctx.async_mode = Some(ctx.io_type);
+        ctx.io_type = new_io_type;
+        // Some bytes of other types will be counted.
+        io_stats::set_io_context(ctx);
+        WithAsyncIoRateLimit
+    }
 }
 
-impl DeferredReadThrottle {
-    pub fn new(io_type: IoType) -> Self {
+impl Drop for WithAsyncIoRateLimit {
+    fn drop(&mut self) {
         let mut ctx = io_stats::get_io_context();
-        let previous_io_type = Some(ctx.io_type);
-        ctx.io_type = io_type;
-        ctx.defer_mode = true;
+        ctx.io_type = ctx.async_mode.take().unwrap();
+        // Do not rate limit these bytes because there's no available
+        // reschedule point. They will be passed on to other types.
         io_stats::set_io_context(ctx);
-        DeferredReadThrottle { previous_io_type }
     }
+}
 
-    pub async fn async_consume(mut self) {
-        if let Some(previous) = self.previous_io_type.take() {
-            let mut ctx = io_stats::get_io_context();
-            let old_ctx = ctx;
-            // Fetch physical IOs.
-            let true_bytes = io_stats::fetch_thread_io_bytes().read;
-            let delta_bytes = true_bytes - ctx.total_read_bytes;
-            ctx.total_read_bytes = true_bytes;
-            // Exit defer mode first because this task could be rescheduled during async
-            // wait.
-            ctx.defer_mode = false;
-            ctx.io_type = previous;
-            io_stats::set_io_context(ctx);
-            if let Some(limiter) = get_io_rate_limiter() {
-                limiter.async_request(old_ctx.io_type, delta_bytes).await;
-            }
+/// Returns previous `async_mode` value.
+pub async fn before_reschedule() -> Option<IoType> {
+    let old_ctx = io_stats::get_io_context();
+    if std::intrinsics::unlikely(old_ctx.async_mode.is_some()) {
+        let mut new_ctx = old_ctx;
+        new_ctx.io_type = old_ctx.async_mode.unwrap();
+        new_ctx.total_read_bytes = io_stats::fetch_thread_io_bytes().read;
+        io_stats::set_io_context(new_ctx);
+        if let Some(limiter) = get_io_rate_limiter() {
+            limiter
+                .async_request(
+                    old_ctx.io_type,
+                    new_ctx
+                        .total_read_bytes
+                        .saturating_sub(old_ctx.total_read_bytes),
+                )
+                .await;
         }
     }
+    old_ctx.async_mode
 }
 
-impl Drop for DeferredReadThrottle {
-    fn drop(&mut self) {
-        // Make sure `async_consume` is always called.
-        debug_assert!(self.previous_io_type.is_none());
+pub fn after_reschedule(prev_async_mode: Option<IoType>) {
+    if std::intrinsics::unlikely(prev_async_mode.is_some()) {
+        let mut ctx = io_stats::get_io_context();
+        ctx.total_read_bytes = io_stats::fetch_thread_io_bytes().read;
+        ctx.async_mode = prev_async_mode;
+        io_stats::set_io_context(ctx);
     }
 }
 

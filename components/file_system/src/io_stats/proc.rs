@@ -166,6 +166,7 @@ pub fn init() -> Result<(), String> {
     Ok(())
 }
 
+#[inline(always)]
 pub(crate) fn get_io_context() -> IoContext {
     IO_CTX.with(|ctx| ctx.get())
 }

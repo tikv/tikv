@@ -10,6 +10,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 derive_more = "0.99.3"
 error_code = { path = "../error_code", default-features = false }
+file_system = { path = "../file_system", default-features = false }
 futures = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
