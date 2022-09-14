@@ -6,7 +6,7 @@ use std::{
     io::{BufRead, BufReader, Seek},
     path::PathBuf,
     str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use crossbeam_utils::CachePadded;
@@ -15,18 +15,29 @@ use strum::EnumCount;
 use thread_local::ThreadLocal;
 use tikv_util::sys::thread::{self, Pid};
 
-use crate::{IoBytes, IoType};
+use crate::{IoBytes, IoContext, IoType};
 
 lazy_static! {
     /// Total I/O bytes read/written by each I/O type.
     static ref GLOBAL_IO_STATS: [AtomicIoBytes; IoType::COUNT] = Default::default();
-    /// Incremental I/O bytes read/written by the thread's own I/O type.
+    /// Incremental I/O bytes read/written by the thread's own I/O type. This
+    /// counter is updated and synchronized to the global counter in
+    /// [`flush_thread_io`]. It is called by user or when the thread-local I/O
+    /// type changes.
     static ref LOCAL_IO_STATS: ThreadLocal<CachePadded<Mutex<LocalIoStats>>> = ThreadLocal::new();
 }
 
 thread_local! {
     /// A private copy of I/O type. Optimized for local access.
-    static IO_TYPE: Cell<IoType> = Cell::new(IoType::Other);
+    static IO_CTX: Cell<IoContext> = Cell::new(init_io_context());
+}
+
+/// IO context will always be accessed by IO rate limiter regardless of whether
+/// the IO type is set correctly. We do some thread initialization work here.
+fn init_io_context() -> IoContext {
+    // Initialize thread local context.
+    LOCAL_IO_STATS.get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())));
+    IoContext::new(IoType::Other)
 }
 
 #[derive(Debug)]
@@ -47,12 +58,22 @@ impl ThreadId {
         }
     }
 
+    /// Gets the accumulated disk IO bytes of current thread from procfs.
+    // proc file example:
+    // test:/tmp # cat /proc/3828/io
+    // rchar: 323934931
+    // wchar: 323929600
+    // syscr: 632687
+    // syscw: 632675
+    // read_bytes: 0
+    // write_bytes: 323932160
+    // cancelled_write_bytes: 0
     fn fetch_io_bytes(&mut self) -> Result<IoBytes, String> {
         if self.proc_reader.is_none() {
             let path = PathBuf::from("/proc")
-                .join(format!("{}", self.pid))
+                .join(self.pid.to_string())
                 .join("task")
-                .join(format!("{}", self.tid))
+                .join(self.tid.to_string())
                 .join("io");
             self.proc_reader = Some(BufReader::new(
                 File::open(path).map_err(|e| format!("open: {}", e))?,
@@ -70,10 +91,10 @@ impl ThreadId {
                         let mut s = line.split_whitespace();
                         if let (Some(field), Some(value)) = (s.next(), s.next()) {
                             if field.starts_with("read_bytes") {
-                                io_bytes.read = u64::from_str(value)
+                                io_bytes.read = usize::from_str(value)
                                     .map_err(|e| format!("parse read_bytes: {}", e))?;
                             } else if field.starts_with("write_bytes") {
-                                io_bytes.write = u64::from_str(value)
+                                io_bytes.write = usize::from_str(value)
                                     .map_err(|e| format!("parse write_bytes: {}", e))?;
                             }
                         }
@@ -106,8 +127,8 @@ impl LocalIoStats {
 
 #[derive(Default)]
 struct AtomicIoBytes {
-    read: AtomicU64,
-    write: AtomicU64,
+    read: AtomicUsize,
+    write: AtomicUsize,
 }
 
 impl AtomicIoBytes {
@@ -124,13 +145,17 @@ impl AtomicIoBytes {
     }
 }
 
-/// Flushes the local I/O stats to global I/O stats.
+/// Fetches latest thread I/O stats from procfs, then flushes it to global I/O
+/// stats. Returns the renewed total I/O bytes of current thread.
 #[inline]
-fn flush_thread_io(sentinel: &mut LocalIoStats) {
+fn flush_thread_io(sentinel: &mut LocalIoStats) -> IoBytes {
     if let Ok(io_bytes) = sentinel.id.fetch_io_bytes() {
         GLOBAL_IO_STATS[sentinel.io_type as usize]
             .fetch_add(io_bytes - sentinel.last_flushed, Ordering::Relaxed);
         sentinel.last_flushed = io_bytes;
+        io_bytes
+    } else {
+        IoBytes::default()
     }
 }
 
@@ -141,21 +166,26 @@ pub fn init() -> Result<(), String> {
     Ok(())
 }
 
-pub fn set_io_type(new_io_type: IoType) {
-    IO_TYPE.with(|io_type| {
-        if io_type.get() != new_io_type {
+#[inline(always)]
+pub(crate) fn get_io_context() -> IoContext {
+    IO_CTX.with(|ctx| ctx.get())
+}
+
+pub(crate) fn set_io_context(new_ctx: IoContext) {
+    IO_CTX.with(|ctx| {
+        let old_ctx = ctx.get();
+        debug_assert!(new_ctx.total_read_bytes >= old_ctx.total_read_bytes);
+        if new_ctx.io_type != old_ctx.io_type {
             let mut sentinel = LOCAL_IO_STATS
                 .get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())))
                 .lock();
             flush_thread_io(&mut sentinel);
-            sentinel.io_type = new_io_type;
-            io_type.set(new_io_type);
+            // The `outstanding_read_bytes` of `old_ctx` is inherited by the
+            // `new_ctx` even though they are of different I/O types.
+            sentinel.io_type = new_ctx.io_type;
         }
+        ctx.set(new_ctx);
     });
-}
-
-pub fn get_io_type() -> IoType {
-    IO_TYPE.with(|io_type| io_type.get())
 }
 
 pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
@@ -167,6 +197,13 @@ pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
         bytes[i] = GLOBAL_IO_STATS[i].load(Ordering::Relaxed);
     }
     bytes
+}
+
+pub fn fetch_thread_io_bytes() -> IoBytes {
+    let mut sentinel = LOCAL_IO_STATS
+        .get_or(|| CachePadded::new(Mutex::new(LocalIoStats::current())))
+        .lock();
+    flush_thread_io(&mut sentinel)
 }
 
 #[cfg(test)]

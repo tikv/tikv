@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use file_system::{after_reschedule, before_reschedule};
 use tikv_util::time::Instant;
 use yatp::task::future::reschedule;
 
@@ -53,11 +54,15 @@ impl RescheduleChecker {
 
     #[inline(always)]
     async fn check_reschedule(&mut self, force_check: bool) {
+        use std::intrinsics::unlikely;
         self.prev_key_count += 1;
-        if (force_check || self.prev_key_count % CHECK_KEYS == 0)
-            && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE
-        {
+        if unlikely(
+            (force_check || self.prev_key_count % CHECK_KEYS == 0)
+                && self.prev_start.saturating_elapsed() > MAX_TIME_SLICE,
+        ) {
+            let ctx = before_reschedule().await;
             reschedule().await;
+            after_reschedule(ctx);
             self.prev_start = Instant::now();
             self.prev_key_count = 0;
         }

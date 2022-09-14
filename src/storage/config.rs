@@ -281,6 +281,8 @@ impl BlockCacheConfig {
 pub struct IoRateLimitConfig {
     pub max_bytes_per_sec: ReadableSize,
     #[online_config(skip)]
+    pub max_buffered_read_bytes: ReadableSize,
+    #[online_config(skip)]
     pub mode: IoRateLimitMode,
     /// When this flag is off, high-priority IOs are counted but not limited.
     /// Default set to false because the optimal throughput target provided
@@ -298,6 +300,8 @@ pub struct IoRateLimitConfig {
     pub gc_priority: IoPriority,
     pub import_priority: IoPriority,
     pub export_priority: IoPriority,
+    pub analyze_priority: IoPriority,
+    pub checksum_priority: IoPriority,
     pub other_priority: IoPriority,
 }
 
@@ -305,27 +309,38 @@ impl Default for IoRateLimitConfig {
     fn default() -> IoRateLimitConfig {
         IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(0),
-            mode: IoRateLimitMode::WriteOnly,
+            max_buffered_read_bytes: ReadableSize::mb(1),
+            mode: IoRateLimitMode::AllIo,
             strict: false,
             foreground_read_priority: IoPriority::High,
             foreground_write_priority: IoPriority::High,
             flush_priority: IoPriority::High,
-            level_zero_compaction_priority: IoPriority::Medium,
+            level_zero_compaction_priority: IoPriority::High,
             compaction_priority: IoPriority::Low,
             replication_priority: IoPriority::High,
             load_balance_priority: IoPriority::High,
             gc_priority: IoPriority::High,
-            import_priority: IoPriority::Medium,
-            export_priority: IoPriority::Medium,
+            import_priority: IoPriority::High,
+            export_priority: IoPriority::High,
+            analyze_priority: IoPriority::Medium,
+            checksum_priority: IoPriority::High,
             other_priority: IoPriority::High,
         }
     }
 }
 
 impl IoRateLimitConfig {
-    pub fn build(&self, enable_statistics: bool) -> IoRateLimiter {
-        let limiter = IoRateLimiter::new(self.mode, self.strict, enable_statistics);
-        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
+    pub fn build(&mut self, stats_collector_enabled: bool) -> IoRateLimiter {
+        if !stats_collector_enabled && self.mode != IoRateLimitMode::WriteOnly {
+            warn!("Falling back to write-only mode because io-stats-collector is missing.");
+            self.mode = IoRateLimitMode::WriteOnly;
+        }
+        let limiter = IoRateLimiter::new(
+            self.mode,
+            self.strict,
+            Some(self.max_buffered_read_bytes.0 as usize), // batch_buffered_reads
+            !stats_collector_enabled,
+        );
         limiter.set_io_priority(IoType::ForegroundRead, self.foreground_read_priority);
         limiter.set_io_priority(IoType::ForegroundWrite, self.foreground_write_priority);
         limiter.set_io_priority(IoType::Flush, self.flush_priority);
@@ -339,16 +354,19 @@ impl IoRateLimitConfig {
         limiter.set_io_priority(IoType::Gc, self.gc_priority);
         limiter.set_io_priority(IoType::Import, self.import_priority);
         limiter.set_io_priority(IoType::Export, self.export_priority);
+        limiter.set_io_priority(IoType::Analyze, self.analyze_priority);
+        limiter.set_io_priority(IoType::Checksum, self.checksum_priority);
         limiter.set_io_priority(IoType::Other, self.other_priority);
+        limiter.set_io_rate_limit(self.max_bytes_per_sec.0 as usize);
         limiter
     }
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.other_priority != IoPriority::High {
             warn!(
-                "Occasionally some critical IO operations are tagged as IOType::Other, \
+                "Occasionally some critical IO operations are tagged as IoType::Other, \
                   e.g. IOs are fired from unmanaged threads, thread-local type storage exceeds \
-                  capacity. To be on the safe side, change priority for IOType::Other from \
+                  capacity. To be on the safe side, change priority for IoType::Other from \
                   {:?} to {:?}",
                 self.other_priority,
                 IoPriority::High
@@ -358,15 +376,10 @@ impl IoRateLimitConfig {
         if self.gc_priority != self.foreground_write_priority {
             warn!(
                 "GC writes are merged with foreground writes. To avoid priority inversion, change \
-                  priority for IOType::Gc from {:?} to {:?}",
+                  priority for IoType::Gc from {:?} to {:?}",
                 self.gc_priority, self.foreground_write_priority,
             );
             self.gc_priority = self.foreground_write_priority;
-        }
-        if self.mode != IoRateLimitMode::WriteOnly {
-            return Err(
-                "storage.io-rate-limit.mode other than write-only is not supported.".into(),
-            );
         }
         Ok(())
     }

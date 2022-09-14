@@ -251,7 +251,7 @@ impl<T: Simulator> Cluster<T> {
             self.cfg
                 .storage
                 .io_rate_limit
-                .build(true /* enable_statistics */),
+                .build(false /* stats_collector_enabled */),
         ));
         for _ in 0..self.count {
             self.create_engine(None);

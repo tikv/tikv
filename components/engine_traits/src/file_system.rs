@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use file_system::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
+use file_system::{get_io_rate_limiter, IoOp, IoRateLimiter};
 
 use crate::Result;
 
@@ -37,8 +37,7 @@ impl Default for EngineFileSystemInspector {
 impl FileSystemInspector for EngineFileSystemInspector {
     fn read(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
-            let io_type = get_io_type();
-            Ok(limiter.request(io_type, IoOp::Read, len))
+            Ok(limiter.request(IoOp::Read, len))
         } else {
             Ok(len)
         }
@@ -46,8 +45,7 @@ impl FileSystemInspector for EngineFileSystemInspector {
 
     fn write(&self, len: usize) -> Result<usize> {
         if let Some(limiter) = &self.limiter {
-            let io_type = get_io_type();
-            Ok(limiter.request(io_type, IoOp::Write, len))
+            Ok(limiter.request(IoOp::Write, len))
         } else {
             Ok(len)
         }

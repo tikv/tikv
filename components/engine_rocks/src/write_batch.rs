@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
+use file_system::{IoType, WithIoType};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
@@ -100,6 +101,9 @@ impl RocksWriteBatchVec {
 
 impl engine_traits::WriteBatch for RocksWriteBatchVec {
     fn write_opt(&mut self, opts: &WriteOptions) -> Result<()> {
+        // Indiscriminately increase the priority because RocksDB merges write
+        // batches with different IO types.
+        let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
         let opt: RocksWriteOptions = opts.into();
         if self.support_write_batch_vec {
             self.get_db()

@@ -13,7 +13,7 @@ use engine_traits::{
     RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait,
     RaftLogGcTask, Result,
 };
-use file_system::{IoOp, IoRateLimiter, IoType};
+use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
 use kvproto::{
     metapb::Region,
     raft_serverpb::{
@@ -65,7 +65,7 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
+            size = limiter.request(IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -95,7 +95,7 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
+            size = limiter.request(IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -512,7 +512,11 @@ impl RaftEngine for RaftLogEngine {
         self.0.sync().map_err(transfer_error)
     }
 
+    #[inline]
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
+        // Indiscriminately increase the priority because Raft Engine merges
+        // write batches with different IO types.
+        let _io_type_guard = WithIoType::new(IoType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
@@ -523,7 +527,7 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
-        self.0.write(&mut batch.0, sync).map_err(transfer_error)
+        self.consume(batch, sync)
     }
 
     fn clean(
@@ -543,7 +547,7 @@ impl RaftEngine for RaftLogEngine {
             .0
             .add_entries::<MessageExtTyped>(raft_group_id, &entries)
             .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)
+        self.consume(&mut batch, false)
     }
 
     fn put_store_ident(&self, ident: &StoreIdent) -> Result<()> {
@@ -562,7 +566,7 @@ impl RaftEngine for RaftLogEngine {
             .0
             .put_message(raft_group_id, RAFT_LOG_STATE_KEY.to_vec(), state)
             .map_err(transfer_error)?;
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
         Ok(())
     }
 
@@ -584,7 +588,7 @@ impl RaftEngine for RaftLogEngine {
             old_first_index.push(self.0.first_index(task.raft_group_id));
         }
 
-        self.0.write(&mut batch.0, false).map_err(transfer_error)?;
+        self.consume(&mut batch, false)?;
 
         let mut total = 0;
         for (old_first_index, task) in old_first_index.iter().zip(tasks) {
@@ -601,6 +605,7 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn manual_purge(&self) -> Result<Vec<u64>> {
+        let _io_type_guard = WithIoType::new(IoType::Compaction);
         self.0.purge_expired_files().map_err(transfer_error)
     }
 

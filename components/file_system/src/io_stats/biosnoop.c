@@ -8,7 +8,7 @@ struct stats_t {
   u64 write;
 };
 
-// Should be consistent with IOType in `file_system/lib.rs`
+// Should be consistent with IoType in `file_system/lib.rs`
 // TODO: auto-generate this enum
 typedef enum {
   Other = 0,

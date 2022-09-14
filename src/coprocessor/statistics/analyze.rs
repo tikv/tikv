@@ -3,6 +3,7 @@
 use std::{cmp::Reverse, collections::BinaryHeap, mem, sync::Arc};
 
 use async_trait::async_trait;
+use file_system::{IoType, WithAsyncIoRateLimit};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use rand::{rngs::StdRng, Rng};
@@ -142,6 +143,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
         } else {
             ANALYZE_VERSION_V1
         };
+        let _guard = WithAsyncIoRateLimit::new(IoType::Analyze);
         while let Some((key, _)) = scanner.next().await? {
             let mut key = &key[..];
             if is_common_handle {
@@ -369,6 +371,7 @@ impl<S: Snapshot> RowSampleBuilder<S> {
 
         let mut is_drained = false;
         let mut collector = self.new_collector();
+        let _guard = WithAsyncIoRateLimit::new(IoType::Analyze);
         while !is_drained {
             let mut sample = self.quota_limiter.new_sample(!self.is_auto_analyze);
             let mut read_size: usize = 0;

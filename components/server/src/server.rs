@@ -19,10 +19,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
-    },
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
     u64,
 };
@@ -49,8 +46,7 @@ use engine_traits::{
 };
 use error_code::ErrorCodeExt;
 use file_system::{
-    get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor,
-    MetricsManager as IoMetricsManager,
+    set_io_rate_limiter, BytesFetcher, File, IoRateLimiter, MetricsManager as IoMetricsManager,
 };
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
@@ -153,9 +149,9 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(config: TikvConfig) {
     tikv.init_fs();
     tikv.init_yatp();
     tikv.init_encryption();
-    let fetcher = tikv.init_io_utility();
+    let (io_limiter, fetcher) = tikv.init_io_utility();
     let listener = tikv.init_flow_receiver();
-    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    let (engines, engines_info) = tikv.init_raw_engines(io_limiter, listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers::<F>();
     tikv.register_services();
@@ -1253,7 +1249,7 @@ where
         }
     }
 
-    fn init_io_utility(&mut self) -> BytesFetcher {
+    fn init_io_utility(&mut self) -> (Arc<IoRateLimiter>, BytesFetcher) {
         let stats_collector_enabled = file_system::init_io_stats_collector()
             .map_err(|e| warn!("failed to init I/O stats collector: {}", e))
             .is_ok();
@@ -1262,7 +1258,7 @@ where
             self.config
                 .storage
                 .io_rate_limit
-                .build(!stats_collector_enabled /* enable_statistics */),
+                .build(stats_collector_enabled),
         );
         let fetcher = if stats_collector_enabled {
             BytesFetcher::FromIoStatsCollector()
@@ -1271,23 +1267,22 @@ where
         };
         // Set up IO limiter even when rate limit is disabled, so that rate limits can
         // be dynamically applied later on.
-        set_io_rate_limiter(Some(limiter));
-        fetcher
+        set_io_rate_limiter(Some(limiter.clone()));
+        (limiter, fetcher)
     }
 
     fn init_metrics_flusher(
         &mut self,
         fetcher: BytesFetcher,
-        engines_info: Arc<EnginesResourceInfo>,
+        mut engines_info: EnginesBacklogMonitor,
     ) {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.engines.as_ref().unwrap().engines.clone(),
         );
         let mut io_metrics = IoMetricsManager::new(fetcher);
-        let engines_info_clone = engines_info.clone();
 
         // region_id -> (suffix, tablet)
-        // `update` of EnginesResourceInfo is called perodically which needs this map
+        // `update` of EnginesBacklogMonitor is called perodically which needs this map
         // for recording the latest tablet for each region.
         // `cached_latest_tablets` is passed to `update` to avoid memory
         // allocation each time when calling `update`.
@@ -1297,11 +1292,8 @@ where
                 let now = Instant::now();
                 engine_metrics.flush(now);
                 io_metrics.flush(now);
-                engines_info_clone.update(now, &mut cached_latest_tablets);
+                engines_info.update(now, &mut cached_latest_tablets);
             });
-        if let Some(limiter) = get_io_rate_limiter() {
-            limiter.set_low_priority_io_adjustor_if_needed(Some(engines_info));
-        }
 
         let mut mem_trace_metrics = MemoryTraceManager::default();
         mem_trace_metrics.register_provider(MEMTRACE_RAFTSTORE.clone());
@@ -1555,6 +1547,7 @@ pub trait ConfiguredRaftEngine: RaftEngine {
         _: &Arc<Env>,
         _: &Option<Arc<DataKeyManager>>,
         _: &Option<Cache>,
+        _: Option<Arc<IoRateLimiter>>,
     ) -> Self;
     fn as_rocks_engine(&self) -> Option<&RocksEngine> {
         None
@@ -1568,6 +1561,7 @@ impl ConfiguredRaftEngine for RocksEngine {
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Option<Cache>,
+        _: Option<Arc<IoRateLimiter>>,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1620,6 +1614,7 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         env: &Arc<Env>,
         key_manager: &Option<Arc<DataKeyManager>>,
         block_cache: &Option<Cache>,
+        io_limiter: Option<Arc<IoRateLimiter>>,
     ) -> Self {
         let mut raft_data_state_machine = RaftDataStateMachine::new(
             &config.storage.data_dir,
@@ -1629,9 +1624,8 @@ impl ConfiguredRaftEngine for RaftLogEngine {
         let should_dump = raft_data_state_machine.before_open_target();
 
         let raft_config = config.raft_engine.config();
-        let raft_engine =
-            RaftLogEngine::new(raft_config, key_manager.clone(), get_io_rate_limiter())
-                .expect("failed to open raft engine");
+        let raft_engine = RaftLogEngine::new(raft_config, key_manager.clone(), io_limiter)
+            .expect("failed to open raft engine");
 
         if should_dump {
             let config_raftdb = &config.raftdb;
@@ -1656,12 +1650,16 @@ impl ConfiguredRaftEngine for RaftLogEngine {
 impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
     fn init_raw_engines(
         &mut self,
+        io_limiter: Arc<IoRateLimiter>,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (Engines<RocksEngine, CER>, EnginesBacklogMonitor) {
         let block_cache = self.config.storage.block_cache.build_shared_cache();
         let env = self
             .config
-            .build_shared_rocks_env(self.encryption_key_manager.clone(), get_io_rate_limiter())
+            .build_shared_rocks_env(
+                self.encryption_key_manager.clone(),
+                Some(io_limiter.clone()),
+            )
             .unwrap();
 
         // Create raft engine
@@ -1670,6 +1668,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             &env,
             &self.encryption_key_manager,
             &block_cache,
+            Some(io_limiter.clone()),
         );
 
         // Create kv engine.
@@ -1703,11 +1702,12 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
             .raft
             .register_config(cfg_controller, self.config.storage.block_cache.shared);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(
+        let engines_info = EnginesBacklogMonitor::new(
             factory,
             engines.raft.as_rocks_engine().cloned(),
             180, // max_samples_to_preserve
-        ));
+            io_limiter,
+        );
 
         (engines, engines_info)
     }
@@ -1855,34 +1855,41 @@ impl<EK: KvEngine, R: RaftEngine> EngineMetricsManager<EK, R> {
     }
 }
 
-pub struct EnginesResourceInfo {
+pub struct EnginesBacklogMonitor {
     tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
     raft_engine: Option<RocksEngine>,
-    latest_normalized_pending_bytes: AtomicU32,
+    io_rate_limiter: Arc<IoRateLimiter>,
+
     normalized_pending_bytes_collector: MovingAvgU32,
+    /// (Original I/O rate, I/O rate recently set by us)
+    history_io_rate_limits: Option<(usize, usize)>,
 }
 
-impl EnginesResourceInfo {
+impl EnginesBacklogMonitor {
     const SCALE_FACTOR: u64 = 100;
 
     fn new(
         tablet_factory: Arc<dyn TabletFactory<RocksEngine> + Sync + Send>,
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
+        io_rate_limiter: Arc<IoRateLimiter>,
     ) -> Self {
-        EnginesResourceInfo {
+        EnginesBacklogMonitor {
             tablet_factory,
             raft_engine,
-            latest_normalized_pending_bytes: AtomicU32::new(0),
+            io_rate_limiter,
             normalized_pending_bytes_collector: MovingAvgU32::new(max_samples_to_preserve),
+            history_io_rate_limits: None,
         }
     }
 
     pub fn update(
-        &self,
+        &mut self,
         _now: Instant,
         cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
     ) {
+        // Starts adjusting I/O rate if pending bytes exceeds 25% of soft limit.
+        const BACKLOG_THRESHOLD: u32 = 75;
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {
@@ -1891,7 +1898,7 @@ impl EnginesResourceInfo {
                     if cf_opts.get_soft_pending_compaction_bytes_limit() > 0 {
                         *normalized_pending_bytes = std::cmp::max(
                             *normalized_pending_bytes,
-                            (b * EnginesResourceInfo::SCALE_FACTOR
+                            (b * EnginesBacklogMonitor::SCALE_FACTOR
                                 / cf_opts.get_soft_pending_compaction_bytes_limit())
                                 as u32,
                         );
@@ -1939,55 +1946,46 @@ impl EnginesResourceInfo {
         let (_, avg) = self
             .normalized_pending_bytes_collector
             .add(normalized_pending_bytes);
-        self.latest_normalized_pending_bytes.store(
-            std::cmp::max(normalized_pending_bytes, avg),
-            Ordering::Relaxed,
-        );
-    }
-}
 
-impl IoBudgetAdjustor for EnginesResourceInfo {
-    fn adjust(&self, total_budgets: usize) -> usize {
-        let score = self.latest_normalized_pending_bytes.load(Ordering::Relaxed) as f32
-            / Self::SCALE_FACTOR as f32;
-        // Two reasons for adding `sqrt` on top:
-        // 1) In theory the convergence point is independent of the value of pending
-        //    bytes (as long as backlog generating rate equals consuming rate, which is
-        //    determined by compaction budgets), a convex helps reach that point while
-        //    maintaining low level of pending bytes.
-        // 2) Variance of compaction pending bytes grows with its magnitude, a filter
-        //    with decreasing derivative can help balance such trend.
-        let score = score.sqrt();
-        // The target global write flow slides between Bandwidth / 2 and Bandwidth.
-        let score = 0.5 + score / 2.0;
-        (total_budgets as f32 * score) as usize
+        // Maps [THRESHOLD, 100] to [1,2].
+        let score = std::cmp::max(normalized_pending_bytes, avg).saturating_sub(BACKLOG_THRESHOLD)
+            as f32
+            / (100.0 - BACKLOG_THRESHOLD as f32)
+            + 1.0;
+        let io_limiter = self.io_rate_limiter.clone();
+        if score > 1.0 {
+            if let Some((original, last)) = self.history_io_rate_limits.take() {
+                let new = (original as f32 * score) as usize;
+                if io_limiter.fetch_update_io_rate_limit(Some(last), new) {
+                    self.history_io_rate_limits = Some((original, new));
+                }
+            } else {
+                let current = io_limiter.fetch_io_rate_limit();
+                let new = (current as f32 * score) as usize;
+                if io_limiter.fetch_update_io_rate_limit(Some(current), new) {
+                    self.history_io_rate_limits = Some((current, new));
+                }
+            }
+        } else if let Some((original, last)) = self.history_io_rate_limits.take() {
+            io_limiter.fetch_update_io_rate_limit(Some(last), original);
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::HashMap,
-        sync::{atomic::Ordering, Arc},
-    };
-
-    use engine_rocks::{raw::Env, RocksEngine};
-    use engine_traits::{
-        FlowControlFactorsExt, MiscExt, OpenOptions, SyncMutable, TabletFactory, CF_DEFAULT,
-    };
+    use engine_traits::{OpenOptions, SyncMutable};
     use tempfile::Builder;
-    use tikv::{config::TikvConfig, server::KvEngineFactoryBuilder};
-    use tikv_util::{config::ReadableSize, time::Instant};
+    use tikv_util::config::ReadableSize;
 
-    use super::EnginesResourceInfo;
+    use super::*;
 
     #[test]
     fn test_engines_resource_info_update() {
         let mut config = TikvConfig::default();
         config.rocksdb.defaultcf.disable_auto_compactions = true;
+        config.rocksdb.defaultcf.disable_write_stall = true;
         config.rocksdb.defaultcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.writecf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
-        config.rocksdb.lockcf.soft_pending_compaction_bytes_limit = Some(ReadableSize(1));
         let env = Arc::new(Env::default());
         let path = Builder::new().prefix("test-update").tempdir().unwrap();
 
@@ -2033,23 +2031,27 @@ mod test {
 
         assert!(old_pending_compaction_bytes > new_pending_compaction_bytes);
 
-        let engines_info = Arc::new(EnginesResourceInfo::new(Arc::new(factory), None, 10));
+        let limiter = Arc::new(IoRateLimiter::new_for_test());
+        let mut engines_info =
+            EnginesBacklogMonitor::new(Arc::new(factory), None, 10, limiter.clone());
+        limiter.set_io_rate_limit(200);
 
         let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
-
+        let updated_rate = limiter.fetch_io_rate_limit();
+        assert!(updated_rate > 200);
         // The memory allocation should be reserved
         assert!(cached_latest_tablets.capacity() >= 5);
         // The tablet cache should be cleared
         assert!(cached_latest_tablets.is_empty());
 
-        // The latest_normalized_pending_bytes should be equal to the pending compaction
-        // bytes of tablet_1_20
-        assert_eq!(
-            (new_pending_compaction_bytes * 100) as u32,
-            engines_info
-                .latest_normalized_pending_bytes
-                .load(Ordering::Relaxed)
-        );
+        // idempotent
+        engines_info.update(Instant::now(), &mut cached_latest_tablets);
+        assert_eq!(limiter.fetch_io_rate_limit(), updated_rate);
+
+        // user can override
+        limiter.set_io_rate_limit(100);
+        engines_info.update(Instant::now(), &mut cached_latest_tablets);
+        assert_eq!(limiter.fetch_io_rate_limit(), 100);
     }
 }

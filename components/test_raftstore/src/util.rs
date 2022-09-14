@@ -589,13 +589,13 @@ pub fn create_test_engine(
             .map(Arc::new);
     let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
-        .build_shared_rocks_env(key_manager.clone(), limiter)
+        .build_shared_rocks_env(key_manager.clone(), limiter.clone())
         .unwrap();
 
     let sst_worker = LazyWorker::new("sst-recovery");
     let scheduler = sst_worker.scheduler();
 
-    let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
+    let raft_engine = RaftTestEngine::build(&cfg, &env, &key_manager, &cache, limiter);
 
     let mut builder =
         KvEngineFactoryBuilder::new(env, &cfg, dir.path()).sst_recovery_sender(Some(scheduler));

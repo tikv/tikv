@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
+use file_system::{IoType, WithAsyncIoRateLimit};
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::storage::{
@@ -73,6 +74,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
+        let _guard = WithAsyncIoRateLimit::new(IoType::Checksum);
         while let Some((k, v)) = self.scanner.next().await? {
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));

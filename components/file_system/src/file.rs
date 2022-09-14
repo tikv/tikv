@@ -13,7 +13,7 @@ use std::{
 // Extention Traits
 use fs2::FileExt;
 
-use super::{get_io_rate_limiter, get_io_type, IoOp, IoRateLimiter};
+use super::{get_io_rate_limiter, IoOp, IoRateLimiter};
 
 /// A wrapper around `std::fs::File` with capability to track and regulate IO
 /// flow.
@@ -105,7 +105,7 @@ impl Read for File {
             let mut remains = buf.len();
             let mut pos = 0;
             while remains > 0 {
-                let allowed = limiter.request(get_io_type(), IoOp::Read, remains);
+                let allowed = limiter.request(IoOp::Read, remains);
                 let read = self.inner.read(&mut buf[pos..pos + allowed])?;
                 pos += read;
                 remains -= read;
@@ -132,7 +132,7 @@ impl Write for File {
             let mut remains = buf.len();
             let mut pos = 0;
             while remains > 0 {
-                let allowed = limiter.request(get_io_type(), IoOp::Write, remains);
+                let allowed = limiter.request(IoOp::Write, remains);
                 let written = self.inner.write(&buf[pos..pos + allowed])?;
                 pos += written;
                 remains -= written;
@@ -263,31 +263,20 @@ mod tests {
             .tempdir()
             .unwrap();
         let limiter = Arc::new(IoRateLimiter::new_for_test());
-        // make sure read at most one bytes at a time
-        limiter.set_io_rate_limit(20 /* 1s / refill_period */);
+        limiter.set_io_rate_limit(crate::rate_limiter::DEFAULT_REFILLS_PER_SEC);
         let stats = limiter.statistics().unwrap();
 
         let tmp_file = tmp_dir.path().join("instrumented.txt");
         let content = String::from("drink full and descend");
         {
             let _guard = WithIoType::new(IoType::ForegroundWrite);
-            let mut f = File::create_with_limiter(&tmp_file, Some(limiter.clone())).unwrap();
+            let mut f = File::create_with_limiter(&tmp_file, Some(limiter)).unwrap();
             f.write_all(content.as_bytes()).unwrap();
             f.sync_all().unwrap();
             assert_eq!(
                 stats.fetch(IoType::ForegroundWrite, IoOp::Write),
                 content.len()
             );
-        }
-        {
-            let _guard = WithIoType::new(IoType::Export);
-            let mut buffer = String::new();
-            let mut f = File::open_with_limiter(&tmp_file, Some(limiter)).unwrap();
-            assert_eq!(f.read_to_string(&mut buffer).unwrap(), content.len());
-            assert_eq!(buffer, content);
-            // read_to_string only exit when file.read() returns zero, which means
-            // it requires two EOF reads to finish the call.
-            assert_eq!(stats.fetch(IoType::Export, IoOp::Read), content.len() + 2);
         }
     }
 

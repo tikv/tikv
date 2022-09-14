@@ -2,6 +2,7 @@
 
 #![feature(test)]
 #![feature(duration_consts_float)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -11,6 +12,9 @@ extern crate test;
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[cfg(test)]
+#[macro_use]
+extern crate more_asserts;
 
 mod file;
 mod io_stats;
@@ -34,7 +38,7 @@ use std::{
 };
 
 pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use io_stats::init as init_io_stats_collector;
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
 use openssl::{
@@ -42,7 +46,7 @@ use openssl::{
     hash::{self, Hasher, MessageDigest},
 };
 pub use rate_limiter::{
-    get_io_rate_limiter, set_io_rate_limiter, IoBudgetAdjustor, IoRateLimitMode, IoRateLimiter,
+    get_io_rate_limiter, set_io_rate_limiter, IoRateLimitMode, IoRateLimiter,
     IoRateLimiterStatistics,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -72,6 +76,8 @@ pub enum IoType {
     Gc = 8,
     Import = 9,
     Export = 10,
+    Analyze = 11,
+    Checksum = 12,
 }
 
 impl IoType {
@@ -88,8 +94,64 @@ impl IoType {
             IoType::Gc => "gc",
             IoType::Import => "import",
             IoType::Export => "export",
+            IoType::Analyze => "analyze",
+            IoType::Checksum => "cheskcum",
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct IoContext {
+    pub(crate) io_type: IoType,
+    /// Accumulated physical read I/O bytes used by current thread.
+    ///
+    /// This counter is refreshed in [`IoRateLimiter`] whenever the
+    /// `outstanding_read_bytes` reaches a user-defined threshold.
+    pub(crate) total_read_bytes: usize,
+    /// Buffered read I/O bytes used by current thread since last refresh of
+    /// `total_read_bytes`.
+    ///
+    /// This counter is updated when new read requests arrive at
+    /// [`IoRateLimiter`].
+    pub(crate) outstanding_read_bytes: usize,
+
+    /// A special mode to apply I/O rate limits in async environment.
+    ///
+    /// Usage protocol:
+    /// - `let guard = WithAsyncIoRateLimit::new(IoType)`
+    /// - `let ctx = before_reschedule().await`
+    /// - `<reschedule-point>.await`
+    /// - `after_reschedule(ctx)`
+    /// - `drop(guard)`
+    ///
+    /// `before_reschedule()` is a no-op when `WithAsyncIoRateLimit` isn't held.
+    ///
+    /// This field stores the I/O type before the `WithAsyncIoRateLimit` is
+    /// created.
+    pub(crate) async_mode: Option<IoType>,
+}
+
+impl IoContext {
+    pub fn new(io_type: IoType) -> Self {
+        Self {
+            io_type,
+            total_read_bytes: 0,
+            outstanding_read_bytes: 0,
+            async_mode: None,
+        }
+    }
+}
+
+pub fn set_io_type(io_type: IoType) {
+    let mut ctx = io_stats::get_io_context();
+    if ctx.io_type != io_type {
+        ctx.io_type = io_type;
+        io_stats::set_io_context(ctx);
+    }
+}
+
+pub fn get_io_type() -> IoType {
+    io_stats::get_io_context().io_type
 }
 
 pub struct WithIoType {
@@ -110,11 +172,65 @@ impl Drop for WithIoType {
     }
 }
 
+pub struct WithAsyncIoRateLimit;
+
+impl WithAsyncIoRateLimit {
+    pub fn new(new_io_type: IoType) -> WithAsyncIoRateLimit {
+        let mut ctx = io_stats::get_io_context();
+        ctx.async_mode = Some(ctx.io_type);
+        ctx.io_type = new_io_type;
+        // Some bytes of other types will be counted.
+        io_stats::set_io_context(ctx);
+        WithAsyncIoRateLimit
+    }
+}
+
+impl Drop for WithAsyncIoRateLimit {
+    fn drop(&mut self) {
+        let mut ctx = io_stats::get_io_context();
+        ctx.io_type = ctx.async_mode.take().unwrap();
+        // Do not rate limit these bytes because there's no available
+        // reschedule point. They will be passed on to other types.
+        io_stats::set_io_context(ctx);
+    }
+}
+
+/// Returns previous `async_mode` value.
+pub async fn before_reschedule() -> Option<IoType> {
+    let old_ctx = io_stats::get_io_context();
+    if std::intrinsics::unlikely(old_ctx.async_mode.is_some()) {
+        let mut new_ctx = old_ctx;
+        new_ctx.io_type = old_ctx.async_mode.unwrap();
+        new_ctx.total_read_bytes = io_stats::fetch_thread_io_bytes().read;
+        io_stats::set_io_context(new_ctx);
+        if let Some(limiter) = get_io_rate_limiter() {
+            limiter
+                .async_request(
+                    old_ctx.io_type,
+                    new_ctx
+                        .total_read_bytes
+                        .saturating_sub(old_ctx.total_read_bytes),
+                )
+                .await;
+        }
+    }
+    old_ctx.async_mode
+}
+
+pub fn after_reschedule(prev_async_mode: Option<IoType>) {
+    if std::intrinsics::unlikely(prev_async_mode.is_some()) {
+        let mut ctx = io_stats::get_io_context();
+        ctx.total_read_bytes = io_stats::fetch_thread_io_bytes().read;
+        ctx.async_mode = prev_async_mode;
+        io_stats::set_io_context(ctx);
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IoBytes {
-    read: u64,
-    write: u64,
+    read: usize,
+    write: usize,
 }
 
 impl std::ops::Sub for IoBytes {
