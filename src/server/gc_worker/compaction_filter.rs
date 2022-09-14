@@ -208,9 +208,11 @@ pub fn get_rocksdb_from_factory(region_id: u64, suffix: u64) -> engine_traits::R
         None => return Err(box_err!("GC_CONTEXT is not ready yet!")),
     };
 
-    gc_context
-        .tablet_factory
-        .open_tablet(region_id, Some(suffix), OpenOptions::default().set_create(true))
+    gc_context.tablet_factory.open_tablet(
+        region_id,
+        Some(suffix),
+        OpenOptions::default().set_create(true),
+    )
 }
 
 pub struct WriteCompactionFilterFactory {
