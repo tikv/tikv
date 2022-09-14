@@ -245,9 +245,9 @@ impl From<Error> for errorpb::Error {
                 errorpb.set_recovery_in_progress(e);
             }
             Error::FlashbackInProgress(region_id) => {
-                let mut e = errorpb::RecoveryInProgress::default();
+                let mut e = errorpb::FlashbackInProgress::default();
                 e.set_region_id(region_id);
-                errorpb.set_recovery_in_progress(e);
+                errorpb.set_flashback_in_progress(e);
             }
             _ => {}
         };
