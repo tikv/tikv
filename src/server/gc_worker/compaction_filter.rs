@@ -687,10 +687,6 @@ pub fn check_need_gc(
         if props.min_ts > safe_point {
             return (false, false);
         }
-        println!(
-            "context.is_bottommost_level():{}",
-            context.is_bottommost_level()
-        );
         if ratio_threshold < 1.0 || context.is_bottommost_level() {
             // According to our tests, `split_ts` on keys and `parse_write` on values
             // won't utilize much CPU. So always perform GC at the bottommost level

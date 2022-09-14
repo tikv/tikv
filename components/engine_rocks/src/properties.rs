@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mvcc_properties_raw_mode() {
+    fn test_mvcc_properties_rawkv_mode() {
         let test_raws = vec![
             (b"r\0a", 1, false, u64::MAX),
             (b"r\0a", 5, false, u64::MAX),
