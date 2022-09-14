@@ -381,10 +381,15 @@ impl Suite {
                     for f in g.data_files_info.into_iter() {
                         let file_info = meta_map.get_mut(path);
                         if let Some(v) = file_info {
-                            v.push((f.range_offset as usize, (f.range_offset + f.range_length) as usize));
+                            v.push((
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            ));
                         } else {
-                            let v =
-                                vec![(f.range_offset as usize, (f.range_offset + f.range_length) as usize)];
+                            let v = vec![(
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            )];
                             meta_map.insert(String::from(path), v);
                         }
                     }
