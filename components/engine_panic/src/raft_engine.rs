@@ -191,7 +191,7 @@ impl RaftEngine for PanicEngine {
         f: F,
     ) -> Result<()>
     where
-        F: FnMut(u64, &RegionSequenceNumberRelation),
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
     {
         panic!()
     }

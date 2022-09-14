@@ -419,7 +419,7 @@ impl RaftEngine for RocksEngine {
         mut f: F,
     ) -> Result<()>
     where
-        F: FnMut(u64, &RegionSequenceNumberRelation),
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
     {
         let start = start.unwrap_or(0);
         let end = end.unwrap_or(u64::MAX);

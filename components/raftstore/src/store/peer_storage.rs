@@ -1200,6 +1200,7 @@ pub fn write_peer_state_to_raft<EK: KvEngine, ER: RaftEngine>(
                             relation.get_apply_state().get_applied_index(),
                         )
                         .unwrap();
+                    true
                 },
             )
             .unwrap();

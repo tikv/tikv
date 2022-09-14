@@ -1388,6 +1388,7 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();
+                true
             })
             .unwrap();
         Ok(())

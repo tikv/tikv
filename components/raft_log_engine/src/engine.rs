@@ -797,7 +797,7 @@ impl RaftEngine for RaftLogEngine {
         mut f: F,
     ) -> Result<()>
     where
-        F: FnMut(u64, &RegionSequenceNumberRelation),
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool,
     {
         let start = start.map(|s| raft_seqno_relation_key(s));
         let end = end.map(|s| raft_seqno_relation_key(s));
@@ -806,11 +806,10 @@ impl RaftEngine for RaftLogEngine {
                 raft_group_id,
                 start.as_deref(),
                 end.as_deref(),
-                true,
+                false,
                 |key, value| {
                     let index = parse_raft_seqno_relation_key(key).unwrap();
-                    f(index, &value);
-                    false
+                    f(index, &value)
                 },
             )
             .map_err(transfer_error)

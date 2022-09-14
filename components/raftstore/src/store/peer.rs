@@ -1285,6 +1285,7 @@ where
             "begin to destroy";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
+            "keep_data" => keep_data,
         );
 
         let (pending_create_peers, clean) = if self.local_first_replicate {

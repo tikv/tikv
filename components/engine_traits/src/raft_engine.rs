@@ -178,7 +178,7 @@ pub trait RaftEngine: RaftEngineReadOnly + PerfContextExt + Clone + Sync + Send 
         f: F,
     ) -> Result<()>
     where
-        F: FnMut(u64, &RegionSequenceNumberRelation);
+        F: FnMut(u64, &RegionSequenceNumberRelation) -> bool;
 
     fn put_flushed_seqno(&self, flushed_seqno: &FlushedSeqno) -> Result<()>;
 }
