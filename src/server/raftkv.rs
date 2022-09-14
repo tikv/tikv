@@ -3,7 +3,6 @@
 // #[PerformanceCriticalPath]
 use std::{
     borrow::Cow,
-    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     io::Error as IoError,
     mem,
@@ -13,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use kvproto::{

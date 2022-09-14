@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     fmt::{self, Debug, Display, Formatter},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -10,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
     get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,

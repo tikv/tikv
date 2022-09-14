@@ -6285,6 +6285,7 @@ name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
  "backtrace",
+ "collections",
  "engine_panic",
  "engine_rocks",
  "engine_test",

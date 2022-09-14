@@ -62,7 +62,6 @@ mod types;
 
 use std::{
     borrow::Cow,
-    collections::HashMap,
     iter,
     marker::PhantomData,
     sync::{
@@ -72,6 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;

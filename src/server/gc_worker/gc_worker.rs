@@ -372,9 +372,9 @@ where
     fn flush_txn(
         limiter: &Limiter,
         engine: &E,
-        txns: std::collections::HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
+        txns: HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
     ) -> Result<()> {
-        let mut modifies = std::collections::HashMap::new();
+        let mut modifies = HashMap::default();
         let mut write_size = 0;
         for (id, txn) in txns {
             write_size += txn.write_size();
@@ -454,7 +454,7 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
-        let mut txns = std::collections::HashMap::new();
+        let mut txns = HashMap::default();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
@@ -503,7 +503,7 @@ where
                 } else {
                     txns.insert(region.id, txn);
                     Self::flush_txn(&self.limiter, &self.engine, txns)?;
-                    txns = std::collections::HashMap::new();
+                    txns = HashMap::default();
 
                     reader = self.create_reader(
                         count,
@@ -568,7 +568,7 @@ where
             return Ok((handled_keys, wasted_keys));
         }
 
-        let mut region_modifies = std::collections::HashMap::new();
+        let mut region_modifies = HashMap::default();
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
@@ -617,7 +617,7 @@ where
                     Self::flush_raw_gc(&self.limiter, &self.engine, region_modifies)?;
                     // After flush, reset raw_modifies.
                     raw_modifies = MvccRaw::new();
-                    region_modifies = std::collections::HashMap::new();
+                    region_modifies = HashMap::default();
                 }
             }
 
@@ -707,9 +707,9 @@ where
     fn flush_raw_gc(
         limiter: &Limiter,
         engine: &E,
-        region_modifies: std::collections::HashMap<u64, MvccRaw>,
+        region_modifies: HashMap<u64, MvccRaw>,
     ) -> Result<()> {
-        let mut modifies = std::collections::HashMap::new();
+        let mut modifies = HashMap::default();
         let mut write_size = 0;
         for (id, m) in region_modifies {
             write_size += m.write_size();
@@ -1397,8 +1397,9 @@ where
 
 #[cfg(any(test, feature = "testexport"))]
 pub mod test_gc_worker {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
+    use collections::HashMap;
     use engine_rocks::{RocksEngine, RocksSnapshot};
     use engine_test::kv::TestTabletFactoryV2;
     use engine_traits::{KvEngine, OpenOptions, TabletFactory};
@@ -2596,7 +2597,7 @@ mod tests {
             .open_tablet(3, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
 
-        let mut region_info = std::collections::HashMap::new();
+        let mut region_info = HashMap::default();
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
         region_info.insert(3, r3.clone());
@@ -2653,33 +2654,25 @@ mod tests {
         gc_runner.gc(regions[1].clone(), 200.into()).unwrap();
         gc_runner.gc(regions[2].clone(), 200.into()).unwrap();
 
-        let mut region_id = 1;
-        let mut db = factory
-            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
-            .unwrap()
-            .as_inner()
-            .clone();
-        let mut cf = get_cf_handle(&db, CF_WRITE).unwrap();
-        for i in 0..30 {
-            if i >= 10 && i % 10 == 0 {
-                region_id += 1;
-                db = factory
-                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                    .unwrap()
-                    .as_inner()
-                    .clone();
-                cf = get_cf_handle(&db, CF_WRITE).unwrap();
+        for region_id in 1..=3 {
+            let db = factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .as_inner()
+                .clone();
+            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
+
+                // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
+                must_get_none_on_region(&engine, region_id, &k, 150);
+
+                // MVCC-DELETIONs is cleaned
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts(152.into());
+                raw_k.extend_from_slice(suffix.as_encoded());
+                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
             }
-            let k = format!("k{:02}", i).into_bytes();
-
-            // Stale MVCC-PUTs will be cleaned in write CF's compaction filter.
-            must_get_none_on_region(&engine, region_id, &k, 150);
-
-            // MVCC-DELETIONs is cleaned
-            let mut raw_k = vec![b'z'];
-            let suffix = Key::from_raw(&k).append_ts(152.into());
-            raw_k.extend_from_slice(suffix.as_encoded());
-            assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
         }
     }
 
@@ -2704,35 +2697,27 @@ mod tests {
             .gc_keys(keys, 200.into(), Either::Right(ri_provider))
             .unwrap();
 
-        let mut region_id = 1;
-        let mut db = factory
-            .open_tablet(1, None, OpenOptions::default().set_cache_only(true))
-            .unwrap()
-            .as_inner()
-            .clone();
-        let mut cf = get_cf_handle(&db, CF_WRITE).unwrap();
-        for i in 0..30 {
-            if i >= 10 && i % 10 == 0 {
-                region_id += 1;
-                db = factory
-                    .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
-                    .unwrap()
-                    .as_inner()
-                    .clone();
-                cf = get_cf_handle(&db, CF_WRITE).unwrap();
-            }
-            let k = format!("k{:02}", i).into_bytes();
+        for region_id in 1..=3 {
+            let db = factory
+                .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
+                .unwrap()
+                .as_inner()
+                .clone();
+            let cf = get_cf_handle(&db, CF_WRITE).unwrap();
+            for i in 10 * (region_id - 1)..10 * region_id {
+                let k = format!("k{:02}", i).into_bytes();
 
-            let mut raw_k = vec![b'z'];
-            let suffix = Key::from_raw(&k).append_ts(152.into());
-            raw_k.extend_from_slice(suffix.as_encoded());
+                let mut raw_k = vec![b'z'];
+                let suffix = Key::from_raw(&k).append_ts(152.into());
+                raw_k.extend_from_slice(suffix.as_encoded());
 
-            if i % 2 == 0 {
-                assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
-                must_get_on_region(&engine, region_id, &k, 150, b"value");
-            } else {
-                must_get_none_on_region(&engine, region_id, &k, 150);
-                assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                if i % 2 == 0 {
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    must_get_on_region(&engine, region_id, &k, 150, b"value");
+                } else {
+                    must_get_none_on_region(&engine, region_id, &k, 150);
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
+                }
             }
         }
     }
@@ -2760,7 +2745,7 @@ mod tests {
             .open_tablet(2, Some(10), OpenOptions::default().set_create_new(true))
             .unwrap();
 
-        let mut region_info = std::collections::HashMap::new();
+        let mut region_info = HashMap::default();
         region_info.insert(1, r1.clone());
         region_info.insert(2, r2.clone());
         let engine = MultiRocksEngine {
@@ -2784,7 +2769,7 @@ mod tests {
         );
 
         // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>
-        let mut test_raws = std::collections::HashMap::new();
+        let mut test_raws = HashMap::default();
         let mut test_raws_region = Vec::new();
         let mut test_keys = Vec::new();
         let mut i = 0;

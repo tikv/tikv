@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, LinkedList},
+    collections::LinkedList,
     sync::{Arc, Mutex},
 };
 
+use collections::HashMap;
 use kvproto::kvrpcpb::Context;
 
 use super::Result;

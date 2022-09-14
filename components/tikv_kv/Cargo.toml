@@ -49,6 +49,7 @@ thiserror = "1.0"
 tikv_util = { path = "../tikv_util", default-features = false }
 tracker = { path = "../tracker" }
 txn_types = { path = "../txn_types", default-features = false }
+collections = { path = "../collections" }
 
 [dev-dependencies]
 keys = { path = "../keys", default-features = false }

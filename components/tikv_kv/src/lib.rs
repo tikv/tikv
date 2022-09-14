@@ -23,7 +23,6 @@ mod stats;
 
 use std::{
     cell::UnsafeCell,
-    collections::HashMap,
     error,
     num::NonZeroU64,
     ptr, result,
@@ -31,6 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashMap;
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
     CF_DEFAULT, CF_LOCK,

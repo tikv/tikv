@@ -4,7 +4,6 @@ use std::{
     collections::{
         BTreeMap,
         Bound::{self, Excluded, Included, Unbounded},
-        HashMap,
     },
     default::Default,
     fmt::{self, Debug, Display, Formatter},
@@ -12,6 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
