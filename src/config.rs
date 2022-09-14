@@ -681,7 +681,7 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory(
-            "tikv.mvcc-properties-collector",
+            "tikv.rawkv-mvcc-properties-collector",
             RawMvccPropertiesCollectorFactory::default(),
         );
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
