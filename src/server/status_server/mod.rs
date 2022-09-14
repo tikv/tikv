@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+/// Provides profilers for TiKV.
 mod profile;
 use std::{
     error::Error as StdError,
@@ -39,6 +40,10 @@ use openssl::{
     x509::X509,
 };
 use pin_project::pin_project;
+pub use profile::{
+    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
+    read_file, start_one_cpu_profile, start_one_heap_profile,
+};
 use prometheus::TEXT_FORMAT;
 use raftstore::store::{transport::CasualRouter, CasualMessage};
 use regex::Regex;
@@ -56,10 +61,6 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 
-use self::profile::{
-    activate_heap_profile, deactivate_heap_profile, jeprof_heap_profile, list_heap_profiles,
-    read_file, start_one_cpu_profile, start_one_heap_profile,
-};
 use crate::{
     config::{ConfigController, LogLevel},
     server::Result,
