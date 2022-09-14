@@ -633,7 +633,7 @@ impl CausalTsProvider for SimpleTsoProvider {
 
 #[cfg(test)]
 pub mod tests {
-    use test_raftstore::TestPdClient;
+    use test_pd_client::TestPdClient;
 
     use super::*;
 

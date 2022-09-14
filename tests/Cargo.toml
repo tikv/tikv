@@ -144,6 +144,7 @@ sst_importer = { path = "../components/sst_importer", default-features = false }
 test_backup = { path = "../components/test_backup", default-features = false }
 test_coprocessor = { path = "../components/test_coprocessor", default-features = false }
 test_pd = { path = "../components/test_pd", default-features = false }
+test_pd_client = { path = "../components/test_pd_client" }
 test_raftstore = { path = "../components/test_raftstore", default-features = false }
 test_sst_importer = { path = "../components/test_sst_importer", default-features = false }
 test_storage = { path = "../components/test_storage", default-features = false }
