@@ -165,8 +165,11 @@ pub mod kv {
                 }
                 return Ok(db.clone());
             }
+<<<<<<< HEAD
             // No need for mutex protection here since root_db creation only occurs at
             // tikv bootstrap time when there is no racing issue.
+=======
+>>>>>>> b54e489fe (*: fix unit test failure)
             if options.create_new() || options.create() {
                 return self.create_shared_db();
             }
