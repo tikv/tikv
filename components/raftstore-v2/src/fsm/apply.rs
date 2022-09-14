@@ -9,7 +9,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::{batch::ApplyContext, raft::Apply, router::ApplyTask};
 
 pub struct ApplyFsm<EK: KvEngine> {
-    apply: Apply<EK>,
+    pub(crate) apply: Apply<EK>,
     receiver: Receiver<ApplyTask>,
     is_stopped: bool,
 }
@@ -58,7 +58,7 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
 }
 
 pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
-    fsm: &'a mut ApplyFsm<EK>,
+    pub(crate) fsm: &'a mut ApplyFsm<EK>,
     apply_ctx: &'a mut ApplyContext<EK, ER>,
 
     pub(crate) tag: String,

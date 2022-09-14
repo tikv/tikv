@@ -3,7 +3,9 @@
 use std::collections::VecDeque;
 
 use collections::{HashMap, HashMapEntry, HashSet};
-use engine_traits::{KvEngine, RaftEngine, RaftEngineReadOnly, TabletFactory};
+use engine_traits::{
+    CfOptions, KvEngine, MiscExt, RaftEngine, RaftEngineReadOnly, TabletFactory, DATA_CFS,
+};
 use kvproto::{
     metapb::Region,
     raft_cmdpb::{AdminRequest, AdminResponse},
@@ -177,14 +179,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
         }
 
         let region_id = derived.get_id();
-        let state = ctx.raft_engine.get_region_state(region_id)?.unwrap();
-        let current_tablet_path = ctx
-            .factory
-            .as_ref()
-            .unwrap()
-            .tablet_path(region_id, state.tablet_index);
-
-        assert!(std::path::Path::try_exists(&current_tablet_path).unwrap());
+        let tablet = self.fsm.apply.tablet().unwrap();
+        for &cf in DATA_CFS {
+            let mut cf_option = tablet.get_options_cf(cf).unwrap();
+            cf_option.set_disable_auto_compactions(true);
+        }
+        tablet.flush_cfs(true).unwrap();
+        let current_tablet_path = std::path::Path::new(tablet.path());
 
         let mut wb = ctx.raft_engine.log_batch(10);
         for new_region in &regions {
@@ -210,7 +211,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
                 .unwrap()
                 .tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
 
-            match std::fs::hard_link(&current_tablet_path, &new_tablet_path) {
+            match std::fs::hard_link(current_tablet_path, &new_tablet_path) {
                 Ok(_) => (),
                 Err(_) => unimplemented!(),
             }
@@ -233,7 +234,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
             .factory
             .as_ref()
             .unwrap()
-            .load_tablet(&current_tablet_path, region_id, log_index)
+            .load_tablet(current_tablet_path, region_id, log_index)
             .unwrap();
 
         let mut resp = AdminResponse::default();

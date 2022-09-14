@@ -20,4 +20,8 @@ impl<EK: KvEngine> Apply<EK> {
             logger: peer.logger.clone(),
         }
     }
+
+    pub fn tablet(&mut self) -> Option<&EK> {
+        self.tablet.latest()
+    }
 }
