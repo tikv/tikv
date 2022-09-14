@@ -2,12 +2,9 @@
 
 use std::io::{self, Error, ErrorKind};
 
-<<<<<<< HEAD
-=======
 use async_trait::async_trait;
 use cloud::metrics;
 use futures::{future::TryFutureExt, Future};
->>>>>>> bcaa663c6... cloud: add retry on web identity credentials (#13343)
 use rusoto_core::{
     region::Region,
     request::{HttpClient, HttpConfig},
@@ -20,8 +17,6 @@ use tikv_util::{
     stream::{retry_ext, RetryError, RetryExt},
     warn,
 };
-
-use async_trait::async_trait;
 
 #[allow(dead_code)] // This will be used soon, please remove the allow.
 const READ_BUF_SIZE: usize = 1024 * 1024 * 2;

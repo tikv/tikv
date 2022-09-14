@@ -4,39 +4,27 @@ use std::io;
 use std::time::Duration;
 use thiserror::Error;
 
+use crate::util::{self, retry_and_count};
+use cloud::blob::{
+    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
+};
+use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
 use fail::fail_point;
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
+pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
 use rusoto_core::{
     request::DispatchSignedRequest,
     {ByteStream, RusotoError},
 };
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
-<<<<<<< HEAD
 use std::error::Error as StdError;
-use tokio::time::{sleep, timeout};
-
-use cloud::blob::{
-    none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
-};
-use cloud::metrics::CLOUD_REQUEST_HISTOGRAM_VEC;
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
-use tikv_util::debug;
-use tikv_util::stream::{error_stream, retry};
-use tikv_util::time::Instant;
-
-use crate::util;
-=======
-use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
-
-use crate::util::{self, retry_and_count};
->>>>>>> bcaa663c6... cloud: add retry on web identity credentials (#13343)
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
