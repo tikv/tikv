@@ -1951,29 +1951,20 @@ impl EnginesBacklogMonitor {
             + 1.0;
         let io_limiter = self.io_rate_limiter.clone();
         if score > 1.0 {
-            io_limiter.with_io_rate_limit(|current| {
-                if let Some((original, last)) = self.history_io_rate_limits.take() {
-                    if last == current {
-                        let new = (original as f32 * score) as usize;
-                        self.history_io_rate_limits = Some((original, new));
-                        return Some(new);
-                    }
-                } else {
-                    let new = (current as f32 * score) as usize;
+            if let Some((original, last)) = self.history_io_rate_limits.take() {
+                let new = (original as f32 * score) as usize;
+                if io_limiter.fetch_update_io_rate_limit(Some(last), new) {
+                    self.history_io_rate_limits = Some((original, new));
+                }
+            } else {
+                let current = io_limiter.fetch_io_rate_limit();
+                let new = (current as f32 * score) as usize;
+                if io_limiter.fetch_update_io_rate_limit(Some(current), new) {
                     self.history_io_rate_limits = Some((current, new));
-                    return Some(new);
                 }
-                None
-            });
+            }
         } else if let Some((original, last)) = self.history_io_rate_limits.take() {
-            io_limiter.with_io_rate_limit(|current| {
-                // Reset to original rate limit if user hasn't modified it.
-                if last == current {
-                    Some(original)
-                } else {
-                    None
-                }
-            });
+            io_limiter.fetch_update_io_rate_limit(Some(last), original);
         }
     }
 }
@@ -2044,12 +2035,8 @@ mod test {
 
         let mut cached_latest_tablets: HashMap<u64, (u64, RocksEngine)> = HashMap::new();
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
-        let mut updated_rate = 0;
-        limiter.with_io_rate_limit(|r| {
-            assert!(r > 200);
-            updated_rate = r;
-            None
-        });
+        let updated_rate = limiter.fetch_io_rate_limit();
+        assert!(updated_rate > 200);
         // The memory allocation should be reserved
         assert!(cached_latest_tablets.capacity() >= 5);
         // The tablet cache should be cleared
@@ -2057,17 +2044,11 @@ mod test {
 
         // idempotent
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
-        limiter.with_io_rate_limit(|r| {
-            assert_eq!(updated_rate, r);
-            None
-        });
+        assert_eq!(limiter.fetch_io_rate_limit(), updated_rate);
 
         // user can override
         limiter.set_io_rate_limit(100);
         engines_info.update(Instant::now(), &mut cached_latest_tablets);
-        limiter.with_io_rate_limit(|r| {
-            assert_eq!(r, 100);
-            None
-        });
+        assert_eq!(limiter.fetch_io_rate_limit(), 100);
     }
 }

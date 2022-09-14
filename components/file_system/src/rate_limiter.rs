@@ -299,45 +299,60 @@ impl IoRateLimiter {
         self.stats.clone()
     }
 
-    /// Dynamically changes the total I/O flow threshold.
-    pub fn set_io_rate_limit(&self, bytes_per_sec: usize) {
-        let new_rate = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
-        let mut locked = self.protected.lock();
-        self.reset_rate(&mut locked, new_rate);
-        RATE_LIMITER_MAX_BYTES_PER_SEC
-            .high
-            .set(bytes_per_sec as i64);
-        RATE_LIMITER_MAX_BYTES_PER_SEC
-            .medium
-            .set(bytes_per_sec as i64);
-        RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
+    #[inline]
+    pub fn fetch_io_rate_limit(&self) -> usize {
+        (self.bytes_per_epoch.load(Ordering::Relaxed) as f64 / DEFAULT_REFILL_PERIOD.as_secs_f64())
+            as usize
     }
 
-    pub fn with_io_rate_limit<F>(&self, f: F)
-    where
-        F: FnOnce(usize) -> Option<usize>,
-    {
+    /// Updates rate limit. When `old` is present, only do the update if current
+    /// rate limit equals `old`.
+    #[inline]
+    pub fn fetch_update_io_rate_limit(&self, old: Option<usize>, new: usize) -> bool {
         let mut locked = self.protected.lock();
-        let old_bytes_per_sec = (self.bytes_per_epoch.load(Ordering::Relaxed) as f64
-            / DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
-        if let Some(bytes_per_sec) = f(old_bytes_per_sec) {
-            let new_rate = (bytes_per_sec as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
+        if old.map_or(true, |expected| self.fetch_io_rate_limit() == expected) {
+            let new_rate = (new as f64 * DEFAULT_REFILL_PERIOD.as_secs_f64()) as usize;
             self.reset_rate(&mut locked, new_rate);
-            RATE_LIMITER_MAX_BYTES_PER_SEC
-                .high
-                .set(bytes_per_sec as i64);
-            RATE_LIMITER_MAX_BYTES_PER_SEC
-                .medium
-                .set(bytes_per_sec as i64);
-            RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(bytes_per_sec as i64);
+            RATE_LIMITER_MAX_BYTES_PER_SEC.high.set(new as i64);
+            RATE_LIMITER_MAX_BYTES_PER_SEC.medium.set(new as i64);
+            RATE_LIMITER_MAX_BYTES_PER_SEC.low.set(new as i64);
+            return true;
         }
+        false
     }
 
-    pub fn set_io_priority(&self, io_type: IoType, io_priority: IoPriority) {
+    #[inline]
+    pub fn set_io_rate_limit(&self, l: usize) {
+        self.fetch_update_io_rate_limit(None, l);
+    }
+
+    #[inline]
+    pub fn fetch_io_priority(&self, io_type: IoType) -> IoPriority {
+        IoPriority::unsafe_from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed))
+    }
+
+    /// Updates priority. When `old` is present, only do the update if current
+    /// priority equals `old`.
+    #[inline]
+    pub fn fetch_update_io_priority(
+        &self,
+        io_type: IoType,
+        old: Option<IoPriority>,
+        new: IoPriority,
+    ) -> bool {
         let mut locked = self.protected.lock();
-        self.priority_map[io_type as usize].store(io_priority as u32, Ordering::Relaxed);
-        let rate = self.bytes_per_epoch.load(Ordering::Relaxed);
-        self.reset_rate(&mut locked, rate);
+        if old.map_or(true, |expected| self.fetch_io_priority(io_type) == expected) {
+            self.priority_map[io_type as usize].store(new as u32, Ordering::Relaxed);
+            let rate = self.bytes_per_epoch.load(Ordering::Relaxed);
+            self.reset_rate(&mut locked, rate);
+            return true;
+        }
+        false
+    }
+
+    #[inline]
+    pub fn set_io_priority(&self, io_type: IoType, p: IoPriority) {
+        self.fetch_update_io_priority(io_type, None, p);
     }
 
     fn reset_rate(&self, locked: &mut IoRateLimiterInner, rate: usize) {
