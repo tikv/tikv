@@ -124,7 +124,7 @@ fn bench_receiver_stream_unbounded_batch(b: &mut Bencher) {
         });
     }
 
-    let rx = mpsc::future::BatchReceiver::new(rx, 32, Vec::new, mpsc::future::VecCollector);
+    let rx = mpsc::future::BatchReceiver::new(rx, 32, Vec::new, Vec::push);
 
     let mut rx = Some(block_on(rx.into_future()).1);
 

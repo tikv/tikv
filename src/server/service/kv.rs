@@ -39,7 +39,7 @@ use raftstore::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
-    mpsc::future::{unbounded, BatchCollector, BatchReceiver, Sender, WakePolicy},
+    mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
     time::{duration_to_ms, duration_to_sec, Instant},
     worker::Scheduler,
@@ -1093,7 +1093,7 @@ impl<T: RaftStoreRouter<E::Local> + 'static, E: Engine, L: LockManager, F: KvFor
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
             MeasuredBatchResponse::default,
-            BatchRespCollector,
+            collect_batch_resp,
         );
 
         let mut response_retriever = response_retriever.map(move |mut item| {
@@ -2354,18 +2354,10 @@ impl Default for MeasuredBatchResponse {
     }
 }
 
-struct BatchRespCollector;
-impl BatchCollector<MeasuredBatchResponse, MeasuredSingleResponse> for BatchRespCollector {
-    fn collect(
-        &mut self,
-        v: &mut MeasuredBatchResponse,
-        mut e: MeasuredSingleResponse,
-    ) -> Option<MeasuredSingleResponse> {
-        v.batch_resp.mut_request_ids().push(e.id);
-        v.batch_resp.mut_responses().push(e.resp.consume());
-        v.measures.push(e.measure);
-        None
-    }
+fn collect_batch_resp(v: &mut MeasuredBatchResponse, mut e: MeasuredSingleResponse) {
+    v.batch_resp.mut_request_ids().push(e.id);
+    v.batch_resp.mut_responses().push(e.resp.consume());
+    v.measures.push(e.measure);
 }
 
 fn raftstore_error_to_region_error(e: RaftStoreError, region_id: u64) -> RegionError {

@@ -165,38 +165,15 @@ pub fn unbounded<T>(policy: WakePolicy) -> (Sender<T>, Receiver<T>) {
     (Sender { queue }, Receiver { queue })
 }
 
-/// A Collector Used in `BatchReceiver`.
-pub trait BatchCollector<Collection, Elem> {
-    /// If `elem` is collected into `collection` successfully, return `None`.
-    /// Otherwise return `elem` back, and `collection` should be spilled out.
-    fn collect(&mut self, collection: &mut Collection, elem: Elem) -> Option<Elem>;
-}
-
-pub struct VecCollector;
-
-impl<E> BatchCollector<Vec<E>, E> for VecCollector {
-    fn collect(&mut self, v: &mut Vec<E>, e: E) -> Option<E> {
-        v.push(e);
-        None
-    }
-}
-
 /// `BatchReceiver` is a `futures::Stream`, which returns a batched type.
-pub struct BatchReceiver<T, E, I, C> {
+pub struct BatchReceiver<T, I, C> {
     rx: Receiver<T>,
     max_batch_size: usize,
-    elem: Option<E>,
     initializer: I,
     collector: C,
 }
 
-impl<T, E, I, C> BatchReceiver<T, E, I, C>
-where
-    T: Unpin,
-    E: Unpin,
-    I: Fn() -> E + Unpin,
-    C: BatchCollector<E, T> + Unpin,
-{
+impl<T, I, C> BatchReceiver<T, I, C> {
     /// Creates a new `BatchReceiver` with given `initializer` and `collector`.
     /// `initializer` is used to generate a initial value, and `collector`
     /// will collect every (at most `max_batch_size`) raw items into the
@@ -205,57 +182,39 @@ where
         BatchReceiver {
             rx,
             max_batch_size,
-            elem: None,
             initializer,
             collector,
         }
     }
 }
 
-impl<T, E, I, C> Stream for BatchReceiver<T, E, I, C>
+impl<T, E, I, C> Stream for BatchReceiver<T, I, C>
 where
     T: Send + Unpin,
     E: Unpin,
     I: Fn() -> E + Unpin,
-    C: BatchCollector<E, T> + Unpin,
+    C: FnMut(&mut E, T) + Unpin,
 {
     type Item = E;
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let ctx = self.get_mut();
-        let (mut count, mut received) = (0, None);
-        let finished = loop {
-            // Our implementation is safe to poll twice.
-            match ctx.rx.poll_next_unpin(cx) {
-                Poll::Ready(Some(m)) => {
-                    let collection = ctx.elem.get_or_insert_with(&ctx.initializer);
-                    if let Some(m) = ctx.collector.collect(collection, m) {
-                        received = Some(m);
-                        break false;
-                    }
-                    count += 1;
-                    if count >= ctx.max_batch_size {
-                        break false;
-                    }
-                }
-                Poll::Ready(None) => break true,
-                Poll::Pending => break false,
+        let mut collector = match ctx.rx.poll_next_unpin(cx) {
+            Poll::Ready(Some(m)) => {
+                let mut c = (ctx.initializer)();
+                (ctx.collector)(&mut c, m);
+                c
             }
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Pending => return Poll::Pending,
         };
-
-        if ctx.elem.is_none() && finished {
-            return Poll::Ready(None);
-        } else if ctx.elem.is_none() {
-            return Poll::Pending;
+        for _ in 1..ctx.max_batch_size {
+            if let Poll::Ready(Some(m)) = ctx.rx.poll_next_unpin(cx) {
+                (ctx.collector)(&mut collector, m);
+            }
         }
-        let elem = ctx.elem.take();
-        if let Some(m) = received {
-            let collection = ctx.elem.get_or_insert_with(&ctx.initializer);
-            let _received = ctx.collector.collect(collection, m);
-            debug_assert!(_received.is_none());
-        }
-        Poll::Ready(elem)
+        Poll::Ready(Some(collector))
     }
 }
 
@@ -363,7 +322,7 @@ mod tests {
 
         let len = Arc::new(AtomicUsize::new(0));
         let l = len.clone();
-        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), VecCollector);
+        let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), Vec::push);
         let (_pool, msg_counter) = spawn_and_wait(move || {
             stream::unfold((rx, l), |(mut rx, l)| async move {
                 rx.next().await.map(|i| {
