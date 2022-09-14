@@ -189,8 +189,8 @@ struct ImportModeCfOptions {
 impl ImportModeCfOptions {
     fn optimized_for_import_mode(&self) -> Self {
         Self {
-            level0_stop_writes_trigger: -1,
-            level0_slowdown_writes_trigger: -1,
+            level0_stop_writes_trigger: self.level0_stop_writes_trigger.max(1 << 30),
+            level0_slowdown_writes_trigger: self.level0_slowdown_writes_trigger.max(1 << 30),
             soft_pending_compaction_bytes_limit: 0,
             hard_pending_compaction_bytes_limit: 0,
         }
