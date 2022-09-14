@@ -496,20 +496,3 @@ where
     };
     (StoreRouter { router, logger }, system)
 }
-
-pub trait MsgRouter: Send {
-    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()>;
-}
-
-impl<EK, ER> MsgRouter for StoreRouter<EK, ER>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-{
-    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()> {
-        match Router::force_send(self, addr, msg) {
-            Ok(()) => Ok(()),
-            Err(e) => unimplemented!(),
-        }
-    }
-}

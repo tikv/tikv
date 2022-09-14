@@ -46,7 +46,24 @@ use tikv_util::{
 use time::Timespec;
 use txn_types::WriteBatchFlags;
 
-use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, MsgRouter, StoreRouter};
+use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, StoreRouter};
+
+pub trait MsgRouter: Send {
+    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()>;
+}
+
+impl<EK, ER> MsgRouter for StoreRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()> {
+        match Router::force_send(self, addr, msg) {
+            Ok(()) => Ok(()),
+            Err(e) => unimplemented!(),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct LocalReader<E, C, D, S>

@@ -33,6 +33,6 @@ pub mod router;
 mod tablet;
 
 pub(crate) use batch::StoreContext;
-pub use batch::{create_store_batch_system, MsgRouter, StoreRouter, StoreSystem};
+pub use batch::{create_store_batch_system, StoreRouter, StoreSystem};
 pub use bootstrap::Bootstrap;
 pub use raftstore::{Error, Result};
