@@ -98,6 +98,7 @@ impl<T> Drop for Sender<T> {
 }
 
 unsafe impl<T: Send> Send for Sender<T> {}
+unsafe impl<T: Send> Sync for Sender<T> {}
 
 pub struct Receiver<T> {
     queue: *mut Queue<T>,
