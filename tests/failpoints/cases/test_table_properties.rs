@@ -29,6 +29,9 @@ pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
 
 #[test]
 fn test_check_need_gc() {
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
+
     let mut cfg = DbConfig::default();
     cfg.defaultcf.disable_auto_compactions = true;
     cfg.defaultcf.dynamic_level_bytes = false;
@@ -168,6 +171,9 @@ fn do_gc(
 
 #[test]
 fn test_skip_gc_by_check() {
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
+
     let mut cfg = DbConfig::default();
     cfg.defaultcf.disable_auto_compactions = true;
     cfg.defaultcf.dynamic_level_bytes = false;

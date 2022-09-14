@@ -847,6 +847,7 @@ mod tests {
         assert_eq!(props.min_ts, 1.into());
         assert_eq!(props.max_ts, 7.into());
         assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_deletes, 3);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
