@@ -505,7 +505,7 @@ where
         delegate.update_metrics(self);
         if persistent {
             if let (_, Some(seqno)) = self.write_to_db() {
-                delegate.last_write_seqno.push(seqno);
+                delegate.unfinished_write_seqno.push(seqno);
                 let count = self.uncommitted_res_count;
                 for res in self.apply_res.iter_mut().rev().take(count) {
                     res.write_seqno.push(seqno);
@@ -620,7 +620,7 @@ where
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
-            write_seqno: mem::take(&mut delegate.last_write_seqno),
+            write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_term: delegate.applied_term,
@@ -955,7 +955,7 @@ where
 
     buckets: Option<BucketStat>,
 
-    last_write_seqno: Vec<SequenceNumber>,
+    unfinished_write_seqno: Vec<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -988,7 +988,7 @@ where
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
-            last_write_seqno: vec![],
+            unfinished_write_seqno: vec![],
         }
     }
 
