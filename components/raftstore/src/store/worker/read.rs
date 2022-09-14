@@ -391,21 +391,24 @@ impl ReadDelegate {
         }
     }
 
+    pub fn need_renew_lease(&self, ts: Timespec) -> bool {
+        self.leader_lease
+            .as_ref()
+            .map(|lease| lease.need_renew(ts))
+            .unwrap_or(false)
+    }
+
     // If the remote lease will be expired in near future send message
-    // to `raftstore` renew it
+    // to `raftstore` to renew it
     pub fn maybe_renew_lease_advance<EK: KvEngine>(
         &self,
         router: &dyn CasualRouter<EK>,
         ts: Timespec,
     ) {
-        if !self
-            .leader_lease
-            .as_ref()
-            .map(|lease| lease.need_renew(ts))
-            .unwrap_or(false)
-        {
+        if !self.need_renew_lease(ts) {
             return;
         }
+
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         let region_id = self.region.get_id();
         if let Err(e) = router.send(region_id, CasualMessage::RenewLease) {

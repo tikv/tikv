@@ -30,9 +30,9 @@ use raftstore::{
     store::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
-        CasualRouter, LocalReaderCore, ProposalRouter, ReadDelegate, ReadExecutor,
-        ReadExecutorProvider, ReadProgress, RegionSnapshot, RequestInspector, RequestPolicy,
-        TrackVer, TxnExt, TLS_LOCAL_READ_METRICS,
+        LocalReaderCore, ProposalRouter, ReadDelegate, ReadExecutor, ReadExecutorProvider,
+        ReadProgress, RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        TLS_LOCAL_READ_METRICS,
     },
     Error, Result,
 };
@@ -49,7 +49,7 @@ use txn_types::WriteBatchFlags;
 use crate::{fsm::StoreMeta, router::PeerMsg, tablet::CachedTablet, StoreRouter};
 
 pub trait MsgRouter: Send {
-    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()>;
+    fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>>;
 }
 
 impl<EK, ER> MsgRouter for StoreRouter<EK, ER>
@@ -57,11 +57,8 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn send(&self, addr: u64, msg: PeerMsg) -> Result<()> {
-        match Router::force_send(self, addr, msg) {
-            Ok(()) => Ok(()),
-            Err(e) => unimplemented!(),
-        }
+    fn send(&self, addr: u64, msg: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>> {
+        Router::send(self, addr, msg)
     }
 }
 
@@ -69,7 +66,7 @@ where
 pub struct LocalReader<E, C, D, S>
 where
     E: KvEngine,
-    C: MsgRouter + CasualRouter<E>,
+    C: MsgRouter,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate>,
     S: ReadExecutorProvider<E, Executor = D>,
 {
@@ -82,7 +79,7 @@ where
 impl<E, C, D, S> LocalReader<E, C, D, S>
 where
     E: KvEngine,
-    C: MsgRouter + CasualRouter<E>,
+    C: MsgRouter,
     D: ReadExecutor<E> + Deref<Target = ReadDelegate> + Clone,
     S: ReadExecutorProvider<E, Executor = D> + Clone,
 {
@@ -135,7 +132,7 @@ where
                     );
 
                     // Try renew lease in advance
-                    delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
+                    self.maybe_renew_lease_in_advance(&delegate, &req, snapshot_ts);
                     Ok(Some(snap))
                 }
                 RequestPolicy::StaleRead => {
@@ -180,7 +177,8 @@ where
             return Ok(snap);
         }
 
-        // try to renew the lease
+        // try to renew the lease by sending read query where the reading process may
+        // renew the lease
         let (msg, mut sub) = PeerMsg::raft_query(req.clone());
         MsgRouter::send(&self.router, region_id, msg);
         if let Some(query_res) = sub.result().await {
@@ -195,6 +193,25 @@ where
         }
 
         Err(not_leader_err(region_id))
+    }
+
+    // If the remote lease will be expired in near future send message
+    // to `raftstore` to renew it
+    fn maybe_renew_lease_in_advance(
+        &self,
+        delegate: &ReadDelegate,
+        req: &RaftCmdRequest,
+        ts: Timespec,
+    ) {
+        if !delegate.need_renew_lease(ts) {
+            return;
+        }
+
+        let region_id = req.header.get_ref().region_id;
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
+        // Send a read query which may renew the lease
+        let (msg, mut sub) = PeerMsg::raft_query(req.clone());
+        MsgRouter::send(&self.router, region_id, msg);
     }
 }
 
@@ -406,8 +423,8 @@ mod tests {
     use kvproto::{metapb::Region, raft_cmdpb::*};
     use raftstore::store::{
         util::{new_peer, Lease},
-        Callback, CasualMessage, CasualRouter, LocalReaderCore, ProposalRouter, RaftCommand,
-        ReadCallback, TLS_LOCAL_READ_METRICS,
+        Callback, LocalReaderCore, ProposalRouter, RaftCommand, ReadCallback,
+        TLS_LOCAL_READ_METRICS,
     };
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
@@ -433,38 +450,19 @@ mod tests {
 
     struct MockRouter {
         p_router: SyncSender<(u64, PeerMsg)>,
-        c_router: SyncSender<(u64, CasualMessage<KvTestEngine>)>,
     }
 
     impl MockRouter {
-        fn new() -> (
-            MockRouter,
-            Receiver<(u64, PeerMsg)>,
-            Receiver<(u64, CasualMessage<KvTestEngine>)>,
-        ) {
+        fn new() -> (MockRouter, Receiver<(u64, PeerMsg)>) {
             let (p_ch, p_rx) = sync_channel(1);
-            let (c_ch, c_rx) = sync_channel(1);
-            (
-                MockRouter {
-                    p_router: p_ch,
-                    c_router: c_ch,
-                },
-                p_rx,
-                c_rx,
-            )
+            (MockRouter { p_router: p_ch }, p_rx)
         }
     }
 
     impl MsgRouter for MockRouter {
-        fn send(&self, addr: u64, cmd: PeerMsg) -> Result<()> {
+        fn send(&self, addr: u64, cmd: PeerMsg) -> std::result::Result<(), TrySendError<PeerMsg>> {
             self.p_router.send((addr, cmd)).unwrap();
             Ok(())
-        }
-    }
-
-    impl CasualRouter<KvTestEngine> for MockRouter {
-        fn send(&self, region_id: u64, msg: CasualMessage<KvTestEngine>) -> Result<()> {
-            CasualRouter::send(&self.c_router, region_id, msg)
         }
     }
 
@@ -481,7 +479,7 @@ mod tests {
         >,
         Receiver<(u64, PeerMsg)>,
     ) {
-        let (ch, rx, _) = MockRouter::new();
+        let (ch, rx) = MockRouter::new();
         let mut reader = LocalReader::new(
             StoreMetaDelegate::new(store_meta),
             ch,
