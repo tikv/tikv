@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -28,6 +29,7 @@ pub use external_storage::{
     read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
 };
 use futures_io::AsyncRead;
+use futures_util::io::BufReader;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
@@ -324,16 +326,25 @@ impl ExternalStorage for EncryptedExternalStorage {
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.storage.read(name)
     }
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.storage.read_part(name, off, len)
+    }
     fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
+        compressed_range: Option<(u64, u64)>,
         expected_length: u64,
         expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
     ) -> io::Result<()> {
-        let reader = self.read(storage_name);
+        let reader = if let Some((off, len)) = compressed_range {
+            let r = self.read_part(storage_name, off, len);
+            Box::new(ZstdDecoder::new(BufReader::new(r)))
+        } else {
+            self.read(storage_name)
+        };
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
@@ -366,5 +377,9 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).get(name)
+    }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).get_part(name, off, len)
     }
 }

@@ -2191,7 +2191,9 @@ fn test_commands_write_detail() {
         assert!(wd.get_commit_log_nanos() > 0);
         assert!(wd.get_apply_batch_wait_nanos() > 0);
         assert!(wd.get_apply_log_nanos() > 0);
-        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        // Mutex has been removed from write path.
+        // Ref https://github.com/facebook/rocksdb/pull/7516
+        // assert!(wd.get_apply_mutex_lock_nanos() > 0);
         assert!(wd.get_apply_write_wal_nanos() > 0);
         assert!(wd.get_apply_write_memtable_nanos() > 0);
     };
