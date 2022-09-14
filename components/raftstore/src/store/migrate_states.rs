@@ -5,7 +5,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use protobuf::Message;
 use tikv_util::{box_try, info};
 
-use crate::Result;
+use crate::{store::peer_storage::recover_from_applying_state, Result};
 
 pub fn migrate_states_from_kvdb_to_raftdb<EK, ER>(engines: &Engines<EK, ER>) -> Result<()>
 where
@@ -34,6 +34,9 @@ where
 
         match local_state.get_state() {
             PeerState::Normal | PeerState::Merging | PeerState::Applying => {
+                if local_state.get_state() == PeerState::Applying {
+                    recover_from_applying_state(engines, &mut raft_wb, region_id).unwrap();
+                }
                 let apply_state = kv_engine
                     .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
                     .unwrap()

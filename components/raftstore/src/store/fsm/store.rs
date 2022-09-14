@@ -1812,7 +1812,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                 .raft
                 .put_recover_from_raft_db(seqno)
                 .unwrap();
-            let workers = self.workers.as_ref().unwrap();
             let seqno_worker = workers.seqno_worker.as_ref().unwrap();
             let scheduler = seqno_worker.scheduler();
             scheduler.schedule(SeqnoRelationTask::Start).unwrap();
