@@ -3416,6 +3416,15 @@ where
                     .raft_engine
                     .fetch_entries_to(rid, start, end, None, &mut entries)
                     .unwrap();
+                let elapsed = apply_ctx.timer.unwrap().saturating_elapsed();
+                info!(
+                    "(this_pr) apply fetch entries";
+                    "start" => start,
+                    "end" => end,
+                    "region_id" => rid,
+                    "elapsed" => ?elapsed,
+                );
+                APPLY_FETCH_ENTRIES_DURATION_HISTOGRAM.observe(duration_to_sec(elapsed) as f64);
             } else if entries.is_empty() {
                 entries = e;
             } else {

@@ -78,6 +78,18 @@ make_auto_flush_static_metric! {
         fetch_unused,
     }
 
+    pub label_enum PrefillEntryCacheType {
+        low_is_in_cache,
+        low_is_compacted,
+        low_is_0,
+        low_ge_high,
+        started,
+        in_progress,
+        finished,
+        timeout,
+
+        unexpected,
+    }
 
     pub label_enum RaftEventDurationType {
         compact_check,
@@ -103,6 +115,11 @@ make_auto_flush_static_metric! {
     pub struct RaftEntryFetches : LocalIntCounter {
         "type" => RaftEntryType
     }
+
+    pub struct PrefillEntryCacheCounter : LocalIntCounter {
+        "type" => PrefillEntryCacheType
+    }
+
     pub struct SnapCf : LocalHistogram {
         "type" => CfNames,
     }
@@ -612,11 +629,28 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
 
+    pub static ref PREFILL_ENTRY_CACHE_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_raftstore_prefill_entry_cache_total",
+            "Total number of prefill entry cache.",
+            &["type"]
+        ).unwrap();
+    pub static ref PREFILL_ENTRY_CACHE_COUNTER: PrefillEntryCacheCounter =
+        auto_flush_from!(PREFILL_ENTRY_CACHE_COUNTER_VEC, PrefillEntryCacheCounter);
+
     // The max task duration can be a few minutes.
     pub static ref PREFILL_ENTRY_CACHE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_prefill_entry_cache_duration_seconds",
             "Bucketed histogram of prefilling entry cache duration.",
+            exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
+        ).unwrap();
+
+    // The max task duration can be a few minutes.
+    pub static ref APPLY_FETCH_ENTRIES_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_fetch_entries_duration_seconds",
+            "Bucketed histogram of fetching entries in apply fsm duration.",
             exponential_buckets(0.0005, 2.0, 21).unwrap()  // 500us ~ 8.7m
         ).unwrap();
 

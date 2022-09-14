@@ -3299,6 +3299,7 @@ where
             if let Some(meta) = &self.pre_ack_transfer_leader_meta {
                 // Timeout.
                 if meta.receive_time.saturating_elapsed_secs() > 15.0 {
+                    PREFILL_ENTRY_CACHE_COUNTER.timeout.inc();
                     info!(
                         "(this_pr) pre fill entry cache timeout";
                         "region_id" => self.region_id,
@@ -4448,6 +4449,7 @@ where
     /// Return true means the msg can be acked.
     pub fn pre_ack_transfer_leader_msg(&mut self, msg: eraftpb::Message) -> bool {
         if let Some(meta) = &self.pre_ack_transfer_leader_meta {
+            PREFILL_ENTRY_CACHE_COUNTER.in_progress.inc();
             info!(
                 "(this_pr) already in pre ack transfer leader";
                 "region_id" => self.region_id,
@@ -4461,6 +4463,7 @@ where
         let min_matched = msg.get_index();
 
         if min_matched == 0 {
+            PREFILL_ENTRY_CACHE_COUNTER.low_is_0.inc();
             warn!(
                 "(this_pr) min_matched is 0";
                 "region_id" => self.region_id,
@@ -4475,6 +4478,7 @@ where
             if let Some(first_index) = store.entry_cache_first_index() {
                 // Already filled.
                 if first_index <= min_matched + 1 {
+                    PREFILL_ENTRY_CACHE_COUNTER.low_is_in_cache.inc();
                     info!(
                         "(this_pr) entry cache already covers the min_matched";
                         "region_id" => self.region_id,
@@ -4496,6 +4500,7 @@ where
             // TODO(cosven): no need to use two vars.
             let mut low = min_matched + 1;
             if min_matched < self.last_compacted_idx {
+                PREFILL_ENTRY_CACHE_COUNTER.low_is_compacted.inc();
                 warn!(
                     "(this_pr) min matched is less than last compatecd";
                     "region_id" => self.region_id,
@@ -4505,6 +4510,7 @@ where
             }
 
             if low >= high {
+                PREFILL_ENTRY_CACHE_COUNTER.low_ge_high.inc();
                 info!(
                     "(this_pr) need not to fill entry cache";
                     "region_id" => self.region_id,
@@ -4526,6 +4532,7 @@ where
                     .entries(low, high, u64::MAX, GetEntriesContext::empty(true))
                     .is_err()
                 {
+                    PREFILL_ENTRY_CACHE_COUNTER.started.inc();
                     info!(
                         "(this_pr) pre fill entry cache";
                         "region_id" => self.region_id,
@@ -4543,6 +4550,7 @@ where
                     false
                 } else {
                     // TODO(cosven): remove this log.
+                    PREFILL_ENTRY_CACHE_COUNTER.unexpected.inc();
                     warn!(
                         "(this_pr) cache is filled unexpectedly";
                         "region_id" => self.region_id,

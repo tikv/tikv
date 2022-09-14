@@ -1740,6 +1740,7 @@ where
                         }
                     }
                     self.fsm.peer.ack_transfer_leader_msg();
+                    PREFILL_ENTRY_CACHE_COUNTER.finished.inc();
                     // self.fsm.peer.pre_ack_transfer_leader_meta = None;
                 }
                 // clean the async fetch result immediately if not used to free memory
