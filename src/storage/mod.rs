@@ -4451,8 +4451,8 @@ mod tests {
         // Prewrite and commit.
         for write in writes.iter() {
             let (key, value) = write.0.clone().into_key_value();
-            let start_ts = write.1.into();
-            let commit_ts = write.2.into();
+            let start_ts = write.1;
+            let commit_ts = write.2;
             storage
                 .sched_txn_command(
                     commands::Prewrite::with_defaults(
@@ -4497,7 +4497,7 @@ mod tests {
             let commit_ts = *ts.incr();
             let (key, value) = write.0.clone().into_key_value();
             // The version we want to flashback to.
-            let version = write.2.into();
+            let version = write.2;
             storage
                 .sched_txn_command(
                     commands::FlashbackToVersionReadPhase::new(
