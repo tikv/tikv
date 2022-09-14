@@ -1886,7 +1886,7 @@ impl EnginesBacklogMonitor {
         cached_latest_tablets: &mut HashMap<u64, (u64, RocksEngine)>,
     ) {
         // Starts adjusting I/O rate if pending bytes exceeds 25% of soft limit.
-        const BACKLOG_THRESHOLD: u32 = 25;
+        const BACKLOG_THRESHOLD: u32 = 75;
         let mut normalized_pending_bytes = 0;
 
         fn fetch_engine_cf(engine: &RocksEngine, cf: &str, normalized_pending_bytes: &mut u32) {

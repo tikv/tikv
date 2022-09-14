@@ -4385,7 +4385,7 @@ mod tests {
         incoming.coprocessor.region_split_keys = Some(10000);
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(500);
-        incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
+        incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::Low;
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
