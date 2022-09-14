@@ -312,20 +312,29 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         self.ticker.schedule(PEER_TICK_RAFT);
+        let peer = &mut self.fsm.peer;
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
-        if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
+        if peer.is_applying_snapshot() || peer.has_pending_snapshot() {
             // need to check if snapshot is applied.
             return;
         }
+        let snapshot_not_ready_peers = &peer.get_store().snapshot_not_ready_peers;
+        if !snapshot_not_ready_peers.borrow().is_empty() {
+            for peer_id in snapshot_not_ready_peers.take() {
+                // Set these peers' progress to probe.
+                peer.raft_group
+                    .report_snapshot(peer_id, raft::SnapshotStatus::Failure);
+            }
+        }
         let raft_election_timeout_ticks = self.ctx.cfg.raft_election_timeout_ticks;
-        self.peer.retry_pending_reads(raft_election_timeout_ticks);
-        self.fsm.peer.raft_group.tick();
-        self.fsm.peer.mut_store().flush_cache_metrics();
-        if self.peer.need_campaign {
-            let _ = self.peer.raft_group.campaign();
-            self.peer.need_campaign = false;
+        peer.retry_pending_reads(raft_election_timeout_ticks);
+        peer.raft_group.tick();
+        peer.mut_store().flush_cache_metrics();
+        if peer.need_campaign {
+            let _ = peer.raft_group.campaign();
+            peer.need_campaign = false;
         }
     }
 

@@ -1,7 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
+
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use collections::HashSet;
 use engine_traits::RaftEngineReadOnly;
 use kvengine::ShardMeta;
 use kvproto::{
@@ -89,6 +92,15 @@ pub(crate) struct PeerStorage {
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
     pub(crate) on_persist_snapshot_apply_result: Option<MsgApplyResult>,
     pub(crate) on_apply_snapshot_msgs: Vec<RaftMessage>,
+    /// !initial_flushed peer can't generate snapshot until initial_flush change set
+    /// is committed. If majority followers are created by raft msg which always request
+    /// snapshot from leader, the initial_flush change set can't be committed due to snapshot
+    /// not ready. It's a deadlock!
+    ///
+    /// Peer created by split doesn't request snapshot, so we can wait for those peer replacing
+    /// peer created by raft message. We record these requesting snapshot peers to set their
+    /// progress to probe manually due to raft-rs's implementation.
+    pub(crate) snapshot_not_ready_peers: RefCell<HashSet<u64>>,
 }
 
 impl raft::Storage for PeerStorage {
@@ -169,9 +181,10 @@ impl raft::Storage for PeerStorage {
         Ok(self.last_index())
     }
 
-    fn snapshot(&self, request_index: u64, _to: u64) -> raft::Result<eraftpb::Snapshot> {
+    fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<eraftpb::Snapshot> {
         if !self.initial_flushed || self.shard_meta.is_none() {
-            info!("shard has not flushed for generating snapshot"; "region" => self.tag());
+            info!("shard has not flushed for generating snapshot"; "region" => self.tag(), "to" => to);
+            self.snapshot_not_ready_peers.borrow_mut().insert(to);
             return Err(raft::Error::Store(
                 StorageError::SnapshotTemporarilyUnavailable,
             ));
@@ -200,6 +213,7 @@ impl raft::Storage for PeerStorage {
             snap_index,
             snap_term
         );
+        self.snapshot_not_ready_peers.borrow_mut().remove(&to);
         Ok(snap)
     }
 }
@@ -245,6 +259,7 @@ impl PeerStorage {
             shard_meta,
             on_persist_snapshot_apply_result: None,
             on_apply_snapshot_msgs: vec![],
+            snapshot_not_ready_peers: RefCell::default(),
         })
     }
 
