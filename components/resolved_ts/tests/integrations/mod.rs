@@ -71,7 +71,14 @@ fn test_resolved_ts_basic() {
 
     let tracked_index_before = suite.region_tracked_index(r1.id);
     suite.must_ingest_sst(r1.id, meta);
-    let tracked_index_after = suite.region_tracked_index(r1.id);
+    let mut tracked_index_after = suite.region_tracked_index(r1.id);
+    for _ in 0..10 {
+        if tracked_index_after > tracked_index_before {
+            break;
+        }
+        tracked_index_after = suite.region_tracked_index(r1.id);
+        sleep_ms(200)
+    }
     assert!(tracked_index_after > tracked_index_before);
 
     suite.stop();
