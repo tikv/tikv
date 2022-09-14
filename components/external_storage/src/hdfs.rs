@@ -134,6 +134,15 @@ impl ExternalStorage for HdfsStorage {
     fn read(&self, _name: &str) -> Box<dyn futures::AsyncRead + Unpin + '_> {
         unimplemented!("currently only HDFS export is implemented")
     }
+
+    fn read_part(
+        &self,
+        _name: &str,
+        _off: u64,
+        _len: u64,
+    ) -> Box<dyn futures::AsyncRead + Unpin + '_> {
+        unimplemented!("currently only HDFS export is implemented")
+    }
 }
 
 #[cfg(test)]
