@@ -5,7 +5,10 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use protobuf::Message;
 use tikv_util::{box_try, info};
 
-use crate::{store::peer_storage::recover_from_applying_state, Result};
+use crate::{
+    store::{fsm::apply, peer_storage::recover_from_applying_state},
+    Result,
+};
 
 pub fn migrate_states_from_kvdb_to_raftdb<EK, ER>(engines: &Engines<EK, ER>) -> Result<()>
 where
@@ -42,6 +45,7 @@ where
                     .unwrap()
                     .unwrap();
                 raft_wb.put_apply_state(region_id, &apply_state).unwrap();
+                info!("migrate apply state from kvdb to raftdb"; "region_id" => region_id, "apply_state" => ?apply_state);
             }
             PeerState::Tombstone => {
                 tombstone_count += 1;

@@ -1364,6 +1364,7 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
             .get_seqno_relation(region_id, seqno + 1)
             .unwrap()
         {
+            info!("update apply state during gc relation"; "region_id" => region_id, "relation" => ?relation);
             wb.put_apply_state(region_id, relation.get_apply_state())
                 .unwrap();
             let applied_index = relation.get_apply_state().get_applied_index();
@@ -1379,11 +1380,13 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
                         raft_engine.clean(region_id, 0, &raft_state, wb).unwrap();
                     }
                 }
+                info!("update region state during gc relation"; "region_id" => region_id, "state" => ?state);
                 wb.put_region_state(region_id, &state).unwrap();
             }
         }
         raft_engine
-            .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, _| {
+            .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
+                info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();
             })
             .unwrap();

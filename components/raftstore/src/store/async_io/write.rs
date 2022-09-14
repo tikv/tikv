@@ -459,6 +459,7 @@ where
         }
         if let ExtraBatchWrite::V2(extra_states_map) = &mut self.extra_batch_write {
             for (region_id, state) in extra_states_map.drain() {
+                info!("put apply state before write to db"; "region_id" => region_id, "apply_state" => ?state.apply_state);
                 self.raft_wb
                     .put_apply_state(region_id, &state.apply_state)
                     .unwrap();

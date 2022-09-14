@@ -13,7 +13,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RegionLocalState, RegionSequenceNumberRelation,
 };
 use tikv_util::{
-    debug, error,
+    debug, error, info,
     sequence_number::{SequenceNumber, SequenceNumberWindow, SYNCED_MAX_SEQUENCE_NUMBER},
     worker::{Runnable, Scheduler},
 };
@@ -187,6 +187,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             relation.set_region_id(r.region_id);
             relation.set_apply_state(r.apply_state);
             relation.set_sequence_number(r.seqno.number);
+            info!("save seqno relation to raftdb"; "region_id" => region_id, "relation" => ?relation);
             self.wb.put_seqno_relation(region_id, &relation).unwrap();
             count += 1;
             if count % RAFT_WB_MAX_KEYS == 0 || count == size - 1 {

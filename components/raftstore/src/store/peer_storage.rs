@@ -393,6 +393,7 @@ where
             &keys::apply_state_key(self.region.get_id()),
             self.apply_state(),
         )?;
+        info!("save apply state for snapshot"; "region_id" => self.region.get_id(), "apply_state" => ?self.apply_state());
         raft_wb.put_apply_state(self.region.get_id(), self.apply_state())?;
         Ok(())
     }
@@ -1131,6 +1132,7 @@ pub fn write_initial_apply_state_raft<T: RaftLogBatch>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
+    info!("write initial apply state to raftdb"; "region_id" => region_id, "apply_state" => ?apply_state);
     raft_wb.put_apply_state(region_id, &apply_state).unwrap();
     Ok(())
 }
