@@ -652,7 +652,6 @@ fn test_serde_custom_tikv_config() {
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
     raft_engine_config.batch_compression_threshold.0 = ReadableSize::kb(1).0;
-    raft_engine_config.bytes_per_sync.0 = ReadableSize::kb(64).0;
     raft_engine_config.target_file_size.0 = ReadableSize::mb(1).0;
     raft_engine_config.purge_threshold.0 = ReadableSize::gb(1).0;
     raft_engine_config.recovery_mode = RecoveryMode::TolerateTailCorruption;
