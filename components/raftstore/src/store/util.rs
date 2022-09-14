@@ -932,11 +932,11 @@ impl RegionReadProgressRegistry {
     }
 
     pub fn get_tracked_index(&self, region_id: &u64) -> Option<u64> {
-        if let Some(rp) = self.get(region_id) {
-            let core = rp.core.lock().unwrap();
-            return Some(core.applied_index);
-        }
-        None
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.core.lock().unwrap().applied_index)
     }
 
     // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
