@@ -16,7 +16,9 @@ use engine_traits::{
 use file_system::{IoOp, IoRateLimiter, IoType};
 use kvproto::{
     metapb::Region,
-    raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent},
+    raft_serverpb::{
+        RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
+    },
 };
 use raft::eraftpb::Entry;
 use raft_engine::{
@@ -344,6 +346,7 @@ const STORE_IDENT_KEY: &[u8] = &[0x01];
 const PREPARE_BOOTSTRAP_REGION_KEY: &[u8] = &[0x02];
 const REGION_STATE_KEY: &[u8] = &[0x03];
 const APPLY_STATE_KEY: &[u8] = &[0x04];
+const RECOVER_STATE_KEY: &[u8] = &[0x05];
 
 impl RaftLogBatchTrait for RaftLogBatch {
     fn append(&mut self, raft_group_id: u64, entries: Vec<Entry>) -> Result<()> {
@@ -470,6 +473,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
     fn get_apply_state(&self, raft_group_id: u64) -> Result<Option<RaftApplyState>> {
         self.0
             .get_message(raft_group_id, APPLY_STATE_KEY)
+            .map_err(transfer_error)
+    }
+
+    fn get_recover_state(&self) -> Result<Option<StoreRecoverState>> {
+        self.0
+            .get_message(STORE_STATE_ID, RECOVER_STATE_KEY)
             .map_err(transfer_error)
     }
 }
@@ -619,6 +628,16 @@ impl RaftEngine for RaftLogEngine {
                 f(id)?;
             }
         }
+        Ok(())
+    }
+
+    fn put_recover_state(&self, state: &StoreRecoverState) -> Result<()> {
+        let mut batch = Self::LogBatch::default();
+        batch
+            .0
+            .put_message(STORE_STATE_ID, RECOVER_STATE_KEY.to_vec(), state)
+            .map_err(transfer_error)?;
+        self.0.write(&mut batch.0, true).map_err(transfer_error)?;
         Ok(())
     }
 }
