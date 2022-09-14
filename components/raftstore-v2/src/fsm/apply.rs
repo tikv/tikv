@@ -59,7 +59,7 @@ impl<EK: KvEngine> Fsm for ApplyFsm<EK> {
 
 pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
     fsm: &'a mut ApplyFsm<EK>,
-    apply_ctx: &'a mut ApplyContext<ER>,
+    apply_ctx: &'a mut ApplyContext<EK, ER>,
 
     pub(crate) tag: String,
     // todo(SpadeA): tmp use.
@@ -67,7 +67,7 @@ pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
-    pub fn new(fsm: &'a mut ApplyFsm<EK>, apply_ctx: &'a mut ApplyContext<ER>) -> Self {
+    pub fn new(fsm: &'a mut ApplyFsm<EK>, apply_ctx: &'a mut ApplyContext<EK, ER>) -> Self {
         Self {
             fsm,
             tag: String::new(),

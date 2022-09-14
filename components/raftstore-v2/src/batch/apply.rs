@@ -15,7 +15,7 @@ use batch_system::{
     BasicMailbox, BatchRouter, BatchSystem, HandleResult, HandlerBuilder, PollHandler,
 };
 use collections::HashMap;
-use engine_traits::{KvEngine, RaftEngine};
+use engine_traits::{KvEngine, RaftEngine, TabletFactory};
 use raftstore::store::{
     fsm::{
         apply::{ControlFsm, ControlMsg},
@@ -33,7 +33,11 @@ use crate::{
     router::ApplyTask,
 };
 
-pub struct ApplyContext<ER: RaftEngine> {
+pub struct ApplyContext<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub(crate) store_id: u64,
 
     cfg: Config,
@@ -43,30 +47,47 @@ pub struct ApplyContext<ER: RaftEngine> {
     /// An uninitialized peer can be replaced to the one from splitting iff they
     /// are exactly the same peer.
     pub(crate) pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
-
     pub(crate) raft_engine: ER,
+
+    pub(crate) factory: Option<Arc<dyn TabletFactory<EK>>>,
 }
 
-impl<ER: RaftEngine> ApplyContext<ER> {
+impl<EK, ER> ApplyContext<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     pub fn new(cfg: Config, raft_engine: ER) -> Self {
         ApplyContext {
             store_id: 0, // todo(SpadeA)
             cfg,
             pending_create_peers: Arc::default(),
             raft_engine,
+            factory: None,
         }
     }
 }
 
-pub struct ApplyPoller<ER: RaftEngine> {
+pub struct ApplyPoller<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     apply_task_buf: Vec<ApplyTask>,
     pending_latency_inspect: Vec<LatencyInspector>,
-    apply_ctx: ApplyContext<ER>,
+    apply_ctx: ApplyContext<EK, ER>,
     cfg_tracker: Tracker<Config>,
 }
 
-impl<ER: RaftEngine> ApplyPoller<ER> {
-    pub fn new(apply_ctx: ApplyContext<ER>, cfg_tracker: Tracker<Config>) -> ApplyPoller<ER> {
+impl<EK, ER> ApplyPoller<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(
+        apply_ctx: ApplyContext<EK, ER>,
+        cfg_tracker: Tracker<Config>,
+    ) -> ApplyPoller<EK, ER> {
         Self {
             apply_task_buf: Vec::new(),
             pending_latency_inspect: Vec::new(),
@@ -87,7 +108,7 @@ impl<ER: RaftEngine> ApplyPoller<ER> {
     }
 }
 
-impl<EK, ER> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<ER>
+impl<EK, ER> PollHandler<ApplyFsm<EK>, ControlFsm> for ApplyPoller<EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -151,7 +172,7 @@ impl<ER: RaftEngine> ApplyPollerBuilder<ER> {
 impl<EK: KvEngine, ER: RaftEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
     for ApplyPollerBuilder<ER>
 {
-    type Handler = ApplyPoller<ER>;
+    type Handler = ApplyPoller<EK, ER>;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let apply_ctx = ApplyContext::new(self.cfg.value().clone(), self.raft_engine.clone());

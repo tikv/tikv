@@ -3,22 +3,37 @@
 use std::collections::VecDeque;
 
 use collections::{HashMap, HashMapEntry, HashSet};
-use engine_traits::{KvEngine, RaftEngine, RaftEngineReadOnly};
-use kvproto::{metapb::Region, raft_cmdpb::AdminRequest};
+use engine_traits::{KvEngine, RaftEngine, RaftEngineReadOnly, TabletFactory};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::{AdminRequest, AdminResponse},
+};
 use raftstore::{
-    store::{fsm::apply::NewSplitPeer, metrics::PEER_ADMIN_CMD_COUNTER, util},
+    store::{
+        fsm::{
+            apply::{ApplyResult, NewSplitPeer},
+            ExecResult,
+        },
+        metrics::PEER_ADMIN_CMD_COUNTER,
+        util, RAFT_INIT_LOG_INDEX,
+    },
     Result,
 };
 use tikv_util::box_err;
 
-use crate::{batch::ApplyContext, fsm::ApplyFsmDelegate};
+use crate::{
+    batch::ApplyContext,
+    fsm::ApplyFsmDelegate,
+    raft::{write_initial_states, write_peer_state},
+};
 
 impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
     pub fn exec_batch_split(
         &mut self,
-        ctx: &mut ApplyContext<ER>,
+        ctx: &mut ApplyContext<EK, ER>,
         req: &AdminRequest,
-    ) -> Result<()> {
+        log_index: u64,
+    ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         PEER_ADMIN_CMD_COUNTER.batch_split.all.inc();
         let split_reqs = req.get_splits();
         let right_derive = split_reqs.get_right_derive();
@@ -151,7 +166,88 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
             }
         }
 
-        Ok(())
+        if !already_exist_regions.is_empty() {
+            let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
+            for (region_id, peer_id) in &already_exist_regions {
+                assert_eq!(
+                    pending_create_peers.remove(region_id),
+                    Some((*peer_id, true))
+                );
+            }
+        }
+
+        let region_id = derived.get_id();
+        let state = ctx.raft_engine.get_region_state(region_id)?.unwrap();
+        let current_tablet_path = ctx
+            .factory
+            .as_ref()
+            .unwrap()
+            .tablet_path(region_id, state.tablet_index);
+
+        assert!(std::path::Path::try_exists(&current_tablet_path).unwrap());
+
+        let mut wb = ctx.raft_engine.log_batch(10);
+        for new_region in &regions {
+            let new_region_id = new_region.id;
+            if new_region_id == region_id {
+                continue;
+            }
+            let new_split_peer = new_split_regions.get(&new_region_id).unwrap();
+            if let Some(ref r) = new_split_peer.result {
+                // warn!(
+                //     "new region from splitting already exists";
+                //     "new_region_id" => new_region.get_id(),
+                //     "new_peer_id" => new_split_peer.peer_id,
+                //     "reason" => r,
+                //     "region_id" => self.region_id(),
+                //     "peer_id" => self.id(),
+                // );
+                continue;
+            }
+            let new_tablet_path = ctx
+                .factory
+                .as_ref()
+                .unwrap()
+                .tablet_path(new_region_id, RAFT_INIT_LOG_INDEX);
+
+            match std::fs::hard_link(&current_tablet_path, &new_tablet_path) {
+                Ok(_) => (),
+                Err(_) => unimplemented!(),
+            }
+
+            write_initial_states(&mut wb, new_region.clone()).unwrap_or_else(|e| {
+                panic!(
+                    "{} fails to save split region {:?}: {:?}",
+                    self.tag, new_region, e
+                )
+            });
+        }
+        write_peer_state(&mut wb, derived.clone(), log_index).unwrap_or_else(|e| {
+            panic!("{} fails to update region {:?}: {:?}", self.tag, derived, e)
+        });
+        ctx.raft_engine
+            .consume(&mut wb, true)
+            .unwrap_or_else(|e| panic!("{} fails to consume the write: {:?}", self.tag, e,));
+
+        let _ = ctx
+            .factory
+            .as_ref()
+            .unwrap()
+            .load_tablet(&current_tablet_path, region_id, log_index)
+            .unwrap();
+
+        let mut resp = AdminResponse::default();
+        resp.mut_splits().set_regions(regions.clone().into());
+        PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
+
+        Ok((
+            resp,
+            ApplyResult::Res(ExecResult::SplitRegion {
+                regions,
+                derived,
+                new_split_regions,
+            }),
+        ))
     }
 }
 
