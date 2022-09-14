@@ -761,7 +761,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "test_raftstore",
+ "test_pd_client",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
@@ -813,6 +813,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_raftstore",
  "test_util",
  "thiserror",
@@ -5699,6 +5700,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_pd_client"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log_wrappers",
+ "pd_client",
+ "raft",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "tikv_util",
+ "tokio",
+ "tokio-timer",
+ "txn_types",
+]
+
+[[package]]
 name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
@@ -5734,6 +5757,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd_client",
  "test_util",
  "tikv",
  "tikv_util",
@@ -5849,6 +5873,7 @@ dependencies = [
  "test_backup",
  "test_coprocessor",
  "test_pd",
+ "test_pd_client",
  "test_raftstore",
  "test_sst_importer",
  "test_storage",

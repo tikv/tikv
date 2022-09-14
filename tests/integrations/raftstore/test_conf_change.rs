@@ -19,6 +19,7 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::{store::util::is_learner, Result};
+use test_pd_client::TestPdClient;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
