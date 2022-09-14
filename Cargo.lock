@@ -4547,6 +4547,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_raftstore",
+ "test_sst_importer",
  "test_util",
  "thiserror",
  "tikv",
