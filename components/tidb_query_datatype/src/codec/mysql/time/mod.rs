@@ -21,6 +21,7 @@ pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
 use crate::{
     codec::{
         convert::ConvertTo,
+        data_type::Real,
         mysql::{check_fsp, Decimal, Duration},
         Error, Result, TEN_POW,
     },
@@ -476,7 +477,7 @@ mod parser {
             }
             ((tz_hour.len() == 2 || tz_hour.is_empty())
                 && (tz_minute.len() == 2 || tz_minute.is_empty()))
-            .as_option()?;
+                .as_option()?;
             let delta_hour = bytes_to_u32(tz_hour)? as i32;
             let delta_minute = bytes_to_u32(tz_minute)? as i32;
             (!(delta_hour > 14
@@ -645,7 +646,7 @@ mod parser {
                     t.second(),
                     t.micro(),
                 )
-                .ok()?;
+                    .ok()?;
                 ts = ts.with_timezone(&ctx.cfg.tz);
                 Some(
                     Time::try_from_chrono_datetime(ctx, ts.naive_local(), time_type, fsp as i8)
@@ -656,15 +657,14 @@ mod parser {
         }
     }
 
-    pub fn parse_from_decimal(
+    pub fn parse_from_float_string(
         ctx: &mut EvalContext,
-        input: &Decimal,
+        input: String,
         time_type: TimeType,
         fsp: u8,
         round: bool,
     ) -> Option<Time> {
-        let decimal_as_string = input.to_string();
-        let (components, _) = split_components_with_tz(decimal_as_string.as_str())?;
+        let (components, _) = split_components_with_tz(input.as_str())?;
         match components.len() {
             1 | 2 => {
                 let result: i64 = components[0].convert(ctx).ok()?;
@@ -779,7 +779,18 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        parser::parse_from_decimal(ctx, input, time_type, check_fsp(fsp)?, round)
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+
+    pub fn parse_from_real(
+        ctx: &mut EvalContext,
+        input: &Real,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -877,8 +888,8 @@ impl TimeArgs {
             TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
-        .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
-        .ok()
+            .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
+            .ok()
     }
 
     pub fn zero(fsp: i8, time_type: TimeType) -> TimeArgs {
@@ -1010,7 +1021,7 @@ impl Time {
                 time_type,
             },
         )
-        .ok()
+            .ok()
     }
 
     /// Construct a `Time` via a number in format: yyyymmddhhmmss
@@ -1447,7 +1458,7 @@ impl Time {
                 .and_then(|datetime| datetime.checked_add_signed(duration))?;
             Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
-        .ok()
+            .ok()
     }
 
     pub fn checked_sub(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
@@ -1466,7 +1477,7 @@ impl Time {
                 .and_then(|datetime| datetime.checked_sub_signed(duration))?;
             Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
-        .ok()
+            .ok()
     }
 
     pub fn date_diff(mut self, mut other: Self) -> Option<i64> {
@@ -1577,7 +1588,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else if h == 12 {
                     write!(
                         output,
@@ -1586,7 +1597,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else if h < 12 {
                     write!(
                         output,
@@ -1595,7 +1606,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 } else {
                     write!(
                         output,
@@ -1604,7 +1615,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                    .unwrap();
+                        .unwrap();
                 }
             }
             'T' => {
@@ -1615,7 +1626,7 @@ impl Time {
                     self.minute(),
                     self.second()
                 )
-                .unwrap();
+                    .unwrap();
             }
             'S' | 's' => {
                 write!(output, "{:02}", self.second()).unwrap();
@@ -1709,7 +1720,7 @@ impl Time {
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
             )
-            .unwrap();
+                .unwrap();
         }
         buffer
     }
@@ -2045,6 +2056,43 @@ mod tests {
         let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
             Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_real() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05 00:00:00", "305", 0),
+            ("2000-12-03 00:00:00", "1203", 0),
+            ("2003-12-05 00:00:00.0", "31205", 1),
+            ("2007-01-18 00:00:00.00", "070118", 2),
+            ("0101-12-09 00:00:00.000", "1011209.333", 3),
+            ("2017-01-18 00:00:00.0000", "20170118.123", 4),
+            ("2012-12-31 11:30:45.12335", "121231113045.123345", 5),
+            ("2012-12-31 11:30:45.125000", "20121231113045.123345", 6),
+            ("2012-12-31 11:30:46.00000", "121231113045.9999999", 5),
+            ("2017-01-05 08:40:59.5756", "170105084059.575601", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input, fsp) in cases {
+            let input: Real = input.parse().unwrap();
+            let actual_real =
+                Time::parse_from_real(&mut ctx, &input, TimeType::DateTime, fsp, true)?;
+            assert_eq!(actual_real.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+
+        for case in should_fail {
+            let case: Real = case.parse().unwrap();
+            Time::parse_from_real(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
     }
