@@ -609,6 +609,9 @@ impl PdClient for RpcClient {
                             if last > last_report {
                                 last_report = last - 1;
                             }
+                            fail::fail_point!("region_heartbeat_send_failed", |_| {
+                                Err(Error::Grpc(grpcio::Error::RemoteStopped))
+                            });
                             Ok((r, WriteFlags::default()))
                         }))
                         .await;
@@ -633,7 +636,8 @@ impl PdClient for RpcClient {
                 .expect("expect region heartbeat sender");
             let ret = sender
                 .unbounded_send(req)
-                .map_err(|e| Error::Other(Box::new(e)));
+                .map_err(|e| Error::StreamDisconnect(e.into_send_error()));
+
             Box::pin(future::ready(ret)) as PdFuture<_>
         };
 
