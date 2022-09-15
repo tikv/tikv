@@ -105,6 +105,7 @@ impl engine_traits::WriteBatch for RocksWriteBatchVec {
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
                 .map_err(r2e)
+                .map(|_| ())
         } else {
             self.get_db()
                 .write_opt(&self.wbs[0], &opt.into_raw())

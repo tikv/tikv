@@ -728,7 +728,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let storage = create_raft_storage::<_, _, _, F, _>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,

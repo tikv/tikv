@@ -553,6 +553,33 @@ impl AzureStorage {
         }
         key.to_owned()
     }
+
+    fn get_range(
+        &self,
+        name: &str,
+        range: Option<std::ops::Range<u64>>,
+    ) -> Box<dyn AsyncRead + Unpin + '_> {
+        let name = self.maybe_prefix_key(name);
+        debug!("read file from Azure storage"; "key" => %name);
+        let t = async move {
+            let blob_client = self.client_builder.get_client().await?.as_blob_client(name);
+
+            let builder = if let Some(r) = range {
+                blob_client.get().range(r)
+            } else {
+                blob_client.get()
+            };
+
+            builder
+                .execute()
+                .await
+                .map(|res| res.data)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
+        };
+        let k = stream::once(t);
+        let t = k.boxed().into_async_read();
+        Box::new(t)
+    }
 }
 
 #[async_trait]
@@ -576,22 +603,11 @@ impl BlobStorage for AzureStorage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let name = self.maybe_prefix_key(name);
-        debug!("read file from Azure storage"; "key" => %name);
-        let t = async move {
-            self.client_builder
-                .get_client()
-                .await?
-                .as_blob_client(name)
-                .get()
-                .execute()
-                .await
-                .map(|res| res.data)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
-        };
-        let k = stream::once(t);
-        let t = k.boxed().into_async_read();
-        Box::new(t)
+        self.get_range(name, None)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.get_range(name, Some(off..off + len))
     }
 }
 
