@@ -12,7 +12,7 @@ pub trait DbOptionsExt {
 
 /// A handle to a database's options
 pub trait DbOptions {
-    type TitanDbOptions: TitanDbOptions;
+    type TitanDbOptions: TitanCfOptions;
 
     fn new() -> Self;
     fn get_max_background_jobs(&self) -> i32;
@@ -24,7 +24,7 @@ pub trait DbOptions {
 }
 
 /// Titan-specefic options
-pub trait TitanDbOptions {
+pub trait TitanCfOptions {
     fn new() -> Self;
     fn set_min_blob_size(&mut self, size: u64);
 }
