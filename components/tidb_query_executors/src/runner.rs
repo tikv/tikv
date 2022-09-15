@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{convert::TryFrom, sync::Arc, time::Duration};
+use std::{convert::TryFrom, sync::Arc};
 
 use fail::fail_point;
 use kvproto::coprocessor::KeyRange;
@@ -8,7 +8,7 @@ use protobuf::Message;
 use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
-    storage::{scanner::MAX_TIME_SLICE, IntervalRange, Storage},
+    storage::{IntervalRange, Storage},
     Result,
 };
 use tidb_query_datatype::{
@@ -441,7 +441,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         loop {
             let mut chunk = Chunk::default();
             let mut sample = self.quota_limiter.new_sample(true);
-            let (exec_duration, (drained, record_len)) = {
+            let (drained, record_len) = {
                 let (cpu_time, res) = sample
                     .observe_cpu_async(self.internal_handle_request(
                         false,
@@ -451,9 +451,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                         &mut ctx,
                     ))
                     .await;
-                (cpu_time, res?)
+                sample.add_cpu_time(cpu_time);
+                res?
             };
-            sample.add_cpu_time(exec_duration);
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
             }
@@ -511,8 +511,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 return Ok((sel_resp, range));
             }
 
-            // adjust batch size
-            batch_size = adjust_batch_size(batch_size, exec_duration);
+            // Grow batch size
+            grow_batch_size(&mut batch_size);
         }
     }
 
@@ -672,16 +672,11 @@ fn batch_initial_size() -> usize {
 }
 
 #[inline]
-fn adjust_batch_size(batch_size: usize, duration: Duration) -> usize {
-    let new_batch = if duration * 2 <= MAX_TIME_SLICE {
-        batch_size * batch_grow_factor()
-    } else if duration > MAX_TIME_SLICE {
-        batch_size / batch_grow_factor()
-    } else {
-        batch_size
-    };
-    std::cmp::max(
-        batch_initial_size(),
-        std::cmp::min(new_batch, BATCH_MAX_SIZE),
-    )
+fn grow_batch_size(batch_size: &mut usize) {
+    if *batch_size < BATCH_MAX_SIZE {
+        *batch_size *= batch_grow_factor();
+        if *batch_size > BATCH_MAX_SIZE {
+            *batch_size = BATCH_MAX_SIZE
+        }
+    }
 }
