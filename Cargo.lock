@@ -255,6 +255,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -370,6 +371,7 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "async-channel",
+ "aws",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -1633,7 +1635,7 @@ dependencies = [
 [[package]]
 name = "fs2"
 version = "0.4.3"
-source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#9e17642f4ddec02a8d7733d8c5977cf211de6552"
+source = "git+https://github.com/tabokie/fs2-rs?branch=tikv#cd503764a19a99d74c1ab424dd13d6bcd093fcae"
 dependencies = [
  "libc 0.2.106",
  "winapi 0.3.9",
@@ -3720,6 +3722,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "futures-util",
+ "grpcio-health",
  "into_other",
  "itertools 0.10.0",
  "keys",
@@ -4585,6 +4588,7 @@ dependencies = [
  "fs2",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -5122,6 +5126,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "grpcio",
+ "grpcio-health",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5465,7 +5470,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "5.4.1"
+version = "5.4.2"
 dependencies = [
  "anyhow",
  "api_version",
@@ -5749,6 +5754,7 @@ dependencies = [
  "log",
  "log_wrappers",
  "nix 0.19.0",
+ "num-traits",
  "num_cpus",
  "online_config",
  "openssl",

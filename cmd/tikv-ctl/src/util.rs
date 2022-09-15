@@ -12,7 +12,7 @@ const LOG_DIR: &str = "./ctl-engine-info-log";
 
 pub fn init_ctl_logger(level: &str) {
     let mut cfg = TiKvConfig::default();
-    cfg.log_level = slog::Level::from_str(level).unwrap();
+    cfg.log.level = slog::Level::from_str(level).unwrap();
     cfg.rocksdb.info_log_dir = LOG_DIR.to_owned();
     cfg.raftdb.info_log_dir = LOG_DIR.to_owned();
     initial_logger(&cfg);
