@@ -81,10 +81,7 @@ impl SequenceNumber {
     }
 
     pub fn max(left: Self, right: Self) -> Self {
-        match left.number.cmp(&right.number) {
-            cmp::Ordering::Less | cmp::Ordering::Equal => right,
-            cmp::Ordering::Greater => left,
-        }
+        cmp::max_by_key(left, right, |s| s.number)
     }
 
     pub fn get_number(&self) -> u64 {
@@ -137,6 +134,9 @@ impl SequenceNumberWindow {
             })
             .or_insert(sn);
         self.write_status_window[start_delta - 1] = true;
+        if start_delta != 1 {
+            return;
+        }
         // Commit seqno of the counter which all smaller counter were received.
         let mut acks = 0;
         for received in self.write_status_window.iter() {

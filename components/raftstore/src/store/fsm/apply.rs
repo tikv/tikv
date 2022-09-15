@@ -506,12 +506,7 @@ where
         if persistent {
             if let (_, Some(seqno)) = self.write_to_db() {
                 delegate.unfinished_write_seqno.push(seqno);
-                let count = self.uncommitted_res_count;
-                for res in self.apply_res.iter_mut().rev().take(count) {
-                    res.write_seqno.push(seqno);
-                }
             }
-            self.uncommitted_res_count = 0;
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
@@ -604,6 +599,13 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
+        let res_count = self.uncommitted_res_count;
+        self.uncommitted_res_count = 0;
+        if let Some(seqno) = seqno {
+            for res in self.apply_res.iter_mut().rev().take(res_count) {
+                res.write_seqno.push(seqno);
+            }
+        }
         (need_sync, seqno)
     }
 
@@ -665,17 +667,11 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let (is_synced, seqno) = self.write_to_db();
+        let (is_synced, _) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
-            let mut apply_res = mem::take(&mut self.apply_res);
-            if let Some(seqno) = seqno {
-                for res in apply_res.iter_mut().rev().take(self.uncommitted_res_count) {
-                    res.write_seqno.push(seqno);
-                }
-            }
-            self.uncommitted_res_count = 0;
+            let apply_res = mem::take(&mut self.apply_res);
             self.notifier.notify(apply_res);
         }
 
