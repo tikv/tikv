@@ -35,7 +35,7 @@ txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
 criterion = "0.3"
-test_raftstore = { path = "../test_raftstore" }
+test_pd_client = { path = "../test_pd_client" }
 
 [[bench]]
 name = "tso"
