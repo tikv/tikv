@@ -40370,6 +40370,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The total count of TTL expired KV during backup",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -40411,7 +40412,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_backup_raw_expired_count",
+              "expr": "sum(tikv_backup_raw_expired_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}) by (instance)",
               "interval": "",
               "legendFormat": "{{instance}}",
               "queryType": "randomWalk",
@@ -40419,7 +40420,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(tikv_backup_raw_expired_count)",
+              "expr": "sum(tikv_backup_raw_expired_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"})",
               "hide": false,
               "interval": "",
               "legendFormat": "sum",
