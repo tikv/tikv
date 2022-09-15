@@ -477,7 +477,7 @@ mod parser {
             }
             ((tz_hour.len() == 2 || tz_hour.is_empty())
                 && (tz_minute.len() == 2 || tz_minute.is_empty()))
-                .as_option()?;
+            .as_option()?;
             let delta_hour = bytes_to_u32(tz_hour)? as i32;
             let delta_minute = bytes_to_u32(tz_minute)? as i32;
             (!(delta_hour > 14
@@ -646,7 +646,7 @@ mod parser {
                     t.second(),
                     t.micro(),
                 )
-                    .ok()?;
+                .ok()?;
                 ts = ts.with_timezone(&ctx.cfg.tz);
                 Some(
                     Time::try_from_chrono_datetime(ctx, ts.naive_local(), time_type, fsp as i8)
@@ -888,8 +888,8 @@ impl TimeArgs {
             TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
-            .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
-            .ok()
+        .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
+        .ok()
     }
 
     pub fn zero(fsp: i8, time_type: TimeType) -> TimeArgs {
@@ -1021,7 +1021,7 @@ impl Time {
                 time_type,
             },
         )
-            .ok()
+        .ok()
     }
 
     /// Construct a `Time` via a number in format: yyyymmddhhmmss
@@ -1458,7 +1458,7 @@ impl Time {
                 .and_then(|datetime| datetime.checked_add_signed(duration))?;
             Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
-            .ok()
+        .ok()
     }
 
     pub fn checked_sub(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
@@ -1477,7 +1477,7 @@ impl Time {
                 .and_then(|datetime| datetime.checked_sub_signed(duration))?;
             Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
-            .ok()
+        .ok()
     }
 
     pub fn date_diff(mut self, mut other: Self) -> Option<i64> {
@@ -1588,7 +1588,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                        .unwrap();
+                    .unwrap();
                 } else if h == 12 {
                     write!(
                         output,
@@ -1597,7 +1597,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                        .unwrap();
+                    .unwrap();
                 } else if h < 12 {
                     write!(
                         output,
@@ -1606,7 +1606,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                        .unwrap();
+                    .unwrap();
                 } else {
                     write!(
                         output,
@@ -1615,7 +1615,7 @@ impl Time {
                         self.minute(),
                         self.second()
                     )
-                        .unwrap();
+                    .unwrap();
                 }
             }
             'T' => {
@@ -1626,7 +1626,7 @@ impl Time {
                     self.minute(),
                     self.second()
                 )
-                    .unwrap();
+                .unwrap();
             }
             'S' | 's' => {
                 write!(output, "{:02}", self.second()).unwrap();
@@ -1720,7 +1720,7 @@ impl Time {
                 self.micro() / TEN_POW[MICRO_WIDTH - fsp],
                 width = fsp
             )
-                .unwrap();
+            .unwrap();
         }
         buffer
     }
