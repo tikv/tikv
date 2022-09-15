@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::Context,
     time::Duration,
 };
 
@@ -36,7 +37,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncRead, AsyncWriteExt, BufWriter},
+    io::{AsyncRead, AsyncWrite, BufWriter},
     sync::{oneshot, Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};
@@ -613,7 +614,7 @@ impl FilesReader {
 impl AsyncRead for FilesReader {
     fn poll_read(
         self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let me = self.get_mut();
@@ -632,21 +633,16 @@ impl AsyncRead for FilesReader {
     }
 }
 
-#[async_trait::async_trait]
-pub trait CompressionWriter: Sync + Send + 'static {
-    async fn write_all(&mut self, src: &[u8]) -> Result<()>;
-
-    async fn shutdown(&mut self) -> Result<()>;
-}
+pub trait CompressionWriter: AsyncWrite + Sync + Send + 'static {}
 
 pub async fn compression_writer_dispatcher(
     local_path: impl AsRef<Path>,
     compression_type: CompressionType,
-) -> Result<Box<dyn CompressionWriter>> {
+) -> Result<Pin<Box<dyn CompressionWriter>>> {
     let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
     match compression_type {
-        CompressionType::Unknown => Ok(Box::new(NoneCompressionWriter::new(inner))),
-        CompressionType::Zstd => Ok(Box::new(ZstdCompressionWriter::new(inner))),
+        CompressionType::Unknown => Ok(Box::pin(NoneCompressionWriter::new(inner))),
+        CompressionType::Zstd => Ok(Box::pin(ZstdCompressionWriter::new(inner))),
         _ => Err(Error::Other(box_err!(format!(
             "the compression type is unimplemented, compression type id {:?}",
             compression_type
@@ -664,19 +660,26 @@ impl NoneCompressionWriter {
     }
 }
 
-#[async_trait::async_trait]
-impl CompressionWriter for NoneCompressionWriter {
-    async fn shutdown(&mut self) -> Result<()> {
-        let file = &mut self.inner;
-        file.flush().await?;
-        file.get_ref().sync_all().await?;
-        Ok(())
+impl AsyncWrite for NoneCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
     }
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        self.inner.write_all(src).await?;
-        Ok(())
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
+
+impl CompressionWriter for NoneCompressionWriter {}
 
 pub struct ZstdCompressionWriter {
     inner: ZstdEncoder<BufWriter<File>>,
@@ -690,22 +693,26 @@ impl ZstdCompressionWriter {
     }
 }
 
-#[async_trait::async_trait]
-impl CompressionWriter for ZstdCompressionWriter {
-    async fn shutdown(&mut self) -> Result<()> {
-        let encoder = &mut self.inner;
-        encoder.shutdown().await?;
-        let file = encoder.get_mut();
-        file.flush().await?;
-        file.get_ref().sync_all().await?;
-        Ok(())
+impl AsyncWrite for ZstdCompressionWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        src: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        Pin::new(&mut me.inner).poll_write(cx, src)
     }
 
-    async fn write_all(&mut self, src: &[u8]) -> Result<()> {
-        self.inner.write_all(src).await?;
-        Ok(())
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
+
+impl CompressionWriter for ZstdCompressionWriter {}
 
 #[cfg(test)]
 mod test {
@@ -719,7 +726,7 @@ mod test {
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
 
@@ -943,5 +950,46 @@ mod test {
             .await
             .unwrap();
         assert_eq!(expect_content, read_content);
+    }
+
+    #[tokio::test]
+    async fn test_compression_writer() {
+        use kvproto::brpb::CompressionType;
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::compression_writer_dispatcher;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let content = "test for compression writer. try to write to local path, and read it back.";
+
+        // uncompressed writer
+        let path1 = dir.path().join("f1");
+        let mut writer = compression_writer_dispatcher(path1.clone(), CompressionType::Unknown)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        let mut reader = BufReader::new(File::open(path1).await.unwrap());
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+        assert_eq!(content, read_content);
+
+        // zstd compressed writer
+        let path2 = dir.path().join("f2");
+        let mut writer = compression_writer_dispatcher(path2.clone(), CompressionType::Zstd)
+            .await
+            .unwrap();
+        writer.write_all(content.as_bytes()).await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        use async_compression::tokio::bufread::ZstdDecoder;
+        let mut reader = ZstdDecoder::new(BufReader::new(File::open(path2).await.unwrap()));
+        let mut read_content = String::new();
+        reader.read_to_string(&mut read_content).await.unwrap();
+
+        println!("1{}2,{}", read_content, read_content.len());
+        assert_eq!(content, read_content);
     }
 }

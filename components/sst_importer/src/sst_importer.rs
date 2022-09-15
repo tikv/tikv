@@ -21,7 +21,7 @@ use engine_traits::{
 use file_system::{get_io_rate_limiter, OpenOptions};
 use futures::executor::ThreadPool;
 use kvproto::{
-    brpb::{CipherInfo, CompressionType, StorageBackend},
+    brpb::{CipherInfo, StorageBackend},
     import_sstpb::*,
     kvrpcpb::ApiVersion,
 };
@@ -229,12 +229,10 @@ impl SstImporter {
         src_file_name: &str,
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
-        expect_sha256: Option<Vec<u8>>,
         support_kms: bool,
         file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
-        range: Option<(u64, u64)>,
-        compression_type: Option<CompressionType>,
+        restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
         let start_read = Instant::now();
         if let Some(p) = dst_file.parent() {
@@ -267,12 +265,10 @@ impl SstImporter {
         let result = ext_storage.restore(
             src_file_name,
             dst_file.clone(),
-            range,
-            compression_type,
             file_length,
-            expect_sha256,
             speed_limiter,
             file_crypter,
+            restore_config,
         );
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
         result.map_err(|e| Error::CannotReadExternalStorage {
@@ -331,12 +327,16 @@ impl SstImporter {
         } else {
             Some((offset, range_length))
         };
+        let restore_config = external_storage_export::RestoreConfig {
+            range,
+            compression_type: Some(meta.compression_type),
+            expected_sha256,
+        };
         self.download_file_from_external_storage(
             meta.get_length(),
             src_name,
             path.temp.clone(),
             backend,
-            expected_sha256,
             // kv-files needn't are decrypted with KMS when download currently because these files
             // are not encrypted when log-backup. It is different from sst-files
             // because sst-files is encrypted when saved with rocksdb env with KMS.
@@ -345,8 +345,7 @@ impl SstImporter {
             // don't support encrypt for now.
             None,
             speed_limiter,
-            range,
-            Some(meta.compression_type),
+            restore_config,
         )?;
         info!("download file finished {}, offset {}", src_name, offset);
 
@@ -507,17 +506,17 @@ impl SstImporter {
             iv: meta.cipher_iv.to_owned(),
         });
 
+        let restore_config = external_storage_export::RestoreConfig::default();
+
         self.download_file_from_external_storage(
             meta.length,
             name,
             path.temp.clone(),
             backend,
-            None,
             true,
             file_crypter,
             speed_limiter,
-            None,
-            None,
+            restore_config,
         )?;
 
         // now validate the SST file.
@@ -1265,18 +1264,17 @@ mod tests {
         // perform download file into .temp dir.
         let file_name = "sample.sst";
         let path = importer.dir.get_import_path(file_name).unwrap();
+        let restore_config = external_storage_export::RestoreConfig::default();
         importer
             .download_file_from_external_storage(
                 meta.get_length(),
                 file_name,
                 path.temp.clone(),
                 &backend,
-                None,
                 true,
                 None,
                 &Limiter::new(f64::INFINITY),
-                None,
-                None,
+                restore_config,
             )
             .unwrap();
         check_file_exists(&path.temp, Some(&key_manager));
@@ -1301,18 +1299,20 @@ mod tests {
         .unwrap();
 
         let path = importer.dir.get_import_path(kv_meta.get_name()).unwrap();
+        let restore_config = external_storage_export::RestoreConfig {
+            expected_sha256: Some(kv_meta.get_sha256().to_vec()),
+            ..Default::default()
+        };
         importer
             .download_file_from_external_storage(
                 kv_meta.get_length(),
                 kv_meta.get_name(),
                 path.temp.clone(),
                 &backend,
-                Some(kv_meta.get_sha256().to_vec()),
                 false,
                 None,
                 &Limiter::new(f64::INFINITY),
-                None,
-                None,
+                restore_config,
             )
             .unwrap();
 

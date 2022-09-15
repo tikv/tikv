@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::pin::Pin;
 use std::{
     borrow::Borrow,
     collections::HashMap,
@@ -41,6 +42,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::{remove_file, File},
+    io::AsyncWriteExt,
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -1279,7 +1281,7 @@ struct DataFile {
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     // TODO: use lz4 with async feature
-    inner: Box<dyn CompressionWriter>,
+    inner: Pin<Box<dyn CompressionWriter>>,
     compression_type: CompressionType,
     start_key: Vec<u8>,
     end_key: Vec<u8>,

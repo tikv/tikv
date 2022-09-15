@@ -9,7 +9,6 @@ use std::{
     sync::Arc,
 };
 
-use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
 #[cfg(feature = "cloud-aws")]
 pub use aws::{Config as S3Config, S3Storage};
@@ -24,18 +23,21 @@ use engine_traits::FileEncryptionInfo;
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
+use external_storage::{
+    compression_reader_dispatcher, encrypt_wrap_reader, record_storage_create, BackendConfig,
+    HdfsStorage,
+};
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
+    UnpinReader,
 };
 use futures_io::AsyncRead;
-use futures_util::io::BufReader;
 #[cfg(feature = "cloud-gcp")]
 pub use gcp::{Config as GcsConfig, GcsStorage};
 pub use kvproto::brpb::StorageBackend_oneof_backend as Backend;
 #[cfg(any(feature = "cloud-gcp", feature = "cloud-aws", feature = "cloud-azure"))]
 use kvproto::brpb::{AzureBlobStorage, Gcs, S3};
-use kvproto::brpb::{CloudDynamic, CompressionType, Noop, StorageBackend};
+use kvproto::brpb::{CloudDynamic, Noop, StorageBackend};
 #[cfg(feature = "cloud-storage-dylib")]
 use tikv_util::warn;
 use tikv_util::{
@@ -333,36 +335,25 @@ impl ExternalStorage for EncryptedExternalStorage {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        range: Option<(u64, u64)>,
-        compression_type: Option<CompressionType>,
         expected_length: u64,
-        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
         file_crypter: Option<FileEncryptionInfo>,
+        restore_config: RestoreConfig,
     ) -> io::Result<()> {
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+        } = restore_config;
+
         let reader = {
-            let r = if let Some((off, len)) = range {
+            let inner = if let Some((off, len)) = range {
                 self.read_part(storage_name, off, len)
             } else {
                 self.read(storage_name)
             };
 
-            match compression_type {
-                Some(c) => match c {
-                    CompressionType::Unknown => r,
-                    CompressionType::Zstd => Box::new(ZstdDecoder::new(BufReader::new(r))),
-                    _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!(
-                                "the compression type is unimplemented, compression type id {:?}",
-                                c
-                            ),
-                        ));
-                    }
-                },
-                None => r,
-            }
+            compression_reader_dispatcher(compression_type, inner)?
         };
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
