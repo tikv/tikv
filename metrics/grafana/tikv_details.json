@@ -40370,7 +40370,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The total count of TTL expired KV during backup",
+          "description": "The accumulated TTL expired KV count during backup",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -40416,7 +40416,8 @@
               "interval": "",
               "legendFormat": "{{instance}}",
               "queryType": "randomWalk",
-              "refId": "A"
+              "refId": "A",
+              "hide": true
             },
             {
               "exemplar": true,
