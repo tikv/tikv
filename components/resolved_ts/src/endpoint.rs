@@ -361,7 +361,7 @@ where
                         entries,
                         apply_index,
                     })
-                    .unwrap_or_else(|e| debug!("schedule resolved ts task failed"; "err" => ?e));
+                    .unwrap_or_else(|e| warn!("schedule resolved ts task failed"; "err" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["finish"]).inc();
             }),
             on_error: Some(Box::new(move |observe_id, _region, e| {
@@ -371,7 +371,7 @@ where
                         observe_id,
                         cause: format!("met error while handle scan task {:?}", e),
                     })
-                    .unwrap();
+                    .unwrap_or_else(|schedule_err| warn!("schedule re-register task failed"; "err" => ?schedule_err, "re-register cause" => ?e));
                 RTS_SCAN_TASKS.with_label_values(&["abort"]).inc();
             })),
         }
