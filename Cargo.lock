@@ -255,6 +255,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -370,6 +371,7 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "async-channel",
+ "aws",
  "collections",
  "concurrency_manager",
  "crc64fast",
