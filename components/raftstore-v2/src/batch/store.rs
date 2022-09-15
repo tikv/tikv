@@ -3,7 +3,7 @@
 use std::{
     mem,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
     time::Duration,
 };
 
@@ -15,13 +15,16 @@ use crossbeam::channel::{Sender, TrySendError};
 use engine_traits::{Engines, KvEngine, RaftEngine, TabletFactory};
 use futures::{compat::Future01CompatExt, FutureExt};
 use kvproto::{
-    metapb::Store,
+    metapb::{self, Store},
     raft_serverpb::{PeerState, RaftMessage},
 };
 use raft::INVALID_ID;
-use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
-    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+use raftstore::{
+    coprocessor::CoprocessorHost,
+    store::{
+        fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+        RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    },
 };
 use slog::Logger;
 use tikv_util::{
@@ -36,7 +39,7 @@ use tikv_util::{
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
-    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate},
+    fsm::{PeerFsm, PeerFsmDelegate, SenderFsmPair, StoreFsm, StoreFsmDelegate, StoreMeta},
     raft::{Peer, Storage},
     router::{PeerMsg, PeerTick, StoreMsg},
     Error, Result,
@@ -44,6 +47,7 @@ use crate::{
 
 /// A per-thread context shared by the [`StoreFsm`] and multiple [`PeerFsm`]s.
 pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
+    pub store: metapb::Store,
     /// A logger without any KV. It's clean for creating new PeerFSM.
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
@@ -62,6 +66,21 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub engine: ER,
     pub tablet_factory: Arc<dyn TabletFactory<EK>>,
     pub log_fetch_scheduler: Scheduler<RaftlogFetchTask>,
+    // todo(SpadeA): remove option
+    pub store_meta: Option<Arc<Mutex<StoreMeta<EK>>>>,
+    // todo(SpadeA): remove option
+    pub coprocessor_host: Option<CoprocessorHost<EK>>,
+    /// region_id -> (peer_id, is_splitting)
+    /// Used for handling race between splitting and creating new peer.
+    /// An uninitialized peer can be replaced to the one from splitting iff they
+    /// are exactly the same peer.
+    ///
+    /// WARNING:
+    /// To avoid deadlock, if you want to use `store_meta` and
+    /// `pending_create_peers` together, the lock sequence MUST BE:
+    /// 1. lock the store_meta.
+    /// 2. lock the pending_create_peers.
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 /// A [`PollHandler`] that handles updates of [`StoreFsm`]s and [`PeerFsm`]s.
@@ -288,6 +307,7 @@ where
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
         let cfg = self.cfg.value().clone();
         let poll_ctx = StoreContext {
+            store: metapb::Store::default(), // todo(SpadeA)
             logger: self.logger.clone(),
             trans: self.trans.clone(),
             has_ready: false,
@@ -300,6 +320,9 @@ where
             engine: self.engine.clone(),
             tablet_factory: self.tablet_factory.clone(),
             log_fetch_scheduler: self.log_fetch_scheduler.clone(),
+            coprocessor_host: None,
+            store_meta: None,
+            pending_create_peers: Arc::default(),
         };
         let cfg_tracker = self.cfg.clone().tracker("raftstore".to_string());
         StorePoller::new(poll_ctx, cfg_tracker)

@@ -2,10 +2,14 @@
 
 use std::{collections::VecDeque, mem, sync::Arc};
 
+use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use pd_client::BucketStat;
 use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::store::{util::find_peer, Config, EntryStorage, RaftlogFetchTask, WriteRouter};
+use raftstore::store::{
+    util::find_peer, Config, EntryStorage, RaftlogFetchTask, TxnExt, WriteRouter, RegionReadProgress,
+};
 use slog::{o, Logger};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
@@ -28,6 +32,13 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     destroy_progress: DestroyProgress,
     has_ready: bool,
     pub(crate) logger: Logger,
+
+    /// Transaction extensions related to this peer.
+    pub(crate) txn_ext: Arc<TxnExt>,
+    pub(crate) txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    pub(crate) read_progress: Arc<RegionReadProgress>,
+    /// region buckets.
+    pub(crate) region_buckets: Option<BucketStat>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -90,6 +101,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             has_ready: false,
             destroy_progress: DestroyProgress::None,
             logger,
+            txn_ext: Arc::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -253,5 +265,30 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
         &mut self.destroy_progress
+    }
+
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        unimplemented!()
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        unimplemented!()
+    }
+
+    #[inline]
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        unimplemented!()
+    }
+
+    #[inline]
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        unimplemented!()
+    }
+
+    #[inline]
+    pub fn post_split(&mut self) {
+        unimplemented!()
     }
 }

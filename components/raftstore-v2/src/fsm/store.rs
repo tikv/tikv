@@ -1,17 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::SystemTime;
+use std::{collections::BTreeMap, time::SystemTime};
 
 use batch_system::Fsm;
 use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
-use raftstore::store::{Config, ReadDelegate};
+use kvproto::metapb::Region;
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeReason},
+    store::{Config, ReadDelegate},
+};
 use slog::{o, Logger};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 
 use crate::{
     batch::StoreContext,
+    raft::Peer,
     router::{StoreMsg, StoreTick},
     tablet::CachedTablet,
 };
@@ -21,6 +26,10 @@ where
     E: KvEngine,
 {
     pub store_id: Option<u64>,
+    /// region_end_key -> region_id
+    pub region_ranges: BTreeMap<Vec<u8>, u64>,
+    /// region_id -> region
+    pub regions: HashMap<u64, Region>,
     /// region_id -> reader
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
@@ -34,9 +43,31 @@ where
     pub fn new() -> StoreMeta<E> {
         StoreMeta {
             store_id: None,
+            region_ranges: BTreeMap::default(),
+            regions: HashMap::default(),
             readers: HashMap::default(),
             tablet_caches: HashMap::default(),
         }
+    }
+
+    #[inline]
+    pub fn set_region<ER: RaftEngine>(
+        &mut self,
+        host: &CoprocessorHost<E>,
+        region: Region,
+        peer: &mut Peer<E, ER>,
+        reason: RegionChangeReason,
+    ) {
+        unimplemented!()
+    }
+}
+
+impl<E> Default for StoreMeta<E>
+where
+    E: KvEngine,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
