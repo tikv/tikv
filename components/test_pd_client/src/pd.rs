@@ -26,7 +26,10 @@ use futures::{
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, PeerRole},
-    pdpb,
+    pdpb::{
+        self, ChangePeer, ChangePeerV2, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion,
+        TransferLeader,
+    },
     replication_modepb::{
         DrAutoSyncState, RegionReplicationStatus, ReplicationMode, ReplicationStatus,
         StoreDrAutoSyncStatus,
@@ -37,7 +40,7 @@ use pd_client::{
 };
 use raft::eraftpb::ConfChangeType;
 use raftstore::store::{
-    util::{check_key_in_region, find_peer, is_learner},
+    util::{check_key_in_region, find_peer, is_learner, new_peer},
     QueryStats, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 use tikv_util::{
@@ -134,11 +137,68 @@ enum Operator {
     },
 }
 
+pub fn sleep_ms(ms: u64) {
+    std::thread::sleep(Duration::from_millis(ms));
+}
+
 fn change_peer(change_type: ConfChangeType, peer: metapb::Peer) -> pdpb::ChangePeer {
     let mut cp = pdpb::ChangePeer::default();
     cp.set_change_type(change_type);
     cp.set_peer(peer);
     cp
+}
+
+pub fn new_pd_change_peer(
+    change_type: ConfChangeType,
+    peer: metapb::Peer,
+) -> RegionHeartbeatResponse {
+    let mut change_peer = ChangePeer::default();
+    change_peer.set_change_type(change_type);
+    change_peer.set_peer(peer);
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_change_peer(change_peer);
+    resp
+}
+
+pub fn new_pd_change_peer_v2(changes: Vec<ChangePeer>) -> RegionHeartbeatResponse {
+    let mut change_peer = ChangePeerV2::default();
+    change_peer.set_changes(changes.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_change_peer_v2(change_peer);
+    resp
+}
+
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_split_region(split_region);
+    resp
+}
+
+pub fn new_pd_transfer_leader(
+    peer: metapb::Peer,
+    peers: Vec<metapb::Peer>,
+) -> RegionHeartbeatResponse {
+    let mut transfer_leader = TransferLeader::default();
+    transfer_leader.set_peer(peer);
+    transfer_leader.set_peers(peers.into());
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_transfer_leader(transfer_leader);
+    resp
+}
+
+pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
+    let mut merge = Merge::default();
+    merge.set_target(target_region);
+
+    let mut resp = RegionHeartbeatResponse::default();
+    resp.set_merge(merge);
+    resp
 }
 
 impl Operator {
