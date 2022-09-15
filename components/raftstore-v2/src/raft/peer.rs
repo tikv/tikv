@@ -344,4 +344,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
         &mut self.destroy_progress
     }
+
+    #[inline]
+    pub(crate) fn has_applied_to_current_term(&self) -> bool {
+        self.entry_storage().applied_term() == self.term()
+    }
 }

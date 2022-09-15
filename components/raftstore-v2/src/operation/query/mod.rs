@@ -49,7 +49,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
 {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.get_header().get_read_quorum() {
-            println!("read_quorum");
             return Ok(RequestPolicy::ReadIndex);
         }
 
@@ -92,7 +91,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
                     ch.set_result(QueryResult::Read(read_resp));
                 }
                 _ => {
-                    unimplemented!();
+                    panic!("inspect_read is expected to only return ReadIndex or ReadLocal");
                 }
             };
         } else {
@@ -151,9 +150,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
 
         let allow_replica_read = msg.get_header().get_replica_read();
-        let flags = WriteBatchFlags::from_bits_check(msg.get_header().get_flags());
-        let allow_stale_read = flags.contains(WriteBatchFlags::STALE_READ);
-        if !self.is_leader() && !is_read_index_request && !allow_replica_read && !allow_stale_read {
+        if !self.is_leader() && !is_read_index_request && !allow_replica_read {
             raft_metrics.invalid_proposal.not_leader.inc();
             return Err(Error::NotLeader(self.region_id(), None));
         }
@@ -163,11 +160,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
         }
-        // check whether the peer is initialized.
-        if !self.storage().is_initialized() {
-            raft_metrics.invalid_proposal.region_not_initialized.inc();
-            return Err(Error::RegionNotInitialized(self.region_id()));
-        }
+        // assert the peer is initialized.
+        // If it's on leader, it should be initialized before serving request.
+        // If it's on follower, it should wait for apply.
+        assert!(self.storage().is_initialized());
 
         // TODO: check applying snapshot
 

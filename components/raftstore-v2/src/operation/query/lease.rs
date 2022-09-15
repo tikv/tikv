@@ -133,33 +133,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 })
             });
 
-            // leader reports key is locked
-            if let Some(locked) = read_index_req.locked.take() {
-                let mut response = raft_cmdpb::Response::default();
-                response.mut_read_index().set_locked(*locked);
-                let mut cmd_resp = RaftCmdResponse::default();
-                cmd_resp.mut_responses().push(response);
-                ch.report_error(cmd_resp);
-            } else {
-                match (read_index, read_index_req.read_index) {
-                    (Some(local_responsed_index), Some(batch_index)) => {
-                        // `read_index` could be less than `read_index_req.read_index` because the
-                        // former is filled with `committed index` when
-                        // proposed, and the latter is filled
-                        // after a read-index procedure finished.
-                        read_index = Some(std::cmp::max(local_responsed_index, batch_index));
-                    }
-                    (None, _) => {
-                        // Actually, the read_index is none if and only if it's the first one in
-                        // read_index_req.cmds. Starting from the second, all the following ones'
-                        // read_index is not none.
-                        read_index = read_index_req.read_index;
-                    }
-                    _ => {}
+            // Key lock should not happen when read_index is running at the leader.
+            // Because it only happens when concurrent read and write requests on the same
+            // region on different TiKVs.
+            assert!(read_index_req.locked.is_none());
+            match (read_index, read_index_req.read_index) {
+                (Some(local_responsed_index), Some(batch_index)) => {
+                    // `read_index` could be less than `read_index_req.read_index` because the
+                    // former is filled with `committed index` when
+                    // proposed, and the latter is filled
+                    // after a read-index procedure finished.
+                    read_index = Some(std::cmp::max(local_responsed_index, batch_index));
                 }
-                let read_resp = ReadResponse::new(read_index.unwrap_or(0));
-                ch.set_result(QueryResult::Read(read_resp));
+                (None, _) => {
+                    // Actually, the read_index is none if and only if it's the first one in
+                    // read_index_req.cmds. Starting from the second, all the following ones'
+                    // read_index is not none.
+                    read_index = read_index_req.read_index;
+                }
+                _ => {}
             }
+            let read_resp = ReadResponse::new(read_index.unwrap_or(0));
+            ch.set_result(QueryResult::Read(read_resp));
         }
     }
 
@@ -229,10 +224,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "progress" => ?progress,
         );
         reader.update(progress);
-    }
-
-    pub(crate) fn has_applied_to_current_term(&self) -> bool {
-        self.entry_storage().applied_term() == self.term()
     }
 
     pub(crate) fn inspect_lease(&mut self) -> LeaseState {
