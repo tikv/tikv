@@ -635,6 +635,26 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    /// `pre_persist` is called we we want to persist data or meta for a region.
+    /// For example, in `finish_for` and `commit`,
+    /// we will separately call `pre_persist` with is_finished = true/false.
+    /// By returning false, we reject this persistence.
+    pub fn pre_persist(
+        &self,
+        region: &Region,
+        is_finished: bool,
+        cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            if !observer.pre_persist(&mut ctx, is_finished, cmd) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn on_flush_applied_cmd_batch(
         &self,
         max_level: ObserveLevel,
