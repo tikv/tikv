@@ -1188,7 +1188,6 @@ where
 
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
-        kv_engine: &E::Local,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>, // Store safe point here.
     ) -> Result<()> {
@@ -1198,7 +1197,7 @@ where
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-        kv_engine.init_compaction_filter(
+        self.engine.kv_engine().init_compaction_filter(
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1939,10 +1938,7 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        let kv_engine = engine.get_rocksdb();
-        gc_worker
-            .start_auto_gc(&kv_engine, auto_gc_cfg, safe_point)
-            .unwrap();
+        gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
