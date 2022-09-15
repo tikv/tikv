@@ -147,7 +147,11 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 }
                 self.seqno_window.push(*seqno);
             }
-            self.handle_exec_res(res.region_id, &res.apply_state, res.exec_res.iter());
+            if let Some(region_state) =
+                self.handle_exec_res(res.region_id, &res.apply_state, res.exec_res.iter())
+            {
+                info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
+            }
         }
         if !sync_relations.is_empty() {
             self.handle_sync_relations(sync_relations);
@@ -248,8 +252,8 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         region_id: u64,
         apply_state: &RaftApplyState,
         exec_res: impl Iterator<Item = &'a ExecResult<EK::Snapshot>>,
-    ) {
-        let mut region_local_state = RegionLocalState::default();
+    ) -> Option<RegionLocalState> {
+        let mut region_state = None;
         for res in exec_res {
             match res {
                 ExecResult::ChangePeer(cp) => {
@@ -263,21 +267,18 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                             remove_self = false;
                         }
                     }
-                    let state = if remove_self {
+                    let peer_state = if remove_self {
                         PeerState::Tombstone
                     } else {
                         PeerState::Normal
                     };
-                    region_local_state.set_region(cp.region.clone());
-                    region_local_state.set_state(state);
-                    region_local_state.clear_merge_state();
+                    let mut state = RegionLocalState::default();
+                    state.set_region(cp.region.clone());
+                    state.set_state(peer_state);
                     self.raft_wb
-                        .put_pending_region_state(
-                            region_id,
-                            apply_state.applied_index,
-                            &region_local_state,
-                        )
+                        .put_pending_region_state(region_id, apply_state.applied_index, &state)
                         .unwrap();
+                    region_state = Some(state);
                 }
                 ExecResult::SplitRegion {
                     regions,
@@ -290,77 +291,84 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         } else {
                             0
                         };
-                        region_local_state.set_region(region.clone());
-                        region_local_state.set_state(PeerState::Normal);
-                        region_local_state.clear_merge_state();
+                        let mut state = RegionLocalState::default();
+                        state.set_region(region.clone());
+                        state.set_state(PeerState::Normal);
                         if let Some(new_split_peer) = new_split_regions.get(&region.get_id()) {
                             if new_split_peer.result.is_some() {
                                 continue;
                             }
                             self.raft_wb
-                                .put_region_state(region.get_id(), &region_local_state)
+                                .put_region_state(region.get_id(), &state)
                                 .unwrap();
                             write_initial_apply_state_raft(&mut self.raft_wb, region.get_id())
                                 .unwrap();
                         } else {
                             self.raft_wb
-                                .put_pending_region_state(
-                                    region.get_id(),
-                                    applied_index,
-                                    &region_local_state,
-                                )
+                                .put_pending_region_state(region.get_id(), applied_index, &state)
                                 .unwrap();
+                        }
+                        if region.get_id() == region_id {
+                            region_state = Some(state);
                         }
                     }
                 }
-                ExecResult::PrepareMerge { region, state } => {
-                    region_local_state.set_region(region.clone());
-                    region_local_state.set_state(PeerState::Merging);
-                    region_local_state.set_merge_state(state.clone());
+                ExecResult::PrepareMerge {
+                    region,
+                    state: merge_state,
+                } => {
+                    let mut state = RegionLocalState::default();
+                    state.set_region(region.clone());
+                    state.set_state(PeerState::Merging);
+                    state.set_merge_state(merge_state.clone());
                     self.raft_wb
                         .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
-                            &region_local_state,
+                            &state,
                         )
                         .unwrap();
+                    region_state = Some(state);
                 }
                 ExecResult::CommitMerge {
                     index,
                     region,
                     source,
                 } => {
-                    region_local_state.set_region(region.clone());
-                    region_local_state.set_state(PeerState::Normal);
-                    region_local_state.clear_merge_state();
+                    let mut state = RegionLocalState::default();
+                    state.set_region(region.clone());
+                    state.set_state(PeerState::Normal);
                     self.raft_wb
                         .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
-                            &region_local_state,
+                            &state,
                         )
                         .unwrap();
+                    region_state = Some(state);
                     // Write source state
+                    let mut state = RegionLocalState::default();
                     let mut merging_state = MergeState::default();
                     merging_state.set_target(region.clone());
-                    region_local_state.set_region(source.clone());
-                    region_local_state.set_state(PeerState::Tombstone);
-                    region_local_state.set_merge_state(merging_state);
+                    state.set_region(source.clone());
+                    state.set_state(PeerState::Tombstone);
+                    state.set_merge_state(merging_state);
                     self.raft_wb
-                        .put_pending_region_state(source.get_id(), *index, &region_local_state)
+                        .put_pending_region_state(source.get_id(), *index, &state)
                         .unwrap();
                 }
                 ExecResult::RollbackMerge { region, .. } => {
-                    region_local_state.set_region(region.clone());
-                    region_local_state.set_state(PeerState::Normal);
-                    region_local_state.clear_merge_state();
+                    let mut state = RegionLocalState::default();
+                    state.set_region(region.clone());
+                    state.set_state(PeerState::Normal);
                     self.raft_wb
                         .put_pending_region_state(
                             region.get_id(),
                             apply_state.applied_index,
-                            &region_local_state,
+                            &state,
                         )
                         .unwrap();
+                    region_state = Some(state);
                 }
                 ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
@@ -382,6 +390,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                 )
                 .unwrap();
         }
+        region_state
     }
 
     fn store_id(&mut self) -> Option<u64> {
