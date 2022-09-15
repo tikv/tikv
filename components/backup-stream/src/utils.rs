@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::pin::Pin;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
@@ -13,7 +14,7 @@ use std::{
 
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, FutureExt, StreamExt};
+use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
 use kvproto::raft_cmdpb::{CmdType, Request};
 use raft::StateRole;
 use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
@@ -28,7 +29,11 @@ use tikv_util::{
     worker::Scheduler,
     Either,
 };
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::{
+    fs::File,
+    io::AsyncRead,
+    sync::{oneshot, Mutex, RwLock},
+};
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
@@ -589,6 +594,39 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
     }
 }
 
+pub struct FilesReader {
+    files: Vec<File>,
+    index: usize,
+}
+
+impl FilesReader {
+    pub fn new(files: Vec<File>) -> Self {
+        FilesReader { files, index: 0 }
+    }
+}
+
+impl AsyncRead for FilesReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+
+        while me.index < me.files.len() {
+            let rem = buf.remaining();
+            ready!(Pin::new(&mut me.files[me.index]).poll_read(cx, buf))?;
+            if buf.remaining() == rem {
+                me.index += 1;
+            } else {
+                return Poll::Ready(Ok(()));
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::{
@@ -601,6 +639,7 @@ mod test {
 
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
+    use tokio::io::AsyncWriteExt;
 
     use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
 
@@ -787,5 +826,42 @@ mod test {
             size,
             items_size
         );
+    }
+
+    #[tokio::test]
+    async fn test_files_reader() {
+        use tempdir::TempDir;
+        use tokio::{fs::File, io::AsyncReadExt};
+
+        use super::FilesReader;
+
+        let dir = TempDir::new("test_files").unwrap();
+        let files_num = 5;
+        let mut files_path = Vec::new();
+        let mut expect_content = String::new();
+        for i in 0..files_num {
+            let path = dir.path().join(format!("f{}", i));
+            let mut file = File::create(&path).await.unwrap();
+            let content = format!("{i}_{i}_{i}_{i}_{i}\n{i}{i}{i}{i}\n").repeat(10);
+            file.write_all(content.as_bytes()).await.unwrap();
+            file.sync_all().await.unwrap();
+
+            files_path.push(path);
+            expect_content.push_str(&content);
+        }
+
+        let mut files = Vec::new();
+        for i in 0..files_num {
+            let file = File::open(&files_path[i]).await.unwrap();
+            files.push(file);
+        }
+
+        let mut files_reader = FilesReader::new(files);
+        let mut read_content = String::new();
+        files_reader
+            .read_to_string(&mut read_content)
+            .await
+            .unwrap();
+        assert_eq!(expect_content, read_content);
     }
 }

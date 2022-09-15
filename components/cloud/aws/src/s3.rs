@@ -50,6 +50,7 @@ pub struct Config {
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
+    object_lock_enabled: bool,
 }
 
 impl Config {
@@ -64,6 +65,7 @@ impl Config {
             sse_kms_key_id: None,
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
+            object_lock_enabled: false,
         }
     }
 
@@ -96,6 +98,7 @@ impl Config {
             force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
             multi_part_size: MINIMUM_PART_SIZE,
+            object_lock_enabled: false,
         })
     }
 
@@ -128,6 +131,7 @@ impl Config {
             force_path_style: input.force_path_style,
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
             multi_part_size: MINIMUM_PART_SIZE,
+            object_lock_enabled: input.object_lock_enabled,
         })
     }
 }
@@ -217,6 +221,37 @@ impl S3Storage {
         }
         key.to_owned()
     }
+
+    fn get_range(&self, name: &str, range: Option<String>) -> Box<dyn AsyncRead + Unpin + '_> {
+        let key = self.maybe_prefix_key(name);
+        let bucket = self.config.bucket.bucket.clone();
+        debug!("read file from s3 storage"; "key" => %key);
+        let req = GetObjectRequest {
+            key,
+            bucket: (*bucket).clone(),
+            range,
+            ..Default::default()
+        };
+        Box::new(
+            self.client
+                .get_object(req)
+                .map(move |future| match future {
+                    Ok(out) => out.body.unwrap(),
+                    Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
+                        ByteStream::new(error_stream(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("no key {} at bucket {}", key, *bucket),
+                        )))
+                    }
+                    Err(e) => ByteStream::new(error_stream(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("failed to get object {}", e),
+                    ))),
+                })
+                .flatten_stream()
+                .into_async_read(),
+        )
+    }
 }
 
 /// A helper for uploading a large files to S3 storage.
@@ -232,6 +267,7 @@ struct S3Uploader<'client> {
     sse_kms_key_id: Option<StringNonEmpty>,
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
+    object_lock_enabled: bool,
 
     upload_id: String,
     parts: Vec<CompletedPart>,
@@ -275,6 +311,13 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
+fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
+    object_lock_enabled.then(|| {
+        let digest = md5::compute(content);
+        base64::encode(digest.0)
+    })
+}
+
 /// Specifies the minimum size to use multi-part upload.
 /// AWS S3 requires each part to be at least 5 MiB.
 const MINIMUM_PART_SIZE: usize = 5 * 1024 * 1024;
@@ -292,6 +335,7 @@ impl<'client> S3Uploader<'client> {
             sse_kms_key_id: config.sse_kms_key_id.as_ref().cloned(),
             storage_class: config.storage_class.as_ref().cloned(),
             multi_part_size: config.multi_part_size,
+            object_lock_enabled: config.object_lock_enabled,
             upload_id: "".to_owned(),
             parts: Vec::new(),
         }
@@ -432,6 +476,7 @@ impl<'client> S3Uploader<'client> {
                     upload_id: self.upload_id.clone(),
                     part_number,
                     content_length: Some(data.len() as i64),
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -492,6 +537,7 @@ impl<'client> S3Uploader<'client> {
                     ssekms_key_id: self.sse_kms_key_id.as_ref().map(|s| s.to_string()),
                     storage_class: self.storage_class.as_ref().map(|s| s.to_string()),
                     content_length: Some(data.len() as i64),
+                    content_md5: get_content_md5(self.object_lock_enabled, data),
                     body: Some(data.to_vec().into()),
                     ..Default::default()
                 })
@@ -550,33 +596,12 @@ impl BlobStorage for S3Storage {
     }
 
     fn get(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
-        let key = self.maybe_prefix_key(name);
-        let bucket = self.config.bucket.bucket.clone();
-        debug!("read file from s3 storage"; "key" => %key);
-        let req = GetObjectRequest {
-            key,
-            bucket: (*bucket).clone(),
-            ..Default::default()
-        };
-        Box::new(
-            self.client
-                .get_object(req)
-                .map(move |future| match future {
-                    Ok(out) => out.body.unwrap(),
-                    Err(RusotoError::Service(GetObjectError::NoSuchKey(key))) => {
-                        ByteStream::new(error_stream(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("no key {} at bucket {}", key, *bucket),
-                        )))
-                    }
-                    Err(e) => ByteStream::new(error_stream(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("failed to get object {}", e),
-                    ))),
-                })
-                .flatten_stream()
-                .into_async_read(),
-        )
+        self.get_range(name, None)
+    }
+
+    fn get_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        // inclusive, bytes=0-499 -> [0, 499]
+        self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
     }
 }
 
@@ -589,6 +614,18 @@ mod tests {
     use tikv_util::stream::block_on_external_io;
 
     use super::*;
+
+    #[test]
+    fn test_s3_get_content_md5() {
+        // base64 encode md5sum "helloworld"
+        let code = "helloworld".to_string();
+        let expect = "/F4DjTilcDIIVEHn/nAQsA==".to_string();
+        let actual = get_content_md5(true, code.as_bytes()).unwrap();
+        assert_eq!(actual, expect);
+
+        let actual = get_content_md5(false, b"xxx");
+        assert!(actual.is_none())
+    }
 
     #[test]
     fn test_s3_config() {
