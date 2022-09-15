@@ -425,6 +425,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
+    fn batch_initial_size() -> usize {
+        fail_point!("copr_batch_initial_size", |r| r
+            .map_or(1, |e| e.parse().unwrap()));
+        BATCH_INITIAL_SIZE
+    }
+
     /// handle_request returns the response of selection and an optional range,
     /// only paging request will return Some(IntervalRange),
     /// this should be used when calculating ranges of the next batch.
@@ -433,7 +439,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     /// with IntervalRange like (k1, k4).
     pub async fn handle_request(&mut self) -> Result<(SelectResponse, Option<IntervalRange>)> {
         let mut chunks = vec![];
-        let mut batch_size = batch_initial_size();
+        let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
@@ -457,6 +463,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             if chunk.has_rows_data() {
                 sample.add_read_bytes(chunk.get_rows_data().len());
             }
+
             let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
             if !quota_delay.is_zero() {
                 NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
@@ -663,12 +670,6 @@ fn batch_grow_factor() -> usize {
     fail_point!("copr_batch_grow_size", |r| r
         .map_or(1, |e| e.parse().unwrap()));
     BATCH_GROW_FACTOR
-}
-
-fn batch_initial_size() -> usize {
-    fail_point!("copr_batch_initial_size", |r| r
-        .map_or(1, |e| e.parse().unwrap()));
-    BATCH_INITIAL_SIZE
 }
 
 #[inline]
