@@ -576,9 +576,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::{
-        util::{new_engine_opt, new_temp_engine, FixedPrefixSliceTransform},
+        util::{new_engine_opt, FixedPrefixSliceTransform},
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSnapshot,
     };
+    use engine_test::new_temp_engine;
     use engine_traits::{IterOptions, SyncMutable, CF_DEFAULT};
     use keys::data_key;
     use kvproto::metapb::{Peer, Region};

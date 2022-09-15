@@ -38,7 +38,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt, TabletAccessor,
-    TabletErrorCollector, TitanDbOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    TabletErrorCollector, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
@@ -710,7 +710,7 @@ impl DefaultCfConfig {
                     .unwrap();
             }
         }
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -816,7 +816,7 @@ impl WriteCfConfig {
                 WriteCompactionFilterFactory,
             )
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -895,7 +895,7 @@ impl LockCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -966,7 +966,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -1342,7 +1342,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
-        cf_opts.set_titandb_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts());
         cf_opts
     }
 }
