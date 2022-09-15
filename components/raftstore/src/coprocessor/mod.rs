@@ -310,6 +310,17 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+
+    /// Should be called everytime before we write a WriteBatch into
+    /// KvEngine. Returns false if we can't commit at this time.
+    fn pre_persist(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _is_finished: bool,
+        _cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]
