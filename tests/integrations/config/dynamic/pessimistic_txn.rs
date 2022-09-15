@@ -6,7 +6,7 @@ use std::{
 };
 
 use security::SecurityManager;
-use test_raftstore::TestPdClient;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::*,
     server::{

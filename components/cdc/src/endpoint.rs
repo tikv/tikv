@@ -1433,7 +1433,8 @@ mod tests {
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},
     };
-    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
+    use test_pd_client::TestPdClient;
+    use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
         storage::{kv::Engine, TestEngineBuilder},

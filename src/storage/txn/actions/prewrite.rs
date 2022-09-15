@@ -5,8 +5,9 @@ use std::cmp;
 
 use fail::fail_point;
 use kvproto::kvrpcpb::{
-    Assertion, AssertionLevel,
+    self, Assertion, AssertionLevel,
     PrewriteRequestPessimisticAction::{self, *},
+    WriteConflictReason,
 };
 use txn_types::{
     is_short_value, Key, Mutation, MutationType, OldValue, TimeStamp, Value, Write, WriteType,
@@ -352,59 +353,78 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         reader: &mut SnapshotReader<S>,
     ) -> Result<Option<(Write, TimeStamp)>> {
-        match reader.seek_write(&self.key, TimeStamp::max())? {
-            Some((commit_ts, write)) => {
-                // Abort on writes after our start/for_update timestamp ...
-                // If exists a commit version whose commit timestamp is larger than current
-                // start/for_update timestamp, we should abort current prewrite.
-                match self.txn_props.kind {
-                    TransactionKind::Optimistic(_) => {
+        let mut seek_ts = TimeStamp::max();
+        while let Some((commit_ts, write)) = reader.seek_write(&self.key, seek_ts)? {
+            // If there's a write record whose commit_ts equals to our start ts, the current
+            // transaction is ok to continue, unless the record means that the current
+            // transaction has been rolled back.
+            if commit_ts == self.txn_props.start_ts
+                && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
+            {
+                MVCC_CONFLICT_COUNTER.rolled_back.inc();
+                // TODO: Maybe we need to add a new error for the rolled back case.
+                self.write_conflict_error(&write, commit_ts, WriteConflictReason::SelfRolledBack)?;
+            }
+            match self.txn_props.kind {
+                TransactionKind::Optimistic(_) => {
+                    if commit_ts > self.txn_props.start_ts {
+                        MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                        self.write_conflict_error(
+                            &write,
+                            commit_ts,
+                            WriteConflictReason::Optimistic,
+                        )?;
+                    }
+                }
+                // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
+                // if it is a retrying prewrite request.
+                TransactionKind::Pessimistic(for_update_ts) => {
+                    if let DoConstraintCheck = self.pessimistic_action {
+                        // Do the same as optimistic transactions if constraint checks are needed.
                         if commit_ts > self.txn_props.start_ts {
                             MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                            self.write_conflict_error(&write, commit_ts)?;
+                            self.write_conflict_error(
+                                &write,
+                                commit_ts,
+                                WriteConflictReason::LazyUniquenessCheck,
+                            )?;
                         }
                     }
-                    // Note: PessimisticLockNotFound can happen on a non-pessimistically locked key,
-                    // if it is a retrying prewrite request.
-                    TransactionKind::Pessimistic(for_update_ts) => {
-                        if let DoConstraintCheck = self.pessimistic_action {
-                            if commit_ts > self.txn_props.start_ts {
-                                MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                                self.write_conflict_error(&write, commit_ts)?;
-                            }
-                        } else if commit_ts > for_update_ts {
-                            warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                                "key" => %self.key, 
-                                "start_ts" => self.txn_props.start_ts, 
-                                "for_update_ts" => for_update_ts,
-                                "conflicting start_ts" => write.start_ts,
-                                "conflicting commit_ts" => commit_ts);
-                            return Err(ErrorInner::PessimisticLockNotFound {
-                                start_ts: self.txn_props.start_ts,
-                                key: self.key.clone().into_raw()?,
-                            }
-                            .into());
+                    if commit_ts > for_update_ts {
+                        // Don't treat newer Rollback records as write conflicts. They can cause
+                        // false positive errors because they can be written even if the pessimistic
+                        // lock of the corresponding row key exists.
+                        // Rollback records are only used to prevent retried prewrite from
+                        // succeeding. Even if the Rollback record of the current transaction is
+                        // collapsed by a newer record, it is safe to prewrite this non-pessimistic
+                        // key because either the primary key is rolled back or it's protected
+                        // because it's written by CheckSecondaryLocks.
+                        if write.write_type == WriteType::Rollback {
+                            seek_ts = commit_ts.prev();
+                            continue;
                         }
-                    }
-                }
-                // If there's a write record whose commit_ts equals to our start ts, the current
-                // transaction is ok to continue, unless the record means that the current
-                // transaction has been rolled back.
-                if commit_ts == self.txn_props.start_ts
-                    && (write.write_type == WriteType::Rollback || write.has_overlapped_rollback)
-                {
-                    MVCC_CONFLICT_COUNTER.rolled_back.inc();
-                    // TODO: Maybe we need to add a new error for the rolled back case.
-                    self.write_conflict_error(&write, commit_ts)?;
-                }
-                // Should check it when no lock exists, otherwise it can report error when there
-                // is a lock belonging to a committed transaction which deletes the key.
-                check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
 
-                Ok(Some((write, commit_ts)))
+                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
+                            "key" => %self.key, 
+                            "start_ts" => self.txn_props.start_ts, 
+                            "for_update_ts" => for_update_ts,
+                            "conflicting start_ts" => write.start_ts,
+                            "conflicting commit_ts" => commit_ts);
+                        return Err(ErrorInner::PessimisticLockNotFound {
+                            start_ts: self.txn_props.start_ts,
+                            key: self.key.clone().into_raw()?,
+                        }
+                        .into());
+                    }
+                }
             }
-            None => Ok(None),
+            // Should check it when no lock exists, otherwise it can report error when there
+            // is a lock belonging to a committed transaction which deletes the key.
+            check_data_constraint(reader, self.should_not_exist, &write, commit_ts, &self.key)?;
+
+            return Ok(Some((write, commit_ts)));
         }
+        Ok(None)
     }
 
     fn write_lock(self, lock_status: LockStatus, txn: &mut MvccTxn) -> Result<TimeStamp> {
@@ -465,13 +485,19 @@ impl<'a> PrewriteMutation<'a> {
         final_min_commit_ts
     }
 
-    fn write_conflict_error(&self, write: &Write, commit_ts: TimeStamp) -> Result<()> {
+    fn write_conflict_error(
+        &self,
+        write: &Write,
+        commit_ts: TimeStamp,
+        reason: kvrpcpb::WriteConflictReason,
+    ) -> Result<()> {
         Err(ErrorInner::WriteConflict {
             start_ts: self.txn_props.start_ts,
             conflict_start_ts: write.start_ts,
             conflict_commit_ts: commit_ts,
             key: self.key.to_raw()?,
             primary: self.txn_props.primary.to_vec(),
+            reason,
         }
         .into())
     }
@@ -1535,6 +1561,46 @@ pub mod tests {
             kvproto::kvrpcpb::AssertionLevel::Off,
         );
         must_locked(&engine, b"k2", 13);
+        must_rollback(&engine, b"k2", 13, false);
+
+        // Write a Rollback at 50 first. A retried prewrite at the same ts should
+        // report WriteConflict.
+        must_rollback(&engine, b"k2", 50, false);
+        let err = must_retry_pessimistic_prewrite_put_err(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            50,
+            50,
+            SkipPessimisticCheck,
+            0,
+        );
+        assert!(
+            matches!(err, Error(box ErrorInner::WriteConflict { .. })),
+            "{:?}",
+            err
+        );
+        // But prewriting at 48 can succeed because a newer rollback is allowed.
+        must_prewrite_put_impl(
+            &engine,
+            b"k2",
+            b"v2",
+            b"k1",
+            &None,
+            48.into(),
+            SkipPessimisticCheck,
+            100,
+            48.into(),
+            1,
+            49.into(),
+            TimeStamp::default(),
+            true,
+            kvproto::kvrpcpb::Assertion::None,
+            kvproto::kvrpcpb::AssertionLevel::Off,
+        );
+        must_locked(&engine, b"k2", 48);
     }
 
     #[test]
@@ -2075,7 +2141,13 @@ pub mod tests {
         must_pessimistic_prewrite_insert(&engine, key2, value, key, 3, 3, SkipPessimisticCheck);
         let err =
             must_pessimistic_prewrite_insert_err(&engine, key, value, key, 3, 3, DoConstraintCheck);
-        assert!(matches!(err, Error(box ErrorInner::WriteConflict { .. })));
+        assert!(matches!(
+            err,
+            Error(box ErrorInner::WriteConflict {
+                reason: WriteConflictReason::LazyUniquenessCheck,
+                ..
+            })
+        ));
 
         // 2. unique constraint fail
         must_prewrite_put(&engine, key, value, key, 11);

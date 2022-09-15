@@ -45,6 +45,7 @@ use raftstore::{
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
     coprocessor, coprocessor_v2,
@@ -390,7 +391,8 @@ impl ServerCluster {
         let (res_tag_factory, collector_reg_handle, rsmeter_cleanup) =
             self.init_resource_metering(&cfg.resource_metering);
 
-        let check_leader_runner = CheckLeaderRunner::new(store_meta.clone());
+        let check_leader_runner =
+            CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
         let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
@@ -404,7 +406,7 @@ impl ServerCluster {
             cfg.quota.max_delay_duration,
             cfg.quota.enable_auto_tune,
         ));
-        let store = create_raft_storage::<_, _, _, F>(
+        let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
