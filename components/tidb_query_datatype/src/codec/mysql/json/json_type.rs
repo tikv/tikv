@@ -14,6 +14,9 @@ const JSON_TYPE_ARRAY: &[u8] = b"ARRAY";
 const JSON_TYPE_BIT: &[u8] = b"BIT";
 const JSON_TYPE_BLOB: &[u8] = b"BLOB";
 const JSON_TYPE_OPAQUE: &[u8] = b"OPAQUE";
+const JSON_TYPE_DATE: &[u8] = b"DATE";
+const JSON_TYPE_DATETIME: &[u8] = b"DATETIME";
+const JSON_TYPE_TIME: &[u8] = b"TIME";
 
 impl<'a> JsonRef<'a> {
     /// `json_type` is the implementation for
@@ -43,6 +46,10 @@ impl<'a> JsonRef<'a> {
                 Ok(FieldTypeTp::Bit) => JSON_TYPE_BIT,
                 _ => JSON_TYPE_OPAQUE,
             },
+            JsonType::Date => JSON_TYPE_DATE,
+            JsonType::Datetime => JSON_TYPE_DATETIME,
+            JsonType::Timestamp => JSON_TYPE_DATETIME,
+            JsonType::Time => JSON_TYPE_TIME,
         }
     }
 }

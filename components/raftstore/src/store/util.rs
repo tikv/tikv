@@ -931,6 +931,14 @@ impl RegionReadProgressRegistry {
             .map(|rp| rp.safe_ts())
     }
 
+    pub fn get_tracked_index(&self, region_id: &u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .unwrap()
+            .get(region_id)
+            .map(|rp| rp.core.lock().unwrap().applied_index)
+    }
+
     // Update `safe_ts` with the provided `LeaderInfo` and return the regions that
     // have the same `LeaderInfo`
     pub fn handle_check_leaders<E: KvEngine>(
