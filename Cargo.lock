@@ -4078,8 +4078,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67b66e735395b7ff12f3ebbb4794006aecb365c4c9a82141279b58b227ac3a8b"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4112,8 +4113,9 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.2.0"
-source = "git+https://github.com/tikv/raft-engine.git#9751c6dd5c20a056570c9fbfe62bad6e0d585094"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43ddbee86249b9d6587e548c05588f6d7cc26d7a99c2d32473fa4c0110361db8"
 dependencies = [
  "clap 3.1.6",
  "env_logger",
@@ -4547,6 +4549,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "test_raftstore",
+ "test_sst_importer",
  "test_util",
  "thiserror",
  "tikv",
@@ -5835,6 +5838,7 @@ dependencies = [
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
+ "engine_test",
  "engine_traits",
  "error_code",
  "external_storage_export",
@@ -7224,7 +7228,7 @@ version = "5.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
 dependencies = [
- "libc 0.2.125",
+ "libc 0.2.132",
  "zstd-sys",
 ]
 
