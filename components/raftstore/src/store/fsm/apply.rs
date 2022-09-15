@@ -416,10 +416,10 @@ where
 
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
-    /// Sometimes an `ApplyRes` was created with an applied_index, but data
-    /// before the applied index still not be written to kvdb, let's call this
+    /// Sometimes an `ApplyRes` is created with an applied_index, but data
+    /// before the applied index is still not written to kvdb. Let's call the
     /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
-    /// `flush`. Here is the count of uncommmitted `ApplyRes`.
+    /// `flush`.
     uncommitted_res_count: usize,
 }
 
