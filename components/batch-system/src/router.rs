@@ -96,6 +96,8 @@ where
             }
         }
 
+        ROUTER_CACHE_MISS.inc();
+
         let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
             let cnt = boxes.len();
