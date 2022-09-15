@@ -1810,10 +1810,11 @@ pub mod tests {
             (ApiVersion::V2, ApiVersion::V1ttl, false, false),
             (ApiVersion::V1ttl, ApiVersion::V1, false, false),
         ];
-        for (idx, (src_api, dst_api, test_ttl, result)) in test_backup_cases.iter().enumerate() {
+        for (idx, (src_api, dst_api, test_ttl, result)) in test_backup_cases.into_iter().enumerate()
+        {
             assert_eq!(
-                test_handle_backup_raw_task_impl(*src_api, *dst_api, *test_ttl),
-                *result,
+                test_handle_backup_raw_task_impl(src_api, dst_api, test_ttl),
+                result,
                 "case {}",
                 idx,
             );

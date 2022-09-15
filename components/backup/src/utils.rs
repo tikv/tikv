@@ -571,7 +571,7 @@ pub mod tests {
     fn test_is_valid_raw_value() {
         // api_version, key, value, expire_ts, is_delete, expect_valid,
         // expect_ttl_expired
-        let test_cases = [
+        let test_cases = vec![
             (
                 ApiVersion::V1,
                 b"m".to_vec(),
@@ -638,20 +638,20 @@ pub mod tests {
         ];
 
         for (idx, (api_ver, key, value, expire_ts, is_delete, expect_valid, expect_ttl_expire)) in
-            test_cases.iter().enumerate()
+            test_cases.into_iter().enumerate()
         {
-            let codec = KeyValueCodec::new(true, *api_ver, *api_ver);
+            let codec = KeyValueCodec::new(true, api_ver, api_ver);
             let raw_value = RawValue {
                 user_value: value.clone(),
-                expire_ts: Some(*expire_ts),
-                is_delete: *is_delete,
+                expire_ts: Some(expire_ts),
+                is_delete,
             };
             let encoded_value =
                 dispatch_api_version!(api_ver, API::encode_raw_value_owned(raw_value));
             let (is_valid, ttl_expired) =
-                codec.is_valid_raw_value(key, &encoded_value, 20).unwrap();
-            assert_eq!(is_valid, *expect_valid, "case {}", idx);
-            assert_eq!(ttl_expired, *expect_ttl_expire, "case {}", idx);
+                codec.is_valid_raw_value(&key, &encoded_value, 20).unwrap();
+            assert_eq!(is_valid, expect_valid, "case {}", idx);
+            assert_eq!(ttl_expired, expect_ttl_expire, "case {}", idx);
         }
     }
 }
