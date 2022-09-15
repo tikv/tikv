@@ -60,6 +60,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }));
         }
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        // TODO: maybe we should resolve all locks before starting a flashback.
         // Scan the locks.
         let mut key_locks = Vec::with_capacity(0);
         let mut has_remain_locks = false;
@@ -83,10 +84,13 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
             // record if exists.
             let key_ts_old_writes;
-            (key_ts_old_writes, has_remain_writes) = reader.scan_old_writes(
+            (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
                 self.next_write_key.as_ref(),
                 self.end_key.as_ref(),
-                self.version,
+                Some(self.version),
+                // No need to find an old version for the key if its latest `commit_ts` is smaller
+                // than or equal to the version.
+                |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > self.version,
                 FLASHBACK_BATCH_SIZE - key_locks.len(),
             )?;
             statistics.add(&reader.statistics);
