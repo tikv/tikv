@@ -1121,9 +1121,9 @@ fn cast_real_as_time(
             )
         } else {
             // Convert `val` to a string first and then parse it as a float string.
-            Time::parse(
+            Time::parse_from_real(
                 ctx,
-                &val.to_string(),
+                val,
                 extra.ret_field_type.as_accessor().tp().try_into()?,
                 extra.ret_field_type.get_decimal() as i8,
                 // Enable round
