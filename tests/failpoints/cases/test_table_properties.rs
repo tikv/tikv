@@ -108,7 +108,6 @@ fn test_check_need_gc() {
             .get(),
         0
     );
-
 }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
@@ -237,5 +236,4 @@ fn test_skip_gc_by_check() {
             .get(),
         2
     );
-
 }
