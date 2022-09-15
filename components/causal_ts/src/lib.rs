@@ -36,6 +36,8 @@ pub trait CausalTsProvider: Send + Sync {
 #[enum_dispatch(CausalTsProvider)]
 pub enum CausalTs {
     BatchTsoProvider(BatchTsoProvider<pd_client::RpcClient>),
+    #[cfg(any(test, feature = "testexport"))]
+    BatchTsoProviderTest(BatchTsoProvider<test_pd_client::TestPdClient>),
     TestProvider(tests::TestProvider),
 }
 

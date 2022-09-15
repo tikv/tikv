@@ -370,8 +370,17 @@ impl ServerCluster {
         };
 
         if ApiVersion::V2 == F::TAG {
-            let causal_ts_provider: Arc<CausalTs> =
-                Arc::new(causal_ts::tests::TestProvider::default().into());
+            let causal_ts_provider: Arc<CausalTs> = Arc::new(
+                block_on(causal_ts::BatchTsoProvider::new_opt(
+                    self.pd_client.clone(),
+                    cfg.causal_ts.renew_interval.0,
+                    cfg.causal_ts.available_interval.0,
+                    cfg.causal_ts.renew_batch_min_size,
+                    cfg.causal_ts.renew_batch_max_size,
+                ))
+                .unwrap()
+                .into()
+            );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
             let causal_ob = causal_ts::CausalObserver::new(causal_ts_provider);
