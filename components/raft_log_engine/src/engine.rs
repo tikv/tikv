@@ -523,20 +523,9 @@ impl RaftEngineReadOnly for RaftLogEngine {
         raft_group_id: u64,
         applied_index: u64,
     ) -> Result<Option<kvproto::raft_serverpb::RegionLocalState>> {
-        let mut res = None;
         self.0
-            .scan_messages(
-                raft_group_id,
-                Some(REGION_STATE_KEY),
-                Some(&region_local_state_key(applied_index + 1)),
-                true,
-                |_, value| {
-                    res = Some(value);
-                    false
-                },
-            )
-            .map_err(transfer_error)?;
-        Ok(res)
+            .get_message(raft_group_id, &region_local_state_key(applied_index))
+            .map_err(transfer_error)
     }
 
     fn get_seqno_relation(

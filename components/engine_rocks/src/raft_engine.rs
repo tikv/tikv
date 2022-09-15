@@ -32,12 +32,7 @@ impl RaftEngineReadOnly for RocksEngine {
         applied_index: u64,
     ) -> Result<Option<RegionLocalState>> {
         let key = keys::pending_region_state_key(raft_group_id, applied_index);
-        let res = if let Some((_, value)) = self.seek(CF_DEFAULT, &key)? {
-            Some(parse_from_bytes::<RegionLocalState>(&value)?)
-        } else {
-            None
-        };
-        Ok(res)
+        self.get_msg_cf(CF_DEFAULT, &key)
     }
 
     fn get_seqno_relation(

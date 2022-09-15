@@ -1218,15 +1218,13 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let store_id = self.store.get_id();
         let mut recover_from_raft_db = false;
 
-        if let Some(seqno) = raft_engine.recover_from_raft_db().unwrap() {
-            info!("start to recover states from raftdb"; "seqno" => seqno);
+        if let Some(last_seqno) = raft_engine.recover_from_raft_db().unwrap() {
+            info!("start to recover states from raftdb"; "seqno" => last_seqno);
             recover_from_raft_db = true;
             let flushed_seqnos = raft_engine.get_flushed_seqno().unwrap();
             let min_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.min_seqno());
-            let max_flushed_seqno = flushed_seqnos.as_ref().map(|seqnos| seqnos.max_seqno());
-            let latest_seqno = kv_engine.get_latest_sequence_number();
-            let start_seqno = min_flushed_seqno.unwrap_or(0).max(seqno);
-            let end_seqno = max_flushed_seqno.unwrap_or(latest_seqno);
+            let start_seqno = min_flushed_seqno.unwrap_or(0).max(last_seqno);
+            let end_seqno = kv_engine.get_latest_sequence_number();
             self.seqno_recover_range = Some(RangeInclusive::new(start_seqno, end_seqno));
             let mut raft_wb = raft_engine.log_batch(0);
             gc_seqno_relations(start_seqno, &raft_engine, &mut raft_wb).unwrap();

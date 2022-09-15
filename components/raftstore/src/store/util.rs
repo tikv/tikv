@@ -1372,8 +1372,6 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
                 .get_pending_region_state(region_id, applied_index)
                 .unwrap()
             {
-                wb.delete_pending_region_state(region_id, applied_index)
-                    .unwrap();
                 if state.get_state() == PeerState::Tombstone {
                     wb.delete_apply_state(region_id).unwrap();
                     if let Some(raft_state) = raft_engine.get_raft_state(region_id).unwrap() {
@@ -1388,6 +1386,7 @@ pub fn gc_seqno_relations<ER: RaftEngine>(
             .scan_seqno_relations(region_id, None, Some(seqno + 1), |s, relation| {
                 info!("delete relation during gc relation"; "region_id" => region_id, "relation" => ?relation);
                 wb.delete_seqno_relation(region_id, s).unwrap();
+                wb.delete_pending_region_state(region_id, relation.get_apply_state().get_applied_index()).unwrap();
                 true
             })
             .unwrap();
