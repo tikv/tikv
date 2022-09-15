@@ -166,7 +166,7 @@ pub mod tests {
         metapb::Region,
         raft_cmdpb::{RaftCmdRequest, Request as RaftRequest},
     };
-    use test_raftstore::TestPdClient;
+    use test_pd_client::TestPdClient;
     use txn_types::{Key, TimeStamp};
 
     use super::*;

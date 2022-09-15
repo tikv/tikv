@@ -140,7 +140,7 @@ impl TsoBatch {
 /// the scenario of leader transfer). Other regions without the requirement can
 /// still use older TSO cache.
 #[derive(Default, Debug)]
-struct TsoBatchList {
+pub struct TsoBatchList {
     inner: RwLock<TsoBatchListInner>,
 
     /// Number of remaining (available) TSO.
@@ -191,7 +191,6 @@ impl TsoBatchList {
         usage
     }
 
-    // TODO: make it async
     fn remove_batch(&self, key: u64) {
         if let Some(batch) = self.inner.write().remove(&key) {
             self.tso_remain
@@ -218,7 +217,9 @@ impl TsoBatchList {
                 self.tso_usage.fetch_add(1, Ordering::Relaxed);
                 self.tso_remain.fetch_sub(1, Ordering::Relaxed);
                 if is_used_up {
-                    // TODO: make it async
+                    // Note: do NOT try to make it async.
+                    // According to benchmark, `remove_batch` can be done in ~50ns, while async
+                    // implemented by `Worker` costs ~1us.
                     self.remove_batch(key);
                 }
                 return Some(ts);
@@ -253,8 +254,10 @@ impl TsoBatchList {
                 .fetch_add(batch_size as i32, Ordering::Relaxed);
         }
 
-        // remove items out of capacity limitation.
-        // TODO: make it async
+        // Remove items out of capacity limitation.
+        // Note: do NOT try to make it async.
+        // According to benchmark, `write().pop_first()` can be done in ~50ns, while
+        // async implemented by `Worker` costs ~1us.
         if self.inner.read().len() > self.capacity as usize {
             if let Some((_, batch)) = self.inner.write().pop_first() {
                 self.tso_remain
@@ -630,7 +633,7 @@ impl CausalTsProvider for SimpleTsoProvider {
 
 #[cfg(test)]
 pub mod tests {
-    use test_raftstore::TestPdClient;
+    use test_pd_client::TestPdClient;
 
     use super::*;
 

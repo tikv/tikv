@@ -34,4 +34,10 @@ tokio = { version = "1", features = ["sync"] }
 txn_types = { path = "../txn_types", default-features = false }
 
 [dev-dependencies]
-test_raftstore = { path = "../test_raftstore" }
+criterion = "0.3"
+test_pd_client = { path = "../test_pd_client" }
+
+[[bench]]
+name = "tso"
+path = "benches/tso.rs"
+harness = false
