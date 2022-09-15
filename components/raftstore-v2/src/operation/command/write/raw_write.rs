@@ -182,33 +182,29 @@ const ARBITRARY_CF_TAG: u8 = 3;
 
 // Generally the length of most key is within 128. The length of value is
 // within 2GiB.
+// The algorithm can be checked in https://www.sqlite.org/src4/doc/trunk/www/varint.wiki.
 #[inline]
 fn encode_len(len: u32, buf: &mut Vec<u8>) {
     match len {
-        0..=0x7f => {
-            buf.push(len as u8);
+        0..=240 => buf.push(len as u8),
+        241..=2287 => {
+            buf.push((241 + (len - 240) / 256) as u8);
+            buf.push(((len - 240) % 256) as u8);
         }
-        0x80..=0x3fff => {
-            buf.push(0x80 | ((len >> 8) as u8));
-            buf.push(len as u8);
+        2288..=67823 => {
+            buf.push(249);
+            buf.push(((len - 2288) / 256) as u8);
+            buf.push(((len - 2288) % 256) as u8);
         }
-        0x4000..=0x3fffff => {
-            buf.push(0xc0 | ((len >> 16) as u8));
-            buf.push((len >> 8) as u8);
-            buf.push(len as u8);
+        67824..=16777215 => {
+            buf.push(250);
+            let bytes = len.to_be_bytes();
+            buf.extend_from_slice(&bytes[1..]);
         }
-        0x400000..=0x3fffffff => {
-            buf.push(0xe0 | ((len >> 24) as u8));
-            buf.push((len >> 16) as u8);
-            buf.push((len >> 8) as u8);
-            buf.push(len as u8);
-        }
-        _ => {
-            buf.push(0xf0);
-            buf.push((len >> 24) as u8);
-            buf.push((len >> 16) as u8);
-            buf.push((len >> 8) as u8);
-            buf.push(len as u8);
+        16777216..=u32::MAX => {
+            buf.push(251);
+            let bytes = len.to_be_bytes();
+            buf.extend_from_slice(&bytes);
         }
     }
 }
@@ -217,32 +213,23 @@ fn encode_len(len: u32, buf: &mut Vec<u8>) {
 fn decode_len(buf: &[u8]) -> (u32, &[u8]) {
     let (f, left) = buf.split_first().expect("decode len can't be 0");
     match f {
-        0..=0b01111111 => (*f as u32, left),
-        0b10000000..=0b10111111 => {
-            let (sec, left) = left.split_first().expect("decode len can't be 1");
-            let res = (((*f - 0b10000000) as u32) << 8) | (*sec as u32);
-            (res, left)
+        0..=240 => (*f as u32, left),
+        241..=248 => {
+            let (s, left) = left.split_first().expect("decode len can't be 1");
+            (240 + ((*f as u32) - 241) * 256 + *s as u32, left)
         }
-        0b11000000..=0b11011111 => {
-            let (sec, left) = left.split_at(2);
-            let res = (((*f - 0b11000000) as u32) << 16) | (sec[0] as u32) << 8 | sec[1] as u32;
-            (res, left)
+        249 => {
+            let (f, left) = left.split_first().expect("decode len can't be 2");
+            let (s, left) = left.split_first().expect("decode len can't be 3");
+            (2288 + (*f as u32) * 256 + *s as u32, left)
         }
-        0b11100000..=0b11101111 => {
-            let (sec, left) = left.split_at(3);
-            let res = (((*f - 0b11100000) as u32) << 24)
-                | (sec[0] as u32) << 16
-                | (sec[1] as u32) << 8
-                | sec[2] as u32;
-            (res, left)
+        250 => {
+            let (f, left) = left.split_at(3);
+            (u32::from_be_bytes([0, f[0], f[1], f[2]]), left)
         }
-        0b11110000 => {
-            let (sec, left) = left.split_at(4);
-            let res = ((sec[0] as u32) << 24)
-                | (sec[1] as u32) << 16
-                | (sec[2] as u32) << 8
-                | sec[3] as u32;
-            (res, left)
+        251 => {
+            let (f, left) = left.split_at(4);
+            (u32::from_be_bytes([f[0], f[1], f[2], f[3]]), left)
         }
         _ => panic!("invalid len byte: {}", f),
     }
@@ -437,6 +424,31 @@ mod tests {
 
         let res = decoder.next();
         assert!(res.is_none(), "{:?}", res);
+    }
+
+    #[test]
+    fn test_encode_num() {
+        let mut buf = Vec::new();
+        let cases = vec![
+            0,
+            1,
+            240,
+            241,
+            2287,
+            2288,
+            67823,
+            67824,
+            16777215,
+            16777216,
+            u32::MAX,
+        ];
+        for n in cases {
+            super::encode_len(n, &mut buf);
+            let (m, left) = super::decode_len(&buf);
+            assert_eq!(n, m);
+            assert!(left.is_empty(), "{:?}", left);
+            buf.clear();
+        }
     }
 
     #[test]
