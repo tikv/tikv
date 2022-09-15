@@ -16,4 +16,11 @@ lazy_static! {
         "Total number of channel full errors.",
     )
     .unwrap();
+
+    pub static ref ROUTER_MAILBOX_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_router_mailbox_duration_secs",
+            "Bucketed histogram of handle store write msg duration.",
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
 }

@@ -2,7 +2,7 @@
 
 use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::{BasicMailbox, Mailbox};
-use crate::metrics::CHANNEL_FULL_COUNTER_VEC;
+use crate::metrics::{CHANNEL_FULL_COUNTER_VEC, ROUTER_CACHE_MISS, ROUTER_MAILBOX_DURATION_HISTOGRAM},
 
 use crossbeam::channel::{SendError, TrySendError};
 use std::cell::Cell;
@@ -97,6 +97,7 @@ where
         }
 
         ROUTER_CACHE_MISS.inc();
+        let now = Instant::now();
 
         let (cnt, mailbox) = {
             let mut boxes = self.normals.lock().unwrap();
@@ -118,6 +119,8 @@ where
         }
 
         let res = f(&mailbox);
+        ROUTER_MAILBOX_DURATION_HISTOGRAM.observe(duration_to_sec(now.saturating_elapsed()));
+
         match res {
             Some(r) => {
                 caches.insert(addr, mailbox);
