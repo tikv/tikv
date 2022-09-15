@@ -31,7 +31,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::config::{
     BlockCacheConfig, Config as StorageConfig, FlowControlConfig, IORateLimitConfig,
 };
-use tikv_util::config::{LogFormat, OptionReadableSize, ReadableDuration, ReadableSize};
+use tikv_util::config::{LogFormat, ReadableDuration, ReadableSize};
 
 mod dynamic;
 mod test_config_client;
@@ -69,7 +69,7 @@ fn test_serde_custom_tikv_config() {
     value.slow_log_file = "slow_foo".to_owned();
     value.slow_log_threshold = ReadableDuration::secs(1);
     value.abort_on_panic = true;
-    value.memory_usage_limit = OptionReadableSize(Some(ReadableSize::gb(10)));
+    value.memory_usage_limit = Some(ReadableSize::gb(10));
     value.memory_usage_high_water = 0.65;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
@@ -644,7 +644,7 @@ fn test_serde_custom_tikv_config() {
         },
         block_cache: BlockCacheConfig {
             shared: true,
-            capacity: OptionReadableSize(Some(ReadableSize::gb(40))),
+            capacity: Some(ReadableSize::gb(40)),
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
@@ -829,11 +829,11 @@ fn test_block_cache_backward_compatible() {
     let content = read_file_in_project_dir("integrations/config/test-cache-compatible.toml");
     let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
     assert!(cfg.storage.block_cache.shared);
-    assert!(cfg.storage.block_cache.capacity.0.is_none());
+    assert!(cfg.storage.block_cache.capacity.is_none());
     cfg.compatible_adjust();
-    assert!(cfg.storage.block_cache.capacity.0.is_some());
+    assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
-        cfg.storage.block_cache.capacity.0.unwrap().0,
+        cfg.storage.block_cache.capacity.unwrap().0,
         cfg.rocksdb.defaultcf.block_cache_size.0
             + cfg.rocksdb.writecf.block_cache_size.0
             + cfg.rocksdb.lockcf.block_cache_size.0
