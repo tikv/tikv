@@ -66,7 +66,7 @@ use crate::{
         lock_manager::{
             self,
             lock_wait_context::LockWaitContext,
-            lock_waiting_queue::{LockWaitEntry, LockWaitQueues},
+            lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
             DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
         },
         metrics::*,
@@ -756,13 +756,19 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn on_release_locks(&self, released_locks: ReleasedLocks) {
         // let mut wake_up_events = vec![];
         let mut legacy_wake_up_list = vec![];
+        let mut delay_wake_up_futures = vec![];
+        let wake_up_delay_duration_ms = self
+            .inner
+            .pessimistic_lock_wake_up_delay_duration_ms
+            .load(Ordering::Relaxed);
 
         released_locks.0.into_iter().for_each(|released_lock| {
-            let (lock_wait_entry, legacy_wake_up_index) =
+            let (lock_wait_entry, delay_wake_up_future) =
                 match self.inner.lock_wait_queues.pop_for_waking_up(
                     &released_lock.key,
                     released_lock.start_ts,
                     released_lock.commit_ts,
+                    wake_up_delay_duration_ms,
                 ) {
                     Some(e) => e,
                     None => return,
@@ -776,38 +782,26 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             //     awakened_allow_resuming:
             // lock_wait_entry.parameters.allow_lock_with_conflict, });
 
-            legacy_wake_up_list.push((lock_wait_entry, released_lock, legacy_wake_up_index));
+            legacy_wake_up_list.push((lock_wait_entry, released_lock));
+            if let Some(f) = delay_wake_up_future {
+                delay_wake_up_futures.push(f);
+            }
         });
 
         // self.inner.lock_mgr.on_keys_wakeup(wake_up_events);
-        self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list);
+        self.wake_up_legacy_pessimistic_locks(legacy_wake_up_list, delay_wake_up_futures);
     }
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
-        legacy_wake_up_list: Vec<(Box<LockWaitEntry>, ReleasedLock, Option<usize>)>,
+        legacy_wake_up_list: Vec<(Box<LockWaitEntry>, ReleasedLock)>,
+        delayed_wake_up_futures: Vec<DelayedNotifyAllFuture>,
     ) {
-        let wake_up_delay_duration = Duration::from_millis(
-            self.inner
-                .pessimistic_lock_wake_up_delay_duration_ms
-                .load(Ordering::Relaxed),
-        );
-
-        let lock_wait_queues = self.inner.lock_wait_queues.clone();
-
+        let self1 = self.clone();
         self.get_sched_pool(CommandPri::High)
             .pool
             .spawn(async move {
-                let start_time = std::time::Instant::now();
-
-                let mut delay_wake_up_keys = vec![];
-                for (_, released_locks, legacy_wake_up_index) in &legacy_wake_up_list {
-                    if let &Some(idx) = legacy_wake_up_index {
-                        delay_wake_up_keys.push((released_locks.key.clone(), idx));
-                    }
-                }
-
-                for (lock_info, released_lock, _) in legacy_wake_up_list {
+                for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
                         MvccErrorInner::WriteConflict {
@@ -821,20 +815,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     cb(Err(e.into()));
                 }
 
-                if delay_wake_up_keys.is_empty() {
-                    return;
-                }
-
-                GLOBAL_TIMER_HANDLE
-                    .delay(start_time + wake_up_delay_duration)
-                    .compat()
-                    .await
-                    .unwrap();
-
-                for (key, idx) in delay_wake_up_keys {
-                    let res = lock_wait_queues.delayed_notify_all(&key, idx);
-                    // It returns only None currently.
-                    assert!(res.is_none());
+                for f in delayed_wake_up_futures {
+                    self1
+                        .get_sched_pool(CommandPri::High)
+                        .pool
+                        .spawn(async move {
+                            let res = f.await;
+                            // It returns only None currently.
+                            // TODO: Handle not-none case when supporting resumable pessimistic lock
+                            // requests.
+                            assert!(res.is_none());
+                        })
+                        .unwrap();
                 }
             })
             .unwrap();

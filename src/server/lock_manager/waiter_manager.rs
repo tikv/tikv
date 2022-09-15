@@ -73,7 +73,7 @@ impl Delay {
     }
 
     /// Resets the instance to an earlier deadline.
-    fn reset_shrinking(&self, deadline: Instant) {
+    fn reset(&self, deadline: Instant) {
         if deadline < self.deadline {
             self.inner.borrow_mut().timer.get_mut().reset(deadline);
         }
@@ -248,7 +248,7 @@ impl Waiter {
     }
 
     fn reset_timeout(&self, deadline: Instant) {
-        self.delay.reset_shrinking(deadline);
+        self.delay.reset(deadline);
     }
 
     /// Consumes the `Waiter` to notify the corresponding transaction `going on.
@@ -738,7 +738,7 @@ pub mod tests {
         // Should reset timeout successfully with cloned delay.
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         let delay_clone = delay.clone();
-        delay_clone.reset_shrinking(Instant::now() + Duration::from_millis(50));
+        delay_clone.reset(Instant::now() + Duration::from_millis(50));
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(not_cancelled)));
@@ -750,7 +750,7 @@ pub mod tests {
         // New deadline can't exceed the initial deadline.
         let delay = Delay::new(Instant::now() + Duration::from_millis(100));
         let delay_clone = delay.clone();
-        delay_clone.reset_shrinking(Instant::now() + Duration::from_millis(300));
+        delay_clone.reset(Instant::now() + Duration::from_millis(300));
         assert_elapsed(
             || {
                 block_on(delay.map(|not_cancelled| assert!(not_cancelled)));

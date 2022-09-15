@@ -3257,7 +3257,7 @@ mod tests {
                 DiagnosticContext, KeyLockWaitInfo, KeyWakeUpEvent, LockDigest, LockWaitToken,
                 UpdateWaitForEvent, WaitTimeout,
             },
-            mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, LockType},
+            mvcc::LockType,
             txn::{
                 commands,
                 commands::{AcquirePessimisticLock, Prewrite},
@@ -7358,9 +7358,9 @@ mod tests {
             }
         }
 
-        pub fn set_has_waiter(&mut self, has_waiter: bool) {
-            self.has_waiter.store(has_waiter, Ordering::Relaxed);
-        }
+        // pub fn set_has_waiter(&mut self, has_waiter: bool) {
+        //     self.has_waiter.store(has_waiter, Ordering::Relaxed);
+        // }
     }
 
     impl LockManager for ProxyLockMgr {

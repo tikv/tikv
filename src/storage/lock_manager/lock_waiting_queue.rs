@@ -1,12 +1,25 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BinaryHeap, convert::TryFrom, result::Result, sync::Arc};
+use std::{
+    collections::BinaryHeap,
+    convert::TryFrom,
+    future::Future,
+    pin::Pin,
+    result::Result,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use dashmap;
+use futures_util::compat::Future01CompatExt;
 use kvproto::kvrpcpb;
 use smallvec::SmallVec;
 use sync_wrapper::SyncWrapper;
 use thiserror::Error;
+use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -114,6 +127,9 @@ pub struct KeyLockWaitState {
     queue: BinaryHeap<LockWaitEntryComparableWrapper>,
     last_conflict_start_ts: TimeStamp,
     last_conflict_commit_ts: TimeStamp,
+
+    /// `(id, start_time, delay_duration)`
+    delayed_notify_all_state: Option<(u64, Instant, Arc<AtomicU64>)>,
 }
 
 impl KeyLockWaitState {
@@ -124,13 +140,21 @@ impl KeyLockWaitState {
             queue: BinaryHeap::new(),
             last_conflict_start_ts: TimeStamp::zero(),
             last_conflict_commit_ts: TimeStamp::zero(),
+            delayed_notify_all_state: None,
         }
     }
 }
 
+pub type DelayedNotifyAllFuture = Pin<Box<dyn Future<Output = Option<Box<LockWaitEntry>>> + Send>>;
+
+pub struct LockWaitQueueInner {
+    queue_map: dashmap::DashMap<Key, KeyLockWaitState>,
+    id_allocated: AtomicU64,
+}
+
 #[derive(Clone)]
 pub struct LockWaitQueues<L: LockManager> {
-    queue_map: Arc<dashmap::DashMap<Key, KeyLockWaitState>>,
+    inner: Arc<LockWaitQueueInner>,
     #[allow(dead_code)]
     lock_mgr: L,
 }
@@ -138,7 +162,10 @@ pub struct LockWaitQueues<L: LockManager> {
 impl<L: LockManager> LockWaitQueues<L> {
     pub fn new(lock_mgr: L) -> Self {
         Self {
-            queue_map: Arc::new(dashmap::DashMap::new()),
+            inner: Arc::new(LockWaitQueueInner {
+                queue_map: dashmap::DashMap::new(),
+                id_allocated: AtomicU64::new(1),
+            }),
             lock_mgr,
         }
     }
@@ -149,6 +176,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         current_lock: kvrpcpb::LockInfo,
     ) {
         let mut entry = self
+            .inner
             .queue_map
             .entry(lock_wait_entry.key.clone())
             .or_insert_with(|| KeyLockWaitState::new(current_lock));
@@ -161,26 +189,43 @@ impl<L: LockManager> LockWaitQueues<L> {
     /// Dequeues the head of the lock waiting queue of the specified key,
     /// assuming the popped entry will be woken up.
     ///
-    /// If it's waking up a legacy request and the queue is not empty, a call to
-    /// `delayed_notify_all` need to be scheduled. This function determines if
-    /// it's needed, and the caller is responsible to actually do it.
-    ///
-    /// Returns the popped out entry if any. Also returns the
-    /// `legacy_wake_up_index` which is needed to call `delayed_notify_all`,
-    /// if necessary.
+    /// If it's waking up a legacy request and the queue is not empty, a future
+    /// will be returned and the caller will be responsible for executing it.
+    /// The future waits until `wake_up_delay_duration` is elapsed since the
+    /// most recent waking-up, and then wakes up all lock waiting entries that
+    /// exists at the time when the latest waking-up happens. The future
+    /// will return a `LockWaitEntry` if a resumable entry is popped out
+    /// from the queue while executing, and in this case the caller will be
+    /// responsible to wake it up.
     pub fn pop_for_waking_up(
         &self,
         key: &Key,
         conflicting_start_ts: TimeStamp,
         conflicting_commit_ts: TimeStamp,
-    ) -> Option<(Box<LockWaitEntry>, Option<usize>)> {
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
+        self.pop_for_waking_up_impl(
+            key,
+            conflicting_start_ts,
+            conflicting_commit_ts,
+            Some(wake_up_delay_duration_ms),
+        )
+    }
+
+    fn pop_for_waking_up_impl(
+        &self,
+        key: &Key,
+        conflicting_start_ts: TimeStamp,
+        conflicting_commit_ts: TimeStamp,
+        wake_up_delay_duration_ms: Option<u64>,
+    ) -> Option<(Box<LockWaitEntry>, Option<DelayedNotifyAllFuture>)> {
         let mut result = None;
 
         // We don't want other thread insert insert any more entries between finding the
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.queue_map.remove_if_mut(key, |_, v| {
+        self.inner.queue_map.remove_if_mut(key, |_, v| {
             v.last_conflict_start_ts = conflicting_start_ts;
             v.last_conflict_commit_ts = conflicting_commit_ts;
 
@@ -196,13 +241,14 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if !lock_wait_entry.parameters.allow_lock_with_conflict {
                     // If a pessimistic lock request in legacy mode is woken up, increase the
                     // counter.
-                    let legacy_wake_up_index = if v.queue.is_empty() {
-                        None
-                    } else {
-                        Some(v.legacy_wake_up_cnt)
-                    };
                     v.legacy_wake_up_cnt += 1;
-                    result = Some((lock_wait_entry, legacy_wake_up_index));
+                    let notify_all_future =
+                        if !v.queue.is_empty() && wake_up_delay_duration_ms.is_some() {
+                            self.handle_delayed_wake_up(v, key, wake_up_delay_duration_ms.unwrap())
+                        } else {
+                            None
+                        };
+                    result = Some((lock_wait_entry, notify_all_future));
                 } else {
                     result = Some((lock_wait_entry, None));
                 }
@@ -216,17 +262,76 @@ impl<L: LockManager> LockWaitQueues<L> {
         result
     }
 
-    pub fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
-        // Implementation of this function is required for supporting acquiring lock
-        // after woken up.
-        unimplemented!()
+    fn handle_delayed_wake_up(
+        &self,
+        key_lock_wait_state: &mut KeyLockWaitState,
+        key: &Key,
+        wake_up_delay_duration_ms: u64,
+    ) -> Option<DelayedNotifyAllFuture> {
+        if let Some((_, start_time, delay_duration)) =
+            &mut key_lock_wait_state.delayed_notify_all_state
+        {
+            let new_delay_duration =
+                (start_time.saturating_elapsed().as_millis() as u64) + wake_up_delay_duration_ms;
+            delay_duration.store(new_delay_duration, Ordering::Release);
+            None
+        } else {
+            let notify_id = self.allocate_internal_id();
+            let start_time = Instant::now();
+            let delay_ms = Arc::new(AtomicU64::new(wake_up_delay_duration_ms));
+
+            key_lock_wait_state.delayed_notify_all_state =
+                Some((notify_id, start_time, delay_ms.clone()));
+            Some(Box::pin(self.clone().async_notify_all(
+                key.clone(),
+                start_time,
+                delay_ms,
+                notify_id,
+            )))
+        }
     }
 
-    pub fn delayed_notify_all(
-        &self,
-        key: &Key,
-        legacy_wake_up_index: usize,
+    fn allocate_internal_id(&self) -> u64 {
+        self.inner.id_allocated.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn async_notify_all(
+        self,
+        key: Key,
+        start_time: Instant,
+        delay_ms: Arc<AtomicU64>,
+        notify_id: u64,
     ) -> Option<Box<LockWaitEntry>> {
+        // tokio::task::yield_now().await;
+        let mut prev_delay_ms = 0;
+        // The delay duration may be extended by later waking-up events, by updating the
+        // value of `delay_ms`. So we loop until we find that the elapsed
+        // duration is larger than `delay_ms`.
+        loop {
+            let current_delay_ms = delay_ms.load(Ordering::Acquire);
+            if current_delay_ms == 0 {
+                // Cancelled.
+                return None;
+            }
+
+            if current_delay_ms <= prev_delay_ms
+                || (start_time.saturating_elapsed().as_millis() as u64) >= current_delay_ms
+            {
+                // Timed out.
+                break;
+            }
+
+            let deadline = start_time + Duration::from_millis(current_delay_ms);
+
+            GLOBAL_TIMER_HANDLE.delay(deadline).compat().await.unwrap();
+
+            prev_delay_ms = current_delay_ms;
+        }
+
+        self.delayed_notify_all(&key, notify_id)
+    }
+
+    fn delayed_notify_all(&self, key: &Key, notify_id: u64) -> Option<Box<LockWaitEntry>> {
         let mut popped_lock_wait_entries = SmallVec::<[_; 4]>::new();
 
         let mut woken_up_resumable_entry = None;
@@ -237,9 +342,24 @@ impl<L: LockManager> LockWaitQueues<L> {
         // queue is empty and removing the queue from the map. Wrap the logic
         // within a call to `remove_if_mut` to avoid releasing lock during the
         // procedure.
-        self.queue_map.remove_if_mut(key, |_, v| {
+        self.inner.queue_map.remove_if_mut(key, |_, v| {
+            // The KeyLockWaitState of the key might have been removed from the map and then
+            // recreated. Skip.
+            if v.delayed_notify_all_state
+                .as_ref()
+                .map_or(true, |(id, ..)| *id != notify_id)
+            {
+                return false;
+            }
+
+            // Clear the state which indicates the scheduled `delayed_notify_all` has
+            // finished.
+            v.delayed_notify_all_state = None;
+
             conflicting_start_ts = v.last_conflict_start_ts;
             conflicting_commit_ts = v.last_conflict_commit_ts;
+
+            let legacy_wake_up_index = v.legacy_wake_up_cnt;
 
             while let Some(front) = v.queue.peek() {
                 if front.0.req_states.as_ref().unwrap().is_finished() {
@@ -250,7 +370,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                 if front
                     .0
                     .current_legacy_wakeup_cnt
-                    .map_or(false, |cnt| cnt > legacy_wake_up_index)
+                    .map_or(false, |cnt| cnt >= legacy_wake_up_index)
                 {
                     // This entry is added after the legacy-wakeup that issued the current
                     // delayed_notify_all operation. Keep it and other remaining items in the queue.
@@ -269,7 +389,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         });
 
         // Call callbacks to cancel these entries here.
-        // TODO: Perhaps we'better make it concurrent with scheduling the new command
+        // TODO: Perhaps we'd better make it concurrent with scheduling the new command
         // (if `woken_up_resumable_entry` is some) if there are too many.
         for lock_wait_entry in popped_lock_wait_entries {
             let lock_wait_entry = *lock_wait_entry;
@@ -289,12 +409,18 @@ impl<L: LockManager> LockWaitQueues<L> {
         // Return the item to be woken up in resumable way.
         woken_up_resumable_entry
     }
+
+    pub fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
+        // Implementation of this function is required for supporting continuing
+        // acquiring lock after woken up.
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::mpsc::{channel, Receiver, RecvTimeoutError, TryRecvError},
+        sync::mpsc::{channel, Receiver, RecvTimeoutError},
         time::Duration,
     };
 
@@ -311,17 +437,6 @@ mod tests {
     }
 
     impl TestLockWaitEntryHandle {
-        fn try_get_result(&self) -> Option<Result<PessimisticLockRes, SharedError>> {
-            match self.wake_up_rx.try_recv() {
-                Ok(res) => Some(res),
-                Err(TryRecvError::Empty) => None,
-                Err(e @ _) => panic!(
-                    "unexpected error when receiving result of a LockWaitEntry: {:?}",
-                    e
-                ),
-            }
-        }
-
         fn wait_for_result_timeout(
             &self,
             timeout: Duration,
@@ -437,18 +552,25 @@ mod tests {
             handle
         }
 
+        /// Pop an entry from the queue of the specified key, but do not create
+        /// the future for delayed wake up. Used in tests that do not
+        /// care about the delayed wake up.
         fn must_pop(
             &self,
             key: &[u8],
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
-        ) -> (Box<LockWaitEntry>, Option<usize>) {
-            self.pop_for_waking_up(
-                &Key::from_raw(key),
-                conflicting_start_ts.into(),
-                conflicting_commit_ts.into(),
-            )
-            .unwrap()
+        ) -> Box<LockWaitEntry> {
+            let (entry, f) = self
+                .pop_for_waking_up_impl(
+                    &Key::from_raw(key),
+                    conflicting_start_ts.into(),
+                    conflicting_commit_ts.into(),
+                    None,
+                )
+                .unwrap();
+            assert!(f.is_none());
+            entry
         }
 
         fn must_pop_none(
@@ -457,21 +579,58 @@ mod tests {
             conflicting_start_ts: impl Into<TimeStamp>,
             conflicting_commit_ts: impl Into<TimeStamp>,
         ) {
-            let res = self.pop_for_waking_up(
+            let res = self.pop_for_waking_up_impl(
                 &Key::from_raw(key),
                 conflicting_start_ts.into(),
                 conflicting_commit_ts.into(),
+                Some(1),
             );
             assert!(res.is_none());
         }
 
+        fn must_pop_with_delayed_notify(
+            &self,
+            key: &[u8],
+            conflicting_start_ts: impl Into<TimeStamp>,
+            conflicting_commit_ts: impl Into<TimeStamp>,
+        ) -> (Box<LockWaitEntry>, DelayedNotifyAllFuture) {
+            let (res, f) = self
+                .pop_for_waking_up_impl(
+                    &Key::from_raw(key),
+                    conflicting_start_ts.into(),
+                    conflicting_commit_ts.into(),
+                    Some(50),
+                )
+                .unwrap();
+            (res, f.unwrap())
+        }
+
+        fn must_pop_with_no_delayed_notify(
+            &self,
+            key: &[u8],
+            conflicting_start_ts: impl Into<TimeStamp>,
+            conflicting_commit_ts: impl Into<TimeStamp>,
+        ) -> Box<LockWaitEntry> {
+            let (res, f) = self
+                .pop_for_waking_up_impl(
+                    &Key::from_raw(key),
+                    conflicting_start_ts.into(),
+                    conflicting_commit_ts.into(),
+                    Some(50),
+                )
+                .unwrap();
+            assert!(f.is_none());
+            res
+        }
+
         fn must_not_contains_key(&self, key: &[u8]) {
-            assert!(self.queue_map.get(&Key::from_raw(key)).is_none());
+            assert!(self.inner.queue_map.get(&Key::from_raw(key)).is_none());
         }
 
         fn must_have_next_entry(&self, key: &[u8], start_ts: impl Into<TimeStamp>) {
             assert_eq!(
-                self.queue_map
+                self.inner
+                    .queue_map
                     .get(&Key::from_raw(key))
                     .unwrap()
                     .queue
@@ -482,6 +641,16 @@ mod tests {
                     .start_ts,
                 start_ts.into()
             );
+        }
+
+        fn get_delayed_notify_id(&self, key: &[u8]) -> Option<u64> {
+            self.inner
+                .queue_map
+                .get(&Key::from_raw(key))
+                .unwrap()
+                .delayed_notify_all_state
+                .as_ref()
+                .map(|(id, ..)| *id)
         }
     }
 
@@ -531,7 +700,6 @@ mod tests {
 
         queues
             .must_pop(b"k1", 5, 6)
-            .0
             .check_key(b"k1")
             .check_start_ts(10);
         queues.must_pop_none(b"k1", 5, 6);
@@ -539,7 +707,6 @@ mod tests {
 
         queues
             .must_pop(b"k2", 5, 6)
-            .0
             .check_key(b"k2")
             .check_start_ts(11);
         queues.must_pop_none(b"k2", 5, 6);
@@ -561,7 +728,6 @@ mod tests {
         for &expected_start_ts in &[10u64, 12, 12, 13, 20] {
             queues
                 .must_pop(b"k1", 5, 6)
-                .0
                 .check_key(b"k1")
                 .check_start_ts(expected_start_ts);
         }
@@ -581,7 +747,6 @@ mod tests {
         // Pop an entry and increase the counter
         queues
             .must_pop(b"k1", 5, 6)
-            .0
             .check_key(b"k1")
             .check_start_ts(8);
 
@@ -591,7 +756,6 @@ mod tests {
 
         queues
             .must_pop(b"k1", 5, 6)
-            .0
             .check_key(b"k1")
             .check_start_ts(9);
 
@@ -612,7 +776,6 @@ mod tests {
         ] {
             queues
                 .must_pop(b"k1", 5, 6)
-                .0
                 .check_key(b"k1")
                 .check_start_ts(expected_start_ts)
                 .check_legacy_wake_up_cnt(expected_legacy_wake_up_cnt);
@@ -638,18 +801,16 @@ mod tests {
         for &expected_start_ts in &[12u64, 14] {
             queues
                 .must_pop(b"k1", 5, 6)
-                .0
                 .check_start_ts(expected_start_ts);
         }
         queues.must_not_contains_key(b"k1");
     }
 
-    #[test]
-    fn test_delayed_notify_all() {
+    #[tokio::test]
+    async fn test_delayed_notify_all() {
         let queues = LockWaitQueues::new(DummyLockManager::new());
 
         queues.mock_lock_wait(b"k1", 8, 5, false);
-        queues.mock_lock_wait(b"k1", 9, 5, false);
 
         let handles1 = vec![
             queues.mock_lock_wait(b"k1", 11, 5, false),
@@ -657,7 +818,7 @@ mod tests {
             queues.mock_lock_wait(b"k1", 13, 5, false),
         ];
 
-        let (entry, idx1) = queues.must_pop(b"k1", 5, 6);
+        let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 5, 6);
         entry.check_key(b"k1").check_start_ts(8);
 
         let handles2 = vec![
@@ -666,11 +827,6 @@ mod tests {
             queues.mock_lock_wait(b"k1", 16, 5, false),
         ];
 
-        let (entry, idx2) = queues.must_pop(b"k1", 7, 8);
-        entry.check_key(b"k1").check_start_ts(9);
-
-        queues.mock_lock_wait(b"k1", 17, 5, false);
-
         assert!(
             handles1[0]
                 .wait_for_result_timeout(Duration::from_millis(100))
@@ -678,14 +834,11 @@ mod tests {
         );
 
         // Wakes up transaction 11 to 13, and cancels them.
-        assert!(
-            queues
-                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
-                .is_none()
-        );
+        assert!(delay_wake_up_future.await.is_none());
+        assert!(queues.get_delayed_notify_id(b"k1").is_none());
         handles1
             .into_iter()
-            .for_each(|h| expect_write_conflict(&h.wait_for_result().unwrap_err().0, 7, 8));
+            .for_each(|h| expect_write_conflict(&h.wait_for_result().unwrap_err().0, 5, 6));
         // 14 is not woken up.
         assert!(
             handles2[0]
@@ -693,11 +846,17 @@ mod tests {
                 .is_none()
         );
 
+        queues.mock_lock_wait(b"k1", 9, 5, false);
+        // 9 will be woken up and 14 to 16 will be scheduled for delayed wake up.
+        let (entry, delay_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
+        entry.check_key(b"k1").check_start_ts(9);
+
+        queues.mock_lock_wait(b"k1", 17, 5, false);
+        let handle18 = queues.mock_lock_wait(b"k1", 18, 5, false);
+
         // Wakes up 14, and stops at 15 which is resumable. Then, 15 should be returned
         // and the caller should be responsible for waking it up.
-        let entry15 = queues
-            .delayed_notify_all(&Key::from_raw(b"k1"), idx2.unwrap())
-            .unwrap();
+        let entry15 = delay_wake_up_future.await.unwrap();
         entry15.check_key(b"k1").check_start_ts(15);
 
         let mut it = handles2.into_iter();
@@ -720,11 +879,13 @@ mod tests {
 
         queues.must_have_next_entry(b"k1", 16);
 
-        // Calls delayed_notify_all when there are no entries can be woken up by it.
-        // Nothing would happen.
+        // Call delayed_notify_all when the key does not have
+        // `delayed_notify_all_state`. This case may happen when the key is
+        // removed and recreated in the map. Nothing would happen.
+        assert!(queues.get_delayed_notify_id(b"k1").is_none());
         assert!(
             queues
-                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
+                .delayed_notify_all(&Key::from_raw(b"k1"), 1)
                 .is_none()
         );
         queues.must_have_next_entry(b"k1", 16);
@@ -735,16 +896,32 @@ mod tests {
         );
 
         // Remove remaining entries of the key.
-        let (entry, idx) = queues.must_pop(b"k1", 7, 8);
-        // After waking up a legacy lock request, `idx` should be `Some` which indicates
-        // `delayed_notify_all` invocation need to be scheduled (in production).
+
+        let (entry, delayed_wake_up_future) = queues.must_pop_with_delayed_notify(b"k1", 7, 8);
         entry.check_key(b"k1").check_start_ts(16);
-        assert!(idx.is_some());
-        let (entry, idx) = queues.must_pop(b"k1", 7, 8);
+        queues.must_have_next_entry(b"k1", 17);
+        let notify_id = queues.get_delayed_notify_id(b"k1").unwrap();
+        // Call `delayed_notify_all` with a different ID. Nothing happens.
+        assert!(
+            queues
+                .delayed_notify_all(&Key::from_raw(b"k1"), notify_id - 1)
+                .is_none()
+        );
+        queues.must_have_next_entry(b"k1", 17);
+
+        // Don't need to create new future if there already exists one for the key.
+        let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
         entry.check_key(b"k1").check_start_ts(17);
-        // But `delayed_notify_all` don't need to be invoked if the queue is cleared,
-        // therefore `idx` can be none.
-        assert!(idx.is_none());
+        queues.must_have_next_entry(b"k1", 18);
+
+        queues.mock_lock_wait(b"k1", 19, 5, false);
+        assert!(delayed_wake_up_future.await.is_none());
+        // 18 will be cancelled with ts of the latest wake-up event.
+        expect_write_conflict(&handle18.wait_for_result().unwrap_err().0, 9, 10);
+
+        // Don't need to create new future if the queue is cleared.
+        let entry = queues.must_pop_with_no_delayed_notify(b"k1", 9, 10);
+        entry.check_key(b"k1").check_start_ts(19);
 
         queues.must_not_contains_key(b"k1");
 
@@ -752,7 +929,7 @@ mod tests {
         // completely waking up). Nothing would happen.
         assert!(
             queues
-                .delayed_notify_all(&Key::from_raw(b"k1"), idx1.unwrap())
+                .delayed_notify_all(&Key::from_raw(b"k1"), 1)
                 .is_none()
         );
         queues.must_not_contains_key(b"k1");
