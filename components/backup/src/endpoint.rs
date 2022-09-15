@@ -1749,6 +1749,7 @@ pub mod tests {
             assert!(resp.has_error());
             return false;
         }
+
         let current_expire_cnt = BACKUP_RAW_EXPIRED_COUNT.get();
         let expect_expire_cnt = if test_ttl {
             original_expire_cnt + ttl_expire_cnt
