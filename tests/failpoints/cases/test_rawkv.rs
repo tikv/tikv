@@ -123,9 +123,6 @@ const FP_CAUSAL_OBSERVER_FLUSH_TIMESTAMP: &str = "causal_observer_flush_timestam
 
 /// Verify correctness on leader transfer.
 // TODO: simulate and test for the scenario of issue #12498.
-// TestProvider does not impl flush for different nodes.
-// TODO: Change to BatchTsoProvider in integration test.
-#[ignore]
 #[test]
 fn test_leader_transfer() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
@@ -182,7 +179,6 @@ fn test_leader_transfer() {
 
 /// Verify correctness on region merge.
 /// See issue #12680.
-#[ignore]
 #[test]
 fn test_region_merge() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
