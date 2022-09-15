@@ -109,8 +109,6 @@ fn test_check_need_gc() {
         0
     );
 
-    GC_COMPACTION_FILTER_PERFORM.reset();
-    GC_COMPACTION_FILTER_SKIP.reset();
 }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
@@ -240,6 +238,4 @@ fn test_skip_gc_by_check() {
         2
     );
 
-    GC_COMPACTION_FILTER_PERFORM.reset();
-    GC_COMPACTION_FILTER_SKIP.reset();
 }
