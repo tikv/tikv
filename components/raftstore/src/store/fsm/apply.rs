@@ -584,10 +584,17 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
-        if !delegate.pending_remove {
-            delegate.write_apply_state(self.kv_wb_mut());
+        if self.host.pre_persist(&delegate.region, true, None) {
+            if !delegate.pending_remove {
+                delegate.write_apply_state(self.kv_wb_mut());
+            }
+            self.commit_opt(delegate, false);
+        } else {
+            debug!("do not persist when finish_for";
+                "region" => ?delegate.region,
+                "tag" => &delegate.tag,
+            );
         }
-        self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
@@ -1073,8 +1080,9 @@ where
             }
             let mut has_unflushed_data =
                 self.last_flush_applied_index != self.apply_state.get_applied_index();
-            if has_unflushed_data && should_write_to_engine(&cmd)
-                || apply_ctx.kv_wb().should_write_to_engine()
+            if (has_unflushed_data && should_write_to_engine(&cmd)
+                || apply_ctx.kv_wb().should_write_to_engine())
+                && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
             {
                 apply_ctx.commit(self);
                 if let Some(start) = self.handle_start.as_ref() {
@@ -4972,6 +4980,7 @@ mod tests {
         cmd_sink: Option<Arc<Mutex<Sender<CmdBatch>>>>,
         filter_compact_log: Arc<AtomicBool>,
         filter_consistency_check: Arc<AtomicBool>,
+        skip_persist_when_pre_commit: Arc<AtomicBool>,
         delay_remove_ssts: Arc<AtomicBool>,
         last_delete_sst_count: Arc<AtomicU64>,
         last_pending_delete_sst_count: Arc<AtomicU64>,
@@ -5093,6 +5102,17 @@ mod tests {
         }
 
         fn on_applied_current_term(&self, _: raft::StateRole, _: &Region) {}
+    }
+
+    impl RegionChangeObserver for ApplyObserver {
+        fn pre_persist(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _is_finished: bool,
+            _cmd: Option<&RaftCmdRequest>,
+        ) -> bool {
+            !self.skip_persist_when_pre_commit.load(Ordering::SeqCst)
+        }
     }
 
     #[test]
@@ -5717,6 +5737,8 @@ mod tests {
         host.registry
             .register_admin_observer(1, BoxAdminObserver::new(obs.clone()));
         host.registry
+            .register_region_change_observer(1, BoxRegionChangeObserver::new(obs.clone()));
+        host.registry
             .register_query_observer(1, BoxQueryObserver::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
@@ -5751,6 +5773,8 @@ mod tests {
         reg.region.mut_region_epoch().set_version(3);
         router.schedule_task(1, Msg::Registration(reg));
 
+        obs.skip_persist_when_pre_commit
+            .store(true, Ordering::SeqCst);
         let mut index_id = 1;
         let put_entry = EntryBuilder::new(index_id, 1)
             .put(b"k1", b"v1")
@@ -5759,7 +5783,19 @@ mod tests {
             .epoch(1, 3)
             .build();
         router.schedule_task(1, Msg::apply(apply(peer_id, 1, 1, vec![put_entry], vec![])));
-        fetch_apply_res(&rx);
+        let apply_res = fetch_apply_res(&rx);
+
+        // We don't persist at `finish_for`, since we disabled `pre_persist`.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index() + 1
+        );
+        obs.skip_persist_when_pre_commit
+            .store(false, Ordering::SeqCst);
 
         // Phase 1: we test if pre_exec will filter execution of commands correctly.
         index_id += 1;
@@ -5780,6 +5816,16 @@ mod tests {
         // Executing CompactLog is filtered and takes no effect.
         assert_eq!(apply_res.exec_res.len(), 0);
         assert_eq!(apply_res.apply_state.get_truncated_state().get_index(), 0);
+
+        // We persist at `finish_for`, since we enabled `pre_persist`.
+        let state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        assert_eq!(
+            apply_res.apply_state.get_applied_index(),
+            state.get_applied_index()
+        );
 
         index_id += 1;
         // Don't filter CompactLog

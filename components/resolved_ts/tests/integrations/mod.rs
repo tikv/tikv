@@ -5,9 +5,11 @@ mod testsuite;
 use std::time::Duration;
 
 use futures::executor::block_on;
-use kvproto::kvrpcpb::*;
+use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
+use tempfile::Builder;
 use test_raftstore::sleep_ms;
+use test_sst_importer::*;
 pub use testsuite::*;
 
 #[test]
@@ -51,6 +53,33 @@ fn test_resolved_ts_basic() {
     // Resolved ts of region1 should be advanced
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_get_rts_ge(r1.id, current_ts);
+
+    // ingest sst
+    let temp_dir = Builder::new().prefix("test_resolved_ts").tempdir().unwrap();
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+
+    let mut sst_epoch = RegionEpoch::default();
+    sst_epoch.set_conf_ver(1);
+    sst_epoch.set_version(4);
+
+    let (mut meta, data) = gen_sst_file(&sst_path, sst_range);
+    meta.set_region_id(r1.id);
+    meta.set_region_epoch(sst_epoch);
+
+    suite.upload_sst(r1.id, &meta, &data).unwrap();
+
+    let tracked_index_before = suite.region_tracked_index(r1.id);
+    suite.must_ingest_sst(r1.id, meta);
+    let mut tracked_index_after = suite.region_tracked_index(r1.id);
+    for _ in 0..10 {
+        if tracked_index_after > tracked_index_before {
+            break;
+        }
+        tracked_index_after = suite.region_tracked_index(r1.id);
+        sleep_ms(200)
+    }
+    assert!(tracked_index_after > tracked_index_before);
 
     suite.stop();
 }
