@@ -78,8 +78,8 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         AutoSplitController, CheckLeaderRunner, GlobalReplicationState, LocalReader,
-        SeqnoRelationRunner, SeqnoRelationTask, SnapManager, SnapManagerBuilder, SplitCheckRunner,
-        SplitConfigManager, StoreMetaDelegate,
+        SeqnoRelationTask, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -665,15 +665,6 @@ where
                 DEFAULT_CHECK_INTERVAL,
             );
             sst_worker.start_with_timer(sst_runner);
-        }
-
-        if let Some(seqno_worker) = &mut self.seqno_worker {
-            let seqno_runner = SeqnoRelationRunner::new(
-                engines.store_meta.clone(),
-                ApplyResNotifier::new(self.router.clone(), Some(seqno_worker.scheduler())),
-                self.engines.as_ref().unwrap().engines.clone(),
-            );
-            seqno_worker.start(seqno_runner);
         }
 
         let unified_read_pool = if self.config.readpool.is_unified_pool_enabled() {

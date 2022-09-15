@@ -316,13 +316,10 @@ impl Simulator for NodeCluster {
 
         let mut seqno_worker = None;
         if let Some(listener) = flush_listener {
-            let mut worker = LazyWorker::new("seqno_relation");
+            let worker = LazyWorker::new("seqno_relation");
             let scheduler = worker.scheduler();
             let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
-            let seqno_runner =
-                SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
             listener.update_notifier(notifier);
-            worker.start(seqno_runner);
             seqno_worker = Some(worker);
         };
 

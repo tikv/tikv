@@ -101,7 +101,8 @@ use crate::{
             RegionRunner, RegionTask, SeqnoRelationTask, SplitCheckTask,
         },
         Callback, CasualMessage, GlobalReplicationState, InspectedRaftMessage, MergeResultKind,
-        PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
+        PdTask, PeerMsg, PeerTick, RaftCommand, SeqnoRelationRunner, SignificantMsg, SnapManager,
+        StoreMsg, StoreTick,
     },
     Result,
 };
@@ -442,29 +443,51 @@ where
     ER: RaftEngine,
 {
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-        for r in apply_res {
-            self.router.try_send(
-                r.region_id,
-                PeerMsg::ApplyRes {
-                    res: ApplyTaskRes::Apply(r),
-                },
-            );
+        if let Some(scheduler) = self.seqno_scheduler.as_ref() {
+            if let Err(e) = scheduler.schedule(SeqnoRelationTask::ApplyRes(apply_res)) {
+                error!(
+                    "failed to schedule apply res to seqno relation worker";
+                    "err" => ?e,
+                );
+            }
+        } else {
+            for r in apply_res {
+                let _ = self.router.force_send(
+                    r.region_id,
+                    PeerMsg::ApplyRes {
+                        res: ApplyTaskRes::Apply(r),
+                    },
+                );
+            }
         }
     }
+
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>) {
-        self.router.try_send(region_id, msg);
+        let _ = self.router.force_send(region_id, msg);
     }
 
-    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-        if let Err(e) = self
-            .seqno_scheduler
-            .as_ref()
-            .unwrap()
-            .schedule(SeqnoRelationTask::ApplyRes(apply_res))
-        {
-            warn!(
-                "failed to schedule apply res to seqno relation worker";
-                "err" => ?e,
+    fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool) {
+        if let Some(scheduler) = self.seqno_scheduler.as_ref() {
+            if let Err(e) = scheduler.schedule(SeqnoRelationTask::DestroyRegion {
+                region,
+                peer_id,
+                merge_from_snapshot,
+            }) {
+                error!(
+                    "failed to schedule apply res to seqno relation worker";
+                    "err" => ?e,
+                );
+            }
+        } else {
+            self.notify_one(
+                region.get_id(),
+                PeerMsg::ApplyRes {
+                    res: ApplyTaskRes::Destroy {
+                        region_id: region.get_id(),
+                        peer_id,
+                        merge_from_snapshot,
+                    },
+                },
             );
         }
     }
@@ -1627,7 +1650,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
 
-        let workers = Workers {
+        let mut workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
@@ -1661,13 +1684,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let raftlog_gc_scheduler = workers
             .background_worker
             .start_with_timer("raft-gc-worker", raftlog_gc_runner);
-        if let Some(w) = workers.seqno_worker.as_ref() {
-            let scheduler = w.scheduler();
-            if let Err(e) = scheduler.schedule(SeqnoRelationTask::InitRaftlogGcScheduler(
+
+        if let Some(seqno_worker) = workers.seqno_worker.as_mut() {
+            let seqno_runner = SeqnoRelationRunner::new(
+                store_meta.clone(),
+                self.router.clone(),
+                engines.clone(),
                 raftlog_gc_scheduler.clone(),
-            )) {
-                error!("failed to init raftlog gc scheduler for seqno relation worker"; "err" => ?e);
-            }
+            );
+            seqno_worker.start(seqno_runner);
         }
 
         let raftlog_fetch_scheduler = workers.raftlog_fetch_worker.start(

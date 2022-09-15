@@ -602,29 +602,12 @@ where
         // Write its source peers' `RegionLocalState` together with itself for atomicity
         for r in destroy_regions {
             write_peer_state(kv_wb, r, PeerState::Tombstone, None)?;
-            if self.save_states_to_raft_db {
-                write_peer_state_to_raft(
-                    &self.engines,
-                    raft_wb,
-                    None,
-                    r,
-                    PeerState::Tombstone,
-                    None,
-                )?;
-            }
         }
         let last_index = snap.get_metadata().get_index();
 
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
         if self.save_states_to_raft_db {
-            write_peer_state_to_raft(
-                &self.engines,
-                raft_wb,
-                None,
-                &region,
-                PeerState::Applying,
-                None,
-            )?;
+            write_peer_state_to_raft(raft_wb, None, &region, PeerState::Applying, None)?;
         }
 
         self.raft_state_mut().set_last_index(last_index);
@@ -1160,9 +1143,8 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
-pub fn write_peer_state_to_raft<EK: KvEngine, ER: RaftEngine>(
-    engines: &Engines<EK, ER>,
-    raft_wb: &mut ER::LogBatch,
+pub fn write_peer_state_to_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
     index: Option<u64>,
     region: &metapb::Region,
     state: PeerState,
@@ -1186,24 +1168,6 @@ pub fn write_peer_state_to_raft<EK: KvEngine, ER: RaftEngine>(
             .put_pending_region_state(region_id, index, &region_state)
             .unwrap();
     } else {
-        engines
-            .raft
-            .scan_seqno_relations(
-                region_id,
-                None,
-                Some(engines.kv.get_latest_sequence_number()),
-                |seqno, relation| {
-                    raft_wb.delete_seqno_relation(region_id, seqno).unwrap();
-                    raft_wb
-                        .delete_pending_region_state(
-                            region_id,
-                            relation.get_apply_state().get_applied_index(),
-                        )
-                        .unwrap();
-                    true
-                },
-            )
-            .unwrap();
         raft_wb.put_region_state(region_id, &region_state).unwrap();
     }
     Ok(())

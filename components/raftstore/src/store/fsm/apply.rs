@@ -343,8 +343,7 @@ pub trait Notifier<EK: KvEngine>: Send {
     // Notify apply res to regions.
     fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
     fn notify_one(&self, region_id: u64, msg: PeerMsg<EK>);
-    // Notify apply res to store.
-    fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>);
+    fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool);
     fn clone_box(&self) -> Box<dyn Notifier<EK>>;
 }
 
@@ -679,11 +678,7 @@ where
                 }
             }
             self.uncommitted_res_count = 0;
-            if self.disable_wal {
-                self.notifier.notify_store(apply_res);
-            } else {
-                self.notifier.notify(apply_res);
-            }
+            self.notifier.notify(apply_res);
         }
 
         let elapsed = t.saturating_elapsed();
@@ -3733,15 +3728,10 @@ where
         }
         if !self.delegate.stopped {
             self.destroy(ctx);
-            ctx.notifier.notify_one(
-                self.delegate.region_id(),
-                PeerMsg::ApplyRes {
-                    res: TaskRes::Destroy {
-                        region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id,
-                        merge_from_snapshot: d.merge_from_snapshot,
-                    },
-                },
+            ctx.notifier.notify_destroy_region(
+                self.delegate.region.clone(),
+                self.delegate.id,
+                d.merge_from_snapshot,
             );
         }
     }
@@ -4680,14 +4670,21 @@ mod tests {
                 let _ = self.tx.send(PeerMsg::ApplyRes { res });
             }
         }
-        fn notify_store(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
-            self.notify(apply_res)
-        }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
             let _ = self.tx.send(msg);
         }
         fn clone_box(&self) -> Box<dyn Notifier<EK>> {
             Box::new(self.clone())
+        }
+
+        fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool) {
+            let _ = self.tx.send(PeerMsg::ApplyRes {
+                res: TaskRes::Destroy {
+                    region_id: region.get_id(),
+                    peer_id,
+                    merge_from_snapshot,
+                },
+            });
         }
     }
 

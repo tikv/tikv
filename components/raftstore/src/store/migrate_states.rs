@@ -5,10 +5,7 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use protobuf::Message;
 use tikv_util::{box_try, info};
 
-use crate::{
-    store::{fsm::apply, peer_storage::recover_from_applying_state},
-    Result,
-};
+use crate::{store::peer_storage::recover_from_applying_state, Result};
 
 pub fn migrate_states_from_kvdb_to_raftdb<EK, ER>(engines: &Engines<EK, ER>) -> Result<()>
 where
@@ -66,4 +63,4 @@ where
     Ok(())
 }
 
-pub fn migrate_states_from_raftdb_to_kvdb() {}
+// pub fn migrate_states_from_raftdb_to_kvdb() {}

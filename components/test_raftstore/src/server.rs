@@ -40,9 +40,8 @@ use raftstore::{
             ApplyRouter, RaftBatchSystem, RaftRouter,
         },
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot,
-        SeqnoRelationRunner, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
-        StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
 };
@@ -586,13 +585,10 @@ impl ServerCluster {
         );
         let mut seqno_worker = None;
         if let Some(listener) = flush_listener {
-            let mut worker = LazyWorker::new("seqno-relation");
+            let worker = LazyWorker::new("seqno-relation");
             let scheduler = worker.scheduler();
             let notifier = ApplyResNotifier::new(router.clone(), Some(scheduler));
-            let seqno_runner =
-                SeqnoRelationRunner::new(store_meta.clone(), notifier.clone(), engines.clone());
             listener.update_notifier(notifier);
-            worker.start(seqno_runner);
             seqno_worker = Some(worker);
         };
         node.start(

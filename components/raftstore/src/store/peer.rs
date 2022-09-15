@@ -1364,28 +1364,9 @@ where
                     None
                 },
             )?;
-            if save_states_to_raft_db {
-                if keep_data {
-                    // We may need to apply logs for source regions after restart.
-                    // TODO: Add a test for it.
-                    write_peer_state_to_raft(
-                        engines,
-                        &mut raft_wb,
-                        Some(self.get_store().applied_index()),
-                        &region,
-                        PeerState::Tombstone,
-                        self.pending_merge_state.clone(),
-                    )?;
-                } else {
-                    write_peer_state_to_raft(
-                        engines,
-                        &mut raft_wb,
-                        None,
-                        &region,
-                        PeerState::Tombstone,
-                        None,
-                    )?;
-                }
+            if save_states_to_raft_db && !keep_data {
+                // Write region state again before clearing raft engine for region.
+                write_peer_state_to_raft(&mut raft_wb, None, &region, PeerState::Tombstone, None)?;
             }
 
             // write kv rocksdb first in case of restart happen between two write
