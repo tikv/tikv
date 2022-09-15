@@ -11,37 +11,39 @@ use tirocks::{
     DbOptions,
 };
 
-pub enum RocksDbOptions {
+enum Options {
     Rocks(DbOptions),
     Titan(TitanDbOptions),
 }
 
+pub struct RocksDbOptions(Options);
+
 impl RocksDbOptions {
     #[inline]
     pub fn env(&self) -> Option<&Arc<Env>> {
-        match self {
-            RocksDbOptions::Rocks(opt) => opt.env(),
-            RocksDbOptions::Titan(opt) => opt.env(),
+        match &self.0 {
+            Options::Rocks(opt) => opt.env(),
+            Options::Titan(opt) => opt.env(),
         }
     }
 
     #[inline]
     pub fn is_titan(&self) -> bool {
-        matches!(self, RocksDbOptions::Titan(_))
+        matches!(self.0, Options::Titan(_))
     }
 
     #[inline]
     pub(crate) fn into_rocks(self) -> DbOptions {
-        match self {
-            RocksDbOptions::Rocks(opt) => opt,
+        match self.0 {
+            Options::Rocks(opt) => opt,
             _ => panic!("it's a titan option"),
         }
     }
 
     #[inline]
-    pub(crate) fn into_rocks_titan(self) -> TitanDbOptions {
-        match self {
-            RocksDbOptions::Titan(opt) => opt,
+    pub(crate) fn into_titan(self) -> TitanDbOptions {
+        match self.0 {
+            Options::Titan(opt) => opt,
             _ => panic!("it's not a titan option"),
         }
     }
@@ -50,7 +52,7 @@ impl RocksDbOptions {
 impl Default for RocksDbOptions {
     #[inline]
     fn default() -> Self {
-        Self::Rocks(Default::default())
+        RocksDbOptions(Options::Rocks(Default::default()))
     }
 }
 
@@ -59,9 +61,9 @@ impl Deref for RocksDbOptions {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        match self {
-            RocksDbOptions::Rocks(opt) => opt,
-            RocksDbOptions::Titan(opt) => opt,
+        match &self.0 {
+            Options::Rocks(opt) => opt,
+            Options::Titan(opt) => opt,
         }
     }
 }
@@ -69,9 +71,9 @@ impl Deref for RocksDbOptions {
 impl DerefMut for RocksDbOptions {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            RocksDbOptions::Rocks(opt) => opt,
-            RocksDbOptions::Titan(opt) => opt,
+        match &mut self.0 {
+            Options::Rocks(opt) => opt,
+            Options::Titan(opt) => opt,
         }
     }
 }

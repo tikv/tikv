@@ -10,36 +10,38 @@ use tirocks::{
     CfOptions,
 };
 
-pub enum RocksCfOptions {
+enum Options {
     Rocks(CfOptions),
     Titan(TitanCfOptions),
     // Only used for replace.
     None,
 }
 
+pub struct RocksCfOptions(Options);
+
 impl RocksCfOptions {
     #[inline]
     pub fn is_titan(&self) -> bool {
-        matches!(self, RocksCfOptions::Titan(_))
+        matches!(self.0, Options::Titan(_))
     }
 
     #[inline]
     pub fn default_titan() -> Self {
-        RocksCfOptions::Titan(Default::default())
+        RocksCfOptions(Options::Titan(Default::default()))
     }
 
     #[inline]
     pub(crate) fn into_rocks(self) -> CfOptions {
-        match self {
-            RocksCfOptions::Rocks(opt) => opt,
+        match self.0 {
+            Options::Rocks(opt) => opt,
             _ => panic!("it's a titan cf option"),
         }
     }
 
     #[inline]
-    pub(crate) fn into_rocks_titan(self) -> TitanCfOptions {
-        match self {
-            RocksCfOptions::Titan(opt) => opt,
+    pub(crate) fn into_titan(self) -> TitanCfOptions {
+        match self.0 {
+            Options::Titan(opt) => opt,
             _ => panic!("it's not a titan cf option"),
         }
     }
@@ -48,7 +50,7 @@ impl RocksCfOptions {
 impl Default for RocksCfOptions {
     #[inline]
     fn default() -> Self {
-        Self::Rocks(Default::default())
+        RocksCfOptions(Options::Rocks(Default::default()))
     }
 }
 
@@ -57,10 +59,10 @@ impl Deref for RocksCfOptions {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        match self {
-            RocksCfOptions::Rocks(opt) => opt,
-            RocksCfOptions::Titan(opt) => opt,
-            RocksCfOptions::None => unreachable!(),
+        match &self.0 {
+            Options::Rocks(opt) => opt,
+            Options::Titan(opt) => opt,
+            Options::None => unreachable!(),
         }
     }
 }
@@ -68,10 +70,10 @@ impl Deref for RocksCfOptions {
 impl DerefMut for RocksCfOptions {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            RocksCfOptions::Rocks(opt) => opt,
-            RocksCfOptions::Titan(opt) => opt,
-            RocksCfOptions::None => unreachable!(),
+        match &mut self.0 {
+            Options::Rocks(opt) => opt,
+            Options::Titan(opt) => opt,
+            Options::None => unreachable!(),
         }
     }
 }
@@ -83,14 +85,14 @@ impl engine_traits::TitanCfOptions for RocksCfOptions {
     }
 
     fn set_min_blob_size(&mut self, size: u64) {
-        if let RocksCfOptions::Titan(opt) = self {
+        if let Options::Titan(opt) = &mut self.0 {
             opt.set_min_blob_size(size);
             return;
         }
-        if let RocksCfOptions::Rocks(r) = mem::replace(self, RocksCfOptions::None) {
+        if let Options::Rocks(r) = mem::replace(&mut self.0, Options::None) {
             let mut opt: TitanCfOptions = r.into();
             opt.set_min_blob_size(size);
-            *self = RocksCfOptions::Titan(opt);
+            self.0 = Options::Titan(opt);
             return;
         }
         unreachable!()

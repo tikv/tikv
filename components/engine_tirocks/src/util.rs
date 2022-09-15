@@ -55,9 +55,9 @@ fn new_sanitized(
         }
         builder.open(path.as_ref()).map_err(r2e)
     } else {
-        let mut builder = MultiCfTitanBuilder::new(db_opt.into_rocks_titan());
+        let mut builder = MultiCfTitanBuilder::new(db_opt.into_titan());
         for (name, opt) in cf_opts {
-            builder.add_cf(name, opt.into_rocks_titan());
+            builder.add_cf(name, opt.into_titan());
         }
         builder.open(path.as_ref()).map_err(r2e)
     }
