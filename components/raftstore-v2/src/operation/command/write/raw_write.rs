@@ -219,9 +219,8 @@ fn decode_len(buf: &[u8]) -> (u32, &[u8]) {
             (240 + ((*f as u32) - 241) * 256 + *s as u32, left)
         }
         249 => {
-            let (f, left) = left.split_first().expect("decode len can't be 2");
-            let (s, left) = left.split_first().expect("decode len can't be 3");
-            (2288 + (*f as u32) * 256 + *s as u32, left)
+            let (f, left) = left.split_at(2);
+            (2288 + (f[0] as u32) * 256 + f[1] as u32, left)
         }
         250 => {
             let (f, left) = left.split_at(3);
