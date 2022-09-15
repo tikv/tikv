@@ -1433,6 +1433,41 @@ where
                     .get_engine_size()
                     .expect("get raft engine size");
 
+                let disabled_raft_engine = self.config.raft_engine.enable;
+                let raft_db_path = self.config.raft_store.raftdb_path;
+                let seperate_raft_db = disabled_raft_engine && (raft_db_path.len() != 0);
+                let mut raftdb_disk_status = disk::DiskUsage::Normal;
+                if seperate_raft_db {
+                    let raftdb_disk_stats = match fs2::statvfs(&raft_db_path) {
+                        Err(e) => {
+                            error!(
+                                "get disk stat for raftdb failed";
+                                "raftdb path" => raft_db_path.to_str(),
+                                "err" => ?e
+                            );
+                            return;
+                        }
+                        Ok(stats) => stats,
+                    };
+                    let raftdb_disk_cap = raftdb_disk_stats.total_space();
+                    let raftdb_almost_full_percent =
+                        self.config.raft_store.raftdb_almost_full_percent;
+                    let mut raftdb_remain =
+                        raftdb_disk_cap.checked_sub(raft_size).unwrap_or_default();
+                    raftdb_remain = cmp::min(raftdb_remain, raftdb_disk_stats.available_space());
+                    raftdb_disk_status = if raftdb_remain * 100
+                        <= raftdb_disk_cap * (100 - raftdb_almost_full_percent / 2)
+                    {
+                        disk::DiskUsage::AlreadyFull
+                    } else if raftdb_remain * 100
+                        <= raftdb_disk_cap * (100 - raftdb_almost_full_percent)
+                    {
+                        disk::DiskUsage::AlmostFull
+                    } else {
+                        disk::DiskUsage::Normal
+                    };
+                }
+
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
