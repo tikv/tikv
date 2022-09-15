@@ -1,20 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    borrow::ToOwned,
-    io,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::borrow::ToOwned;
 
-use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 pub use server::setup::initial_logger;
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv_util::{self, config, logger};
+use tikv_util::{self, logger};
 
-use crate::config::{validate_and_persist_config, ProxyConfig};
+use crate::config::ProxyConfig;
 pub use crate::fatal;
 
 #[allow(dead_code)]

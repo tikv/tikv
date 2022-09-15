@@ -31,6 +31,7 @@ elif [[ $M == "testnew" ]]; then
     cargo test --package tests --test proxy normal::ingest
     cargo test --package tests --test proxy normal::snapshot
     cargo test --package tests --test proxy normal::restart
+    cargo test --package tests --test proxy normal::persist
     # tests based on new-mock-engine-store, for some tests not available for new proxy
     cargo test --package tests --test proxy proxy
 elif [[ $M == "debug" ]]; then

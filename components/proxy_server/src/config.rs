@@ -1,10 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::{hash_map::RandomState, HashSet},
-    iter::FromIterator,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashSet, iter::FromIterator, path::Path};
 
 use itertools::Itertools;
 use online_config::OnlineConfig;

@@ -21,7 +21,7 @@ use raft::{eraftpb, StateRole};
 pub mod config;
 mod consistency_check;
 pub mod dispatcher;
-pub mod error;
+mod error;
 mod metrics;
 pub mod region_info_accessor;
 mod split_check;
@@ -103,6 +103,18 @@ pub trait AdminObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminResponse) {}
 
+    /// Hook before exec admin request, returns whether we should skip this
+    /// admin.
+    fn pre_exec_admin(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
+        false
+    }
+
     /// Hook to call immediately after exec command
     /// Will be a special persistence after this exec if a observer returns true.
     fn post_exec_admin(
@@ -112,18 +124,6 @@ pub trait AdminObserver: Coprocessor {
         _: &RaftApplyState,
         _: &RegionState,
         _: &mut ApplyCtxInfo<'_>,
-    ) -> bool {
-        false
-    }
-
-    /// Hook before exec admin request, returns whether we should skip this
-    /// admin.
-    fn pre_exec_admin(
-        &self,
-        _: &mut ObserverContext<'_>,
-        _: &AdminRequest,
-        _: u64,
-        _: u64,
     ) -> bool {
         false
     }
@@ -147,6 +147,12 @@ pub trait QueryObserver: Coprocessor {
     /// For now, the `region` in `ObserverContext` is an empty region.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &Cmd) {}
 
+    /// Hook before exec write request, returns whether we should skip this
+    /// write.
+    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
+        false
+    }
+
     /// Hook to call immediately after exec command.
     /// Will be a special persistence after this exec if a observer returns true.
     fn post_exec_query(
@@ -157,12 +163,6 @@ pub trait QueryObserver: Coprocessor {
         _: &RegionState,
         _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
-        false
-    }
-
-    /// Hook before exec write request, returns whether we should skip this
-    /// write.
-    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
         false
     }
 }
@@ -307,6 +307,17 @@ pub enum RegionChangeEvent {
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
+
+    /// Should be called everytime before we write a WriteBatch into
+    /// KvEngine. Returns false if we can't commit at this time.
+    fn pre_persist(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _is_finished: bool,
+        _cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default)]

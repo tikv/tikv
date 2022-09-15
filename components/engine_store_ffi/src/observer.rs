@@ -9,17 +9,13 @@ use std::{
 
 use collections::HashMap;
 use engine_tiflash::FsStatsExt;
-use engine_traits::{CfName, SstMetaInfo};
+use engine_traits::SstMetaInfo;
 use kvproto::{
-    import_sstpb::SstMeta,
     metapb::Region,
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
-        RaftCmdRequest, RaftCmdResponse, Request,
-    },
+    raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, RaftCmdRequest},
     raft_serverpb::RaftApplyState,
 };
-use raft::{eraftpb, StateRole};
+use raft::StateRole;
 use raftstore::{
     coprocessor,
     coprocessor::{
@@ -131,7 +127,7 @@ impl TiFlashObserver {
     ) -> Self {
         let engine_store_server_helper =
             gen_engine_store_server_helper(engine.engine_store_server_helper);
-        // TODO(tiflash) start thread pool
+        // start thread pool for pre handle snapshot
         let snap_pool = Builder::new(tikv_util::thd_name!("region-task"))
             .max_thread_count(snap_handle_pool_size)
             .build_future_pool();
@@ -242,7 +238,6 @@ impl TiFlashObserver {
 
 impl Coprocessor for TiFlashObserver {
     fn stop(&self) {
-        // TODO(tiflash) remove this when pre apply merged
         info!("shutdown tiflash observer"; "peer_id" => self.peer_id);
         self.apply_snap_pool.as_ref().unwrap().shutdown();
     }
@@ -583,6 +578,43 @@ impl RegionChangeObserver for TiFlashObserver {
             self.engine_store_server_helper
                 .handle_destroy(ob_ctx.region().get_id());
         }
+    }
+    fn pre_persist(
+        &self,
+        ob_ctx: &mut ObserverContext<'_>,
+        is_finished: bool,
+        cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        let should_persist = if is_finished {
+            fail::fail_point!("on_pre_persist_with_finish", |_| { true });
+            false
+        } else {
+            let cmd = cmd.unwrap();
+            if cmd.has_admin_request() {
+                match cmd.get_admin_request().get_cmd_type() {
+                    // Merge needs to get the latest apply index.
+                    AdminCmdType::CommitMerge | AdminCmdType::RollbackMerge => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        };
+        if should_persist {
+            info!(
+            "observe pre_persist, persist";
+            "region_id" => ob_ctx.region().get_id(),
+            "peer_id" => self.peer_id,
+            );
+        } else {
+            debug!(
+            "observe pre_persist";
+            "region_id" => ob_ctx.region().get_id(),
+            "peer_id" => self.peer_id,
+            "is_finished" => is_finished,
+            );
+        };
+        should_persist
     }
 }
 

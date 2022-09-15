@@ -1,6 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(proc_macro_hygiene)]
 use std::{
     ffi::CStr,
     os::raw::{c_char, c_int},
@@ -10,7 +9,6 @@ use std::{
 
 use clap::{App, Arg, ArgMatches};
 use tikv::config::TiKvConfig;
-use tikv_util::config::ReadableDuration;
 
 use crate::{config::make_tikv_config, fatal, setup::overwrite_config_with_cmd_args};
 

@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
         mpsc, Arc, Mutex,
     },
     thread,
@@ -43,15 +43,11 @@ use grpcio::{EnvBuilder, Environment};
 use grpcio_health::HealthService;
 use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::{
-    coprocessor::{
-        config::SplitCheckConfigManager, BoxConsistencyCheckObserver, ConsistencyCheckMethod,
-        CoprocessorHost, RawConsistencyCheckObserver, RegionInfoAccessor,
-    },
+    coprocessor::{config::SplitCheckConfigManager, CoprocessorHost, RegionInfoAccessor},
     router::ServerRaftStoreRouter,
     store::{
         config::RaftstoreConfigManager,
@@ -75,7 +71,7 @@ use tikv::{
     server::{
         config::{Config as ServerConfig, ServerConfigManager},
         create_raft_storage,
-        gc_worker::{AutoGcConfig, GcWorker},
+        gc_worker::GcWorker,
         raftkv::ReplicaReadLockChecker,
         resolve,
         service::{DebugService, DiagnosticsService},
@@ -84,8 +80,7 @@ use tikv::{
         GRPC_THREAD_PREFIX,
     },
     storage::{
-        self, config_manager::StorageConfigManger, mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::FlowController, Engine,
+        self, config_manager::StorageConfigManger, txn::flow_controller::FlowController, Engine,
     },
 };
 use tikv_util::{
@@ -217,7 +212,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 #[inline]
 fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
     config: TiKvConfig,
-    proxy_config: ProxyConfig,
+    _proxy_config: ProxyConfig,
     engine_store_server_helper: &EngineStoreServerHelper,
 ) {
     let encryption_key_manager =
@@ -927,7 +922,6 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             data_sink_reg_handle.clone(),
         );
         self.to_stop.push(single_target_worker);
-        let rsmeter_pubsub_service = resource_metering::PubSubService::new(data_sink_reg_handle);
 
         let cfg_manager = resource_metering::ConfigManager::new(
             self.config.resource_metering.clone(),

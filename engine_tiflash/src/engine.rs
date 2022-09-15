@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
+// Disable warnings for unused engine_rocks's feature.
+#![allow(dead_code)]
+#![allow(unused_variables)]
 use std::{
     any::Any,
     cell::RefCell,

@@ -1,5 +1,5 @@
 use tikv::{
-    server::{lock_manager::waiter_manager::Callback, Error, Result},
+    server::lock_manager::waiter_manager::Callback,
     storage::{
         lock_manager::{DiagnosticContext, Lock, LockManager as LockManagerTrait, WaitTimeout},
         ProcessResult, StorageCallback,

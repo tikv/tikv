@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 pub use engine_store_ffi::{
     interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
     RawCppPtr, UnwrapExternCFunc,
@@ -18,10 +17,8 @@ use engine_traits::{
     Engines, Iterable, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use kvproto::{
-    raft_cmdpb::{AdminCmdType, AdminRequest},
-    raft_serverpb::{
-        MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
-    },
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{RaftApplyState, RegionLocalState},
 };
 pub use mock_cluster::{Cluster, ProxyConfig, Simulator, TestPdClient, TiFlashEngine};
 use protobuf::Message;
@@ -840,7 +837,7 @@ impl ProxyNotifier {
             {
                 let lock = self.mutex.lock().unwrap();
                 if !self.flag.load(std::sync::atomic::Ordering::Acquire) {
-                    self.cv.wait_timeout(lock, timeout);
+                    let _ = self.cv.wait_timeout(lock, timeout);
                 }
             }
             self.flag.store(false, std::sync::atomic::Ordering::Release);

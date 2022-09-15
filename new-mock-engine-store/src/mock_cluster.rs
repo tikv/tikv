@@ -1,13 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(slice_take)]
-
 use std::{
-    borrow::BorrowMut,
-    cell::RefCell,
-    collections::{hash_map::Entry as MapEntry, BTreeMap},
-    path::Path,
-    pin::Pin,
+    collections::hash_map::Entry as MapEntry,
     result,
     sync::{atomic::AtomicU8, Arc, Mutex, RwLock},
     thread,
@@ -22,19 +16,17 @@ pub use engine_store_ffi::{
     interfaces::root::DB as ffi_interfaces, EngineStoreServerHelper, RaftStoreProxyFFIHelper,
     RawCppPtr, TiFlashEngine, UnwrapExternCFunc,
 };
-use engine_traits::{Engines, KvEngine, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{Engines, KvEngine, CF_DEFAULT};
 use file_system::IORateLimiter;
 use futures::executor::block_on;
 use kvproto::{
     errorpb::Error as PbError,
-    metapb::{self, Buckets, PeerRole, RegionEpoch, StoreLabel},
+    metapb::{self, PeerRole, RegionEpoch, StoreLabel},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Request, *},
     raft_serverpb::RaftMessage,
 };
-use lazy_static::lazy_static;
 use pd_client::PdClient;
 pub use proxy_server::config::ProxyConfig;
-use proxy_server::fatal;
 use raftstore::{
     store::{
         bootstrap_store,
@@ -58,12 +50,9 @@ pub use test_raftstore::{
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
     new_transfer_leader_cmd, sleep_ms, TestPdClient,
 };
-use tikv::{
-    config::TiKvConfig,
-    server::{Node, Result as ServerResult},
-};
+use tikv::{config::TiKvConfig, server::Result as ServerResult};
 use tikv_util::{
-    crit, debug, error, info, safe_panic,
+    debug, error, safe_panic,
     sys::SysQuota,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -259,7 +248,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         key_manager: &Option<Arc<DataKeyManager>>,
         router: &Option<RaftRouter<TiFlashEngine, engine_rocks::RocksEngine>>,
     ) {
-        let (mut ffi_helper_set, node_cfg) =
+        let (mut ffi_helper_set, _node_cfg) =
             self.make_ffi_helper_set(0, engines, key_manager, router);
 
         // We can not use moved or cloned engines any more.

@@ -457,10 +457,11 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    /// `post_exec` should be called immediately after we executed one raft command.
-    /// It notifies observers side effects of this command before execution of the next command,
-    /// including req/resp, apply state, modified region state, etc.
-    /// Return true observers think a persistence is necessary.
+    /// `post_exec` should be called immediately after we executed one raft
+    /// command. It notifies observers side effects of this command before
+    /// execution of the next command, including req/resp, apply state,
+    /// modified region state, etc. Return true observers think a
+    /// persistence is necessary.
     pub fn post_exec(
         &self,
         region: &Region,
@@ -631,6 +632,26 @@ impl<E: KvEngine> CoprocessorHost<E> {
             event,
             role
         );
+    }
+
+    /// `pre_persist` is called we we want to persist data or meta for a region.
+    /// For example, in `finish_for` and `commit`,
+    /// we will separately call `pre_persist` with is_finished = true/false.
+    /// By returning false, we reject this persistence.
+    pub fn pre_persist(
+        &self,
+        region: &Region,
+        is_finished: bool,
+        cmd: Option<&RaftCmdRequest>,
+    ) -> bool {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            if !observer.pre_persist(&mut ctx, is_finished, cmd) {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn on_flush_applied_cmd_batch(
@@ -927,11 +948,10 @@ mod tests {
             _: u64,
             _: &crate::store::SnapKey,
             _: Option<&Snapshot>,
-        ) -> Result<()> {
+        ) {
             self.called
                 .fetch_add(ObserverIndex::PostApplySnapshot as usize, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
-            Ok(())
         }
 
         fn should_pre_apply_snapshot(&self) -> bool {
@@ -1100,7 +1120,7 @@ mod tests {
         index += ObserverIndex::PreApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
-        let _ = host.post_apply_snapshot(&region, 0, &key, None);
+        host.post_apply_snapshot(&region, 0, &key, None);
         index += ObserverIndex::PostApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
 
