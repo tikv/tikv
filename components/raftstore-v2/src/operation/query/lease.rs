@@ -231,7 +231,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         reader.update(progress);
     }
 
-    pub(crate) fn has_applied_to_current_term(&mut self) -> bool {
+    pub(crate) fn has_applied_to_current_term(&self) -> bool {
         self.entry_storage().applied_term() == self.term()
     }
 
@@ -240,7 +240,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return LeaseState::Suspect;
         }
         // None means now.
-        let state = self.leader_lease_mut().inspect(None);
+        let state = self.leader_lease().inspect(None);
         if LeaseState::Expired == state {
             debug!(
                 self.logger,
