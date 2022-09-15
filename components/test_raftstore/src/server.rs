@@ -379,7 +379,7 @@ impl ServerCluster {
                     cfg.causal_ts.renew_batch_max_size,
                 ))
                 .unwrap()
-                .into()
+                .into(),
             );
             self.causal_ts_providers
                 .insert(node_id, causal_ts_provider.clone());
