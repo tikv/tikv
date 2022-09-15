@@ -997,6 +997,13 @@
 # info-log-dir = ""
 # info-log-level = "info"
 
+## The percentage of raftdb disk already used to trigger the disk usage stat to almost full.
+## It should be set between 1 and 100. If availble capactiy of raftdb is less than
+## (100 - `full_raftdb_percent`)/2, the disk usage stat will be marked as already full.
+## `raftdb_almost_full_percent` is disabled if `raft-engine` is enabled or `raftdb-path`
+## is not specified.
+# raftdb-alomost-full-percent = 90
+
 [raftdb.defaultcf]
 ## Recommend to set it the same as `rocksdb.defaultcf.compression-per-level`.
 # compression-per-level = ["no", "no", "lz4", "lz4", "lz4", "zstd", "zstd"]
