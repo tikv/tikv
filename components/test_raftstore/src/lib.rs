@@ -8,13 +8,11 @@ extern crate tikv_util;
 mod cluster;
 mod config;
 mod node;
-mod pd;
 mod router;
 mod server;
 mod transport_simulate;
 mod util;
 
 pub use crate::{
-    cluster::*, config::Config, node::*, pd::*, router::*, server::*, transport_simulate::*,
-    util::*,
+    cluster::*, config::Config, node::*, router::*, server::*, transport_simulate::*, util::*,
 };
