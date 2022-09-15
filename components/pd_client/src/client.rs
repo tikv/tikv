@@ -1,23 +1,30 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-use std::u64;
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
-use futures::channel::mpsc;
-use futures::compat::{Compat, Future01CompatExt};
-use futures::executor::block_on;
-use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::StreamExt;
-use grpcio::{CallOption, EnvBuilder, Environment, WriteFlags};
-
-use kvproto::metapb;
-use kvproto::pdpb::{self, Member};
-use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use futures::{
+    channel::mpsc,
+    compat::{Compat, Future01CompatExt},
+    executor::block_on,
+    future::{self, BoxFuture, FutureExt, TryFutureExt},
+    sink::SinkExt,
+    stream::StreamExt,
+};
+use grpcio::{EnvBuilder, Environment, WriteFlags};
+use kvproto::{
+    metapb,
+    pdpb::{self, Member},
+    replication_modepb::{RegionReplicationStatus, ReplicationStatus},
+};
 use security::SecurityManager;
 use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -27,10 +34,12 @@ use txn_types::TimeStamp;
 use yatp::task::future::TaskCell;
 use yatp::ThreadPool;
 
-use super::metrics::*;
-use super::util::{check_resp_header, sync_request, Client, PdConnector};
-use super::{Config, FeatureGate, PdFuture, UnixSecs};
-use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
+use super::{
+    metrics::*,
+    util::{call_option_inner, check_resp_header, sync_request, Client, PdConnector},
+    Config, Error, FeatureGate, PdClient, PdFuture, RegionInfo, RegionStat, Result, UnixSecs,
+    REQUEST_TIMEOUT,
+};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -179,17 +188,6 @@ impl RpcClient {
         block_on(self.pd_client.reconnect(true))
     }
 
-    /// Creates a new call option with default request timeout.
-    #[inline]
-    pub fn call_option(client: &Client) -> CallOption {
-        client
-            .inner
-            .rl()
-            .target_info()
-            .call_option()
-            .timeout(Duration::from_secs(REQUEST_TIMEOUT))
-    }
-
     /// Gets given key's Region and Region's leader from PD.
     fn get_region_and_leader(
         &self,
@@ -204,14 +202,15 @@ impl RpcClient {
         req.set_region_key(key.to_vec());
 
         let executor = move |client: &Client, req: pdpb::GetRegionRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_region_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_region_async_opt", e)
+                    })
+            };
 
             Box::pin(async move {
                 let mut resp = handler.await?;
@@ -243,12 +242,15 @@ impl RpcClient {
         req.set_store_id(store_id);
 
         let executor = move |client: &Client, req: pdpb::GetStoreRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_store_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_store_async", e));
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_store_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_store_async", e)
+                    })
+            };
 
             Box::pin(async move {
                 let mut resp = handler.await?;
@@ -322,7 +324,7 @@ impl PdClient for RpcClient {
     ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
         use kvproto::pdpb::WatchGlobalConfigRequest;
         let req = WatchGlobalConfigRequest::default();
-        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
+        sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, _| {
             client.watch_global_config(&req)
         })
     }
@@ -345,8 +347,8 @@ impl PdClient for RpcClient {
         req.set_store(stores);
         req.set_region(region);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.bootstrap_opt(&req, Self::call_option(&self.pd_client))
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.bootstrap_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
         Ok(resp.replication_status.take())
@@ -360,8 +362,8 @@ impl PdClient for RpcClient {
         let mut req = pdpb::IsBootstrappedRequest::default();
         req.set_header(self.header());
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.is_bootstrapped_opt(&req, Self::call_option(&self.pd_client))
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.is_bootstrapped_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -376,8 +378,8 @@ impl PdClient for RpcClient {
         let mut req = pdpb::AllocIdRequest::default();
         req.set_header(self.header());
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.alloc_id_opt(&req, Self::call_option(&self.pd_client))
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.alloc_id_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -393,8 +395,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store(store);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.put_store_opt(&req, Self::call_option(&self.pd_client))
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.put_store_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -410,8 +412,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_store_id(store_id);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_store_opt(&req, Self::call_option(&self.pd_client))
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.get_store_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -436,8 +438,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_exclude_tombstone_stores(exclude_tombstone);
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_all_stores_opt(&req, Self::call_option(&self.pd_client))
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.get_all_stores_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -452,8 +454,8 @@ impl PdClient for RpcClient {
         let mut req = pdpb::GetClusterConfigRequest::default();
         req.set_header(self.header());
 
-        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_cluster_config_opt(&req, Self::call_option(&self.pd_client))
+        let mut resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.get_cluster_config_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
@@ -486,14 +488,15 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_region_by_id_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
+                    })
+            };
             Box::pin(async move {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -524,14 +527,15 @@ impl PdClient for RpcClient {
         req.set_region_id(region_id);
 
         let executor = move |client: &Client, req: pdpb::GetRegionByIdRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_region_by_id_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_region_by_id_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_region_by_id", e)
+                    })
+            };
             Box::pin(async move {
                 let mut resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -661,12 +665,13 @@ impl PdClient for RpcClient {
         req.set_region(region);
 
         let executor = move |client: &Client, req: pdpb::AskSplitRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .ask_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e));
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .ask_split_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_split", e))
+            };
 
             Box::pin(async move {
                 let resp = handler.await?;
@@ -696,12 +701,15 @@ impl PdClient for RpcClient {
         req.set_split_count(count as u32);
 
         let executor = move |client: &Client, req: pdpb::AskBatchSplitRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .ask_batch_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "ask_batch_split", e));
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .ask_batch_split_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "ask_batch_split", e)
+                    })
+            };
 
             Box::pin(async move {
                 let resp = handler.await?;
@@ -736,12 +744,15 @@ impl PdClient for RpcClient {
         }
         let executor = move |client: &Client, req: pdpb::StoreHeartbeatRequest| {
             let feature_gate = client.feature_gate.clone();
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .store_heartbeat_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "store_heartbeat", e));
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .store_heartbeat_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "store_heartbeat", e)
+                    })
+            };
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -770,14 +781,15 @@ impl PdClient for RpcClient {
         req.set_regions(regions.into());
 
         let executor = move |client: &Client, req: pdpb::ReportBatchSplitRequest| {
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .report_batch_split_async_opt(&req, Self::call_option(client))
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "report_batch_split", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .report_batch_split_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "report_batch_split", e)
+                    })
+            };
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -806,8 +818,8 @@ impl PdClient for RpcClient {
         }
         req.set_region(region.region);
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.scatter_region_opt(&req, Self::call_option(&self.pd_client))
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.scatter_region_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())
     }
@@ -823,15 +835,15 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
 
         let executor = move |client: &Client, req: pdpb::GetGcSafePointRequest| {
-            let option = Self::call_option(client);
-            let handler = client
-                .inner
-                .rl()
-                .client_stub
-                .get_gc_safe_point_async_opt(&req, option)
-                .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
-                });
+            let handler = {
+                let inner = client.inner.rl();
+                inner
+                    .client_stub
+                    .get_gc_safe_point_async_opt(&req, call_option_inner(&inner))
+                    .unwrap_or_else(|e| {
+                        panic!("fail to request PD {} err {:?}", "get_gc_saft_point", e)
+                    })
+            };
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
@@ -860,8 +872,8 @@ impl PdClient for RpcClient {
         req.set_header(self.header());
         req.set_region_id(region_id);
 
-        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client| {
-            client.get_operator_opt(&req, Self::call_option(&self.pd_client))
+        let resp = sync_request(&self.pd_client, LEADER_CHANGE_RETRY, |client, option| {
+            client.get_operator_opt(&req, option)
         })?;
         check_resp_header(resp.get_header())?;
 
