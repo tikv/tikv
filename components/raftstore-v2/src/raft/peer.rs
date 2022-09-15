@@ -140,6 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && tablet_index != 0
         {
             peer.raft_group.campaign()?;
+            peer.set_has_ready();
         }
 
         Ok(peer)
@@ -215,6 +216,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self.tablet
     }
 
+    #[inline]
     pub fn tablet_mut(&mut self) -> &mut CachedTablet<EK> {
         &mut self.tablet
     }
@@ -324,8 +326,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
+    // TODO
     pub fn has_pending_merge_state(&self) -> bool {
-        // TODOTODO
         false
     }
 

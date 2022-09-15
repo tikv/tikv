@@ -15,7 +15,7 @@ use raftstore::{
         msg::{ErrorCallback, ReadCallback},
         propose_read_index, should_renew_lease,
         util::{check_region_epoch, LeaseState},
-        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
+        ReadDelegate, ReadIndexRequest, ReadProgress, TrackVer, Transport,
     },
     Error,
 };
@@ -192,6 +192,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         if let Some(progress) = read_progress {
             let mut meta = store_meta.lock().unwrap();
+            // TODO: remove this block of code when snapshot is done; add the logic into
+            // on_persist_snapshot.
+            let reader = meta.readers.get_mut(&self.region_id());
+            if reader.is_none() {
+                let region = self.region().clone();
+                let region_id = region.get_id();
+                let peer_id = self.peer_id();
+                let delegate = ReadDelegate {
+                    region: Arc::new(region),
+                    peer_id,
+                    term: self.term(),
+                    applied_term: self.entry_storage().applied_term(),
+                    leader_lease: None,
+                    last_valid_ts: Timespec::new(0, 0),
+                    tag: format!("[region {}] {}", region_id, peer_id),
+                    read_progress: self.read_progress().clone(),
+                    pending_remove: false,
+                    bucket_meta: None,
+                    txn_extra_op: Default::default(),
+                    txn_ext: Default::default(),
+                    track_ver: TrackVer::new(),
+                };
+                meta.readers.insert(self.region_id(), delegate);
+            }
+
             let reader = meta.readers.get_mut(&self.region_id()).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }

@@ -18,7 +18,6 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, RaftEngine, Snapshot, TabletFactory};
 use fail::fail_point;
 use kvproto::{
-    kvrpcpb::ExtraOp as TxnExtraOp,
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse, Request, Response},
 };
@@ -28,7 +27,7 @@ use raftstore::{
         cmd_resp,
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress, ReadResponse,
-        RegionSnapshot, RequestInspector, RequestPolicy, TrackVer, TxnExt,
+        RegionSnapshot, RequestInspector, RequestPolicy,
     },
     Error, Result,
 };

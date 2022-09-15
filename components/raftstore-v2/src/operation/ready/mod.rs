@@ -226,7 +226,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         _ctx: &mut crate::batch::StoreContext<EK, ER, T>,
         _take_committed_entries: Vec<raft::prelude::Entry>,
     ) {
-        unimplemented!()
+        // TODO
     }
 
     /// Processing the ready of raft. A detail description of how it's handled

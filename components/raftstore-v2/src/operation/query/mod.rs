@@ -49,14 +49,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
 {
     fn inspect_read(&mut self, req: &RaftCmdRequest) -> Result<RequestPolicy> {
         if req.get_header().get_read_quorum() {
+            println!("read_quorum");
             return Ok(RequestPolicy::ReadIndex);
         }
 
         // If applied index's term is differ from current raft's term, leader transfer
         // must happened, if read locally, we may read old value.
-        if !self.fsm.peer_mut().has_applied_to_current_term() {
+        // TODO: to add the block back when apply is implemented.
+        /*if !self.fsm.peer_mut().has_applied_to_current_term() {
             return Ok(RequestPolicy::ReadIndex);
-        }
+        }*/
 
         match self.fsm.peer_mut().inspect_lease() {
             LeaseState::Valid => Ok(RequestPolicy::ReadLocal),
