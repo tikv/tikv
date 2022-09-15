@@ -33,7 +33,7 @@ use crate::{
 const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(10);
 // consider scale up read pool size if the average thread cpu usage is higher
 // than this threahold.
-const READ_POOL_THREAD_HIGH_THREAHOLD: f64 = 0.8;
+const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
 
@@ -433,12 +433,12 @@ impl ReadPoolConfigRunner {
         let new_thread_count = if self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < cpu_quota
-            && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THREAHOLD
+            && read_pool_cpu > self.cur_thread_count as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks > self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
             self.cur_thread_count + 1
         } else if self.cur_thread_count > self.core_thread_count
-            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_HIGH_THREAHOLD
+            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
             self.cur_thread_count - 1
