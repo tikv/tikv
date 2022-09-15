@@ -1150,6 +1150,8 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                 // TiKV API v2 is enabled when causal_ts_provider is Some.
                 // In this scenario, get TSO from causal_ts_provider to make sure that
                 // RawKV write requests will get larger TSO after this point.
+                // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
+                // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
                 Some(provider) => provider.get_ts().unwrap_or_default(),
                 None => pd_client.get_tso().await.unwrap_or_default(),
             };
@@ -1432,7 +1434,8 @@ mod tests {
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},
     };
-    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
+    use test_pd_client::TestPdClient;
+    use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
         storage::{kv::Engine, TestEngineBuilder},

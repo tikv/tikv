@@ -19,6 +19,7 @@ test = true
 harness = true
 
 [dependencies]
+async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 bytes = "1"
 chrono = "0.4"
@@ -74,6 +75,7 @@ async-trait = "0.1"
 engine_panic = { path = "../engine_panic" }
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored", "protobuf-codec"] }
 hex = "0.4"
+protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8.0"
 tempdir = "0.3"
 tempfile = "3.0"
