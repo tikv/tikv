@@ -21,9 +21,10 @@ use collections::{HashMap, HashSet};
 use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
-use futures::channel::oneshot::Sender;
+use futures::channel::{mpsc::UnboundedSender, oneshot::Sender};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
+    brpb::CheckAdminResponse,
     errorpb,
     import_sstpb::SwitchMode,
     kvrpcpb::DiskFullOpt,
@@ -911,10 +912,19 @@ where
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
 
-        // print some info and do some sanity check
+        info!(
+            "snapshot recovery started";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "target_index" => target_index,
+            "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+
+        );
+
+        // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
-                "snapshot follower wait apply started";
+                "snapshot follower recovery started";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
@@ -1011,6 +1021,35 @@ where
             "peer_id" => self.fsm.peer.peer_id(),
         );
         self.fsm.peer.flashback_state.take();
+    }
+
+    fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
+        if !self.fsm.peer.is_leader() {
+            // no need to check non-leader pending conf change.
+            // in snapshot recovery after we stopped all conf changes from PD.
+            // if the follower slow than leader and has the pending conf change.
+            // that's means
+            // 1. if the follower didn't finished the conf change
+            //    => it cannot be chosen to be leader during recovery.
+            // 2. if the follower has been chosen to be leader
+            //    => it already apply the pending conf change already.
+            return;
+        }
+        debug!(
+            "check pending conf for leader";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+        );
+        let region = self.fsm.peer.region();
+        let mut resp = CheckAdminResponse::default();
+        resp.set_region(region.clone());
+        let pending_admin = self.fsm.peer.raft_group.raft.has_pending_conf()
+            || self.fsm.peer.is_merging()
+            || self.fsm.peer.is_splitting();
+        resp.set_has_pending_admin(pending_admin);
+        if let Err(err) = ch.unbounded_send(resp) {
+            warn!("failed to send check admin response"; "err" => ?err)
+        }
     }
 
     fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
@@ -1432,6 +1471,7 @@ where
             SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
                 self.on_snapshot_recovery_wait_apply(syncer)
             }
+            SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
         }
     }
 

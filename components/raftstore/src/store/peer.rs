@@ -2102,6 +2102,16 @@ where
         true
     }
 
+    // during the snapshot recovery, follower unconditionaly forward the
+    // commit_index. pub fn force_forward_commit_index(&mut self) -> bool {
+
+    //     let persisted = self.raft_group.raft.raft_log.persisted;
+
+    //     self.raft_group.raft.raft_log.committed =
+    //         std::cmp::max(self.raft_group.raft.raft_log.committed, persisted);
+    //     true
+    // }
+
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
@@ -2343,12 +2353,12 @@ where
     }
 
     #[inline]
-    fn is_splitting(&self) -> bool {
+    pub fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
     #[inline]
-    fn is_merging(&self) -> bool {
+    pub fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
     }

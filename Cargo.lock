@@ -2628,7 +2628,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f95ac338b3312e0a9bd7c33c9647a87a74314567"
+source = "git+https://github.com/pingcap/kvproto.git#9fdbd8c1db327dbfd2fe693e5d9a2a7c79682234"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5116,6 +5116,7 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
+ "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5262,6 +5263,35 @@ dependencies = [
  "autocfg",
  "static_assertions",
  "version_check 0.9.4",
+]
+
+[[package]]
+name = "snap_recovery"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "encryption",
+ "encryption_export",
+ "engine_rocks",
+ "engine_traits",
+ "futures 0.3.15",
+ "grpcio",
+ "keys",
+ "kvproto",
+ "log",
+ "pd_client",
+ "protobuf",
+ "raft_log_engine",
+ "raftstore",
+ "slog",
+ "slog-global",
+ "structopt",
+ "thiserror",
+ "tikv",
+ "tikv_alloc",
+ "tikv_util",
+ "toml",
+ "txn_types",
 ]
 
 [[package]]
