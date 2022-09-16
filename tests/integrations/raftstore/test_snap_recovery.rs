@@ -33,7 +33,7 @@ fn test_check_pending_admin() {
     let leader = new_peer(1, 4);
     cluster.async_add_peer(1, leader).unwrap();
 
-    std::thread::sleep(Duration::from_millis(1000));
+    std::thread::sleep(Duration::from_millis(800));
 
     let router = cluster.sim.wl().get_router(1).unwrap();
 
@@ -51,7 +51,7 @@ fn test_check_pending_admin() {
     // clear filter so we can make pending admin requests finished.
     cluster.clear_send_filters();
 
-    std::thread::sleep(Duration::from_millis(1000));
+    std::thread::sleep(Duration::from_millis(800));
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     router.broadcast_normal(|| {
@@ -86,8 +86,9 @@ fn test_snap_wait_apply() {
             .direction(Direction::Recv),
     ));
 
-    // make a async put to let the leader stuck.
+    // make a async put request to let leader has inflight raft log.
     cluster.async_put(b"k2", b"v2").unwrap();
+    std::thread::sleep(Duration::from_millis(800));
 
     let router = cluster.sim.wl().get_router(1).unwrap();
 
@@ -101,10 +102,11 @@ fn test_snap_wait_apply() {
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
     // apply. so the wait apply will timeout.
-    assert!(rx.recv_timeout(Duration::from_secs(1)).is_err());
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_err()
 
     // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();
+    std::thread::sleep(Duration::from_millis(800));
 
     // after clear the filter the leader peer on store 1 can finsihed the wait
     // apply.
@@ -115,5 +117,6 @@ fn test_snap_wait_apply() {
         ))
     });
 
+    // we expect recv the region id from rx.
     assert_eq!(rx.recv(), Ok(1));
 }

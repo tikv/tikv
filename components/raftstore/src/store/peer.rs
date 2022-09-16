@@ -2099,16 +2099,6 @@ where
         true
     }
 
-    // during the snapshot recovery, follower unconditionaly forward the
-    // commit_index. pub fn force_forward_commit_index(&mut self) -> bool {
-
-    //     let persisted = self.raft_group.raft.raft_log.persisted;
-
-    //     self.raft_group.raft.raft_log.committed =
-    //         std::cmp::max(self.raft_group.raft.raft_log.committed, persisted);
-    //     true
-    // }
-
     pub fn check_stale_state<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
