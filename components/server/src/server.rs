@@ -728,7 +728,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let storage = create_raft_storage::<_, _, _, F, _>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -1044,7 +1044,7 @@ where
                 self.concurrency_manager.clone(),
             )
             .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(&engines.engines.kv, auto_gc_config, safe_point) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
