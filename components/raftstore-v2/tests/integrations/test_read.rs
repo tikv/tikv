@@ -11,9 +11,12 @@ use raftstore::store::util::new_peer;
 use tikv_util::codec::number::NumberEncoder;
 use txn_types::WriteBatchFlags;
 
+use crate::Cluster;
+
 #[test]
 fn test_read_index() {
-    let (_node, _transport, router) = super::setup_default_cluster();
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = RaftCmdRequest::default();
@@ -45,7 +48,8 @@ fn test_read_index() {
 
 #[test]
 fn test_snap_without_read_index() {
-    let (_node, _transport, router) = super::setup_default_cluster();
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = RaftCmdRequest::default();
@@ -90,7 +94,8 @@ fn test_snap_without_read_index() {
 
 #[test]
 fn test_query_with_write_cmd() {
-    let (_node, _transport, router) = super::setup_default_cluster();
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = RaftCmdRequest::default();
@@ -129,7 +134,8 @@ fn test_query_with_write_cmd() {
 
 #[test]
 fn test_snap_with_invalid_parameter() {
-    let (_node, _transport, router) = super::setup_default_cluster();
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
     std::thread::sleep(std::time::Duration::from_millis(200));
     let region_id = 2;
     let mut req = RaftCmdRequest::default();
@@ -143,45 +149,51 @@ fn test_snap_with_invalid_parameter() {
     let mut region_epoch = region.take_region_epoch();
 
     let mut req = RaftCmdRequest::default();
-    // store_id is incorrect;
-    req.mut_header().set_peer(new_peer(2, 3));
+    req.mut_header().set_peer(new_peer(1, 3));
     req.mut_header().set_term(6);
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(region_epoch.clone());
     let mut request_inner = Request::default();
     request_inner.set_cmd_type(CmdType::Snap);
     req.mut_requests().push(request_inner);
-    let res = router.query(region_id, req.clone()).unwrap();
+
+    // store_id is incorrect;
+    let mut invalid_req = req.clone();
+    invalid_req.mut_header().set_peer(new_peer(2, 3));
+    let res = router.query(region_id, invalid_req).unwrap();
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 
     // run again, with incorrect peer_id
-    req.mut_header().set_peer(new_peer(1, 4));
-    let res = router.query(region_id, req.clone()).unwrap();
+    let mut invalid_req = req.clone();
+    invalid_req.mut_header().set_peer(new_peer(1, 4));
+    let res = router.query(region_id, invalid_req).unwrap();
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 
     // run with stale term
-    req.mut_header().set_term(1);
-    req.mut_header().set_peer(new_peer(1, 3));
-    let res = router.query(region_id, req.clone()).unwrap();
+    let mut invalid_req = req.clone();
+    invalid_req.mut_header().set_term(1);
+    let res = router.query(region_id, invalid_req).unwrap();
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 
     // run with stale read
-    req.mut_header().set_term(7);
-    req.mut_header()
+    let mut invalid_req = req.clone();
+    invalid_req
+        .mut_header()
         .set_flags(WriteBatchFlags::STALE_READ.bits());
-    let res = router.query(region_id, req.clone()).unwrap();
+    let res = router.query(region_id, invalid_req).unwrap();
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 
     // run again with invalid region_epoch
-    req.mut_header().set_flags(0);
+    let mut invalid_req = req.clone();
     region_epoch.set_version(region_epoch.get_version() + 1);
-    req.mut_header().set_region_epoch(region_epoch.clone());
-    req.mut_header().set_term(6);
-    let res = router.query(region_id, req.clone()).unwrap();
+    invalid_req
+        .mut_header()
+        .set_region_epoch(region_epoch.clone());
+    let res = router.query(region_id, invalid_req).unwrap();
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 }
