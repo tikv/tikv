@@ -102,7 +102,7 @@ fn test_snap_wait_apply() {
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
     // apply. so the wait apply will timeout.
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err()
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 
     // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();
