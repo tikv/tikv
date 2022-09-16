@@ -23,6 +23,7 @@ use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
+use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
     stream::{block_on_external_io, READ_BUF_SIZE},
@@ -63,6 +64,37 @@ pub struct BackendConfig {
     pub hdfs_config: HdfsConfig,
 }
 
+#[derive(Debug, Default)]
+pub struct RestoreConfig {
+    pub range: Option<(u64, u64)>,
+    pub compression_type: Option<CompressionType>,
+    pub expected_sha256: Option<Vec<u8>>,
+    pub file_crypter: Option<FileEncryptionInfo>,
+}
+
+/// a reader dispatcher for different compression type.
+pub fn compression_reader_dispatcher<'a>(
+    compression_type: Option<CompressionType>,
+    inner: Box<dyn AsyncRead + Unpin + 'a>,
+) -> io::Result<Box<dyn AsyncRead + Unpin + 'a>> {
+    match compression_type {
+        Some(c) => match c {
+            // The log files generated from TiKV v6.2.0 use the default value (0).
+            // So here regard Unkown(0) as uncompressed type.
+            CompressionType::Unknown => Ok(inner),
+            CompressionType::Zstd => Ok(Box::new(ZstdDecoder::new(BufReader::new(inner)))),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "the compression type is unimplemented, compression type id {:?}",
+                    c
+                ),
+            )),
+        },
+        None => Ok(inner),
+    }
+}
+
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
 #[async_trait]
@@ -85,17 +117,25 @@ pub trait ExternalStorage: 'static + Send + Sync {
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
-        compressed_range: Option<(u64, u64)>,
         expected_length: u64,
-        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
-        file_crypter: Option<FileEncryptionInfo>,
+        restore_config: RestoreConfig,
     ) -> io::Result<()> {
-        let reader: Box<dyn AsyncRead + Unpin> = if let Some((off, len)) = compressed_range {
-            let r = self.read_part(storage_name, off, len);
-            Box::new(ZstdDecoder::new(BufReader::new(r)))
-        } else {
-            self.read(storage_name)
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+            file_crypter,
+        } = restore_config;
+
+        let reader = {
+            let inner = if let Some((off, len)) = range {
+                self.read_part(storage_name, off, len)
+            } else {
+                self.read(storage_name)
+            };
+
+            compression_reader_dispatcher(compression_type, inner)?
         };
         let output: &mut dyn Write = &mut File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.

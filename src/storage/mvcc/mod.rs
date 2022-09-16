@@ -440,9 +440,36 @@ pub mod tests {
     }
 
     pub fn must_get<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+        must_get_impl(engine, None, key, ts, expect);
+    }
+
+    pub fn must_get_on_region<E: Engine>(
+        engine: &E,
+        region_id: u64,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
+        must_get_impl(engine, Some(region_id), key, ts, expect);
+    }
+
+    fn must_get_impl<E: Engine>(
+        engine: &E,
+        region_id: Option<u64>,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        expect: &[u8],
+    ) {
         let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
         let key = &Key::from_raw(key);
 
@@ -488,9 +515,34 @@ pub mod tests {
     }
 
     pub fn must_get_none<E: Engine>(engine: &E, key: &[u8], ts: impl Into<TimeStamp>) {
+        must_get_none_impl(engine, key, ts, None);
+    }
+
+    pub fn must_get_none_on_region<E: Engine>(
+        engine: &E,
+        region_id: u64,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+    ) {
+        must_get_none_impl(engine, key, ts, Some(region_id));
+    }
+
+    fn must_get_none_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        ts: impl Into<TimeStamp>,
+        region_id: Option<u64>,
+    ) {
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let ts = ts.into();
-        let ctx = SnapContext::default();
-        let snapshot = engine.snapshot(ctx).unwrap();
         let mut reader = SnapshotReader::new(ts, snapshot, true);
         let key = &Key::from_raw(key);
         check_lock(&mut reader, key, ts).unwrap();
