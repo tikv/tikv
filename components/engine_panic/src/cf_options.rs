@@ -18,7 +18,7 @@ impl CfOptionsExt for PanicEngine {
 pub struct PanicCfOptions;
 
 impl CfOptions for PanicCfOptions {
-    type TitanDbOptions = PanicTitanDbOptions;
+    type TitanCfOptions = PanicTitanDbOptions;
 
     fn new() -> Self {
         panic!()
@@ -26,10 +26,10 @@ impl CfOptions for PanicCfOptions {
     fn get_max_write_buffer_number(&self) -> u32 {
         panic!()
     }
-    fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
+    fn get_level_zero_slowdown_writes_trigger(&self) -> i32 {
         panic!()
     }
-    fn get_level_zero_stop_writes_trigger(&self) -> u32 {
+    fn get_level_zero_stop_writes_trigger(&self) -> i32 {
         panic!()
     }
     fn set_level_zero_file_num_compaction_trigger(&mut self, v: i32) {
@@ -47,7 +47,7 @@ impl CfOptions for PanicCfOptions {
     fn set_block_cache_capacity(&self, capacity: u64) -> Result<()> {
         panic!()
     }
-    fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
+    fn set_titan_cf_options(&mut self, opts: &Self::TitanCfOptions) {
         panic!()
     }
     fn get_target_file_size_base(&self) -> u64 {

@@ -59,6 +59,8 @@ fn test_read_execution_tracking() {
         );
     };
 
+    fail::cfg("perform_read_local", "return()").unwrap();
+
     // should perform lease read
     let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
 
@@ -79,6 +81,8 @@ fn test_read_execution_tracking() {
     let resp = client.coprocessor(&coprocessor_request).unwrap();
 
     lease_read_checker(resp.get_exec_details_v2().get_scan_detail_v2());
+
+    fail::remove("perform_read_local");
 
     let read_index_checker = |scan_detail: &ScanDetailV2| {
         assert!(

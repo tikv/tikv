@@ -23,7 +23,6 @@ mod stats;
 
 use std::{
     cell::UnsafeCell,
-    collections::HashMap,
     error,
     num::NonZeroU64,
     ptr, result,
@@ -31,6 +30,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use collections::HashMap;
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions, WriteBatch,
     CF_DEFAULT, CF_LOCK,
@@ -268,19 +268,15 @@ pub trait Engine: Send + Clone + 'static {
     type Local: LocalEngine;
 
     /// Local storage engine.
-    fn kv_engine(&self) -> Self::Local;
-
-    // todo(SpadeA): to be removed
-    fn tmp_kv_engine(&self) -> Option<Self::Local> {
-        Some(self.kv_engine())
-    }
+    ///
+    /// If local engine can't be accessed directly, `None` is returned.
+    /// Currently, only multi-rocksdb version will return `None`.
+    fn kv_engine(&self) -> Option<Self::Local>;
 
     /// Write modifications into internal local engine directly.
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()>;
-
-    fn tmp_modify_on_kv_engine(&self, _modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
-        unimplemented!();
-    }
+    ///
+    /// region_modifies records each region's modifications.
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()>;
 
     fn async_snapshot(&self, ctx: SnapContext<'_>, cb: Callback<Self::Snap>) -> Result<()>;
 

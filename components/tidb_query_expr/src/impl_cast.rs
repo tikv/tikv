@@ -199,6 +199,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
         (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
         (EvalType::Enum, EvalType::DateTime) => cast_enum_as_time_fn_meta(),
+        (EvalType::Json, EvalType::DateTime) => cast_json_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
@@ -1060,6 +1061,36 @@ fn cast_bytes_like_as_duration(
     }
 }
 
+#[inline]
+fn cast_bytes_like_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &[u8],
+) -> Result<Option<Time>> {
+    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
+    let result = Time::parse(
+        ctx,
+        val,
+        extra.ret_field_type.as_accessor().tp().try_into()?,
+        extra.ret_field_type.get_decimal() as i8,
+        true,
+    );
+    match result {
+        Ok(time) => Ok(Some(time)),
+        Err(e) => match e.code() {
+            ERR_DATA_OUT_OF_RANGE => {
+                ctx.handle_overflow_err(e)?;
+                Ok(None)
+            }
+            ERR_TRUNCATE_WRONG_VALUE => {
+                ctx.handle_truncate_err(e)?;
+                Ok(None)
+            }
+            _ => Err(e.into()),
+        },
+    }
+}
+
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 pub fn cast_real_as_duration(
@@ -1100,8 +1131,21 @@ pub fn cast_json_as_duration(
     extra: &RpnFnCallExtra,
     val: Option<JsonRef>,
 ) -> Result<Option<Duration>> {
-    let v = skip_none!(val).unquote()?;
-    cast_bytes_like_as_duration(ctx, extra, v.as_bytes(), false)
+    let v = skip_none!(val);
+    match v.get_type() {
+        JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+            let time = v.get_time()?;
+            let dur: Duration = time.convert(ctx)?;
+
+            Ok(Some(dur.round_frac(extra.ret_field_type.decimal() as i8)?))
+        }
+        JsonType::Time => Ok(Some(v.get_duration()?)),
+        JsonType::String => cast_bytes_like_as_duration(ctx, extra, v.unquote()?.as_bytes(), false),
+        _ => {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("TIME", v.to_string()))?;
+            Ok(None)
+        }
+    }
 }
 
 #[rpn_fn(nullable, capture = [ctx, extra])]
@@ -1164,9 +1208,9 @@ fn cast_real_as_time(
             )
         } else {
             // Convert `val` to a string first and then parse it as a float string.
-            Time::parse(
+            Time::parse_from_real(
                 ctx,
-                &val.to_string(),
+                val,
                 extra.ret_field_type.as_accessor().tp().try_into()?,
                 extra.ret_field_type.get_decimal() as i8,
                 // Enable round
@@ -1261,6 +1305,40 @@ fn cast_duration_as_time(
         .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+pub fn cast_json_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<JsonRef>,
+) -> Result<Option<Time>> {
+    let v = skip_none!(val);
+    match v.get_type() {
+        JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+            let mut time = v.get_time()?;
+
+            time.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
+            Ok(Some(time))
+        }
+        JsonType::Time => {
+            let duration = v.get_duration()?;
+            let time = Time::from_duration(
+                ctx,
+                duration,
+                extra.ret_field_type.as_accessor().tp().try_into()?,
+            )?;
+            Ok(Some(
+                time.round_frac(ctx, extra.ret_field_type.decimal() as i8)?,
+            ))
+        }
+        JsonType::String => cast_bytes_like_as_time(ctx, extra, v.unquote()?.as_bytes()),
+        _ => {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DURATION", v.to_string()))?;
+            Ok(None)
+        }
     }
 }
 
@@ -6566,28 +6644,10 @@ mod tests {
 
         // the case that Json::unquote failed had be tested by test_json_unquote
 
+        let mut ctx = EvalContext::default();
         let cs = vec![
             Json::from_object(BTreeMap::default()).unwrap(),
             Json::from_array(vec![]).unwrap(),
-            Json::from_i64(10).unwrap(),
-            Json::from_i64(i64::MAX).unwrap(),
-            Json::from_i64(i64::MIN).unwrap(),
-            Json::from_u64(0).unwrap(),
-            Json::from_u64(u64::MAX).unwrap(),
-            Json::from_f64(10.5).unwrap(),
-            Json::from_f64(10.4).unwrap(),
-            Json::from_f64(-10.4).unwrap(),
-            Json::from_f64(-10.5).unwrap(),
-            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
-            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
-            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
-            Json::from_f64(i64::MIN as f64).unwrap(),
-            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
-            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
-            Json::from_f64(f64::from(f32::MIN)).unwrap(),
-            Json::from_f64(f64::from(f32::MAX)).unwrap(),
-            Json::from_f64(f64::MAX).unwrap(),
-            Json::from_f64(f64::MAX).unwrap(),
             Json::from_string(String::from("10.0")).unwrap(),
             Json::from_string(String::from(
                 "999999999999999999999999999999999999999999999999",
@@ -6608,6 +6668,7 @@ mod tests {
             Json::from_bool(true).unwrap(),
             Json::from_bool(false).unwrap(),
             Json::none().unwrap(),
+            Json::from_duration(Duration::parse(&mut ctx, "12:13:14", 0).unwrap()).unwrap(),
         ];
 
         let cs_ref: Vec<JsonRef> = cs.iter().map(|x| x.as_ref()).collect();
@@ -6618,6 +6679,145 @@ mod tests {
             cast_json_as_duration,
             "cast_json_as_duration",
         );
+    }
+
+    #[test]
+    fn test_json_as_duration_truncate_wrong_value() {
+        let cs = vec![
+            Json::from_i64(10).unwrap(),
+            Json::from_i64(i64::MAX).unwrap(),
+            Json::from_i64(i64::MIN).unwrap(),
+            Json::from_u64(0).unwrap(),
+            Json::from_u64(u64::MAX).unwrap(),
+            Json::from_f64(10.5).unwrap(),
+            Json::from_f64(10.4).unwrap(),
+            Json::from_f64(-10.4).unwrap(),
+            Json::from_f64(-10.5).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MAX as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as u64 as f64).unwrap(),
+            Json::from_f64(i64::MIN as f64).unwrap(),
+            Json::from_f64(((1u64 << 63) + (1u64 << 62)) as u64 as f64).unwrap(),
+            Json::from_f64(-((1u64 << 63) as f64 + (1u64 << 62) as f64)).unwrap(),
+            Json::from_f64(f64::from(f32::MIN)).unwrap(),
+            Json::from_f64(f64::from(f32::MAX)).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+            Json::from_f64(f64::MAX).unwrap(),
+        ];
+
+        for val in cs {
+            for fsp in MIN_FSP..MAX_FSP {
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
+                let rft = FieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..FieldTypeConfig::default()
+                }
+                .into();
+                let extra = make_extra(&rft);
+                let _result = cast_json_as_duration(&mut ctx, &extra, Some(val.as_ref()));
+
+                let log = format!("input: {:?} should truncate wrong value", val,);
+                check_warning(&ctx, Some(ERR_TRUNCATE_WRONG_VALUE), log.as_str());
+            }
+        }
+    }
+
+    #[test]
+    fn test_json_as_time() {
+        test_none_with_ctx_and_extra(cast_enum_as_time);
+        let mut ctx = EvalContext::default();
+        let cs = vec![
+            // (input, expect, tp, fsp)
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "2019-09-16 10:11:12",
+                        TimeType::DateTime,
+                        0,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                0,
+            ),
+            (
+                Json::from_time(
+                    Time::parse(
+                        &mut ctx,
+                        "2019-09-16 10:11:12.111",
+                        TimeType::Timestamp,
+                        3,
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.111",
+                    TimeType::Timestamp,
+                    3,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::Timestamp,
+                3,
+            ),
+            (
+                Json::from_str_val("2019-09-16 10:11:12").unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12",
+                    TimeType::DateTime,
+                    0,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                0,
+            ),
+            (
+                Json::from_str_val("2019-09-16 10:11:12.1111").unwrap(),
+                Time::parse(
+                    &mut ctx,
+                    "2019-09-16 10:11:12.1111",
+                    TimeType::DateTime,
+                    4,
+                    false,
+                )
+                .unwrap(),
+                FieldTypeTp::DateTime,
+                4,
+            ),
+        ];
+        for (input, expect, tp, fsp) in cs {
+            let rft = FieldTypeConfig {
+                tp: Some(tp),
+                decimal: fsp,
+                ..FieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft);
+            let r = cast_json_as_time(&mut ctx, &extra, Some(input.as_ref()));
+            let log = make_log(&input, &expect, &r);
+            check_result(Some(&expect), &r, log.as_str());
+        }
     }
 
     #[test]
@@ -6886,32 +7086,46 @@ mod tests {
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:15.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.000000".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2000-01-01 12:13:14.666600".to_string()).unwrap(),
+                Json::from_time(
+                    Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
+                )
+                .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
+                Json::from_time(Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap())
+                    .unwrap(),
             ),
             (
                 Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap(),
                 TimeType::DateTime,
-                Json::from_string("2019-09-01 00:00:00.000000".to_string()).unwrap(),
+                Json::from_time(Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap())
+                    .unwrap(),
             ),
         ];
         for (input, time_type, expect) in cs {
@@ -6939,11 +7153,14 @@ mod tests {
         let cs = vec![
             (
                 Duration::zero(),
-                Json::from_string("00:00:00.000000".to_string()).unwrap(),
+                Json::from_duration(Duration::zero()).unwrap(),
             ),
             (
                 Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
-                Json::from_string("10:10:10.000000".to_string()).unwrap(),
+                Json::from_duration(
+                    Duration::parse(&mut EvalContext::default(), "10:10:10", 0).unwrap(),
+                )
+                .unwrap(),
             ),
         ];
 
