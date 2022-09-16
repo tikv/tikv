@@ -96,6 +96,7 @@ pub struct KeyLockWaitInfo {
     pub lock_info: LockInfo,
 }
 
+/// Uniquely identifies a lock-waiting request in a `LockManager`.
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct LockWaitToken(pub Option<u64>);
 

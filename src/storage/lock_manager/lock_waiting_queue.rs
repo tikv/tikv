@@ -1,5 +1,60 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! This mod contains the [`LockWaitQueues`] for managing waiting and waking up
+//! of `AcquirePessimisticLock` requests in lock-contention scenarios, and other
+//! related accessories, including:
+//!
+//! - [`SharedError`]: A wrapper type to [`crate::storage::Error`] to allow the
+//!   error being shared in multiple places
+//! - Related type aliases
+//! - [`LockWaitEntry`]: which is used to represent lock-waiting requests in the
+//!   queue
+//! - [`LockWaitEntryComparableWrapper`]: The comparable wrapper of
+//!   [`LockWaitEntry`] which defines the priority ordering among lock-waiting
+//!   requests
+//!
+//! Each key may have its own lock-waiting queue, which is a priority queue that
+//! orders the entries with the order defined by
+//! [`LockWaitEntryComparableWrapper`].
+//!
+//! There are be two kinds of `AcquirePessimisticLock` requests:
+//!
+//! * Requests in legacy mode: indicated by `allow_lock_with_conflict = false`.
+//!   A legacy request is woken up, it should return a `WriteConflict`
+//!   immediately to the client to tell the client to retry. Then, the remaining
+//!   lock-waiting entries should be woken up after delaying for
+//!   `wake-up-delay-duration` which is a configurable value.
+//! * Resumable requests: indicated by `allow_lock_with_conflict = true`.  This
+//!   kind of requests are allowed to lock even if there is write conflict, When
+//!   it's woken up after waiting for another lock, it can then resume execution
+//!   and try to acquire the lock again. No delayed waking up is necessary.
+//!   **Note that though the `LockWaitQueues` is designed to accept it, this
+//!   kind of requests are currently not implemented yet.**
+//!
+//! ## Details about delayed waking up
+//!
+//! The delayed waking-up is needed after waking up a request in legacy mode.
+//! The reasons are:
+//!
+//! * The head of the queue (let's denote its belonging transaction by `T1`) is
+//!   woken up after the current lock being released, then the request will
+//!   return a `WriteConflict` error immediately, and the key is left unlocked.
+//!   It's possible that `T1` won't lock the key again. However, the other
+//!   waiting requests need releasing-lock event to be woken up. In this case,
+//!   we should not let them wait forever until timeout.
+//! * When many transactions are blocked on the same key, and a transaction is
+//!   granted the lock after another releasing the lock, the transaction that's
+//!   blocking other transactions is changed. After cancelling the other
+//!   transactions and let them retry the `AcquirePessimisticLock` request, they
+//!   will be able to re-detect deadlocks with the latest information.
+//!
+//! To achieve this, after delaying for `wake-up-delay-duration` since the
+//! latest waking-up event on the key, a call to
+//! [`LockWaitQueues::delayed_notify_all`] will be made. However, since the
+//! [`LockWaitQueues`] do not have its own thread pool, the user may receive a
+//! future after calling some of the functions, and the user will be responsible
+//! for executing the future in a suitable place.
+
 use std::{
     collections::BinaryHeap,
     convert::TryFrom,
@@ -33,6 +88,9 @@ use crate::storage::{
     Error as StorageError, ErrorInner as StorageErrorInner,
 };
 
+/// The shared version of [`crate::storage::Error`]. It's necessary to pass a
+/// single error to more than one requests, since the inner error doesn't
+/// support cloning.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct SharedError(Arc<StorageErrorInner>);
@@ -49,6 +107,8 @@ impl From<StorageError> for SharedError {
     }
 }
 
+/// Tries to convert the shared error to owned one. It can success only when
+/// it's the only reference to the error.
 impl TryFrom<SharedError> for StorageError {
     type Error = ();
 
@@ -60,6 +120,8 @@ impl TryFrom<SharedError> for StorageError {
 pub type CallbackWithSharedError<T> = Box<dyn FnOnce(Result<T, SharedError>) + Send + 'static>;
 pub type PessimisticLockKeyCallback = CallbackWithSharedError<PessimisticLockRes>;
 
+/// Represents an `AcquirePessimisticLock` request that's waiting for a lock,
+/// and contains the request's parameters.
 pub struct LockWaitEntry {
     pub key: Key,
     pub lock_hash: u64,
@@ -72,8 +134,11 @@ pub struct LockWaitEntry {
     pub key_cb: Option<SyncWrapper<PessimisticLockKeyCallback>>,
 }
 
+/// A wrapper to [`LockWaitEntry`] to define its ordering.
+/// A [`LockWaitEntry`] takes precedence over another if it has smaller
+/// `start_ts`.
 #[repr(transparent)]
-pub struct LockWaitEntryComparableWrapper(pub Box<LockWaitEntry>);
+struct LockWaitEntryComparableWrapper(pub Box<LockWaitEntry>);
 
 impl From<Box<LockWaitEntry>> for LockWaitEntryComparableWrapper {
     fn from(x: Box<LockWaitEntry>) -> Self {
@@ -120,7 +185,10 @@ pub struct KeyLockWaitState {
     current_lock: kvrpcpb::LockInfo,
     legacy_wake_up_cnt: usize,
     queue: BinaryHeap<LockWaitEntryComparableWrapper>,
+
+    /// The start_ts of the most recent waking up event.
     last_conflict_start_ts: TimeStamp,
+    /// The commit_ts of the most recent waking up event.
     last_conflict_commit_ts: TimeStamp,
 
     /// `(id, start_time, delay_duration)`

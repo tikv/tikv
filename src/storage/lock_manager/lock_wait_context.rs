@@ -1,5 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Holds the state of a lock-waiting `AcquirePessimisticLock` request.
+//!
+//! When an `AcquirePessimisticLock` request meets a lock and enters
+//! lock-waiting state, it then may be either woken up by popping from the
+//! [`LockWaitingQueue`](super::lock_waiting_queue::LockWaitQueues),
+//! or cancelled by the
+//! [`WaiterManager`](crate::server::lock_manager::WaiterManager) due to
+//! timeout. [`LockWaitContext`] is therefore used to share the necessary state
+//! of a single `AcquirePessimisticLock` request, and ensuring the internal
+//! callback for returning response through RPC is called at most only once.
+
 use std::{
     convert::TryInto,
     result::Result,
@@ -94,12 +105,23 @@ impl<L: LockManager> LockWaitContext<L> {
         &self.shared_states
     }
 
+    /// Get the callback that should be invoked when finishes executing the
+    /// scheduler command that issued the lock-waiting.
+    ///
+    /// When we support partially finishing a pessimistic lock request (i.e.
+    /// when acquiring lock multiple keys in one single request, allowing
+    /// some keys to be locked successfully while the others are blocked or
+    /// failed), this will be useful for handling the result of the first
+    /// write batch. But currently, the first write batch of a lock-waiting
+    /// request is always empty, so the callback is just noop.
     pub fn get_callback_for_first_write_batch(&self) -> StorageCallback {
         StorageCallback::Boolean(Box::new(|res| {
             res.unwrap();
         }))
     }
 
+    /// Get the callback that should be called when the request is woken up on a
+    /// key.
     pub fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
         Box::new(move |res| {
@@ -107,6 +129,10 @@ impl<L: LockManager> LockWaitContext<L> {
         })
     }
 
+    /// Get the callback that's used to cancel a lock-waiting request. Usually
+    /// called by
+    /// [`WaiterManager`](crate::server::lock_manager::WaiterManager) due to
+    /// timeout.
     pub fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
         let ctx = self.clone();
         move |e| {
@@ -118,7 +144,7 @@ impl<L: LockManager> LockWaitContext<L> {
         let ctx_inner = if let Some(inner) = self.shared_states.ctx_inner.lock().take() {
             inner
         } else {
-            info!("shared state for partial pessimistic lock already taken, perhaps due to error";
+            debug!("double invoking of finish_request of LockWaitContext";
                 "start_ts" => self.start_ts,
                 "for_update_ts" => self.for_update_ts
             );
