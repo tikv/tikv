@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 use regex::Regex;
 use tidb_query_codegen::rpn_fn;
@@ -117,9 +117,9 @@ pub fn regexp_like<C: Collator>(
         None => return Ok(None),
     };
     let regex = match metadata {
-        Some(r) => r.clone(),
+        Some(r) => Cow::Borrowed(r),
         None => match build_regexp_from_args::<C>(args, LIKE_MATCH_IDX)? {
-            Some(r) => r,
+            Some(r) => Cow::Owned(r),
             None => return Ok(None),
         },
     };
@@ -140,9 +140,9 @@ pub fn regexp_substr<C: Collator>(
         None => return Ok(None),
     };
     let regex = match metadata {
-        Some(r) => r.clone(),
+        Some(r) => Cow::Borrowed(r),
         None => match build_regexp_from_args::<C>(args, SUBSTR_MATCH_IDX)? {
-            Some(r) => r,
+            Some(r) => Cow::Owned(r),
             None => return Ok(None),
         },
     };
@@ -207,9 +207,9 @@ pub fn regexp_instr<C: Collator>(
         None => return Ok(None),
     };
     let regex = match metadata {
-        Some(r) => r.clone(),
+        Some(r) => Cow::Borrowed(r),
         None => match build_regexp_from_args::<C>(args, INSTR_MATCH_IDX)? {
-            Some(r) => r,
+            Some(r) => Cow::Owned(r),
             None => return Ok(None),
         },
     };
@@ -292,9 +292,9 @@ pub fn regexp_replace<C: Collator>(
         None => return Ok(None),
     };
     let regex = match metadata {
-        Some(r) => r.clone(),
+        Some(r) => Cow::Borrowed(r),
         None => match build_regexp_from_args::<C>(args, REPLACE_MATCH_IDX)? {
-            Some(r) => r,
+            Some(r) => Cow::Owned(r),
             None => return Ok(None),
         },
     };
