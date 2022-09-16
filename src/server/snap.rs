@@ -274,7 +274,7 @@ impl RecvSnapContext {
         if let Err(e) = raft_router.send_raft_msg(self.raft_msg) {
             return Err(box_err!("{} failed to send snapshot to raft: {}", key, e));
         }
-        info!("saving all snapshot files";"snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
+        info!("saving all snapshot files"; "snap_key" => %key, "takes" => ?self.start.saturating_elapsed());
         Ok(())
     }
 }
@@ -479,7 +479,7 @@ where
                             cb(Ok(()));
                         }
                         Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "region_id"=>region_id, "err" => ?e);
+                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
                             cb(Err(e));
                         }
                     };

@@ -107,7 +107,7 @@ make_auto_flush_static_metric! {
     }
 
     pub struct SnapLimitTransportBytesVec:LocalIntCounter{
-        "type" =>SnapTask,
+        "type" => SnapTask,
     }
 
     pub struct GcTaskCounterVec: LocalIntCounter {
