@@ -591,22 +591,14 @@ where
         RaftRouter<RocksEngine, ER>,
     > {
         let engines = self.engines.as_ref().unwrap();
-        let mut gc_worker = GcWorker::new(
+        let gc_worker = GcWorker::new(
             engines.engine.clone(),
             self.router.clone(),
             self.flow_info_sender.take().unwrap(),
             self.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
+            Arc::new(self.region_info_accessor.clone()),
         );
-        gc_worker
-            .start()
-            .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        gc_worker
-            .start_observe_lock_apply(
-                self.coprocessor_host.as_mut().unwrap(),
-                self.concurrency_manager.clone(),
-            )
-            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
         cfg_controller.register(
@@ -620,10 +612,10 @@ where
     fn init_servers<F: KvFormat>(&mut self) -> Arc<VersionTrack<ServerConfig>> {
         let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
             &self.config.storage.flow_control,
-            self.engines.as_ref().unwrap().engine.kv_engine(),
+            self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
             self.flow_info_receiver.take().unwrap(),
         )));
-        let gc_worker = self.init_gc_worker();
+        let mut gc_worker = self.init_gc_worker();
         let mut ttl_checker = Box::new(LazyWorker::new("ttl-checker"));
         let ttl_scheduler = ttl_checker.scheduler();
 
@@ -736,7 +728,7 @@ where
             storage_read_pools.handle()
         };
 
-        let storage = create_raft_storage::<_, _, _, F>(
+        let storage = create_raft_storage::<_, _, _, F, _>(
             engines.engine.clone(),
             &self.config.storage,
             storage_read_pool_handle,
@@ -845,7 +837,10 @@ where
             causal_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         };
 
-        let check_leader_runner = CheckLeaderRunner::new(engines.store_meta.clone());
+        let check_leader_runner = CheckLeaderRunner::new(
+            engines.store_meta.clone(),
+            self.coprocessor_host.clone().unwrap(),
+        );
         let check_leader_scheduler = self
             .background_worker
             .start("check-leader", check_leader_runner);
@@ -1040,6 +1035,15 @@ where
             self.region_info_accessor.clone(),
             node.id(),
         );
+        gc_worker
+            .start(node.id())
+            .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+        gc_worker
+            .start_observe_lock_apply(
+                self.coprocessor_host.as_mut().unwrap(),
+                self.concurrency_manager.clone(),
+            )
+            .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
@@ -1047,7 +1051,7 @@ where
         initial_metric(&self.config.metric);
         if self.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
-                self.engines.as_ref().unwrap().engine.kv_engine(),
+                self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
                 self.region_info_accessor.clone(),
                 self.config.storage.ttl_check_poll_interval.into(),
             ));

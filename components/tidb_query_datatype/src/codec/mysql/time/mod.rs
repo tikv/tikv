@@ -21,6 +21,7 @@ pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
 use crate::{
     codec::{
         convert::ConvertTo,
+        data_type::Real,
         mysql::{check_fsp, Decimal, Duration},
         Error, Result, TEN_POW,
     },
@@ -656,15 +657,14 @@ mod parser {
         }
     }
 
-    pub fn parse_from_decimal(
+    pub fn parse_from_float_string(
         ctx: &mut EvalContext,
-        input: &Decimal,
+        input: String,
         time_type: TimeType,
         fsp: u8,
         round: bool,
     ) -> Option<Time> {
-        let decimal_as_string = input.to_string();
-        let (components, _) = split_components_with_tz(decimal_as_string.as_str())?;
+        let (components, _) = split_components_with_tz(input.as_str())?;
         match components.len() {
             1 | 2 => {
                 let result: i64 = components[0].convert(ctx).ok()?;
@@ -779,7 +779,18 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        parser::parse_from_decimal(ctx, input, time_type, check_fsp(fsp)?, round)
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+
+    pub fn parse_from_real(
+        ctx: &mut EvalContext,
+        input: &Real,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -2045,6 +2056,43 @@ mod tests {
         let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
         for case in should_fail {
             Time::parse_from_i64(&mut ctx, case, TimeType::DateTime, 0).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_real() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05 00:00:00", "305", 0),
+            ("2000-12-03 00:00:00", "1203", 0),
+            ("2003-12-05 00:00:00.0", "31205", 1),
+            ("2007-01-18 00:00:00.00", "070118", 2),
+            ("0101-12-09 00:00:00.000", "1011209.333", 3),
+            ("2017-01-18 00:00:00.0000", "20170118.123", 4),
+            ("2012-12-31 11:30:45.12335", "121231113045.123345", 5),
+            ("2012-12-31 11:30:45.125000", "20121231113045.123345", 6),
+            ("2012-12-31 11:30:46.00000", "121231113045.9999999", 5),
+            ("2017-01-05 08:40:59.5756", "170105084059.575601", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input, fsp) in cases {
+            let input: Real = input.parse().unwrap();
+            let actual_real =
+                Time::parse_from_real(&mut ctx, &input, TimeType::DateTime, fsp, true)?;
+            assert_eq!(actual_real.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+
+        for case in should_fail {
+            let case: Real = case.parse().unwrap();
+            Time::parse_from_real(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
         }
         Ok(())
     }

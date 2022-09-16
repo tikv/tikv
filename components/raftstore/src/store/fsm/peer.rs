@@ -123,6 +123,8 @@ enum DelayReason {
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
+pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
+
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
@@ -469,7 +471,9 @@ where
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed
             // raft_entry_max_size after adding header.
-            if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
+            if self.batch_req_size
+                > (cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as u64
+            {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
@@ -4417,10 +4421,11 @@ where
         // After the region commit merged, the region's key range is extended and the
         // region's `safe_ts` should reset to `min(source_safe_ts, target_safe_ts)`
         let source_read_progress = meta.region_read_progress.remove(&source.get_id()).unwrap();
-        self.fsm
-            .peer
-            .read_progress
-            .merge_safe_ts(source_read_progress.safe_ts(), merge_index);
+        self.fsm.peer.read_progress.merge_safe_ts(
+            source_read_progress.safe_ts(),
+            merge_index,
+            &self.ctx.coprocessor_host,
+        );
 
         // If a follower merges into a leader, a more recent read may happen
         // on the leader of the follower. So max ts should be updated after

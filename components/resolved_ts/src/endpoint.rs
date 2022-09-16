@@ -134,6 +134,7 @@ impl ObserveRegion {
                                 }),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {}
                             });
                             assert!(
                                 *tracked_index < *index,
@@ -191,6 +192,9 @@ impl ObserveRegion {
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
                                 // One pc command do not contains any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {}
+                                ChangeRow::IngestSsT => {
+                                    self.resolver.update_tracked_index(*index);
+                                }
                             });
                         }
                     }

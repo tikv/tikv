@@ -71,6 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -1179,7 +1180,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let mut snap_ctx = SnapContext {
                     pb_ctx: &ctx,
-                    start_ts,
+                    start_ts: Some(start_ts),
                     ..Default::default()
                 };
                 let mut key_range = KeyRange::default();
@@ -2715,7 +2716,7 @@ fn prepare_snap_ctx<'a>(
 
     let mut snap_ctx = SnapContext {
         pb_ctx,
-        start_ts,
+        start_ts: Some(start_ts),
         ..Default::default()
     };
     if need_check_locks_in_replica_read(pb_ctx) {
@@ -2787,24 +2788,15 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
     type Local = E::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.engine.kv_engine()
     }
 
-    fn snapshot_on_kv_engine(
+    fn modify_on_kv_engine(
         &self,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> tikv_kv::Result<Self::Snap> {
-        let snapshot = self.engine.snapshot_on_kv_engine(start_key, end_key)?;
-        Ok(TxnTestSnapshot {
-            snapshot,
-            txn_ext: self.txn_ext.clone(),
-        })
-    }
-
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> tikv_kv::Result<()> {
-        self.engine.modify_on_kv_engine(modifies)
+        region_modifies: HashMap<u64, Vec<Modify>>,
+    ) -> tikv_kv::Result<()> {
+        self.engine.modify_on_kv_engine(region_modifies)
     }
 
     fn async_snapshot(

@@ -1,0 +1,16 @@
+[package]
+name = "engine_tirocks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engine_traits = { path = "../engine_traits" }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+tirocks = { git = "https://github.com/busyjay/tirocks.git", branch = "dev" }
+
+[dev-dependencies]
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tempfile = "3.0"

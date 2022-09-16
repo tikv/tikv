@@ -552,7 +552,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
+    let region = cluster.get_region(&k);
+    sync_gc(&gc_scheduler, region, gc_safe_ponit).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;
@@ -695,7 +696,7 @@ fn test_mvcc_flashback_block_rw() {
     get_req.key = k.clone();
     get_req.version = 1;
     let get_resp = client.kv_get(&get_req).unwrap();
-    assert!(get_resp.get_region_error().has_recovery_in_progress());
+    assert!(get_resp.get_region_error().has_flashback_in_progress());
     assert!(!get_resp.has_error());
     assert!(get_resp.value.is_empty());
     // Scan
@@ -705,7 +706,7 @@ fn test_mvcc_flashback_block_rw() {
     scan_req.limit = 1;
     scan_req.version = 1;
     let scan_resp = client.kv_scan(&scan_req).unwrap();
-    assert!(scan_resp.get_region_error().has_recovery_in_progress());
+    assert!(scan_resp.get_region_error().has_flashback_in_progress());
     assert!(scan_resp.pairs.is_empty());
     // Try to write.
     // Prewrite
@@ -714,7 +715,7 @@ fn test_mvcc_flashback_block_rw() {
     mutation.set_key(k.clone());
     mutation.set_value(v);
     let prewrite_resp = try_kv_prewrite(&client, ctx, vec![mutation], k, 1);
-    assert!(prewrite_resp.get_region_error().has_recovery_in_progress());
+    assert!(prewrite_resp.get_region_error().has_flashback_in_progress());
     fail::remove("skip_finish_flashback_to_version");
 }
 
@@ -740,7 +741,7 @@ fn test_mvcc_flashback_block_scheduling() {
         transfer_leader_resp
             .get_header()
             .get_error()
-            .has_recovery_in_progress()
+            .has_flashback_in_progress()
     );
     fail::remove("skip_finish_flashback_to_version");
 }
@@ -2190,7 +2191,9 @@ fn test_commands_write_detail() {
         assert!(wd.get_commit_log_nanos() > 0);
         assert!(wd.get_apply_batch_wait_nanos() > 0);
         assert!(wd.get_apply_log_nanos() > 0);
-        assert!(wd.get_apply_mutex_lock_nanos() > 0);
+        // Mutex has been removed from write path.
+        // Ref https://github.com/facebook/rocksdb/pull/7516
+        // assert!(wd.get_apply_mutex_lock_nanos() > 0);
         assert!(wd.get_apply_write_wal_nanos() > 0);
         assert!(wd.get_apply_write_memtable_nanos() > 0);
     };
