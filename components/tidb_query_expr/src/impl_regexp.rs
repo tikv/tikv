@@ -157,7 +157,7 @@ pub fn regexp_substr<C: Collator>(
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && (count != 0 || pos != 1) {
+        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
             return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
         }
         let mut new_expr = String::new();
@@ -218,7 +218,7 @@ pub fn regexp_instr<C: Collator>(
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && (count != 0 || pos != 1) {
+        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
             return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
         }
         let mut new_expr = String::new();
@@ -261,9 +261,9 @@ pub fn regexp_instr<C: Collator>(
             } else {
                 m.end()
             };
-            let count = expr[..find_pos].to_string().chars().count() as i64;
 
-            return Ok(Some(count + pos - 1));
+            let count = expr[..find_pos].to_string().chars().count() as i64;
+            return Ok(Some(count + pos));
         }
     }
 
@@ -301,7 +301,7 @@ pub fn regexp_replace<C: Collator>(
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && (count != 0 || pos != 1) {
+        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
             return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
         }
         let mut trimmed = String::new();
@@ -385,7 +385,7 @@ mod tests {
             let mut ctx = EvalContext::default();
 
             let mut builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpSig, FieldTypeTp::LongLong);
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpLikeSig, FieldTypeTp::LongLong);
             builder = builder
                 .push_child(ExprDefBuilder::constant_bytes(expr.as_bytes().to_vec()))
                 .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()));
@@ -456,6 +456,14 @@ mod tests {
     #[test]
     fn test_regexp_substr() {
         let cases = vec![
+            ("abc", r"bc", None, None, None, Some("bc"), false),
+            ("你好啊", r"好", None, None, None, Some("好"), false),
+            ("abc", r"bc", Some(2), None, None, Some("bc"), false),
+            ("你好啊", r"好", Some(2), None, None, Some("好"), false),
+            ("你好啊", r"好", Some(3), None, None, None, false),
+            ("你好啊", r"好", Some(4), None, None, None, true),
+            ("你好啊", r"好", Some(-1), None, None, None, true),
+            ("", r"a", Some(1), None, None, None, false),
             (
                 "abc abd abe",
                 r"ab.",
@@ -672,6 +680,126 @@ mod tests {
             let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
             assert!(val.is_vector());
             let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0], None);
+        }
+    }
+
+    #[test]
+    fn test_regexp_instr() {
+        let cases = vec![
+            ("abc", r"bc", None, None, None, None, Some(2), false),
+            ("你好啊", r"好", None, None, None, None, Some(2), false),
+            ("abc", r"bc", Some(2), None, None, None, Some(2), false),
+            ("你好啊", r"好", Some(2), None, None, None, Some(2), false),
+            ("你好啊", r"好", Some(3), None, None, None, None, false),
+            ("你好啊", r"好", Some(4), None, None, None, None, true),
+            ("你好啊", r"好", Some(-1), None, None, None, None, true),
+            ("", r"a", Some(1), None, None, None, None, false),
+            ("abc abd abe", r"ab.", Some(1), Some(1), None, None, Some(1), false),
+		("abc abd abe", r"ab.", Some(1), Some(0), None, None, Some(1), false),
+		("abc abd abe", r"ab.", Some(1), Some(-1), None, None, Some(1), false),
+		("abc abd abe", r"ab.", Some(1), Some(2), None, None, Some(5), false),
+		("abc abd abe", r"ab.", Some(3), Some(1), None, None, Some(5), false),
+		("abc abd abe", r"ab.", Some(3), Some(2), None, None, Some(9), false),
+		("abc abd abe", r"ab.", Some(6), Some(1), None, None, Some(9), false),
+		("abc abd abe", r"ab.", Some(6), Some(100), None, None, Some(0), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(1), Some(1), None, None, Some(1), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(1), Some(2), None, None, Some(4), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(5), Some(1), None, None, Some(7), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(5), Some(2), None, None, Some(0), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(1), Some(100), None, None, Some(0), false),
+        ("abc abd abe", r"ab.", Some(1), Some(1), Some(0), None, Some(1), false),
+		("abc abd abe", r"ab.", Some(1), Some(1), Some(1), None, Some(4), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(1), Some(1), Some(0), None, Some(1), false),
+		("嗯嗯 嗯好 嗯呐", r"嗯.", Some(1), Some(1), Some(1), None, Some(3), false),
+		("", r"^$", Some(1), Some(1), Some(0), None, Some(1), false),
+		("", r"^$", Some(1), Some(1), Some(1), None, Some(1), false),
+        ("abc", r"ab.", Some(1), Some(1), Some(0), Some(""), Some(1), false),
+		("abc", r"aB.", Some(1), Some(1), Some(0), Some("i"), Some(1), false),
+		("good\nday", r"od$", Some(1), Some(1), Some(0), Some("m"), Some(3), false),
+		("good\nday", r"oD$", Some(1), Some(1), Some(0), Some("mi"), Some(3), false),
+		("\n", r".", Some(1), Some(1), Some(0), Some("s"), Some(1), false),
+        ];
+
+        for (expr, pattern, pos, occur, ret_opt, match_type, expected, error) in cases {
+            let mut ctx = EvalContext::default();
+
+            let mut builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpInStrSig, FieldTypeTp::LongLong);
+            builder = builder
+                .push_child(ExprDefBuilder::constant_bytes(expr.as_bytes().to_vec()))
+                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()));
+            if let Some(p) = pos {
+                builder = builder.push_child(ExprDefBuilder::constant_int(p));
+            }
+            if let Some(o) = occur {
+                builder = builder.push_child(ExprDefBuilder::constant_int(o));
+            }
+            if let Some(r) = ret_opt {
+                builder = builder.push_child(ExprDefBuilder::constant_int(r));
+            }
+            if let Some(m) = match_type {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+            }
+
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+
+            match val {
+                Ok(val) => {
+                    assert!(val.is_vector());
+                    let v = val.vector_value().unwrap().as_ref().to_int_vec();
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(v[0], expected, "{:?} {:?} {:?}", expr, pattern, pos);
+                }
+                Err(e) => {
+                    assert!(error, "val has error {:?}", e);
+                }
+            }
+        }
+
+        // Test null
+        let cases = vec![
+            (None, Some(r"a"), Some("i")),
+            (Some("a"), None, Some("i")),
+            (Some("a"), Some(r"a"), None),
+        ];
+        for (expr, pattern, match_type) in cases {
+            let mut ctx = EvalContext::default();
+
+            let mut builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpSig, FieldTypeTp::LongLong);
+            if let Some(e) = expr {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(e.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(p) = pattern {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(p.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(m) = match_type {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
+            assert!(val.is_vector());
+            let v = val.vector_value().unwrap().as_ref().to_int_vec();
             assert_eq!(v.len(), 1);
             assert_eq!(v[0], None);
         }
