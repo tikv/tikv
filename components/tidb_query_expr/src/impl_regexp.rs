@@ -22,7 +22,7 @@ fn is_valid_match_type(m: char) -> bool {
 }
 
 fn get_match_type<C: Collator>(match_type: &[u8]) -> Result<String> {
-    let match_type = String::from_utf8(match_type.to_vec())?;
+    let match_type = std::str::from_utf8(match_type)?;
     let mut flag_set = HashSet::<char>::new();
 
     if C::IS_CASE_INSENSITIVE {
@@ -44,7 +44,7 @@ fn get_match_type<C: Collator>(match_type: &[u8]) -> Result<String> {
 
     let mut flag = String::new();
     for m in flag_set {
-        flag += &m.to_string();
+        flag.push(m);
     }
 
     Ok(flag)
@@ -116,7 +116,7 @@ pub fn regexp_like<C: Collator>(
     args: &[ScalarValueRef<'_>],
 ) -> Result<Option<i64>> {
     let expr = match args[0].as_bytes() {
-        Some(e) => String::from_utf8(e.to_vec())?,
+        Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
     let regex = match metadata {
@@ -127,7 +127,7 @@ pub fn regexp_like<C: Collator>(
         },
     };
 
-    Ok(Some(regex.is_match(&expr) as i64))
+    Ok(Some(regex.is_match(expr) as i64))
 }
 
 /// Currently, TiDB only supports regular expressions for utf-8 strings.
@@ -139,7 +139,7 @@ pub fn regexp_substr<C: Collator>(
     args: &[ScalarValueRef<'_>],
 ) -> Result<Option<Bytes>> {
     let mut expr = match args[0].as_bytes() {
-        Some(e) => String::from_utf8(e.to_vec())?,
+        Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
     let regex = match metadata {
@@ -157,16 +157,14 @@ pub fn regexp_substr<C: Collator>(
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
-            return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
-        }
-        let mut new_expr = String::new();
-        for (i, c) in expr.chars().enumerate() {
-            if i as i64 >= pos - 1 {
-                new_expr += &c.to_string();
+        if pos < 1 || pos > count {
+            if !(count == 0 && pos == 1) {
+                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
             }
+        } else {
+            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
+            expr = &expr[idx..];
         }
-        expr = new_expr;
     }
 
     let mut occurrence = 1i64;
@@ -181,7 +179,7 @@ pub fn regexp_substr<C: Collator>(
         }
     };
 
-    for (i, m) in regex.find_iter(&expr).enumerate() {
+    for (i, m) in regex.find_iter(expr).enumerate() {
         if i as i64 == occurrence - 1 {
             return Ok(Some(m.as_str().as_bytes().to_vec()));
         }
@@ -199,7 +197,7 @@ pub fn regexp_instr<C: Collator>(
     args: &[ScalarValueRef<'_>],
 ) -> Result<Option<i64>> {
     let mut expr = match args[0].as_bytes() {
-        Some(e) => String::from_utf8(e.to_vec())?,
+        Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
     let regex = match metadata {
@@ -218,16 +216,14 @@ pub fn regexp_instr<C: Collator>(
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
-            return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
-        }
-        let mut new_expr = String::new();
-        for (i, c) in expr.chars().enumerate() {
-            if i as i64 >= pos - 1 {
-                new_expr += &c.to_string();
+        if pos < 1 || pos > count {
+            if !(count == 0 && pos == 1) {
+                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
             }
+        } else {
+            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
+            expr = &expr[idx..];
         }
-        expr = new_expr;
     }
 
     let mut occurrence = 1i64;
@@ -254,17 +250,15 @@ pub fn regexp_instr<C: Collator>(
         }
     };
 
-    for (i, m) in regex.find_iter(&expr).enumerate() {
-        if i as i64 == occurrence - 1 {
-            let find_pos = if return_option == 0 {
-                m.start()
-            } else {
-                m.end()
-            };
+    if let Some(m) = regex.find_iter(&expr).nth((occurrence - 1) as usize) {
+        let find_pos = if return_option == 0 {
+            m.start()
+        } else {
+            m.end()
+        };
 
-            let count = expr[..find_pos].to_string().chars().count() as i64;
-            return Ok(Some(count + pos));
-        }
+        let count = expr[..find_pos].to_string().chars().count() as i64;
+        return Ok(Some(count + pos));
     }
 
     Ok(Some(0))
@@ -279,7 +273,7 @@ pub fn regexp_replace<C: Collator>(
     args: &[ScalarValueRef<'_>],
 ) -> Result<Option<Bytes>> {
     let expr = match args[0].as_bytes() {
-        Some(e) => String::from_utf8(e.to_vec())?,
+        Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
     let regex = match metadata {
@@ -290,49 +284,55 @@ pub fn regexp_replace<C: Collator>(
         },
     };
     let replace_expr = match args[2].as_bytes() {
-        Some(e) => String::from_utf8(e.to_vec())?,
+        Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
 
-    let (before_trimmed, trimmed) = if args.len() >= 4 {
+    let (mut before_trimmed, mut trimmed) = ("", expr);
+    if args.len() >= 4 {
         let pos = match EvaluableRef::borrow_scalar_value_ref(args[3]) {
             Some::<&i64>(p) => *p,
             None => return Ok(None),
         };
 
         let count = expr.chars().count() as i64;
-        if (pos < 1 || pos > count) && !(count == 0 && pos == 1) {
-            return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
-        }
-        let mut trimmed = String::new();
-        let mut before_trimmed = String::new();
-        for (i, c) in expr.chars().enumerate() {
-            if i as i64 >= pos - 1 {
-                trimmed += &c.to_string();
-            } else {
-                before_trimmed += &c.to_string();
+        if pos < 1 || pos > count {
+            if !(count == 0 && pos == 1) {
+                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
             }
+        } else {
+            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
+            before_trimmed = &expr[..idx];
+            trimmed = &expr[idx..];
         }
-        (before_trimmed, trimmed)
-    } else {
-        (String::new(), expr.clone())
-    };
+    }
 
-    let mut occurrence = 1i64;
+    let mut occurrence = 0i64;
     if args.len() >= 5 {
         occurrence = match EvaluableRef::borrow_scalar_value_ref(args[4]) {
             Some::<&i64>(o) => *o,
             None => return Ok(None),
         };
 
-        if occurrence < 1 {
+        if occurrence < 0 {
             occurrence = 1;
         }
     };
 
-    let result = before_trimmed + &regex.replacen(&trimmed, occurrence as usize, replace_expr);
+    if occurrence == 0 {
+        let result = before_trimmed.to_owned() + &regex.replace_all(&trimmed, replace_expr);
+        Ok(Some(result.into_bytes()))
+    } else {
+        if let Some(m) = regex.find_iter(&trimmed).nth((occurrence - 1) as usize) {
+            let result = before_trimmed.to_owned()
+                + &trimmed[..m.start()]
+                + replace_expr
+                + &trimmed[m.end()..];
+            return Ok(Some(result.into_bytes()));
+        }
 
-    Ok(Some(result.into_bytes()))
+        Ok(Some(expr.as_bytes().to_vec()))
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +461,7 @@ mod tests {
             ("abc", "bc", Some(2), None, None, Some("bc"), false),
             ("你好啊", "好", Some(2), None, None, Some("好"), false),
             ("你好啊", "好", Some(3), None, None, None, false),
+            // Test invalid position index
             ("你好啊", "好", Some(4), None, None, None, true),
             ("你好啊", "好", Some(-1), None, None, None, true),
             ("", "a", Some(1), None, None, None, false),
@@ -608,7 +609,14 @@ mod tests {
                     assert!(val.is_vector());
                     let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
                     assert_eq!(v.len(), 1);
-                    assert_eq!(v[0], expected.map(|e| e.as_bytes().to_vec()));
+                    assert_eq!(
+                        v[0],
+                        expected.map(|e| e.as_bytes().to_vec()),
+                        "{:?} {:?} {:?}",
+                        expr,
+                        pattern,
+                        pos
+                    );
                 }
                 Err(e) => {
                     assert!(error, "val has error {:?}", e);
@@ -677,6 +685,7 @@ mod tests {
             ("abc", "bc", Some(2), None, None, None, Some(2), false),
             ("你好啊", "好", Some(2), None, None, None, Some(2), false),
             ("你好啊", "好", Some(3), None, None, None, Some(0), false),
+            // Test invalid position index
             ("你好啊", "好", Some(4), None, None, None, Some(0), true),
             ("你好啊", "好", Some(-1), None, None, None, Some(0), true),
             ("", "a", Some(1), None, None, None, Some(0), false),
@@ -1000,6 +1009,312 @@ mod tests {
             let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
             assert!(val.is_vector());
             let v = val.vector_value().unwrap().as_ref().to_int_vec();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0], None);
+        }
+    }
+
+    #[test]
+    fn test_regexp_replace() {
+        let cases = vec![
+            (
+                "abc abd abe",
+                "ab.",
+                "cz",
+                None,
+                None,
+                None,
+                Some("cz cz cz"),
+                false,
+            ),
+            (
+                "你好 好的",
+                "好",
+                "逸",
+                None,
+                None,
+                None,
+                Some("你逸 逸的"),
+                false,
+            ),
+            ("", "^$", "123", None, None, None, Some("123"), false),
+            ("abc", "ab.", "cc", Some(1), None, None, Some("cc"), false),
+            ("abc", "bc", "cc", Some(3), None, None, Some("abc"), false),
+            ("你好", "好", "的", Some(2), None, None, Some("你的"), false),
+            (
+                "你好啊",
+                "好",
+                "的",
+                Some(3),
+                None,
+                None,
+                Some("你好啊"),
+                false,
+            ),
+            ("", "^$", "cc", Some(1), None, None, Some("cc"), false),
+            // Test invalid position index
+            ("", "^$", "a", Some(2), None, None, None, true),
+            ("", "^&", "a", Some(0), None, None, None, true),
+            ("abc", "bc", "a", Some(-1), None, None, None, true),
+            ("abc", "bc", "a", Some(4), None, None, None, true),
+            (
+                "abc abd",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(1),
+                None,
+                Some("cc abd"),
+                false,
+            ),
+            (
+                "abc abd",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(-1),
+                None,
+                Some("cc abd"),
+                false,
+            ),
+            (
+                "abc abd",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(2),
+                None,
+                Some("abc cc"),
+                false,
+            ),
+            (
+                "abc abd",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(0),
+                None,
+                Some("cc cc"),
+                false,
+            ),
+            (
+                "abc abd abe",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(3),
+                None,
+                Some("abc abd cc"),
+                false,
+            ),
+            (
+                "abc abd abe",
+                "ab.",
+                "cc",
+                Some(3),
+                Some(2),
+                None,
+                Some("abc abd cc"),
+                false,
+            ),
+            (
+                "abc abd abe",
+                "ab.",
+                "cc",
+                Some(3),
+                Some(10),
+                None,
+                Some("abc abd abe"),
+                false,
+            ),
+            (
+                "你好 好啊",
+                "好",
+                "的",
+                Some(1),
+                Some(1),
+                None,
+                Some("你的 好啊"),
+                false,
+            ),
+            (
+                "你好 好啊",
+                "好",
+                "的",
+                Some(3),
+                Some(1),
+                None,
+                Some("你好 的啊"),
+                false,
+            ),
+            ("", "^$", "cc", Some(1), Some(1), None, Some("cc"), false),
+            ("", "^$", "cc", Some(1), Some(2), None, Some(""), false),
+            ("", "^$", "cc", Some(1), Some(-1), None, Some("cc"), false),
+            (
+                "abc",
+                "ab.",
+                "cc",
+                Some(1),
+                Some(0),
+                Some(""),
+                Some("cc"),
+                false,
+            ),
+            (
+                "abc",
+                "aB.",
+                "cc",
+                Some(1),
+                Some(0),
+                Some("i"),
+                Some("cc"),
+                false,
+            ),
+            (
+                "good\nday",
+                "od$",
+                "cc",
+                Some(1),
+                Some(0),
+                Some("m"),
+                Some("gocc\nday"),
+                false,
+            ),
+            (
+                "good\nday",
+                "oD$",
+                "cc",
+                Some(1),
+                Some(0),
+                Some("mi"),
+                Some("gocc\nday"),
+                false,
+            ),
+            (
+                "\n",
+                ".",
+                "cc",
+                Some(1),
+                Some(0),
+                Some("s"),
+                Some("cc"),
+                false,
+            ),
+            (
+                "好的 好滴 好~",
+                ".",
+                "的",
+                Some(1),
+                Some(0),
+                Some("msi"),
+                Some("的的的的的的的的"),
+                false,
+            ),
+        ];
+
+        for (expr, pattern, replace, pos, occur, match_type, expected, error) in cases {
+            let mut ctx = EvalContext::default();
+
+            let mut builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpReplaceSig, FieldTypeTp::String);
+            builder = builder
+                .push_child(ExprDefBuilder::constant_bytes(expr.as_bytes().to_vec()))
+                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
+                .push_child(ExprDefBuilder::constant_bytes(replace.as_bytes().to_vec()));
+            if let Some(p) = pos {
+                builder = builder.push_child(ExprDefBuilder::constant_int(p));
+            }
+            if let Some(o) = occur {
+                builder = builder.push_child(ExprDefBuilder::constant_int(o));
+            }
+            if let Some(m) = match_type {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+            }
+
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+
+            match val {
+                Ok(val) => {
+                    assert!(val.is_vector());
+                    let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(
+                        v[0],
+                        expected.map(|e| e.as_bytes().to_vec()),
+                        "{:?} {:?} {:?} {:?} {:?}",
+                        expr,
+                        pattern,
+                        replace,
+                        v[0].as_ref().map(|v| std::str::from_utf8(&v)),
+                        expected
+                    );
+                }
+                Err(e) => {
+                    assert!(error, "val has error {:?}", e);
+                }
+            }
+        }
+
+        // Test null
+        let cases = vec![
+            (None, Some("a"), Some("a"), Some(1), Some(0), Some("i")),
+            (Some("a"), None, Some("a"), Some(1), Some(0), Some("i")),
+            (Some("a"), Some("a"), None, Some(1), Some(0), Some("i")),
+            (Some("a"), Some("a"), Some("a"), None, Some(0), Some("i")),
+            (Some("a"), Some("a"), Some("a"), Some(1), None, Some("i")),
+            (Some("a"), Some("a"), Some("a"), Some(1), Some(0), None),
+        ];
+        for (expr, pattern, replace, pos, occur, match_type) in cases {
+            let mut ctx = EvalContext::default();
+
+            let mut builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpReplaceSig, FieldTypeTp::String);
+            if let Some(e) = expr {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(e.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(p) = pattern {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(p.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(r) = replace {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(r.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(p) = pos {
+                builder = builder.push_child(ExprDefBuilder::constant_int(p));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong));
+            }
+            if let Some(o) = occur {
+                builder = builder.push_child(ExprDefBuilder::constant_int(o));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong));
+            }
+            if let Some(m) = match_type {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1).unwrap();
+            assert!(val.is_vector());
+            let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
             assert_eq!(v.len(), 1);
             assert_eq!(v[0], None);
         }
