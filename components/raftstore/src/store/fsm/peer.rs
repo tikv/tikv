@@ -2181,9 +2181,10 @@ where
 
     fn check_unsafe_recovery_state(&mut self) {
         match &self.fsm.peer.unsafe_recovery_state {
-            Some(UnsafeRecoveryState::WaitApply { .. }) => {
-                self.fsm.peer.unsafe_recovery_maybe_finish_wait_apply(false)
-            }
+            Some(UnsafeRecoveryState::WaitApply { .. }) => self
+                .fsm
+                .peer
+                .unsafe_recovery_maybe_finish_wait_apply(/* force= */ false),
             Some(UnsafeRecoveryState::DemoteFailedVoters {
                 syncer,
                 failed_voters,
