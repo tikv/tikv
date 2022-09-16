@@ -15,9 +15,9 @@ use tikv_util::Either;
 
 use crate::{batch::StoreContext, raft::Peer, router::CmdResChannel};
 
-mod raw_write;
+mod simple_write;
 
-pub use raw_write::{RawWriteDecoder, RawWriteEncoder};
+pub use simple_write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
@@ -48,7 +48,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_command(ctx);
-        match RawWriteEncoder::new(
+        match SimpleWriteEncoder::new(
             req,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
         ) {

@@ -13,7 +13,7 @@ use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
 use super::storage::Storage;
 use crate::{
-    operation::{AsyncWriter, DestroyProgress, RawWriteEncoder},
+    operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::CmdResChannel,
     tablet::{self, CachedTablet},
     Result,
@@ -30,7 +30,7 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
 
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
-    raw_write_encoder: Option<RawWriteEncoder>,
+    raw_write_encoder: Option<SimpleWriteEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
 
     /// Set to true if any side effect needs to be handled.
@@ -272,12 +272,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<RawWriteEncoder> {
+    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
         &mut self.raw_write_encoder
     }
 
     #[inline]
-    pub fn raw_write_encoder(&self) -> &Option<RawWriteEncoder> {
+    pub fn raw_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
         &self.raw_write_encoder
     }
 

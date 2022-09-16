@@ -30,7 +30,7 @@ use crate::{
 
 mod write;
 
-pub use write::{RawWriteDecoder, RawWriteEncoder};
+pub use write::{SimpleWriteDecoder, SimpleWriteEncoder};
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T> PeerFsmDelegate<'a, EK, ER, T> {
     #[inline]

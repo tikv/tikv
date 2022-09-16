@@ -9,27 +9,27 @@ use tikv_util::Either;
 
 use crate::router::CmdResChannel;
 
-// MAGIC number to hint raw write is used. If it's a protobuf message, the
-// first one or several bytes are for field tag, which can't be zero.
+// MAGIC number to hint simple write codec is used. If it's a protobuf message,
+// the first one or several bytes are for field tag, which can't be zero.
 // TODO: use protobuf blob request seems better.
 const MAGIC_PREFIX: u8 = 0x00;
 
 /// We usually use `RaftCmdRequest` for read write request. But the codec is
-/// not efficient enough for simple request. `RawWrite` is introduce to make
+/// not efficient enough for simple request. `SimpleWrite` is introduce to make
 /// codec alloc less and fast.
 #[derive(Debug)]
-pub struct RawWriteEncoder {
+pub struct SimpleWriteEncoder {
     header: SingularPtrField<RaftRequestHeader>,
     buf: Vec<u8>,
     channels: Vec<CmdResChannel>,
     size_limit: usize,
 }
 
-impl RawWriteEncoder {
+impl SimpleWriteEncoder {
     pub fn new(
         mut req: RaftCmdRequest,
         size_limit: usize,
-    ) -> Result<RawWriteEncoder, RaftCmdRequest> {
+    ) -> Result<SimpleWriteEncoder, RaftCmdRequest> {
         if !Self::allow_request(&req) {
             return Err(req);
         }
@@ -43,7 +43,7 @@ impl RawWriteEncoder {
         for r in req.get_requests() {
             encode(r, &mut buf);
         }
-        Ok(RawWriteEncoder {
+        Ok(SimpleWriteEncoder {
             header: req.header,
             buf,
             channels: vec![],
@@ -53,7 +53,7 @@ impl RawWriteEncoder {
 
     fn allow_request(req: &RaftCmdRequest) -> bool {
         if !req.has_status_request() && !req.has_admin_request() {
-            // TODO: skip the check and make caller use `RawWrite` directly.
+            // TODO: skip the check and make caller use `SimpleWrite` directly.
             for r in req.get_requests() {
                 if r.get_cmd_type() != CmdType::Put
                     && r.get_cmd_type() != CmdType::Delete
@@ -125,26 +125,26 @@ pub struct DeleteRange<'a> {
 }
 
 #[derive(Debug)]
-pub enum RawWrite<'a> {
+pub enum SimpleWrite<'a> {
     Put(Put<'a>),
     Delete(Delete<'a>),
     DeleteRange(DeleteRange<'a>),
 }
 
 #[derive(Debug)]
-pub struct RawWriteDecoder<'a> {
+pub struct SimpleWriteDecoder<'a> {
     header: RaftRequestHeader,
     buf: &'a [u8],
 }
 
-impl<'a> RawWriteDecoder<'a> {
-    pub fn new(buf: &'a [u8]) -> Result<RawWriteDecoder<'a>, RaftCmdRequest> {
+impl<'a> SimpleWriteDecoder<'a> {
+    pub fn new(buf: &'a [u8]) -> Result<SimpleWriteDecoder<'a>, RaftCmdRequest> {
         match buf.first().cloned() {
             Some(MAGIC_PREFIX) => {
                 let mut is = CodedInputStream::from_bytes(&buf[1..]);
                 let header = is.read_message().unwrap();
                 let read = is.pos();
-                Ok(RawWriteDecoder {
+                Ok(SimpleWriteDecoder {
                     header,
                     buf: &buf[1 + read as usize..],
                 })
@@ -163,8 +163,8 @@ impl<'a> RawWriteDecoder<'a> {
     }
 }
 
-impl<'a> Iterator for RawWriteDecoder<'a> {
-    type Item = RawWrite<'a>;
+impl<'a> Iterator for SimpleWriteDecoder<'a> {
+    type Item = SimpleWrite<'a>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -314,7 +314,7 @@ fn encode(req: &Request, buf: &mut Vec<u8>) {
 }
 
 #[inline]
-fn decode<'a>(buf: &mut &'a [u8]) -> Option<RawWrite<'a>> {
+fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
     let (tag, mut left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
@@ -322,13 +322,13 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<RawWrite<'a>> {
             let (key, left) = decode_bytes(left);
             let (value, left) = decode_bytes(left);
             *buf = left;
-            Some(RawWrite::Put(Put { cf, key, value }))
+            Some(SimpleWrite::Put(Put { cf, key, value }))
         }
         DELETE_TAG => {
             let (cf, left) = decode_cf(left);
             let (key, left) = decode_bytes(left);
             *buf = left;
-            Some(RawWrite::Delete(Delete { cf, key }))
+            Some(SimpleWrite::Delete(Delete { cf, key }))
         }
         DELETE_RANGE_TAG => {
             let (cf, left) = decode_cf(left);
@@ -336,7 +336,7 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<RawWrite<'a>> {
             let (end_key, left) = decode_bytes(left);
             let (notify_only, left) = left.split_first()?;
             *buf = left;
-            Some(RawWrite::DeleteRange(DeleteRange {
+            Some(SimpleWrite::DeleteRange(DeleteRange {
                 cf,
                 start_key,
                 end_key,
@@ -372,7 +372,7 @@ mod tests {
         delete_req.set_key(delete_key.clone());
         cmd.mut_requests().push(req);
 
-        let mut encoder = RawWriteEncoder::new(cmd.clone(), usize::MAX).unwrap();
+        let mut encoder = SimpleWriteEncoder::new(cmd.clone(), usize::MAX).unwrap();
         cmd.clear_requests();
 
         req = Request::default();
@@ -395,28 +395,28 @@ mod tests {
 
         encoder.amend(cmd.clone()).unwrap();
         let (bytes, _) = encoder.encode();
-        let mut decoder = RawWriteDecoder::new(&bytes).unwrap();
+        let mut decoder = SimpleWriteDecoder::new(&bytes).unwrap();
         assert_eq!(decoder.header(), cmd.get_header());
-        let raw_write = decoder.next().unwrap();
-        let RawWrite::Put(put) = raw_write else { panic!("should be put") };
+        let write = decoder.next().unwrap();
+        let SimpleWrite::Put(put) = write else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
 
-        let raw_write = decoder.next().unwrap();
-        let RawWrite::Delete(delete) = raw_write else { panic!("should be delete") };
+        let write = decoder.next().unwrap();
+        let SimpleWrite::Delete(delete) = write else { panic!("should be delete") };
         assert_eq!(delete.cf, CF_WRITE);
         assert_eq!(delete.key, &delete_key);
 
-        let raw_write = decoder.next().unwrap();
-        let RawWrite::DeleteRange(dr) = raw_write else { panic!("should be delete range") };
+        let write = decoder.next().unwrap();
+        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, CF_LOCK);
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
         assert!(dr.notify_only);
 
-        let raw_write = decoder.next().unwrap();
-        let RawWrite::DeleteRange(dr) = raw_write else { panic!("should be delete range") };
+        let write = decoder.next().unwrap();
+        let SimpleWrite::DeleteRange(dr) = write else { panic!("should be delete range") };
         assert_eq!(dr.cf, "cf");
         assert_eq!(dr.start_key, b"key");
         assert_eq!(dr.end_key, b"key");
@@ -460,9 +460,9 @@ mod tests {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Invalid);
         invalid_cmd.mut_requests().push(req);
-        let fallback = RawWriteEncoder::new(invalid_cmd.clone(), usize::MAX).unwrap_err();
+        let fallback = SimpleWriteEncoder::new(invalid_cmd.clone(), usize::MAX).unwrap_err();
         let bytes = fallback.write_to_bytes().unwrap();
-        let decoded = RawWriteDecoder::new(&bytes).unwrap_err();
+        let decoded = SimpleWriteDecoder::new(&bytes).unwrap_err();
         assert_eq!(decoded, invalid_cmd);
 
         let mut valid_cmd = RaftCmdRequest::default();
@@ -474,7 +474,7 @@ mod tests {
         put_req.set_key(b"key".to_vec());
         put_req.set_value(b"".to_vec());
         valid_cmd.mut_requests().push(req);
-        let mut encoder = RawWriteEncoder::new(valid_cmd.clone(), usize::MAX).unwrap();
+        let mut encoder = SimpleWriteEncoder::new(valid_cmd.clone(), usize::MAX).unwrap();
         // Only simple write command can be batched.
         encoder.amend(invalid_cmd.clone()).unwrap_err();
         let mut valid_cmd2 = valid_cmd.clone();
@@ -483,10 +483,10 @@ mod tests {
         encoder.amend(valid_cmd2).unwrap_err();
 
         let (bytes, _) = encoder.encode();
-        let mut decoder = RawWriteDecoder::new(&bytes).unwrap();
+        let mut decoder = SimpleWriteDecoder::new(&bytes).unwrap();
         assert_eq!(decoder.header(), valid_cmd.get_header());
         let req = decoder.next().unwrap();
-        let RawWrite::Put(put) = req else { panic!("should be put") };
+        let SimpleWrite::Put(put) = req else { panic!("should be put") };
         assert_eq!(put.cf, CF_DEFAULT);
         assert_eq!(put.key, b"key");
         assert_eq!(put.value, b"");
