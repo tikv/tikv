@@ -156,14 +156,23 @@ pub fn regexp_substr<C: Collator>(
             None => return Ok(None),
         };
 
-        let count = expr.chars().count() as i64;
-        if pos < 1 || pos > count {
-            if !(count == 0 && pos == 1) {
-                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
+        if pos >= 1 {
+            if let Some((idx, _)) = expr.char_indices().nth((pos - 1) as usize) {
+                expr = &expr[idx..];
+            } else if pos != 1 {
+                // Char count == 0 && pos == 1 is valid.
+                return Err(box_err!(
+                    "invalid regex pos: {}, count: {}",
+                    pos,
+                    expr.chars().count()
+                ));
             }
         } else {
-            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
-            expr = &expr[idx..];
+            return Err(box_err!(
+                "invalid regex pos: {}, count: {}",
+                pos,
+                expr.chars().count()
+            ));
         }
     }
 
@@ -215,14 +224,23 @@ pub fn regexp_instr<C: Collator>(
             None => return Ok(None),
         };
 
-        let count = expr.chars().count() as i64;
-        if pos < 1 || pos > count {
-            if !(count == 0 && pos == 1) {
-                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
+        if pos >= 1 {
+            if let Some((idx, _)) = expr.char_indices().nth((pos - 1) as usize) {
+                expr = &expr[idx..];
+            } else if pos != 1 {
+                // Char count == 0 && pos == 1 is valid.
+                return Err(box_err!(
+                    "invalid regex pos: {}, count: {}",
+                    pos,
+                    expr.chars().count()
+                ));
             }
         } else {
-            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
-            expr = &expr[idx..];
+            return Err(box_err!(
+                "invalid regex pos: {}, count: {}",
+                pos,
+                expr.chars().count()
+            ));
         }
     }
 
@@ -257,7 +275,7 @@ pub fn regexp_instr<C: Collator>(
             m.end()
         };
 
-        let count = expr[..find_pos].to_string().chars().count() as i64;
+        let count = expr[..find_pos].chars().count() as i64;
         return Ok(Some(count + pos));
     }
 
@@ -295,15 +313,24 @@ pub fn regexp_replace<C: Collator>(
             None => return Ok(None),
         };
 
-        let count = expr.chars().count() as i64;
-        if pos < 1 || pos > count {
-            if !(count == 0 && pos == 1) {
-                return Err(box_err!("invalid regex pos: {}, count: {}", pos, count));
+        if pos >= 1 {
+            if let Some((idx, _)) = expr.char_indices().nth((pos - 1) as usize) {
+                before_trimmed = &expr[..idx];
+                trimmed = &expr[idx..];
+            } else if pos != 1 {
+                // Char count == 0 && pos == 1 is valid.
+                return Err(box_err!(
+                    "invalid regex pos: {}, count: {}",
+                    pos,
+                    expr.chars().count()
+                ));
             }
         } else {
-            let idx = expr.char_indices().nth((pos - 1) as usize).unwrap().0;
-            before_trimmed = &expr[..idx];
-            trimmed = &expr[idx..];
+            return Err(box_err!(
+                "invalid regex pos: {}, count: {}",
+                pos,
+                expr.chars().count()
+            ));
         }
     }
 
@@ -1247,12 +1274,10 @@ mod tests {
                     assert_eq!(
                         v[0],
                         expected.map(|e| e.as_bytes().to_vec()),
-                        "{:?} {:?} {:?} {:?} {:?}",
+                        "{:?} {:?} {:?}",
                         expr,
                         pattern,
                         replace,
-                        v[0].as_ref().map(|v| std::str::from_utf8(&v)),
-                        expected
                     );
                 }
                 Err(e) => {
