@@ -185,4 +185,3 @@ fn test_snap_with_invalid_parameter() {
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 }
-
