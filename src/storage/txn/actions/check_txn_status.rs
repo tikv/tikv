@@ -176,16 +176,19 @@ pub fn rollback_lock(
 }
 
 pub fn collapse_prev_rollback(
-    txn: &mut MvccTxn,
-    reader: &mut SnapshotReader<impl Snapshot>,
-    key: &Key,
+    _txn: &mut MvccTxn,
+    _reader: &mut SnapshotReader<impl Snapshot>,
+    _key: &Key,
 ) -> Result<()> {
-    if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
-        if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
-            txn.delete_write(key.clone(), commit_ts);
-        }
-    }
+    // No need to collapse rollback because of the extra-cf.
     Ok(())
+
+    // if let Some((commit_ts, write)) = reader.seek_write(key, reader.start_ts)? {
+    // if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
+    // txn.delete_write(key.clone(), commit_ts);
+    // }
+    // }
+    // Ok(())
 }
 
 /// Generate the Write record that should be written that means to perform a specified rollback

@@ -943,29 +943,30 @@ mod tests {
             _ => unreachable!("unexpected modify: {:?}", modify),
         };
 
-        let prewrite = |mutations, primary: &[_], ts: u64, one_pc, max_commit_ts: u64| {
-            storage
-                .sched_txn_command(
-                    commands::Prewrite::new(
-                        mutations,
-                        primary.to_vec(),
-                        ts.into(),
-                        3000,
-                        false,
-                        0,
-                        (ts + 1).into(),
-                        max_commit_ts.into(),
-                        None,
-                        one_pc,
-                        AssertionLevel::Off,
-                        Context::default(),
-                    ),
-                    expect_ok_callback(tx.clone(), 1),
-                )
-                .unwrap();
-            rx.recv().unwrap();
-            engine.take_last_write_data().unwrap()
-        };
+        let prewrite =
+            |mutations, primary: &[_], ts: u64, secondaries, one_pc, max_commit_ts: u64| {
+                storage
+                    .sched_txn_command(
+                        commands::Prewrite::new(
+                            mutations,
+                            primary.to_vec(),
+                            ts.into(),
+                            3000,
+                            false,
+                            0,
+                            (ts + 1).into(),
+                            max_commit_ts.into(),
+                            secondaries,
+                            one_pc,
+                            AssertionLevel::Off,
+                            Context::default(),
+                        ),
+                        expect_ok_callback(tx.clone(), 1),
+                    )
+                    .unwrap();
+                rx.recv().unwrap();
+                engine.take_last_write_data().unwrap()
+            };
         let pessimistic_prewrite =
             |mutations, primary: &[_], ts: u64, one_pc, max_commit_ts: u64| {
                 storage
@@ -1024,6 +1025,7 @@ mod tests {
             ],
             b"k1",
             10,
+            None,
             false,
             0,
         );
@@ -1080,6 +1082,7 @@ mod tests {
             ],
             b"k1",
             30,
+            None,
             true,
             40,
         );
@@ -1164,6 +1167,7 @@ mod tests {
             ],
             b"k1",
             50,
+            None,
             false,
             0,
         );
@@ -1174,6 +1178,7 @@ mod tests {
             ],
             b"k3",
             60,
+            None,
             false,
             0,
         );
@@ -1221,6 +1226,7 @@ mod tests {
             vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
             b"k1",
             70,
+            None,
             true,
             1,
         );
@@ -1373,7 +1379,7 @@ mod tests {
                 engine.take_last_write_data().unwrap()
             };
         // Push lock's min_commit_ts
-        let mut data = check_txn_status(b"k1", 90, 100, false);
+        let mut data = check_txn_status(b"k1", 90, 95, false);
         assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
         let modifies = data.modifies.clone();
         let custom_req = modifies_to_requests(&Context::default(), &mut data);
@@ -1386,6 +1392,7 @@ mod tests {
             cnt += 1
         });
         assert_eq!(cnt, 1);
+
         // Rollback lock
         let mut data = check_txn_status(b"k1", 90, u64::MAX, false);
         assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
@@ -1400,6 +1407,30 @@ mod tests {
             cnt += 1
         });
         assert_eq!(cnt, 1);
+
+        // Rollback a missing lock and there is a lock of another async-commit transaction.
+        prewrite(
+            vec![Mutation::make_put(Key::from_raw(b"k1"), b"v1".to_vec())],
+            b"k1",
+            95,
+            Some(vec![b"k2".to_vec()]),
+            false,
+            100,
+        );
+        let mut data = check_txn_status(b"k1", 96, 97, false);
+        assert_eq!(data.extra.req_type, ReqType::CheckTxnStatus);
+        let custom_req = modifies_to_requests(&Context::default(), &mut data);
+        let custom_log = rlog::CustomRaftLog::new_from_data(custom_req.get_data());
+        assert_eq!(custom_log.get_type(), rlog::TYPE_ROLLBACK);
+        let mut cnt = 0;
+        custom_log.iterate_rollback(|k, ts, del_lock| {
+            assert_eq!(k, b"k1");
+            assert!(!del_lock);
+            assert_eq!(ts, 96);
+            cnt += 1
+        });
+        assert_eq!(cnt, 1);
+        check_txn_status(b"k1", 95, u64::MAX, false);
 
         pessimistic_lock(vec![b"k1"], b"k1", 100);
         // Push pessimistic lock's min_commit_ts

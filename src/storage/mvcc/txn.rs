@@ -151,30 +151,32 @@ impl MvccTxn {
     /// by checking the information in the lock.
     pub(crate) fn mark_rollback_on_mismatching_lock(
         &mut self,
-        key: &Key,
-        mut lock: Lock,
-        is_protected: bool,
+        _key: &Key,
+        mut _lock: Lock,
+        _is_protected: bool,
     ) {
-        assert_ne!(lock.ts, self.start_ts);
+        // No need to do it because of the extra-cf.
+        return;
+        // assert_ne!(lock.ts, self.start_ts);
 
-        if !is_protected {
-            // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
-            return;
-        }
+        // if !is_protected {
+        // // A non-protected rollback record is ok to be overwritten, so do nothing in this case.
+        // return;
+        // }
 
-        if self.start_ts < lock.min_commit_ts {
-            // The rollback will surely not be overwritten by committing the lock. Do nothing.
-            return;
-        }
+        // if self.start_ts < lock.min_commit_ts {
+        // // The rollback will surely not be overwritten by committing the lock. Do nothing.
+        // return;
+        // }
 
-        if !lock.use_async_commit {
-            // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
-            // async commit transaction.
-            return;
-        }
+        // if !lock.use_async_commit {
+        // // Currently only async commit may use calculated commit_ts. Do nothing if it's not a
+        // // async commit transaction.
+        // return;
+        // }
 
-        lock.rollback_ts.push(self.start_ts);
-        self.put_lock(key.clone(), &lock);
+        // lock.rollback_ts.push(self.start_ts);
+        // self.put_lock(key.clone(), &lock);
     }
 
     pub(crate) fn clear(&mut self) {
