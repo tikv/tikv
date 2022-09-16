@@ -443,9 +443,10 @@ mod tests {
         ];
         for n in cases {
             super::encode_len(n, &mut buf);
+            buf.push(0);
             let (m, left) = super::decode_len(&buf);
             assert_eq!(n, m);
-            assert!(left.is_empty(), "{:?}", left);
+            assert_eq!(left, &[0]);
             buf.clear();
         }
     }
