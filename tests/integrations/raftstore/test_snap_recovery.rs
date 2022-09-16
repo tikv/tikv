@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use raft::eraftpb::MessageType;
-use raftstore::store::{PeerMsg, SignificantMsg};
+use raftstore::store::{PeerMsg, SignificantMsg, SnapshotRecoveryWaitApplySyncer};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
@@ -66,7 +66,8 @@ fn test_check_pending_admin() {
 }
 
 #[test]
-fn test_check_pending_admin() {
+fn test_snap_wait_apply() {
+    test_util::init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.store_io_pool_size = 0;
@@ -79,34 +80,42 @@ fn test_check_pending_admin() {
     must_get_equal(&cluster.get_engine(2), b"k", b"v");
     must_get_equal(&cluster.get_engine(3), b"k", b"v");
 
-    // add filter to make leader cannot commit apply
+    // add filter to make leader 1 cannot receive follower append response.
     cluster.add_send_filter(CloneFilterFactory(
         RegionPacketFilter::new(1, 1)
             .msg_type(MessageType::MsgAppendResponse)
             .direction(Direction::Recv),
     ));
 
+    // make a admin request to let leader has pending conf change.
+    let leader = new_peer(1, 4);
+    cluster.async_add_peer(1, leader).unwrap();
+
     let router = cluster.sim.wl().get_router(1).unwrap();
 
-    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer::new(1, tx.clone())))
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        ))
     });
 
-    assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(3));
+    // we expect recv timeout because the leader peer on store 1 cannot finished the
+    // apply. so the wait apply will timeout.
+    assert!(rx.recv_timeout(Duration::from_secs(1)).is_err());
 
-    // clear filter so we can make pending admin requests finished.
+    // clear filter so we can make wait apply finished.
     cluster.clear_send_filters();
 
-
-    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    // after clear the filter the leader peer on store 1 can finsihed the wait
+    // apply.
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer::new(1, tx.clone())))
+        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+            SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
+        ))
     });
 
-    futures::executor::block_on(async {
-        let r = rx.next().await;
-        assert_eq!(r, 1);
-    });
+    assert_eq!(rx.recv(), Ok(1));
 }

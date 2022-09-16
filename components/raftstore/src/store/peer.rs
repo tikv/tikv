@@ -623,12 +623,9 @@ impl SnapshotRecoveryWaitApplySyncer {
             }
             let router_ptr = thread_safe_router.lock().unwrap();
 
-            (*router_ptr)
-                .send(region_id)
-                .map_err(|_| {
-                    warn!("reply waitapply states failure.");
-                })
-                .unwrap();
+            _ = router_ptr.send(region_id).map_err(|_| {
+                warn!("reply waitapply states failure.");
+            });
         }));
         SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
