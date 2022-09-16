@@ -623,12 +623,9 @@ impl SnapshotRecoveryWaitApplySyncer {
             }
             let router_ptr = thread_safe_router.lock().unwrap();
 
-            (*router_ptr)
-                .send(region_id)
-                .map_err(|_| {
-                    warn!("reply waitapply states failure.");
-                })
-                .unwrap();
+            _ = router_ptr.send(region_id).map_err(|_| {
+                warn!("reply waitapply states failure.");
+            });
         }));
         SnapshotRecoveryWaitApplySyncer {
             _closure: Arc::new(closure),
@@ -2343,12 +2340,12 @@ where
     }
 
     #[inline]
-    fn is_splitting(&self) -> bool {
+    pub fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
     #[inline]
-    fn is_merging(&self) -> bool {
+    pub fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
     }
