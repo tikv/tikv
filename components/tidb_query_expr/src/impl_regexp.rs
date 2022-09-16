@@ -15,10 +15,7 @@ const INSTR_MATCH_IDX: usize = 5;
 const REPLACE_MATCH_IDX: usize = 5;
 
 fn is_valid_match_type(m: char) -> bool {
-    match m {
-        'i' | 'c' | 'm' | 's' => true,
-        _ => false,
-    }
+    matches!(m, 'i' | 'c' | 'm' | 's')
 }
 
 fn get_match_type<C: Collator>(match_type: &[u8]) -> Result<String> {
@@ -268,7 +265,7 @@ pub fn regexp_instr<C: Collator>(
         }
     };
 
-    if let Some(m) = regex.find_iter(&expr).nth((occurrence - 1) as usize) {
+    if let Some(m) = regex.find_iter(expr).nth((occurrence - 1) as usize) {
         let find_pos = if return_option == 0 {
             m.start()
         } else {
@@ -347,13 +344,13 @@ pub fn regexp_replace<C: Collator>(
     };
 
     if occurrence == 0 {
-        let rep = regex.replace_all(&trimmed, replace_expr);
+        let rep = regex.replace_all(trimmed, replace_expr);
         let mut result = String::with_capacity(before_trimmed.len() + rep.len());
         result.push_str(before_trimmed);
         result.push_str(&rep);
         Ok(Some(result.into_bytes()))
     } else {
-        if let Some(m) = regex.find_iter(&trimmed).nth((occurrence - 1) as usize) {
+        if let Some(m) = regex.find_iter(trimmed).nth((occurrence - 1) as usize) {
             let mut result = String::with_capacity(
                 before_trimmed.len()
                     + trimmed[..m.start()].len()
