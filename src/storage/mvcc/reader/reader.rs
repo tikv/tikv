@@ -507,11 +507,13 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
+        let mut has_remain = false;
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             if let Some(end) = end {
                 if key >= *end {
-                    return Ok((locks, false));
+                    has_remain = false;
+                    break;
                 }
             }
 
@@ -519,15 +521,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
             if filter(&lock) {
                 locks.push((key, lock));
                 if limit > 0 && locks.len() == limit {
-                    return Ok((locks, true));
+                    has_remain = true;
+                    break;
                 }
             }
             cursor.next(&mut self.statistics.lock);
         }
         self.statistics.lock.processed_keys += locks.len();
-        // If we reach here, `cursor.valid()` is `false`, so there MUST be no more
-        // locks.
-        Ok((locks, false))
+        Ok((locks, has_remain))
     }
 
     /// Scan the writes to get all the latest keys with their corresponding
@@ -570,30 +571,32 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let version = version.unwrap_or_else(TimeStamp::max);
         let mut cur_key = None;
         let mut key_writes = Vec::with_capacity(limit);
+        let mut has_remain = false;
         while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
             if let Some(end) = end {
                 if key >= *end {
-                    return Ok((key_writes, false));
+                    has_remain = false;
+                    break;
                 }
             }
             let commit_ts = key.decode_ts()?;
-            let truncated_key = key.clone().truncate_ts()?;
+            let user_key = key.clone().truncate_ts()?;
             // To make sure we only check each unique key once and `filter(&key)` returns
             // true.
-            if (cur_key.is_some() && cur_key.clone().unwrap() == truncated_key) || !filter(&key) {
+            if (cur_key.is_some() && cur_key.clone().unwrap() == user_key) || !filter(&key) {
                 cursor.next(&mut self.statistics.write);
                 continue;
             }
-            cur_key = Some(truncated_key.clone());
+            cur_key = Some(user_key.clone());
 
             let mut write = None;
-            let version_key = truncated_key.clone().append_ts(version);
+            let version_key = user_key.clone().append_ts(version);
             // Try to seek to the key with the specified version.
             if cursor.near_seek(&version_key, &mut self.statistics.write)?
                 && Key::is_user_key_eq(
                     cursor.key(&mut self.statistics.write),
-                    truncated_key.as_encoded(),
+                    user_key.as_encoded(),
                 )
             {
                 while cursor.valid()? {
@@ -611,7 +614,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 Key::from_encoded_slice(cursor.key(&mut self.statistics.write));
                             // Could not find the visible version, current cursor is on the next
                             // key, so we set both `write` and `cur_key` to `None`.
-                            if key.truncate_ts()? != truncated_key {
+                            if key.truncate_ts()? != user_key {
                                 write = None;
                                 cur_key = None;
                                 break;
@@ -620,14 +623,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
                     }
                 }
             }
-            key_writes.push((truncated_key, commit_ts, write));
+            key_writes.push((user_key, commit_ts, write));
             if limit > 0 && key_writes.len() == limit {
-                return Ok((key_writes, true));
+                has_remain = true;
+                break;
             }
         }
         self.statistics.write.processed_keys += key_writes.len();
         resource_metering::record_read_keys(key_writes.len() as u32);
-        Ok((key_writes, false))
+        Ok((key_writes, has_remain))
     }
 
     pub fn scan_keys(

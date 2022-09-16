@@ -100,25 +100,24 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
                 next_write_key = Some(key);
                 break;
             }
-            // If the old write doesn't exist, we should put a `WriteType::Delete` record to
-            // delete the current key.
-            if old_write.is_none() {
+            if let Some(old_write) = old_write {
+                // If it's not a short value and it's a `WriteType::Put`, we should put the old
+                // value in `CF_DEFAULT` with `self.start_ts` as well.
+                if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
+                    if let Some(old_value) = reader.get(&key, self.version)? {
+                        txn.put_value(key.clone(), self.start_ts, old_value);
+                        rows += 1;
+                    }
+                }
+                let new_write =
+                    Write::new(old_write.write_type, self.start_ts, old_write.short_value);
+                txn.put_write(key.clone(), self.commit_ts, new_write.as_ref().to_bytes());
+            } else {
+                // If the old write doesn't exist, we should put a `WriteType::Delete` record to
+                // delete the current key.
                 let new_write = Write::new(WriteType::Delete, self.start_ts, None);
                 txn.put_write(key.clone(), self.commit_ts, new_write.as_ref().to_bytes());
-                rows += 1;
-                continue;
             }
-            let old_write = old_write.unwrap();
-            // If it's not a short value and it's a `WriteType::Put`, we should put the old
-            // value in `CF_DEFAULT` with `self.start_ts` as well.
-            if old_write.short_value.is_none() && old_write.write_type == WriteType::Put {
-                if let Some(old_value) = reader.get(&key, self.version)? {
-                    txn.put_value(key.clone(), self.start_ts, old_value);
-                    rows += 1;
-                }
-            }
-            let new_write = Write::new(old_write.write_type, self.start_ts, old_write.short_value);
-            txn.put_write(key.clone(), self.commit_ts, new_write.as_ref().to_bytes());
             rows += 1;
         }
 
