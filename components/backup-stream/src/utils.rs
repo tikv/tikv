@@ -37,7 +37,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::File,
-    io::{AsyncRead, AsyncWrite, BufWriter},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter},
     sync::{oneshot, Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};
@@ -600,6 +600,7 @@ pub fn is_overlapping(range: (&[u8], &[u8]), range2: (&[u8], &[u8])) -> bool {
     }
 }
 
+/// read files asynchronously in sequence
 pub struct FilesReader {
     files: Vec<File>,
     index: usize,
@@ -633,8 +634,16 @@ impl AsyncRead for FilesReader {
     }
 }
 
-pub trait CompressionWriter: AsyncWrite + Sync + Send + 'static {}
+/// a wrapper for different compression type
+#[async_trait::async_trait]
+pub trait CompressionWriter: AsyncWrite + Sync + Send + 'static {
+    /// call the `File.sync_all()` to flush immediately to disk.
+    async fn done(mut self: Pin<&mut Self>) -> Result<()>;
+}
 
+/// a writer dispatcher for different compression type.
+/// regard `Compression::Unknown` as uncompressed type
+/// to be compatible with v6.2.0.
 pub async fn compression_writer_dispatcher(
     local_path: impl AsRef<Path>,
     compression_type: CompressionType,
@@ -650,6 +659,7 @@ pub async fn compression_writer_dispatcher(
     }
 }
 
+/// uncompressed type writer
 pub struct NoneCompressionWriter {
     inner: BufWriter<File>,
 }
@@ -679,8 +689,17 @@ impl AsyncWrite for NoneCompressionWriter {
     }
 }
 
-impl CompressionWriter for NoneCompressionWriter {}
+#[async_trait::async_trait]
+impl CompressionWriter for NoneCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let bufwriter = &mut self.inner;
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
 
+/// use zstd compression algorithm
 pub struct ZstdCompressionWriter {
     inner: ZstdEncoder<BufWriter<File>>,
 }
@@ -712,7 +731,17 @@ impl AsyncWrite for ZstdCompressionWriter {
     }
 }
 
-impl CompressionWriter for ZstdCompressionWriter {}
+#[async_trait::async_trait]
+impl CompressionWriter for ZstdCompressionWriter {
+    async fn done(mut self: Pin<&mut Self>) -> Result<()> {
+        let encoder = &mut self.inner;
+        encoder.shutdown().await?;
+        let bufwriter = encoder.get_mut();
+        bufwriter.flush().await?;
+        bufwriter.get_ref().sync_all().await?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -969,7 +998,7 @@ mod test {
             .await
             .unwrap();
         writer.write_all(content.as_bytes()).await.unwrap();
-        writer.shutdown().await.unwrap();
+        writer.as_mut().done().await.unwrap();
 
         let mut reader = BufReader::new(File::open(path1).await.unwrap());
         let mut read_content = String::new();
@@ -982,7 +1011,7 @@ mod test {
             .await
             .unwrap();
         writer.write_all(content.as_bytes()).await.unwrap();
-        writer.shutdown().await.unwrap();
+        writer.as_mut().done().await.unwrap();
 
         use async_compression::tokio::bufread::ZstdDecoder;
         let mut reader = ZstdDecoder::new(BufReader::new(File::open(path2).await.unwrap()));

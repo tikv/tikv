@@ -916,7 +916,7 @@ impl StreamTaskInfo {
         futures::future::join_all(
             w.iter_mut()
                 .chain(wm.iter_mut())
-                .map(|(_, f, _)| async move { f.inner.shutdown().await }),
+                .map(|(_, f, _)| async move { f.inner.as_mut().done().await }),
         )
         .await
         .into_iter()

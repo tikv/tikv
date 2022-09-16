@@ -71,6 +71,7 @@ pub struct RestoreConfig {
     pub expected_sha256: Option<Vec<u8>>,
 }
 
+/// a reader dispatcher for different compression type.
 pub fn compression_reader_dispatcher<'a>(
     compression_type: Option<CompressionType>,
     inner: Box<dyn AsyncRead + Unpin + 'a>,
