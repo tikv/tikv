@@ -7,6 +7,12 @@
 
 extern crate tikv_alloc as _;
 
+mod cf_options;
+mod db_options;
+mod engine;
 mod status;
+mod util;
 
+pub use engine::*;
 pub use status::*;
+pub use util::*;

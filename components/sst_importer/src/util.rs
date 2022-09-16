@@ -75,7 +75,7 @@ mod tests {
     };
     use engine_traits::{
         CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
-        SstWriterBuilder, TitanDbOptions, CF_DEFAULT,
+        SstWriterBuilder, TitanCfOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -194,7 +194,7 @@ mod tests {
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);
         let mut cf_opts = RocksCfOptions::new();
-        cf_opts.set_titandb_options(&titan_opts);
+        cf_opts.set_titan_cf_options(&titan_opts);
         check_prepare_sst_for_ingestion(
             Some(db_opts),
             Some(vec![(CF_DEFAULT, cf_opts)]),
