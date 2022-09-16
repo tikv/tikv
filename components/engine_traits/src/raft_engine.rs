@@ -34,6 +34,11 @@ pub trait RaftEngineReadOnly: Sync + Send + 'static {
         seqno: u64,
     ) -> Result<Option<RegionSequenceNumberRelation>>;
 
+    fn get_region_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>>;
+
     fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>>;
 
     fn get_entry(&self, raft_group_id: u64, index: u64) -> Result<Option<Entry>>;
@@ -209,13 +214,14 @@ pub trait RaftLogBatch: Send {
 
     fn delete_seqno_relation(&mut self, raft_group_id: u64, seqno: u64) -> Result<()>;
 
-    fn put_snapshot_apply_state(
+    fn put_region_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
-        state: &RaftApplyState,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
     ) -> Result<()>;
 
-    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()>;
+    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()>;
 
     fn put_pending_region_state(
         &mut self,

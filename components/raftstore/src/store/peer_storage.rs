@@ -606,9 +606,6 @@ where
         let last_index = snap.get_metadata().get_index();
 
         write_peer_state(kv_wb, &region, PeerState::Applying, None)?;
-        if self.save_states_to_raft_db {
-            write_peer_state_to_raft(raft_wb, None, &region, PeerState::Applying, None)?;
-        }
 
         self.raft_state_mut().set_last_index(last_index);
         self.set_last_term(snap.get_metadata().get_term());
@@ -624,6 +621,10 @@ where
         self.apply_state_mut()
             .mut_truncated_state()
             .set_term(snap.get_metadata().get_term());
+
+        if self.save_states_to_raft_db {
+            write_snapshot_state_to_raft(raft_wb, &region, self.apply_state())?;
+        }
 
         // `region` will be updated after persisting.
         // Although there is an interval that other metadata are updated while `region`
@@ -1143,33 +1144,30 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
-pub fn write_peer_state_to_raft<T: RaftLogBatch>(
+pub fn write_tombstone_state_to_raft<T: RaftLogBatch>(
     raft_wb: &mut T,
-    index: Option<u64>,
     region: &metapb::Region,
-    state: PeerState,
-    merge_state: Option<MergeState>,
 ) -> Result<()> {
     let region_id = region.get_id();
     let mut region_state = RegionLocalState::default();
-    region_state.set_state(state);
+    region_state.set_state(PeerState::Tombstone);
     region_state.set_region(region.clone());
-    if let Some(state) = merge_state {
-        region_state.set_merge_state(state);
-    }
+    raft_wb.put_region_state(region_id, &region_state).unwrap();
+    Ok(())
+}
 
-    debug!(
-        "writing merge state";
-        "region_id" => region_id,
-        "state" => ?region_state,
-    );
-    if let Some(index) = index {
-        raft_wb
-            .put_pending_region_state(region_id, index, &region_state)
-            .unwrap();
-    } else {
-        raft_wb.put_region_state(region_id, &region_state).unwrap();
-    }
+pub fn write_snapshot_state_to_raft<T: RaftLogBatch>(
+    raft_wb: &mut T,
+    region: &metapb::Region,
+    apply_state: &RaftApplyState,
+) -> Result<()> {
+    let region_id = region.get_id();
+    let mut region_state = RegionLocalState::default();
+    region_state.set_state(PeerState::Applying);
+    region_state.set_region(region.clone());
+    raft_wb
+        .put_region_apply_snapshot_state(region_id, &region_state, apply_state)
+        .unwrap();
     Ok(())
 }
 
@@ -1635,6 +1633,7 @@ pub mod tests {
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            false,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 0);
@@ -1788,6 +1787,7 @@ pub mod tests {
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Some(pd_mock),
+            false,
         );
         worker.start_with_timer(runner);
         let snap = s.snapshot(0, 1);
@@ -1854,6 +1854,7 @@ pub mod tests {
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            false,
         );
         worker.start(runner);
         s1.snapshot(0, 0).unwrap_err();

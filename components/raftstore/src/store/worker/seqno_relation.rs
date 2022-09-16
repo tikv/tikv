@@ -267,17 +267,17 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                             remove_self = false;
                         }
                     }
-                    let peer_state = if remove_self {
-                        PeerState::Tombstone
-                    } else {
-                        PeerState::Normal
-                    };
                     let mut state = RegionLocalState::default();
                     state.set_region(cp.region.clone());
-                    state.set_state(peer_state);
-                    self.raft_wb
-                        .put_pending_region_state(region_id, apply_state.applied_index, &state)
-                        .unwrap();
+                    if remove_self {
+                        state.set_state(PeerState::Tombstone);
+                        self.handle_destroy_region(cp.region.clone());
+                    } else {
+                        state.set_state(PeerState::Normal);
+                        self.raft_wb
+                            .put_pending_region_state(region_id, apply_state.applied_index, &state)
+                            .unwrap();
+                    };
                     region_state = Some(state);
                 }
                 ExecResult::SplitRegion {
@@ -401,7 +401,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         })
     }
 
-    fn handle_destroy_region(&mut self, region: Region, peer_id: u64, merge_from_snapshot: bool) {
+    fn handle_destroy_region(&mut self, region: Region) {
         // Cleanup all stale relations.
         let raft_engine = self.engines.raft.clone();
         let region_id = region.get_id();
@@ -436,16 +436,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             )
             .unwrap();
         info!("handle destroy region"; "region_id" => region_id);
-        let _ = self.router.force_send(
-            region_id,
-            PeerMsg::ApplyRes {
-                res: ApplyTaskRes::Destroy {
-                    region_id,
-                    peer_id,
-                    merge_from_snapshot,
-                },
-            },
-        );
     }
 }
 
@@ -485,7 +475,18 @@ impl<EK: KvEngine, ER: RaftEngine> Runnable for Runner<EK, ER> {
                 peer_id,
                 merge_from_snapshot,
             } => {
-                self.handle_destroy_region(region, peer_id, merge_from_snapshot);
+                let region_id = region.get_id();
+                self.handle_destroy_region(region);
+                let _ = self.router.force_send(
+                    region_id,
+                    PeerMsg::ApplyRes {
+                        res: ApplyTaskRes::Destroy {
+                            region_id,
+                            peer_id,
+                            merge_from_snapshot,
+                        },
+                    },
+                );
             }
         }
     }

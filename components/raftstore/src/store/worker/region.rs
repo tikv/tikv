@@ -364,6 +364,7 @@ where
     use_delete_range: bool,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
+    disable_kv_wal: bool,
 
     tiflash_stores: HashMap<u64, bool>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
@@ -403,6 +404,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
         pd_client: Option<Arc<T>>,
+        disable_kv_wal: bool,
     ) -> Self {
         Runner {
             batch_size,
@@ -420,6 +422,7 @@ where
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(snap_generator_pool_size)
                 .build_future_pool(),
+            disable_kv_wal,
         }
     }
 
@@ -489,6 +492,7 @@ where
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: self.coprocessor_host.clone(),
+            disable_kv_wal: self.disable_kv_wal,
         };
         s.apply(options)?;
         self.coprocessor_host
@@ -496,17 +500,20 @@ where
 
         region_state.set_state(PeerState::Normal);
 
-        let mut raft_wb = self.engines.raft.log_batch(0);
-        box_try!(raft_wb.put_region_state(region_id, &region_state));
-        self.engines
-            .raft
-            .consume(&mut raft_wb, true)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to save apply_snap result to raft db: {:?}",
-                    region_id, e
-                );
-            });
+        if self.disable_kv_wal {
+            let mut raft_wb = self.engines.raft.log_batch(0);
+            box_try!(raft_wb.put_region_state(region_id, &region_state));
+            box_try!(raft_wb.delete_region_apply_snapshot_state(region_id));
+            self.engines
+                .raft
+                .consume(&mut raft_wb, true)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to save apply_snap result to raft db: {:?}",
+                        region_id, e
+                    );
+                });
+        }
 
         // delete snapshot state.
         let mut wb = self.engines.kv.write_batch();
@@ -521,6 +528,7 @@ where
         info!(
             "apply new data";
             "region_id" => region_id,
+            "apply_state" => ?apply_state,
             "time_takes" => ?timer.saturating_elapsed(),
         );
         Ok(())
@@ -1062,6 +1070,7 @@ mod tests {
             CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<RpcClient>>::None,
+            false,
         );
         runner.clean_stale_check_interval = Duration::from_millis(100);
 
@@ -1170,6 +1179,7 @@ mod tests {
             host,
             router,
             Option::<Arc<RpcClient>>::None,
+            false,
         );
         worker.start_with_timer(runner);
 

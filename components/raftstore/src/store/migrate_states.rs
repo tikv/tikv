@@ -21,6 +21,7 @@ where
 
     let mut total_count = 0;
     let mut tombstone_count = 0;
+    let mut applying_count = 0;
     kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
         let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
         if suffix != keys::REGION_STATE_SUFFIX {
@@ -29,14 +30,11 @@ where
 
         total_count += 1;
 
-        let mut local_state = RegionLocalState::default();
-        local_state.merge_from_bytes(value)?;
+        let mut region_state = RegionLocalState::default();
+        region_state.merge_from_bytes(value)?;
 
-        match local_state.get_state() {
-            PeerState::Normal | PeerState::Merging | PeerState::Applying => {
-                if local_state.get_state() == PeerState::Applying {
-                    recover_from_applying_state(engines, &mut raft_wb, region_id).unwrap();
-                }
+        match region_state.get_state() {
+            PeerState::Normal | PeerState::Merging  => {
                 let apply_state = kv_engine
                     .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
                     .unwrap()
@@ -44,11 +42,21 @@ where
                 raft_wb.put_apply_state(region_id, &apply_state).unwrap();
                 info!("migrate apply state from kvdb to raftdb"; "region_id" => region_id, "apply_state" => ?apply_state);
             }
+            PeerState::Applying => {
+                recover_from_applying_state(engines, &mut raft_wb, region_id).unwrap();
+                let apply_state = kv_engine
+                    .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+                    .unwrap()
+                    .unwrap();
+                raft_wb.put_apply_state(region_id, &apply_state).unwrap();
+                raft_wb.put_region_apply_snapshot_state(region_id, &region_state, &apply_state).unwrap();
+                applying_count += 1;
+            }
             PeerState::Tombstone => {
                 tombstone_count += 1;
             }
         }
-        raft_wb.put_region_state(region_id, &local_state).unwrap();
+        raft_wb.put_region_state(region_id, &region_state).unwrap();
 
         Ok(true)
     })?;
@@ -58,6 +66,7 @@ where
     info!("migrating states from kvdb to raftdb done";
         "total_count" => total_count,
         "tombstone_count" => tombstone_count,
+        "applying_count" => applying_count,
     );
 
     Ok(())

@@ -54,6 +54,20 @@ impl RaftEngineReadOnly for RocksEngine {
         self.get_msg_cf(CF_DEFAULT, &key)
     }
 
+    fn get_region_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
+        let key = keys::snapshot_region_state_key(raft_group_id);
+        if let Some(region_state) = self.get_msg_cf(CF_DEFAULT, &key)? {
+            let key = keys::snapshot_apply_state_key(raft_group_id);
+            let apply_state = self.get_msg_cf(CF_DEFAULT, &key)?.unwrap();
+            Ok(Some((region_state, apply_state)))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn fetch_entries_to(
         &self,
         region_id: u64,
@@ -528,15 +542,21 @@ impl RaftLogBatch for RocksWriteBatchVec {
         self.put_msg(&keys::apply_state_key(raft_group_id), state)
     }
 
-    fn put_snapshot_apply_state(
+    fn put_region_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
-        state: &RaftApplyState,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
     ) -> Result<()> {
-        self.put_msg(&keys::snapshot_apply_state_key(raft_group_id), state)
+        self.put_msg(
+            &keys::snapshot_region_state_key(raft_group_id),
+            region_state,
+        )?;
+        self.put_msg(&keys::snapshot_apply_state_key(raft_group_id), apply_state)
     }
 
-    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.delete(&keys::snapshot_region_state_key(raft_group_id))?;
         self.delete(&keys::snapshot_apply_state_key(raft_group_id))
     }
 

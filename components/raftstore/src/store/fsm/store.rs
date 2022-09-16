@@ -468,14 +468,16 @@ where
 
     fn notify_destroy_region(&self, region: Region, peer_id: u64, merge_from_snapshot: bool) {
         if let Some(scheduler) = self.seqno_scheduler.as_ref() {
+            let region_id = region.get_id();
             if let Err(e) = scheduler.schedule(SeqnoRelationTask::DestroyRegion {
                 region,
                 peer_id,
                 merge_from_snapshot,
             }) {
                 error!(
-                    "failed to schedule apply res to seqno relation worker";
+                    "failed to schedule destroy region to seqno relation worker";
                     "err" => ?e,
+                    "region_id" => region_id,
                 );
             }
         } else {
@@ -1232,21 +1234,47 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             let mut kv_wb = kv_engine.write_batch();
             raft_engine
                 .for_each_raft_group(&mut |region_id| {
-                    let region_state = raft_engine
-                        .get_region_state(region_id)?
-                        .unwrap_or_else(|| panic!("region_id: {}", region_id));
-                    kv_wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state)?;
-                    let apply_state = raft_engine.get_apply_state(region_id)?;
-                    info!("recover region from raftdb";
-                        "region_id" => region_id,
-                        "region_state" => ?region_state,
-                        "apply_state" => ?apply_state,
-                    );
-                    if let Some(apply_state) = apply_state {
-                        kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &apply_state)
+                    if let Some((snap_region_state, snap_apply_state)) =
+                        raft_engine.get_region_apply_snapshot_state(region_id)?
+                    {
+                        kv_wb.put_msg_cf(
+                            CF_RAFT,
+                            &keys::region_state_key(region_id),
+                            &snap_region_state,
+                        )?;
+                        kv_wb.put_msg_cf(
+                            CF_RAFT,
+                            &keys::apply_state_key(region_id),
+                            &snap_apply_state,
+                        )?;
+                        info!("recover applying snapshot region from raftdb";
+                            "region_id" => region_id,
+                            "snap_region_state" => ?snap_region_state,
+                            "snap_apply_state" => ?snap_apply_state,
+                        );
                     } else {
-                        Ok(())
+                        let region_state = raft_engine
+                            .get_region_state(region_id)?
+                            .unwrap_or_else(|| panic!("region_id: {}", region_id));
+                        kv_wb.put_msg_cf(
+                            CF_RAFT,
+                            &keys::region_state_key(region_id),
+                            &region_state,
+                        )?;
+                        let apply_state = if region_state.get_state() != PeerState::Tombstone {
+                            let state = raft_engine.get_apply_state(region_id)?.unwrap();
+                            kv_wb.put_msg_cf(CF_RAFT, &keys::apply_state_key(region_id), &state)?;
+                            Some(state)
+                        } else {
+                            None
+                        };
+                        info!("recover region from raftdb";
+                            "region_id" => region_id,
+                            "region_state" => ?region_state,
+                            "apply_state" => ?apply_state,
+                        );
                     }
+                    Result::Ok(())
                 })
                 .unwrap();
             kv_wb.write().unwrap();
@@ -1669,6 +1697,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.coprocessor_host.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
+            cfg.value().disable_kv_wal,
         );
         let region_scheduler = workers
             .region_worker
@@ -1937,7 +1966,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .for_each_raft_group(&mut |region_id| {
                 if let Some(relation) = engines.raft.get_seqno_relation(region_id, *range.end())? {
                     assert!(
-                        relation.get_sequence_number() <= *range.end(),
+                        relation.get_sequence_number() > *range.start(),
                         "relation {:?}, range {:?}",
                         relation,
                         range

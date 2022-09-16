@@ -352,6 +352,7 @@ const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
 const PENDING_REGION_STATE_KEY: &[u8] = &[0x08];
 const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
+const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x0a];
 
 fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);
@@ -484,17 +485,31 @@ impl RaftLogBatchTrait for RaftLogBatch {
             .map_err(transfer_error)
     }
 
-    fn put_snapshot_apply_state(
+    fn put_region_apply_snapshot_state(
         &mut self,
         raft_group_id: u64,
-        state: &RaftApplyState,
+        region_state: &RegionLocalState,
+        apply_state: &RaftApplyState,
     ) -> Result<()> {
         self.0
-            .put_message(raft_group_id, SNAPSHOT_APPLY_STATE_KEY.to_vec(), state)
+            .put_message(
+                raft_group_id,
+                SNAPSHOT_REGION_STATE_KEY.to_vec(),
+                region_state,
+            )
+            .map_err(transfer_error)?;
+        self.0
+            .put_message(
+                raft_group_id,
+                SNAPSHOT_APPLY_STATE_KEY.to_vec(),
+                apply_state,
+            )
             .map_err(transfer_error)
     }
 
-    fn delete_snapshot_apply_state(&mut self, raft_group_id: u64) -> Result<()> {
+    fn delete_region_apply_snapshot_state(&mut self, raft_group_id: u64) -> Result<()> {
+        self.0
+            .delete(raft_group_id, SNAPSHOT_REGION_STATE_KEY.to_vec());
         self.0
             .delete(raft_group_id, SNAPSHOT_APPLY_STATE_KEY.to_vec());
         Ok(())
@@ -608,6 +623,26 @@ impl RaftEngineReadOnly for RaftLogEngine {
     fn get_flushed_seqno(&self) -> Result<Option<FlushedSeqno>> {
         let value = self.0.get(STORE_STATE_ID, FLUSHED_SEQNO_KEY);
         Ok(value.map(|v| serde_json::from_slice(&v).unwrap()))
+    }
+
+    fn get_region_apply_snapshot_state(
+        &self,
+        raft_group_id: u64,
+    ) -> Result<Option<(RegionLocalState, RaftApplyState)>> {
+        let region_state = self
+            .0
+            .get_message(raft_group_id, SNAPSHOT_REGION_STATE_KEY)
+            .map_err(transfer_error)?;
+        if let Some(region_state) = region_state {
+            let apply_state = self
+                .0
+                .get_message(raft_group_id, SNAPSHOT_APPLY_STATE_KEY)
+                .map_err(transfer_error)?
+                .unwrap();
+            Ok(Some((region_state, apply_state)))
+        } else {
+            Ok(None)
+        }
     }
 }
 

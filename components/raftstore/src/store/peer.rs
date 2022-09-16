@@ -96,7 +96,7 @@ use crate::{
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
         msg::{ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
-        peer_storage::write_peer_state_to_raft,
+        peer_storage::write_tombstone_state_to_raft,
         txn_ext::LocksStatus,
         util::{admin_cmd_epoch_lookup, RegionReadProgress},
         worker::{
@@ -1366,7 +1366,7 @@ where
             )?;
             if save_states_to_raft_db && !keep_data {
                 // Write region state again before clearing raft engine for region.
-                write_peer_state_to_raft(&mut raft_wb, None, &region, PeerState::Tombstone, None)?;
+                write_tombstone_state_to_raft(&mut raft_wb, &region)?;
             }
 
             // write kv rocksdb first in case of restart happen between two write

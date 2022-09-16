@@ -181,6 +181,7 @@ where
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
     pub coprocessor_host: CoprocessorHost<EK>,
+    pub disable_kv_wal: bool,
 }
 
 // A helper function to copy snapshot.
@@ -1087,6 +1088,7 @@ impl Snapshot {
                     &options.db,
                     cf,
                     batch_size,
+                    options.disable_kv_wal,
                     cb,
                 )?;
             } else {
@@ -2281,6 +2283,7 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            disable_kv_wal: false,
         };
         // Verify the snapshot applying is ok.
         s4.apply(options).unwrap();
@@ -2517,6 +2520,7 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            disable_kv_wal: false,
         };
         s5.apply(options).unwrap_err();
 
