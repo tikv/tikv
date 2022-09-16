@@ -84,7 +84,7 @@ impl engine_traits::Iterable for RocksEngine {
 
     fn iterator_opt(&self, cf: &str, opts: engine_traits::IterOptions) -> Result<Self::Iterator> {
         let opt = engine_iterator::to_tirocks_opt(opts);
-        let handle = util::cf_handle(&self.0, cf)?;
+        let handle = self.cf(cf)?;
         Ok(RocksEngineIterator::from_raw(Iterator::new(
             self.0.clone(),
             opt,
@@ -112,7 +112,7 @@ impl engine_traits::Peekable for RocksEngine {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<RocksPinSlice>> {
-        let handle = util::cf_handle(&self.0, cf)?;
+        let handle = self.cf(cf)?;
         self.get(opts, handle, key)
     }
 }
@@ -126,7 +126,7 @@ impl engine_traits::SyncMutable for RocksEngine {
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let handle = util::cf_handle(&self.0, cf)?;
+        let handle = self.cf(cf)?;
         self.0
             .put(&WriteOptions::default(), handle, key, value)
             .map_err(r2e)
@@ -140,7 +140,7 @@ impl engine_traits::SyncMutable for RocksEngine {
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let handle = util::cf_handle(&self.0, cf)?;
+        let handle = self.cf(cf)?;
         self.0
             .delete(&WriteOptions::default(), handle, key)
             .map_err(r2e)
@@ -154,7 +154,7 @@ impl engine_traits::SyncMutable for RocksEngine {
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let handle = util::cf_handle(&self.0, cf)?;
+        let handle = self.cf(cf)?;
         self.0
             .delete_range(&WriteOptions::default(), handle, begin_key, end_key)
             .map_err(r2e)
