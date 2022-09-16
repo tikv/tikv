@@ -69,6 +69,7 @@ pub struct RestoreConfig {
     pub range: Option<(u64, u64)>,
     pub compression_type: Option<CompressionType>,
     pub expected_sha256: Option<Vec<u8>>,
+    pub file_crypter: Option<FileEncryptionInfo>,
 }
 
 /// a reader dispatcher for different compression type.
@@ -118,13 +119,13 @@ pub trait ExternalStorage: 'static + Send + Sync {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
-        file_crypter: Option<FileEncryptionInfo>,
         restore_config: RestoreConfig,
     ) -> io::Result<()> {
         let RestoreConfig {
             range,
             compression_type,
             expected_sha256,
+            file_crypter,
         } = restore_config;
 
         let reader = {

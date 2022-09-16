@@ -230,7 +230,6 @@ impl SstImporter {
         dst_file: std::path::PathBuf,
         backend: &StorageBackend,
         support_kms: bool,
-        file_crypter: Option<FileEncryptionInfo>,
         speed_limiter: &Limiter,
         restore_config: external_storage_export::RestoreConfig,
     ) -> Result<()> {
@@ -267,7 +266,6 @@ impl SstImporter {
             dst_file.clone(),
             file_length,
             speed_limiter,
-            file_crypter,
             restore_config,
         );
         IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
@@ -331,6 +329,7 @@ impl SstImporter {
             range,
             compression_type: Some(meta.compression_type),
             expected_sha256,
+            file_crypter: None,
         };
         self.download_file_from_external_storage(
             meta.get_length(),
@@ -343,7 +342,6 @@ impl SstImporter {
             // to do: support KMS when log-backup and restore point.
             false,
             // don't support encrypt for now.
-            None,
             speed_limiter,
             restore_config,
         )?;
@@ -506,7 +504,10 @@ impl SstImporter {
             iv: meta.cipher_iv.to_owned(),
         });
 
-        let restore_config = external_storage_export::RestoreConfig::default();
+        let restore_config = external_storage_export::RestoreConfig {
+            file_crypter,
+            ..Default::default()
+        };
 
         self.download_file_from_external_storage(
             meta.length,
@@ -514,7 +515,6 @@ impl SstImporter {
             path.temp.clone(),
             backend,
             true,
-            file_crypter,
             speed_limiter,
             restore_config,
         )?;
@@ -1272,7 +1272,6 @@ mod tests {
                 path.temp.clone(),
                 &backend,
                 true,
-                None,
                 &Limiter::new(f64::INFINITY),
                 restore_config,
             )
@@ -1310,7 +1309,6 @@ mod tests {
                 path.temp.clone(),
                 &backend,
                 false,
-                None,
                 &Limiter::new(f64::INFINITY),
                 restore_config,
             )

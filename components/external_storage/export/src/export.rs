@@ -18,7 +18,6 @@ pub use azure::{AzureStorage, Config as AzureConfig};
 use cloud::blob::BlobConfig;
 use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
-use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
@@ -337,13 +336,13 @@ impl ExternalStorage for EncryptedExternalStorage {
         restore_name: std::path::PathBuf,
         expected_length: u64,
         speed_limiter: &Limiter,
-        file_crypter: Option<FileEncryptionInfo>,
         restore_config: RestoreConfig,
     ) -> io::Result<()> {
         let RestoreConfig {
             range,
             compression_type,
             expected_sha256,
+            file_crypter,
         } = restore_config;
 
         let reader = {
