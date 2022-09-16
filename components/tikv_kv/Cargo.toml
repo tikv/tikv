@@ -26,6 +26,7 @@ test-engines-panic = [
 
 [dependencies]
 backtrace = "0.3"
+collections = { path = "../collections" }
 engine_panic = { path = "../engine_panic", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
 engine_test = { path = "../engine_test", default-features = false }

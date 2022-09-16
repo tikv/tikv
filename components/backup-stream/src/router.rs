@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::pin::Pin;
 use std::{
     borrow::Borrow,
     collections::HashMap,
@@ -14,13 +15,15 @@ use std::{
     time::Duration,
 };
 
-use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{BackendConfig, UnpinReader};
 use external_storage_export::{create_storage, ExternalStorage};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata, StreamBackupTaskInfo},
+    brpb::{
+        CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
+        StreamBackupTaskInfo,
+    },
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -39,7 +42,7 @@ use tikv_util::{
 };
 use tokio::{
     fs::{remove_file, File},
-    io::{AsyncWriteExt, BufWriter},
+    io::AsyncWriteExt,
     sync::{Mutex, RwLock},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -54,7 +57,7 @@ use crate::{
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
     subscription_track::TwoPhaseResolver,
     try_send,
-    utils::{self, FilesReader, SegmentMap, SlotMap, StopWatch},
+    utils::{self, CompressionWriter, FilesReader, SegmentMap, SlotMap, StopWatch},
 };
 
 const FLUSH_FAILURE_BECOME_FATAL_THRESHOLD: usize = 30;
@@ -419,6 +422,7 @@ impl RouterInner {
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
     ) -> Result<()> {
+        let compression_type = task.info.get_compression_type();
         let task_name = task.info.take_name();
 
         // register task info
@@ -429,6 +433,7 @@ impl RouterInner {
             self.max_flush_interval,
             ranges.clone(),
             merged_file_size_limit,
+            compression_type,
         )
         .await?;
         self.tasks
@@ -777,6 +782,8 @@ pub struct StreamTaskInfo {
     global_checkpoint_ts: AtomicU64,
     /// The size limit of the merged file for this task.
     merged_file_size_limit: u64,
+    /// The compression type for this task.
+    compression_type: CompressionType,
 }
 
 impl Drop for StreamTaskInfo {
@@ -821,6 +828,7 @@ impl StreamTaskInfo {
         flush_interval: Duration,
         ranges: Vec<(Vec<u8>, Vec<u8>)>,
         merged_file_size_limit: u64,
+        compression_type: CompressionType,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&temp_dir).await?;
         let storage = Arc::from(create_storage(
@@ -844,6 +852,7 @@ impl StreamTaskInfo {
             flush_fail_count: AtomicUsize::new(0),
             global_checkpoint_ts: AtomicU64::new(start_ts),
             merged_file_size_limit,
+            compression_type,
         })
     }
 
@@ -863,7 +872,7 @@ impl StreamTaskInfo {
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
             let path = self.temp_dir.join(key.temp_file_name());
-            let val = Mutex::new(DataFile::new(path).await?);
+            let val = Mutex::new(DataFile::new(path, self.compression_type).await?);
             w.insert(key, val);
         }
 
@@ -907,14 +916,7 @@ impl StreamTaskInfo {
         futures::future::join_all(
             w.iter_mut()
                 .chain(wm.iter_mut())
-                .map(|(_, f, _)| async move {
-                    let encoder = &mut f.inner;
-                    encoder.shutdown().await?;
-                    let file = encoder.get_mut();
-                    file.flush().await?;
-                    file.get_ref().sync_all().await?;
-                    Result::Ok(())
-                }),
+                .map(|(_, f, _)| async move { f.inner.as_mut().done().await }),
         )
         .await
         .into_iter()
@@ -1021,12 +1023,12 @@ impl StreamTaskInfo {
             let mut file_info_clone = file_info.to_owned();
             // Update offset of file_info(DataFileInfo)
             //  and push it into merged_file_info(DataFileGroup).
-            file_info_clone.set_offset(stat_length);
+            file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
                 let file = File::open(data_file.local_path.clone()).await?;
                 let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
-                file_info_clone.set_compress_length(compress_length);
+                file_info_clone.set_range_length(compress_length);
                 file
             });
             data_file_infos.push(file_info_clone);
@@ -1279,7 +1281,8 @@ struct DataFile {
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     // TODO: use lz4 with async feature
-    inner: ZstdEncoder<BufWriter<File>>,
+    inner: Pin<Box<dyn CompressionWriter>>,
+    compression_type: CompressionType,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     number_of_entries: usize,
@@ -1351,16 +1354,18 @@ impl MetadataInfo {
 impl DataFile {
     /// create and open a logfile at the path.
     /// Note: if a file with same name exists, would truncate it.
-    async fn new(local_path: impl AsRef<Path>) -> Result<Self> {
+    async fn new(local_path: impl AsRef<Path>, compression_type: CompressionType) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
-        let inner = BufWriter::with_capacity(128 * 1024, File::create(local_path.as_ref()).await?);
+        let inner =
+            utils::compression_writer_dispatcher(local_path.as_ref(), compression_type).await?;
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
             resolved_ts: TimeStamp::zero(),
             min_begin_ts: None,
-            inner: ZstdEncoder::with_quality(inner, Level::Fastest),
+            inner,
+            compression_type,
             sha256,
             number_of_entries: 0,
             file_size: 0,
@@ -1471,6 +1476,8 @@ impl DataFile {
         meta.set_cf(file_key.cf.to_owned());
         meta.set_region_id(file_key.region_id as i64);
         meta.set_type(file_key.get_file_type());
+
+        meta.set_compression_type(self.compression_type);
 
         Ok(meta)
     }
@@ -1832,6 +1839,7 @@ mod tests {
             Duration::from_secs(300),
             vec![(vec![], vec![])],
             merged_file_size_limit,
+            CompressionType::Zstd,
         )
         .await
         .unwrap();
@@ -2195,6 +2203,7 @@ mod tests {
             Duration::from_secs(300),
             vec![(vec![], vec![])],
             0x100000,
+            CompressionType::Zstd,
         )
         .await
         .unwrap();
@@ -2279,13 +2288,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_est_len_in_flush() -> Result<()> {
+        use tokio::io::AsyncWriteExt;
         let noop_s = NoopStorage::default();
         let ms = MockCheckContentStorage { s: noop_s };
         let file_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let mut f = File::create(file_path.clone()).await?;
         f.write_all("test-data".as_bytes()).await?;
 
-        let data_file = DataFile::new(file_path).await.unwrap();
+        let data_file = DataFile::new(file_path, CompressionType::Zstd)
+            .await
+            .unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);

@@ -167,7 +167,7 @@ fn test_txn_gc_keys_handled() {
     gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().as_inner().clone();
+    let db = engine.kv_engine().unwrap().as_inner().clone();
     let cf = get_cf_handle(&db, CF_WRITE).unwrap();
 
     for i in 0..3 {
@@ -312,7 +312,7 @@ fn test_raw_gc_keys_handled() {
     gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
-    let db = engine.kv_engine().as_inner().clone();
+    let db = engine.kv_engine().unwrap().as_inner().clone();
 
     let user_key_del = b"r\0aaaaaaaaaaa";
 

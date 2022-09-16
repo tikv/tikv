@@ -8,15 +8,17 @@ use fail::fail_point;
 use kvproto::{
     metapb,
     raft_cmdpb::{self, RaftCmdRequest},
+    raft_serverpb::RegionLocalState,
 };
 use protobuf::Message;
-use raft::{RawNode, StateRole};
+use raft::{RawNode, StateRole, INVALID_ID};
 use raftstore::{
     store::{
         fsm::Proposal,
         metrics::PEER_PROPOSE_LOG_SIZE_HISTOGRAM,
-        util::{Lease, RegionReadProgress},
-        Config, EntryStorage, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest, Transport,
+        util::{find_peer, Lease, RegionReadProgress},
+        Config, EntryStorage, ProposalQueue, RaftlogFetchTask, ReadIndexQueue, ReadIndexRequest,
+        Transport, WriteRouter,
     },
     Error,
 };
@@ -32,7 +34,7 @@ use tikv_util::{
 use super::storage::Storage;
 use crate::{
     batch::StoreContext,
-    operation::{AsyncWriter, DestroyProgress},
+    operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
     router::{CmdResChannel, QueryResChannel},
     tablet::{self, CachedTablet},
     Result,
@@ -48,9 +50,19 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// peer list, for example, an isolated peer may need to send/receive
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
-    pub(crate) async_writer: AsyncWriter<EK, ER>,
-    destroy_progress: DestroyProgress,
+
+    /// Encoder for batching proposals and encoding them in a more efficient way
+    /// than protobuf.
+    raw_write_encoder: Option<SimpleWriteEncoder>,
+    proposals: ProposalQueue<Vec<CmdResChannel>>,
+
+    /// Set to true if any side effect needs to be handled.
     has_ready: bool,
+    /// Writer for persisting side effects asynchronously.
+    pub(crate) async_writer: AsyncWriter<EK, ER>,
+
+    destroy_progress: DestroyProgress,
+
     pub(crate) logger: Logger,
     pending_reads: ReadIndexQueue<QueryResChannel>,
     read_progress: Arc<RegionReadProgress>,
@@ -113,12 +125,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = raft_group.store().region_state().get_region().clone();
         let tag = format!("[region {}] {}", region.get_id(), peer_id);
         let mut peer = Peer {
-            raft_group,
             tablet: CachedTablet::new(tablet),
             peer_cache: vec![],
+            raw_write_encoder: None,
+            proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             has_ready: false,
             destroy_progress: DestroyProgress::None,
+            raft_group,
             logger,
             pending_reads: ReadIndexQueue::new(tag.clone()),
             read_progress: Arc::new(RegionReadProgress::new(
@@ -348,5 +362,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub(crate) fn has_applied_to_current_term(&self) -> bool {
         self.entry_storage().applied_term() == self.term()
+    }
+
+    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+        &mut self.raw_write_encoder
+    }
+
+    #[inline]
+    pub fn raw_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+        &self.raw_write_encoder
+    }
+
+    #[inline]
+    pub fn applied_to_current_term(&self) -> bool {
+        self.storage().entry_storage().applied_term() == self.term()
+    }
+
+    #[inline]
+    pub fn proposals_mut(&mut self) -> &mut ProposalQueue<Vec<CmdResChannel>> {
+        &mut self.proposals
     }
 }
