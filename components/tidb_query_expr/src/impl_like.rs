@@ -66,14 +66,10 @@ pub fn like<C: Collator>(target: BytesRef, pattern: BytesRef, escape: &i64) -> R
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{
-        builder::FieldTypeBuilder, codec::batch::LazyBatchColumnVec, expr::EvalContext, Collation,
-        FieldTypeTp,
-    };
+    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
     use tipb::ScalarFuncSig;
-    use tipb_helper::ExprDefBuilder;
 
-    use crate::{test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
+    use crate::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_like() {
