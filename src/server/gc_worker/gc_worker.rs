@@ -372,11 +372,11 @@ where
     fn flush_txn(
         limiter: &Limiter,
         engine: &E,
-        txns: HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
+        txns: &mut HashMap<u64, MvccTxn>, // region id -> MvccTxn for this region
     ) -> Result<()> {
         let mut modifies = HashMap::default();
         let mut write_size = 0;
-        for (id, txn) in txns {
+        for (id, txn) in txns.drain() {
             write_size += txn.write_size();
             modifies.insert(id, txn.into_modifies());
         }
@@ -502,8 +502,8 @@ where
                     gc_info = GcInfo::default();
                 } else {
                     txns.insert(region.id, txn);
-                    Self::flush_txn(&self.limiter, &self.engine, txns)?;
-                    txns = HashMap::default();
+                    Self::flush_txn(&self.limiter, &self.engine, &mut txns)?;
+                    txns.clear();
 
                     reader = self.create_reader(
                         count,
@@ -518,7 +518,7 @@ where
             txns.insert(region.id, txn);
         }
 
-        Self::flush_txn(&self.limiter, &self.engine, txns)?;
+        Self::flush_txn(&self.limiter, &self.engine, &mut txns)?;
         Ok((handled_keys, wasted_keys))
     }
 
@@ -614,17 +614,17 @@ where
                 } else {
                     region_modifies.insert(region.id, raw_modifies);
                     // Flush writeBatch to engine.
-                    Self::flush_raw_gc(&self.limiter, &self.engine, region_modifies)?;
+                    Self::flush_raw_gc(&self.limiter, &self.engine, &mut region_modifies)?;
                     // After flush, reset raw_modifies.
                     raw_modifies = MvccRaw::new();
-                    region_modifies = HashMap::default();
+                    region_modifies.clear();
                 }
             }
 
             region_modifies.insert(region.id, raw_modifies);
         }
 
-        Self::flush_raw_gc(&self.limiter, &self.engine, region_modifies)?;
+        Self::flush_raw_gc(&self.limiter, &self.engine, &mut region_modifies)?;
 
         Ok((handled_keys, wasted_keys))
     }
@@ -707,11 +707,11 @@ where
     fn flush_raw_gc(
         limiter: &Limiter,
         engine: &E,
-        region_modifies: HashMap<u64, MvccRaw>,
+        region_modifies: &mut HashMap<u64, MvccRaw>,
     ) -> Result<()> {
         let mut modifies = HashMap::default();
         let mut write_size = 0;
-        for (id, m) in region_modifies {
+        for (id, m) in region_modifies.drain() {
             write_size += m.write_size();
             modifies.insert(id, m.into_modifies());
         }
