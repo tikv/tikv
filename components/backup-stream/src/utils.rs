@@ -636,7 +636,7 @@ impl AsyncRead for FilesReader {
 
 /// a wrapper for different compression type
 #[async_trait::async_trait]
-pub trait CompressionWriter: AsyncWrite + Sync + Send + 'static {
+pub trait CompressionWriter: AsyncWrite + Sync + Send {
     /// call the `File.sync_all()` to flush immediately to disk.
     async fn done(mut self: Pin<&mut Self>) -> Result<()>;
 }
