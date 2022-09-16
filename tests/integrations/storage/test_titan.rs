@@ -7,9 +7,9 @@ use std::{
 };
 
 use engine_rocks::{
-    raw::IngestExternalFileOptions, util::new_temp_engine, RocksEngine, RocksSnapshot,
-    RocksSstWriterBuilder,
+    raw::IngestExternalFileOptions, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
 };
+use engine_test::new_temp_engine;
 use engine_traits::{
     CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
     SstWriterBuilder, SyncMutable, CF_DEFAULT, CF_WRITE,

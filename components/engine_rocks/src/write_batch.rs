@@ -99,16 +99,15 @@ impl RocksWriteBatchVec {
 }
 
 impl engine_traits::WriteBatch for RocksWriteBatchVec {
-    fn write_opt(&mut self, opts: &WriteOptions) -> Result<()> {
+    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64> {
         let opt: RocksWriteOptions = opts.into();
         if self.support_write_batch_vec {
             self.get_db()
                 .multi_batch_write(self.as_inner(), &opt.into_raw())
                 .map_err(r2e)
-                .map(|_| ())
         } else {
             self.get_db()
-                .write_opt(&self.wbs[0], &opt.into_raw())
+                .write_seq_opt(&self.wbs[0], &opt.into_raw())
                 .map_err(r2e)
         }
     }
