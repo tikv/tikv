@@ -212,8 +212,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 }
                 PeerMsg::RaftCommand(cmd) => {
                     self.on_receive_command(cmd.send_time);
-                    // self.on_command(cmd.cmd.request, cmd.ch)
-                    unimplemented!()
+                    self.on_command(cmd.request, cmd.ch)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
                 PeerMsg::ApplyRes(res) => unimplemented!(),
@@ -232,5 +231,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
             }
         }
+        // TODO: instead of propose pending commands immediately, we should use timeout.
+        self.fsm.peer.propose_pending_command(self.store_ctx);
     }
 }

@@ -121,6 +121,8 @@ enum DelayReason {
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
+pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
+
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
@@ -467,7 +469,9 @@ where
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed
             // raft_entry_max_size after adding header.
-            if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
+            if self.batch_req_size
+                > (cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as u64
+            {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
