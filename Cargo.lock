@@ -2792,7 +2792,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2811,7 +2811,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4656,7 +4656,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#827a5df22cd59dc708c4c6a87dd8735a2312773d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#4c859a208355bc15ceb7dc1f05303f68acfb4791"
 dependencies = [
  "libc 0.2.132",
  "librocksdb_sys",
@@ -6134,7 +6134,6 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "engine_traits_tests",
- "enum_dispatch",
  "error_code",
  "example_plugin",
  "fail",
@@ -6204,7 +6203,6 @@ dependencies = [
  "strum 0.20.0",
  "sysinfo",
  "tempfile",
- "test_pd",
  "test_sst_importer",
  "test_util",
  "thiserror",
