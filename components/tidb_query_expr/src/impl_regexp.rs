@@ -267,7 +267,7 @@ pub fn regexp_instr<C: Collator>(
         }
     }
 
-    Ok(None)
+    Ok(Some(0))
 }
 
 /// Currently, TiDB only supports regular expressions for utf-8 strings.
@@ -692,10 +692,10 @@ mod tests {
             ("你好啊", r"好", None, None, None, None, Some(2), false),
             ("abc", r"bc", Some(2), None, None, None, Some(2), false),
             ("你好啊", r"好", Some(2), None, None, None, Some(2), false),
-            ("你好啊", r"好", Some(3), None, None, None, None, false),
-            ("你好啊", r"好", Some(4), None, None, None, None, true),
-            ("你好啊", r"好", Some(-1), None, None, None, None, true),
-            ("", r"a", Some(1), None, None, None, None, false),
+            ("你好啊", r"好", Some(3), None, None, None, Some(0), false),
+            ("你好啊", r"好", Some(4), None, None, None, Some(0), true),
+            ("你好啊", r"好", Some(-1), None, None, None, Some(0), true),
+            ("", r"a", Some(1), None, None, None, Some(0), false),
             (
                 "abc abd abe",
                 r"ab.",
@@ -964,15 +964,18 @@ mod tests {
 
         // Test null
         let cases = vec![
-            (None, Some(r"a"), Some("i")),
-            (Some("a"), None, Some("i")),
-            (Some("a"), Some(r"a"), None),
+            (None, Some(r"a"), Some(1), Some(1), Some(0), Some("i")),
+            (Some("a"), None, Some(1), Some(1), Some(0), Some("i")),
+            (Some("a"), Some(r"a"), None, Some(1), Some(0), Some("i")),
+            (Some("a"), Some(r"a"), Some(1), None, Some(0), Some("i")),
+            (Some("a"), Some(r"a"), Some(1), Some(1), None, Some("i")),
+            (Some("a"), Some(r"a"), Some(1), Some(1), Some(0), None),
         ];
-        for (expr, pattern, match_type) in cases {
+        for (expr, pattern, pos, occur, ret_opt, match_type) in cases {
             let mut ctx = EvalContext::default();
 
             let mut builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpSig, FieldTypeTp::LongLong);
+                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpInStrSig, FieldTypeTp::LongLong);
             if let Some(e) = expr {
                 builder = builder.push_child(ExprDefBuilder::constant_bytes(e.as_bytes().to_vec()));
             } else {
@@ -982,6 +985,21 @@ mod tests {
                 builder = builder.push_child(ExprDefBuilder::constant_bytes(p.as_bytes().to_vec()));
             } else {
                 builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(p) = pos {
+                builder = builder.push_child(ExprDefBuilder::constant_int(p));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong));
+            }
+            if let Some(o) = occur {
+                builder = builder.push_child(ExprDefBuilder::constant_int(o));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong));
+            }
+            if let Some(r) = ret_opt {
+                builder = builder.push_child(ExprDefBuilder::constant_int(r));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::LongLong));
             }
             if let Some(m) = match_type {
                 builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
