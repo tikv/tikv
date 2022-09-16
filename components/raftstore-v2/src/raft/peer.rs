@@ -27,13 +27,19 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// peer list, for example, an isolated peer may need to send/receive
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
+
     /// Encoder for batching proposals and encoding them in a more efficient way
     /// than protobuf.
     raw_write_encoder: Option<RawWriteEncoder>,
     proposals: ProposalQueue<Vec<CmdResChannel>>,
-    pub(crate) async_writer: AsyncWriter<EK, ER>,
-    destroy_progress: DestroyProgress,
+
+    /// Set to true if any side effect needs to be handled.
     has_ready: bool,
+    /// Writer for persisting side effects asynchronously.
+    pub(crate) async_writer: AsyncWriter<EK, ER>,
+
+    destroy_progress: DestroyProgress,
+
     pub(crate) logger: Logger,
 }
 
