@@ -347,14 +347,23 @@ pub fn regexp_replace<C: Collator>(
     };
 
     if occurrence == 0 {
-        let result = before_trimmed.to_owned() + &regex.replace_all(&trimmed, replace_expr);
+        let rep = regex.replace_all(&trimmed, replace_expr);
+        let mut result = String::with_capacity(before_trimmed.len() + rep.len());
+        result.push_str(before_trimmed);
+        result.push_str(&rep);
         Ok(Some(result.into_bytes()))
     } else {
         if let Some(m) = regex.find_iter(&trimmed).nth((occurrence - 1) as usize) {
-            let result = before_trimmed.to_owned()
-                + &trimmed[..m.start()]
-                + replace_expr
-                + &trimmed[m.end()..];
+            let mut result = String::with_capacity(
+                before_trimmed.len()
+                    + trimmed[..m.start()].len()
+                    + replace_expr.len()
+                    + trimmed[m.end()..].len(),
+            );
+            result.push_str(before_trimmed);
+            result.push_str(&trimmed[..m.start()]);
+            result.push_str(replace_expr);
+            result.push_str(&trimmed[m.end()..]);
             return Ok(Some(result.into_bytes()));
         }
 
