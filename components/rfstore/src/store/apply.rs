@@ -221,8 +221,6 @@ pub(crate) struct Applier {
 
     pub(crate) paused_apply_queue: Vec<MsgApply>,
 
-    pub(crate) ingest_callback: Option<Callback>,
-
     pub(crate) scheduled_change_sets: VecDeque<u64>,
 
     pub(crate) prepared_change_sets: HashMap<u64, kvengine::ChangeSet>,
@@ -232,6 +230,8 @@ pub(crate) struct Applier {
     mem_table_state: Option<MemTableState>,
 
     last_property_term: u64,
+
+    last_ingest_seq: u64,
 }
 
 impl Applier {
@@ -937,6 +937,7 @@ impl Applier {
         }
         self.prepared_change_sets.insert(cs.sequence, cs);
         while let Some(cs) = self.take_prepared_change_set() {
+            let seq = cs.sequence;
             let cs_pb = cs.change_set.clone();
             let is_ingest_files = cs.has_ingest_files();
             let result = if cs.has_snapshot() {
@@ -948,14 +949,11 @@ impl Applier {
             let router = ctx.router.as_ref().unwrap();
             router.send(self.region_id(), PeerMsg::ApplyChangeSetResult(result));
             if is_ingest_files {
-                if let Some(callback) = self.ingest_callback.take() {
-                    let mut resp = RaftCmdResponse::default();
-                    resp.mut_header().set_current_term(ctx.exec_log_term);
-                    callback.invoke_with_response(resp);
-                }
-                self.paused = false;
-                for apply in std::mem::take(&mut self.paused_apply_queue) {
-                    self.handle_apply(ctx, apply);
+                if self.last_ingest_seq == seq {
+                    self.paused = false;
+                    for apply in std::mem::take(&mut self.paused_apply_queue) {
+                        self.handle_apply(ctx, apply);
+                    }
                 }
             }
         }
@@ -1025,7 +1023,9 @@ impl Applier {
 
     fn handle_prepare_change_set(&mut self, ctx: &mut ApplyContext, cs: kvenginepb::ChangeSet) {
         if cs.has_ingest_files() {
-            self.ingest_callback = self.find_callback(cs.sequence, ctx.exec_log_term, false);
+            if cs.sequence > self.last_ingest_seq {
+                self.last_ingest_seq = cs.sequence;
+            }
             self.paused = true;
         }
         self.scheduled_change_sets.push_back(cs.sequence);
