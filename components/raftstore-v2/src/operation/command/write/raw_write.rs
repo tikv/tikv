@@ -309,7 +309,7 @@ fn encode(req: &Request, buf: &mut Vec<u8>) {
         | CmdType::Snap
         | CmdType::Prewrite
         | CmdType::IngestSst
-        | CmdType::ReadIndex => unreachable!("denifed request should be filtered already"),
+        | CmdType::ReadIndex => unreachable!("not supported type should be filtered already"),
     }
 }
 

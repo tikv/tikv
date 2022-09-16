@@ -5,7 +5,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use raftstore::{
     store::{
         cmd_resp,
-        fsm::{apply, Proposal},
+        fsm::{apply, Proposal, MAX_PROPOSAL_SIZE_RATIO},
         msg::ErrorCallback,
         WriteCallback,
     },
@@ -48,7 +48,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_command(ctx);
-        match RawWriteEncoder::new(req, (ctx.cfg.raft_entry_max_size.0 as f64 * 0.4) as usize) {
+        match RawWriteEncoder::new(
+            req,
+            (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
+        ) {
             Ok(mut encoder) => {
                 encoder.add_response_channel(ch);
                 self.set_has_ready();
