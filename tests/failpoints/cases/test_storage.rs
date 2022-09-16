@@ -253,7 +253,7 @@ fn test_scale_scheduler_pool() {
         .unwrap();
 
     let cfg = new_tikv_config(1);
-    let kv_engine = storage.get_engine().kv_engine();
+    let kv_engine = storage.get_engine().kv_engine().unwrap();
     let (_tx, rx) = std::sync::mpsc::channel();
     let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,

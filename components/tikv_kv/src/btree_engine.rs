@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
@@ -77,11 +78,11 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn kv_engine(&self) -> Option<PanicEngine> {
         unimplemented!();
     }
 
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+    fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> EngineResult<()> {
         unimplemented!();
     }
 

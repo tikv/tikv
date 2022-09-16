@@ -313,8 +313,7 @@ fn test_auto_gc() {
         );
         cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
 
-        let kv_engine = cluster.get_engine(*id);
-        storage.start_auto_gc(&kv_engine, cfg);
+        storage.start_auto_gc(cfg);
     }
 
     assert_eq!(storages.len(), count);

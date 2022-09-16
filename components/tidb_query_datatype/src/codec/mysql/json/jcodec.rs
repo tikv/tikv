@@ -260,6 +260,10 @@ pub trait JsonDecoder: NumberDecoder {
                 let (opaque_bytes_len, len_len) = NumberCodec::try_decode_var_u64(&value[1..])?;
                 self.read_bytes(opaque_bytes_len as usize + len_len + 1)?
             }
+            JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+                self.read_bytes(TIME_LEN)?
+            }
+            JsonType::Time => self.read_bytes(DURATION_LEN)?,
         };
         Ok(Json::new(tp, Vec::from(value)))
     }
