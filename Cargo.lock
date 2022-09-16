@@ -3118,26 +3118,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mock-engine-store"
-version = "0.0.1"
-dependencies = [
- "engine_rocks",
- "engine_store_ffi",
- "engine_test",
- "engine_traits",
- "fail",
- "keys",
- "kvproto",
- "protobuf",
- "proxy_server",
- "raftstore",
- "server",
- "slog",
- "slog-global",
- "tikv_util",
-]
-
-[[package]]
 name = "more-asserts"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5778,7 +5758,6 @@ dependencies = [
  "encryption_export",
  "engine_rocks",
  "engine_rocks_helper",
- "engine_store_ffi",
  "engine_test",
  "engine_traits",
  "fail",
@@ -5790,7 +5769,6 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "mock-engine-store",
  "pd_client",
  "protobuf",
  "raft",
@@ -5895,7 +5873,6 @@ dependencies = [
  "kvproto",
  "libc 0.2.125",
  "log_wrappers",
- "mock-engine-store",
  "more-asserts",
  "new-mock-engine-store",
  "online_config",

@@ -67,11 +67,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    debug!(
-        "last try to get {} cf {}",
-        log_wrappers::hex_encode_upper(key),
-        cf
-    );
+    debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.c().get_value_cf(cf, &keys::data_key(key)).unwrap();
     if value.is_none() && res.is_none()
         || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
@@ -79,9 +75,8 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {:?} hex {}",
+        "can't get value {:?} for key {}",
         value.map(escape),
-        key,
         log_wrappers::hex_encode_upper(key)
     )
 }

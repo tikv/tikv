@@ -445,14 +445,14 @@ pub mod root {
             >,
             pub fn_handle_safe_ts_update: ::std::option::Option<
                 unsafe extern "C" fn(
-                    arg1: *const root::DB::EngineStoreServerWrap,
-                    arg2: u64,
-                    arg3: u64,
-                    arg4: u64,
+                    arg1: *mut root::DB::EngineStoreServerWrap,
+                    region_id: u64,
+                    self_safe_ts: u64,
+                    leader_safe_ts: u64,
                 ),
             >,
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 14699247891578305166;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 15776819379826780689;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

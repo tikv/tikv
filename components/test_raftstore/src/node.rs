@@ -229,7 +229,6 @@ impl Simulator for NodeCluster {
         let pd_worker = LazyWorker::new("test-pd-worker");
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
-
         let mut raft_store = cfg.raft_store.clone();
         raft_store
             .validate(cfg.coprocessor.region_split_size)
@@ -262,7 +261,6 @@ impl Simulator for NodeCluster {
                 .max_total_size(cfg.server.snap_max_total_size.0)
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
-                .enable_multi_snapshot_files(true)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -314,7 +312,6 @@ impl Simulator for NodeCluster {
             cm,
             CollectorRegHandle::new_for_test(),
         )?;
-
         assert!(
             engines
                 .kv

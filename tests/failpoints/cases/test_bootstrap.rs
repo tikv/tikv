@@ -10,9 +10,6 @@ fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
     let mut cluster = Cluster::new(0, 5, sim, pd_client, ApiVersion::V1);
-    unsafe {
-        test_raftstore::init_cluster_ptr(&cluster);
-    }
 
     // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();

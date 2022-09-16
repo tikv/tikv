@@ -408,7 +408,7 @@ impl PdCluster {
         Ok(self.base_id.fetch_add(1, Ordering::Relaxed) as u64)
     }
 
-    pub fn put_store(&mut self, store: metapb::Store) -> Result<()> {
+    fn put_store(&mut self, store: metapb::Store) -> Result<()> {
         let store_id = store.get_id();
         // There is a race between put_store and handle_region_heartbeat_response. If store id is
         // 0, it means it's a placeholder created by latter, we just need to update the meta.
@@ -459,7 +459,7 @@ impl PdCluster {
             .map(|(_, region)| region.clone())
     }
 
-    pub fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
+    fn get_region_by_id(&self, region_id: u64) -> Result<Option<metapb::Region>> {
         Ok(self
             .region_id_keys
             .get(&region_id)
@@ -1371,8 +1371,7 @@ impl PdClient for TestPdClient {
     }
 
     fn alloc_id(&self) -> Result<u64> {
-        let result = self.cluster.rl().alloc_id();
-        result
+        self.cluster.rl().alloc_id()
     }
 
     fn put_store(&self, store: metapb::Store) -> Result<Option<ReplicationStatus>> {
@@ -1584,13 +1583,11 @@ impl PdClient for TestPdClient {
         }
 
         let mut resp = pdpb::AskBatchSplitResponse::default();
-        for c in 0..count {
+        for _ in 0..count {
             let mut id = pdpb::SplitId::default();
             id.set_new_region_id(self.alloc_id().unwrap());
-
-            for peer in region.get_peers() {
-                let rid = self.alloc_id().unwrap();
-                id.mut_new_peer_ids().push(rid);
+            for _ in region.get_peers() {
+                id.mut_new_peer_ids().push(self.alloc_id().unwrap());
             }
             resp.mut_ids().push(id);
         }

@@ -277,7 +277,6 @@ members = [
   "fuzz/fuzzer-honggfuzz",
   "fuzz/fuzzer-libfuzzer",
   "gen-proxy-ffi",
-  "mock-engine-store",
   "raftstore-proxy",
   "tests",
 ]

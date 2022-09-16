@@ -2,10 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize},
-        Arc, Mutex, RwLock,
-    },
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -374,22 +371,20 @@ impl ServerCluster {
             CheckLeaderRunner::new(store_meta.clone(), coprocessor_host.clone());
         let check_leader_scheduler = bg_worker.start("check-leader", check_leader_runner);
 
-        let lock_mgr = LockManager::new(&cfg.pessimistic_txn);
+        let mut lock_mgr = LockManager::new(&cfg.pessimistic_txn);
         let quota_limiter = Arc::new(QuotaLimiter::new(
             cfg.quota.foreground_cpu_time,
             cfg.quota.foreground_write_bandwidth,
             cfg.quota.foreground_read_bandwidth,
             cfg.quota.max_delay_duration,
         ));
-
-        let dynamic_config = lock_mgr.get_storage_dynamic_configs();
         let store = create_raft_storage::<_, _, _, F, _>(
             engine,
             &cfg.storage,
             storage_read_pool.handle(),
-            lock_mgr,
+            lock_mgr.clone(),
             concurrency_manager.clone(),
-            dynamic_config,
+            lock_mgr.get_storage_dynamic_configs(),
             Arc::new(FlowController::empty()),
             pd_sender,
             res_tag_factory.clone(),
@@ -421,6 +416,9 @@ impl ServerCluster {
             Arc::clone(&importer),
         );
 
+        // Create deadlock service.
+        let deadlock_service = lock_mgr.deadlock_service();
+
         // Create pd client, snapshot manager, server.
         let (resolver, state) =
             resolve::new_resolver(Arc::clone(&self.pd_client), &bg_worker, router.clone());
@@ -429,7 +427,6 @@ impl ServerCluster {
             .max_total_size(cfg.server.snap_max_total_size.0)
             .encryption_key_manager(key_manager)
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
-            .enable_multi_snapshot_files(true)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -505,6 +502,7 @@ impl ServerCluster {
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
+            svr.register_service(create_deadlock(deadlock_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());
@@ -532,8 +530,7 @@ impl ServerCluster {
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
 
         // Register the role change observer of the lock manager.
-        // We have hacked lock manager
-        // lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
         let pessimistic_txn_cfg = cfg.tikv.pessimistic_txn;
 
@@ -565,6 +562,16 @@ impl ServerCluster {
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
         self.health_services.insert(node_id, health_service);
+
+        lock_mgr
+            .start(
+                node.id(),
+                Arc::clone(&self.pd_client),
+                resolver,
+                Arc::clone(&security_mgr),
+                &pessimistic_txn_cfg,
+            )
+            .unwrap();
 
         server.start(server_cfg, security_mgr).unwrap();
 
