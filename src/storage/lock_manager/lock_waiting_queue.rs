@@ -90,8 +90,6 @@ impl LockWaitEntryComparableWrapper {
 impl PartialEq<Self> for LockWaitEntryComparableWrapper {
     fn eq(&self, other: &Self) -> bool {
         self.0.parameters.start_ts == other.0.parameters.start_ts
-        // && self.0.current_legacy_wakeup_cnt ==
-        // other.0.current_legacy_wakeup_cnt
     }
 }
 
@@ -101,14 +99,11 @@ impl PartialOrd<Self> for LockWaitEntryComparableWrapper {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
-        (
-            // other.0.current_legacy_wakeup_cnt,
-            other.0.parameters.start_ts,
-        )
-            .partial_cmp(&(
-                // self.0.current_legacy_wakeup_cnt,
-                self.0.parameters.start_ts,
-            ))
+        other
+            .0
+            .parameters
+            .start_ts
+            .partial_cmp(&self.0.parameters.start_ts)
     }
 }
 
@@ -116,14 +111,7 @@ impl Ord for LockWaitEntryComparableWrapper {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
-        (
-            // other.0.current_legacy_wakeup_cnt,
-            other.0.parameters.start_ts,
-        )
-            .cmp(&(
-                // self.0.current_legacy_wakeup_cnt,
-                self.0.parameters.start_ts,
-            ))
+        other.0.parameters.start_ts.cmp(&self.0.parameters.start_ts)
     }
 }
 
@@ -737,55 +725,6 @@ mod tests {
                 .must_pop(b"k1", 5, 6)
                 .check_key(b"k1")
                 .check_start_ts(expected_start_ts);
-        }
-
-        queues.must_not_contains_key(b"k1");
-
-        // For each legacy waking up, the counter `legacy_wake_up_cnt` is increased. the
-        // counter behaves like an *epoch*, and requests arrives at later epoch
-        // is always ordered later than those at earlier epoch.
-        queues.mock_lock_wait(b"k1", 8, 5, false);
-        queues.mock_lock_wait(b"k1", 9, 5, false);
-
-        queues.mock_lock_wait(b"k1", 11, 5, false);
-        queues.mock_lock_wait(b"k1", 15, 5, false);
-        queues.mock_lock_wait(b"k1", 20, 5, false);
-
-        // Pop an entry and increase the counter
-        queues
-            .must_pop(b"k1", 5, 6)
-            .check_key(b"k1")
-            .check_start_ts(8);
-
-        queues.mock_lock_wait(b"k1", 15, 5, false);
-        queues.mock_lock_wait(b"k1", 12, 5, false);
-        queues.mock_lock_wait(b"k1", 17, 5, false);
-
-        queues
-            .must_pop(b"k1", 5, 6)
-            .check_key(b"k1")
-            .check_start_ts(9);
-
-        queues.mock_lock_wait(b"k1", 10, 5, false);
-        queues.mock_lock_wait(b"k1", 21, 5, false);
-        queues.mock_lock_wait(b"k1", 13, 5, false);
-
-        for &(expected_start_ts, expected_legacy_wake_up_cnt) in &[
-            (11u64, 0usize),
-            (15, 0),
-            (20, 0),
-            (12, 1),
-            (15, 1),
-            (17, 1),
-            (10, 2),
-            (13, 2),
-            (21, 2),
-        ] {
-            queues
-                .must_pop(b"k1", 5, 6)
-                .check_key(b"k1")
-                .check_start_ts(expected_start_ts)
-                .check_legacy_wake_up_cnt(expected_legacy_wake_up_cnt);
         }
 
         queues.must_not_contains_key(b"k1");

@@ -102,15 +102,9 @@ impl<L: LockManager> LockWaitContext<L> {
 
     pub fn get_callback_for_blocked_key(&self) -> PessimisticLockKeyCallback {
         let ctx = self.clone();
-        if self.allow_lock_with_conflict {
-            Box::new(move |res| {
-                ctx.finish_request(res);
-            })
-        } else {
-            Box::new(move |res| {
-                ctx.finish_request(res);
-            })
-        }
+        Box::new(move |res| {
+            ctx.finish_request(res);
+        })
     }
 
     pub fn get_callback_for_cancellation(&self) -> impl FnOnce(StorageError) {
@@ -183,5 +177,99 @@ impl<L: LockManager> LockWaitContext<L> {
         //     .observe(start_time.saturating_elapsed_secs());
         //
         // ctx_inner.cb.execute(ctx_inner.pr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::mpsc::{channel, Receiver},
+        time::Duration,
+    };
+
+    use super::*;
+    use crate::storage::{
+        lock_manager::DummyLockManager,
+        mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
+        txn::{Error as TxnError, ErrorInner as TxnErrorInner},
+        ErrorInner as StorageErrorInner, Result as StorageResult,
+    };
+
+    fn create_storage_cb() -> (
+        StorageCallback,
+        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+    ) {
+        let (tx, rx) = channel();
+        let cb = StorageCallback::PessimisticLock(Box::new(move |r| tx.send(r).unwrap()));
+        (cb, rx)
+    }
+
+    fn create_test_lock_wait_ctx() -> (
+        LockWaitContext<impl LockManager>,
+        Receiver<StorageResult<StorageResult<PessimisticLockRes>>>,
+    ) {
+        // TODO: Use `ProxyLockMgr` to check the correctness of the `remove_lock_wait`
+        // invocation.
+        let lock_mgr = DummyLockManager::new();
+        let (cb, rx) = create_storage_cb();
+        let ctx = LockWaitContext::new(
+            lock_mgr.clone(),
+            lock_mgr.allocate_token(),
+            1.into(),
+            1.into(),
+            ProcessResult::Res,
+            cb,
+            false,
+        );
+        (ctx, rx)
+    }
+
+    #[test]
+    fn test_lock_wait_context() {
+        let write_conflict = || {
+            StorageErrorInner::Txn(TxnError::from(TxnErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::WriteConflict {
+                    start_ts: 1.into(),
+                    conflict_start_ts: 2.into(),
+                    conflict_commit_ts: 2.into(),
+                    key: b"k1".to_vec(),
+                    primary: b"k1".to_vec(),
+                },
+            ))))
+        };
+        let key_is_locked = || {
+            StorageErrorInner::Txn(TxnError::from(TxnErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::KeyIsLocked(kvproto::kvrpcpb::LockInfo::default()),
+            ))))
+        };
+
+        let (ctx, rx) = create_test_lock_wait_ctx();
+        // Nothing happens currently.
+        (ctx.get_callback_for_first_write_batch()).execute(ProcessResult::Res);
+        rx.recv_timeout(Duration::from_millis(20)).unwrap_err();
+        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())));
+        let res = rx.recv().unwrap().unwrap_err();
+        assert!(matches!(
+            &res,
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. }))
+            )))
+        ));
+        rx.recv().unwrap_err();
+        // Nothing happens if the callback is double-called.
+        (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
+
+        let (ctx, rx) = create_test_lock_wait_ctx();
+        (ctx.get_callback_for_cancellation())(StorageError::from(key_is_locked()));
+        let res = rx.recv().unwrap().unwrap_err();
+        assert!(matches!(
+            &res,
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))
+            )))
+        ));
+        // Nothing happens if the callback is double-called.
+        (ctx.get_callback_for_blocked_key())(Err(SharedError::from(write_conflict())));
+        rx.recv().unwrap_err();
     }
 }
