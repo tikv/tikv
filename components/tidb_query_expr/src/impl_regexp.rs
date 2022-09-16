@@ -185,10 +185,8 @@ pub fn regexp_substr<C: Collator>(
         }
     };
 
-    for (i, m) in regex.find_iter(expr).enumerate() {
-        if i as i64 == occurrence - 1 {
-            return Ok(Some(m.as_str().as_bytes().to_vec()));
-        }
+    if let Some(m) = regex.find_iter(expr).nth((occurrence - 1) as usize) {
+        return Ok(Some(m.as_str().as_bytes().to_vec()));
     }
 
     Ok(None)
@@ -348,6 +346,7 @@ pub fn regexp_replace<C: Collator>(
         let mut result = String::with_capacity(before_trimmed.len() + rep.len());
         result.push_str(before_trimmed);
         result.push_str(&rep);
+
         Ok(Some(result.into_bytes()))
     } else {
         if let Some(m) = regex.find_iter(trimmed).nth((occurrence - 1) as usize) {
@@ -361,6 +360,7 @@ pub fn regexp_replace<C: Collator>(
             result.push_str(&trimmed[..m.start()]);
             result.push_str(replace_expr);
             result.push_str(&trimmed[m.end()..]);
+
             return Ok(Some(result.into_bytes()));
         }
 
