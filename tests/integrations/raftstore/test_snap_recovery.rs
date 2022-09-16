@@ -67,7 +67,6 @@ fn test_check_pending_admin() {
 
 #[test]
 fn test_snap_wait_apply() {
-    test_util::init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.store_io_pool_size = 0;
@@ -87,9 +86,8 @@ fn test_snap_wait_apply() {
             .direction(Direction::Recv),
     ));
 
-    // make a admin request to let leader has pending conf change.
-    let leader = new_peer(1, 4);
-    cluster.async_add_peer(1, leader).unwrap();
+    // make a async put to let the leader stuck.
+    cluster.async_put(b"k2", b"v2").unwrap();
 
     let router = cluster.sim.wl().get_router(1).unwrap();
 
