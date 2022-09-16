@@ -20,8 +20,8 @@ use kvproto::{
 };
 use raft::INVALID_ID;
 use raftstore::store::{
-    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, CasualRouter, Config,
-    RaftlogFetchRunner, RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
+    fsm::store::PeerTickBatch, local_metrics::RaftMetrics, Config, RaftlogFetchRunner,
+    RaftlogFetchTask, StoreWriters, Transport, WriteMsg, WriteSenders,
 };
 use slog::Logger;
 use tikv_util::{
@@ -464,12 +464,6 @@ impl<EK: KvEngine, ER: RaftEngine> DerefMut for StoreRouter<EK, ER> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.router
-    }
-}
-
-impl<EK: KvEngine, ER: RaftEngine> CasualRouter<EK> for StoreRouter<EK, ER> {
-    fn send(&self, region_id: u64, msg: raftstore::store::CasualMessage<EK>) -> Result<()> {
-        unimplemented!()
     }
 }
 
