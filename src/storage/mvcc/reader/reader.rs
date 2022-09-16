@@ -2214,7 +2214,7 @@ pub mod tests {
     fn test_reader_prefix_seek() {
         let dir = tempfile::TempDir::new().unwrap();
         let builder = TestEngineBuilder::new().path(dir.path());
-        let db = builder.build().unwrap().kv_engine();
+        let db = builder.build().unwrap().kv_engine().unwrap();
 
         let region = make_region(1, vec![], vec![]);
         let mut engine = RegionEngine::new(&db, &region);

@@ -348,7 +348,7 @@ where
         let mut c = c.borrow_mut();
         let perf_context = c.get_or_insert_with(|| {
             with_tls_engine(|engine: &E| {
-                Box::new(engine.kv_engine().get_perf_context(
+                Box::new(engine.kv_engine().unwrap().get_perf_context(
                     PerfLevel::Uninitialized,
                     PerfContextKind::Storage(cmd.get_str()),
                 ))

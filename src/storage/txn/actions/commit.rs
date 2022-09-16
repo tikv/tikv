@@ -109,6 +109,7 @@ pub mod tests {
     use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use tikv_kv::SnapContext;
     use txn_types::TimeStamp;
 
     use super::*;
@@ -132,8 +133,35 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let ctx = Context::default();
-        let snapshot = engine.snapshot(Default::default()).unwrap();
+        must_succeed_impl(engine, key, start_ts, commit_ts, None);
+    }
+
+    pub fn must_succeed_on_region<E: Engine>(
+        engine: &E,
+        region_id: u64,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        must_succeed_impl(engine, key, start_ts, commit_ts, Some(region_id));
+    }
+
+    fn must_succeed_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        region_id: Option<u64>,
+    ) {
+        let mut ctx = Context::default();
+        if let Some(region_id) = region_id {
+            ctx.region_id = region_id;
+        }
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        let snapshot = engine.snapshot(snap_ctx).unwrap();
         let start_ts = start_ts.into();
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
