@@ -168,7 +168,16 @@ fn test_snap_with_invalid_parameter() {
     let error_resp = res.response().unwrap();
     assert!(error_resp.get_header().has_error());
 
+    // run with stale read
+    req.mut_header().set_term(7);
+    req.mut_header()
+        .set_flags(WriteBatchFlags::STALE_READ.bits());
+    let res = router.query(region_id, req.clone()).unwrap();
+    let error_resp = res.response().unwrap();
+    assert!(error_resp.get_header().has_error());
+
     // run again with invalid region_epoch
+    req.mut_header().set_flags(0);
     region_epoch.set_version(region_epoch.get_version() + 1);
     req.mut_header().set_region_epoch(region_epoch.clone());
     req.mut_header().set_term(6);
@@ -177,37 +186,3 @@ fn test_snap_with_invalid_parameter() {
     assert!(error_resp.get_header().has_error());
 }
 
-#[test]
-fn test_read_stale() {
-    let (_node, _transport, router) = super::setup_default_cluster();
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    req.mut_status_request()
-        .set_cmd_type(StatusCmdType::RegionDetail);
-    let res = router.query(2, req.clone()).unwrap();
-    let status_resp = res.response().unwrap().get_status_response();
-    let detail = status_resp.get_region_detail();
-    let mut region = detail.get_region().clone();
-
-    let read_req = GetRequest::default();
-    let mut req = RaftCmdRequest::default();
-    req.mut_header().set_peer(new_peer(1, 3));
-    let mut request_inner = Request::default();
-    request_inner.set_cmd_type(CmdType::Get);
-    request_inner.set_get(read_req);
-    req.mut_header()
-        .set_flags(WriteBatchFlags::STALE_READ.bits());
-    let start_ts = {
-        let mut d = [0u8; 8];
-        (&mut d[..]).encode_u64(0).unwrap();
-        d
-    };
-    req.mut_header().set_flag_data(start_ts.into());
-    req.mut_header()
-        .set_region_epoch(region.take_region_epoch());
-    req.mut_requests().push(request_inner);
-    let res = router.query(region.get_id(), req.clone()).unwrap();
-    let resp = res.response().unwrap();
-    assert!(resp.get_header().has_error());
-}

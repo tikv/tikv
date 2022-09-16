@@ -160,10 +160,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
         }
-        // assert the peer is initialized.
-        // If it's on leader, it should be initialized before serving request.
-        // If it's on follower, it should wait for apply.
-        assert!(self.storage().is_initialized());
 
         // TODO: check applying snapshot
 
