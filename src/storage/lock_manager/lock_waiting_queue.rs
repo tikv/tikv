@@ -90,7 +90,8 @@ impl LockWaitEntryComparableWrapper {
 impl PartialEq<Self> for LockWaitEntryComparableWrapper {
     fn eq(&self, other: &Self) -> bool {
         self.0.parameters.start_ts == other.0.parameters.start_ts
-            && self.0.current_legacy_wakeup_cnt == other.0.current_legacy_wakeup_cnt
+        // && self.0.current_legacy_wakeup_cnt ==
+        // other.0.current_legacy_wakeup_cnt
     }
 }
 
@@ -101,10 +102,13 @@ impl PartialOrd<Self> for LockWaitEntryComparableWrapper {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
         (
-            other.0.current_legacy_wakeup_cnt,
+            // other.0.current_legacy_wakeup_cnt,
             other.0.parameters.start_ts,
         )
-            .partial_cmp(&(self.0.current_legacy_wakeup_cnt, self.0.parameters.start_ts))
+            .partial_cmp(&(
+                // self.0.current_legacy_wakeup_cnt,
+                self.0.parameters.start_ts,
+            ))
     }
 }
 
@@ -113,10 +117,13 @@ impl Ord for LockWaitEntryComparableWrapper {
         // Reverse it since the std BinaryHeap is max heap and we want to pop the
         // minimal.
         (
-            other.0.current_legacy_wakeup_cnt,
+            // other.0.current_legacy_wakeup_cnt,
             other.0.parameters.start_ts,
         )
-            .cmp(&(self.0.current_legacy_wakeup_cnt, self.0.parameters.start_ts))
+            .cmp(&(
+                // self.0.current_legacy_wakeup_cnt,
+                self.0.parameters.start_ts,
+            ))
     }
 }
 
