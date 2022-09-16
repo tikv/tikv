@@ -1456,7 +1456,7 @@ where
                         raftdb_disk_cap.checked_sub(raft_size).unwrap_or_default();
                     raftdb_remain = cmp::min(raftdb_remain, raftdb_disk_stats.available_space());
                     raftdb_disk_status = if raftdb_remain * 100
-                        <= raftdb_disk_cap * (100 - raftdb_almost_full_percent / 2)
+                        <= raftdb_disk_cap * ((100 - raftdb_almost_full_percent) / 2)
                     {
                         disk::DiskUsage::AlreadyFull
                     } else if raftdb_remain * 100
@@ -1475,7 +1475,12 @@ where
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
-                let used_size = snap_size + kv_size + raft_size + placeholder_size;
+                let mut used_size = 0;
+                if !seperate_raft_db {
+                    used_size = snap_size + kv_size + raft_size + placeholder_size;
+                } else {
+                    used_size = snap_size + kv_size + placeholder_size;
+                }
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1486,12 +1491,19 @@ where
                 available = cmp::min(available, disk_stats.available_space());
 
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
-                let cur_disk_status = if available <= already_full_threshold {
+                let cur_kv_disk_status = if available <= already_full_threshold {
                     disk::DiskUsage::AlreadyFull
                 } else if available <= almost_full_threshold {
                     disk::DiskUsage::AlmostFull
                 } else {
                     disk::DiskUsage::Normal
+                };
+                let cur_disk_status = match (raftdb_disk_status, cur_kv_disk_status) {
+                    (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
+                    (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
+                    (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
+                    (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
+                    (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
                 };
                 if prev_disk_status != cur_disk_status {
                     warn!(
