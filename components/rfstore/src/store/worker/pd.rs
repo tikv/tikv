@@ -866,6 +866,10 @@ impl PdRunner {
                     }
                     Err(e) => {
                         warn!("failed to update max timestamp for region {}: {:?}", tag, e);
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(Instant::now() + Duration::from_secs(1))
+                            .compat()
+                            .await;
                     }
                 }
             }
