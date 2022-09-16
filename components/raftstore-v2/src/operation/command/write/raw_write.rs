@@ -9,7 +9,8 @@ use tikv_util::Either;
 
 use crate::router::CmdResChannel;
 
-// MAGIC number to hint raw write is used.
+// MAGIC number to hint raw write is used. If it's a protobuf message, the
+// first one or several bytes are for field tag, which can't be zero.
 // TODO: use protobuf blob request seems better.
 const MAGIC_PREFIX: u8 = 0x00;
 
