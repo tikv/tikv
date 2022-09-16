@@ -4,24 +4,32 @@ use std::{collections::VecDeque, mem, sync::Arc};
 
 use crossbeam::atomic::AtomicCell;
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
-use kvproto::{metapb, raft_serverpb::RegionLocalState};
+use kvproto::{kvrpcpb::ExtraOp as TxnExtraOp, metapb, raft_serverpb::RegionLocalState};
 use pd_client::BucketStat;
 use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::store::{
-    util::find_peer, Config, EntryStorage, RaftlogFetchTask, TxnExt, WriteRouter, RegionReadProgress,
+use raftstore::{
+    coprocessor::{CoprocessorHost, RegionChangeReason},
+    store::{
+        util::find_peer, Config, EntryStorage, PeerStat, RaftlogFetchTask, ReadDelegate,
+        RegionReadProgress, TxnExt, WriteRouter,
+    },
 };
 use slog::{o, Logger};
-use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
+use tikv_util::{box_err, config::ReadableSize, time::Instant, worker::Scheduler};
 
 use super::storage::Storage;
 use crate::{
+    batch::StoreContext,
     operation::{AsyncWriter, DestroyProgress},
     tablet::{self, CachedTablet},
     Result,
 };
 
+const REGION_READ_PROGRESS_CAP: usize = 128;
+
 /// A peer that delegates commands between state machine and raft.
 pub struct Peer<EK: KvEngine, ER: RaftEngine> {
+    pub(crate) peer: metapb::Peer,
     raft_group: RawNode<Storage<ER>>,
     tablet: CachedTablet<EK>,
     /// We use a cache for looking up peers. Not all peers exist in region's
@@ -39,6 +47,17 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     pub(crate) read_progress: Arc<RegionReadProgress>,
     /// region buckets.
     pub(crate) region_buckets: Option<BucketStat>,
+
+    /// Write Statistics for PD to schedule hot spot.
+    pub(crate) peer_stat: PeerStat,
+    /// The index of last compacted raft log. It is used for the next compact
+    /// log task.
+    pub(crate) last_compacted_idx: u64,
+
+    /// Approximate size of the region.
+    pub(crate) approximate_size: Option<u64>,
+    /// Approximate keys of the region.
+    pub(crate) approximate_keys: Option<u64>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -71,7 +90,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ..Default::default()
         };
 
-        let region_id = storage.region().get_id();
+        let region = storage.region();
+        let region_id = region.get_id();
         let tablet_index = storage.region_state().get_tablet_index();
         // Another option is always create tablet even if tablet index is 0. But this
         // can introduce race when gc old tablet and create new peer.
@@ -93,7 +113,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
+        let read_progress = Arc::new(RegionReadProgress::new(
+            region,
+            storage.applied_term(),
+            REGION_READ_PROGRESS_CAP,
+            String::new(), // todo(SpdeA)
+        ));
         let mut peer = Peer {
+            peer: metapb::Peer::default(),
             raft_group: RawNode::new(&raft_cfg, storage, &logger)?,
             tablet: CachedTablet::new(tablet),
             peer_cache: vec![],
@@ -102,6 +129,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             destroy_progress: DestroyProgress::None,
             logger,
             txn_ext: Arc::default(),
+            read_progress,
+            txn_extra_op: Arc::new(AtomicCell::new(TxnExtraOp::Noop)),
+            region_buckets: Some(BucketStat {
+                meta: Arc::default(),
+                stats: metapb::BucketStats::default(),
+                create_time: Instant::now(),
+            }),
+            peer_stat: PeerStat::default(),
+            last_compacted_idx: 0,
+            approximate_keys: None,
+            approximate_size: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -124,6 +162,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn region_id(&self) -> u64 {
         self.region().get_id()
+    }
+
+    /// Set the region of a peer.
+    ///
+    /// This will update the region of the peer, caller must ensure the region
+    /// has been preserved in a durable device.
+    pub fn set_region(
+        &mut self,
+        host: &CoprocessorHost<impl KvEngine>,
+        reader: &mut ReadDelegate,
+        region: metapb::Region,
+        reason: RegionChangeReason,
+    ) {
+        unimplemented!()
     }
 
     #[inline]
@@ -268,27 +320,28 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     }
 
     #[inline]
-    pub fn approximate_size(&self) -> Option<u64> {
-        unimplemented!()
-    }
-
-    #[inline]
-    pub fn approximate_keys(&self) -> Option<u64> {
-        unimplemented!()
-    }
-
-    #[inline]
-    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
-        unimplemented!()
-    }
-
-    #[inline]
-    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
-        unimplemented!()
-    }
-
-    #[inline]
     pub fn post_split(&mut self) {
+        unimplemented!()
+    }
+
+    pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
+        // if self.region().get_peers().len() <= 1 {
+        //     // The peer campaigned when it was created, no need to do it
+        // again.     return false;
+        // }
+
+        // if !parent_is_leader {
+        //     return false;
+        // }
+
+        // // If last peer is the leader of the region before split, it's
+        // intuitional for // it to become the leader of new split
+        // region. let _ = self.raft_group.campaign();
+        // true
+        unimplemented!()
+    }
+
+    pub fn activate<T>(&self, ctx: &StoreContext<EK, ER, T>) {
         unimplemented!()
     }
 }

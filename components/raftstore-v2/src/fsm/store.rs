@@ -6,13 +6,16 @@ use batch_system::Fsm;
 use collections::HashMap;
 use crossbeam::channel::TryRecvError;
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb::Region;
+use kvproto::{metapb::Region, raft_serverpb::RaftMessage};
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionChangeReason},
-    store::{Config, ReadDelegate},
+    store::{Config, ReadDelegate, RegionReadProgressRegistry},
 };
 use slog::{o, Logger};
-use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::{
+    mpsc::{self, LooseBoundedSender, Receiver},
+    RingQueue,
+};
 
 use crate::{
     batch::StoreContext,
@@ -34,19 +37,29 @@ where
     pub readers: HashMap<u64, ReadDelegate>,
     /// region_id -> tablet cache
     pub tablet_caches: HashMap<u64, CachedTablet<E>>,
+
+    /// `MsgRequestPreVote`, `MsgRequestVote` or `MsgAppend` messages from newly
+    /// split Regions shouldn't be dropped if there is no such Region in this
+    /// store now. So the messages are recorded temporarily and will be handled
+    /// later.
+    pub pending_msgs: RingQueue<RaftMessage>,
+    /// region_id -> `RegionReadProgress`
+    pub region_read_progress: RegionReadProgressRegistry,
 }
 
 impl<E> StoreMeta<E>
 where
     E: KvEngine,
 {
-    pub fn new() -> StoreMeta<E> {
+    pub fn new(vote_capacity: usize) -> StoreMeta<E> {
         StoreMeta {
             store_id: None,
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
             readers: HashMap::default(),
             tablet_caches: HashMap::default(),
+            pending_msgs: RingQueue::with_capacity(vote_capacity),
+            region_read_progress: RegionReadProgressRegistry::new(),
         }
     }
 
@@ -58,7 +71,14 @@ where
         peer: &mut Peer<E, ER>,
         reason: RegionChangeReason,
     ) {
-        unimplemented!()
+        let prev = self.regions.insert(region.get_id(), region.clone());
+        if prev.map_or(true, |r| r.get_id() != region.get_id()) {
+            // TODO: may not be a good idea to panic when holding a lock.
+            // panic!("{} region corrupted", peer.tag);
+            unimplemented!()
+        }
+        let reader = self.readers.get_mut(&region.get_id()).unwrap();
+        peer.set_region(host, reader, region, reason);
     }
 }
 
@@ -67,7 +87,7 @@ where
     E: KvEngine,
 {
     fn default() -> Self {
-        Self::new()
+        Self::new(0)
     }
 }
 

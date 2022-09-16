@@ -33,6 +33,7 @@ pub struct PeerFsm<EK: KvEngine, ER: RaftEngine> {
     /// twice accidentally.
     tick_registry: u16,
     is_stopped: bool,
+    has_ready: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
@@ -50,6 +51,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
             receiver: rx,
             tick_registry: 0,
             is_stopped: false,
+            has_ready: false,
         });
         Ok((tx, fsm))
     }
@@ -87,6 +89,24 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
             }
         }
         batch_size - l
+    }
+
+    #[inline]
+    pub fn region_id(&self) -> u64 {
+        self.peer.region().get_id()
+    }
+
+    #[inline]
+    pub fn peer_id(&self) -> u64 {
+        self.peer.peer_id()
+    }
+
+    pub fn has_ready(&self) -> bool {
+        self.has_ready
+    }
+
+    pub fn set_has_ready(&mut self, ready: bool) {
+        self.has_ready = ready;
     }
 }
 
@@ -232,5 +252,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 PeerMsg::QueryDebugInfo(ch) => self.fsm.peer_mut().on_query_debug_info(ch),
             }
         }
+    }
+
+    pub fn on_split_region_check_tick(&mut self) {
+        unimplemented!()
     }
 }

@@ -2,7 +2,9 @@
 
 use std::{collections::VecDeque, sync::Arc};
 
+use batch_system::BasicMailbox;
 use collections::{HashMap, HashMapEntry, HashSet};
+use crossbeam::channel::internal::SelectHandle;
 use engine_traits::{
     CfOptions, KvEngine, MiscExt, OpenOptions, RaftEngine, RaftEngineReadOnly, TabletFactory,
     DATA_CFS,
@@ -24,6 +26,7 @@ use raftstore::{
     },
     Result,
 };
+use slog::info;
 use tikv_util::box_err;
 use time::Timespec;
 
@@ -31,6 +34,7 @@ use crate::{
     batch::ApplyContext,
     fsm::{ApplyFsmDelegate, PeerFsm, PeerFsmDelegate},
     raft::{write_initial_states, write_peer_state, Peer, Storage},
+    router::PeerMsg,
 };
 
 fn create_read_delegate<EK: KvEngine, ER: RaftEngine>(peer: &Peer<EK, ER>) -> ReadDelegate {
@@ -296,9 +300,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // map.
         let region_locks = {
             let mut pessimistic_locks = self.fsm.peer().txn_ext.pessimistic_locks.write();
-            // info!("moving {} locks to new regions", pessimistic_locks.len(); "region_id"
-            // => region_id); Update the version so the concurrent reader will
-            // fail due to EpochNotMatch instead of PessimisticLockNotFound.
+            info!(self.store_ctx.logger, "moving {} locks to new regions", pessimistic_locks.len(); "region_id"=> region_id);
+            // Update the version so the concurrent reader will fail due to EpochNotMatch
+            // instead of PessimisticLockNotFound.
             pessimistic_locks.version = derived.get_region_epoch().get_version();
             pessimistic_locks.group_by_regions(&regions, &derived)
         };
@@ -308,12 +312,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         let estimated_size = self
             .fsm
             .peer()
-            .approximate_size()
+            .approximate_size
             .map(|v| v / new_region_count);
         let estimated_keys = self
             .fsm
             .peer()
-            .approximate_keys()
+            .approximate_keys
             .map(|v| v / new_region_count);
         let mut meta = self
             .store_ctx
@@ -337,15 +341,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
 
         let is_leader = self.fsm.peer().is_leader();
         if is_leader {
-            self.fsm.peer_mut().set_approximate_size(estimated_size);
-            self.fsm.peer_mut().set_approximate_keys(estimated_keys);
+            self.fsm.peer_mut().approximate_size = estimated_size;
+            self.fsm.peer_mut().approximate_keys = estimated_keys;
             // self.fsm.peer.heartbeat_pd(self.ctx);
-            // info!(
-            //     "notify pd with split";
-            //     "region_id" => self.fsm.region_id(),
-            //     "peer_id" => self.fsm.peer_id(),
-            //     "split_count" => regions.len(),
-            // );
+            info!(
+                self.store_ctx.logger,
+                "notify pd with split";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "split_count" => regions.len(),
+            );
             // // Now pd only uses ReportBatchSplit for history operation show,
             // // so we send it independently here.
             // let task = PdTask::ReportBatchSplit {
@@ -394,12 +399,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                 );
             }
 
-            // // Insert new regions and validation
-            // info!(
-            //     "insert new region";
-            //     "region_id" => new_region_id,
-            //     "region" => ?new_region,
-            // );
+            // Insert new regions and validation
+            info!(
+                self.store_ctx.logger,
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
+            );
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
                 // Then, the region splits and the first vote message comes to the new node
@@ -413,16 +419,17 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
                         new_region_id, r, new_region
                     );
                 }
-                // self.store_ctx.router.close(new_region_id);
+                self.store_ctx.router.close(new_region_id);
             }
 
             let storage = Storage::new(
                 new_region_id,
                 self.store_ctx.store.id,
-                self.store_ctx.engine,
-                self.store_ctx.log_fetch_scheduler,
+                self.store_ctx.engine.clone(),
+                self.store_ctx.log_fetch_scheduler.clone(),
                 &self.store_ctx.logger,
-            )?
+            )
+            .unwrap_or_else(|e| panic!("fail to create storage: {:?}", e))
             .unwrap();
 
             let (sender, mut new_peer) = match PeerFsm::new(
@@ -443,46 +450,79 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
             // new_peer.peer.init_replication_mode(&mut replication_state);
             // drop(replication_state);
 
-            // let meta_peer = new_peer.peer.peer.clone();
+            let meta_peer = new_peer.peer().peer.clone();
 
             for p in new_region.get_peers() {
                 // Add this peer to cache
                 new_peer.peer_mut().insert_peer_cache(p.clone());
             }
 
-            // // New peer derive write flow from parent region,
-            // // this will be used by balance write flow.
-            // new_peer.peer.peer_stat = self.fsm.peer.peer_stat.clone();
-            // new_peer.peer.last_compacted_idx = new_peer
-            //     .peer
-            //     .get_store()
-            //     .apply_state()
-            //     .get_truncated_state()
-            //     .get_index()
-            //     + 1;
-            // let campaigned = new_peer.peer.maybe_campaign(is_leader);
-            // new_peer.has_ready |= campaigned;
+            // New peer derive write flow from parent region,
+            // this will be used by balance write flow.
+            new_peer.peer_mut().peer_stat = self.fsm.peer().peer_stat.clone();
+            new_peer.peer_mut().last_compacted_idx = new_peer
+                .peer()
+                .storage()
+                .apply_state()
+                .get_truncated_state()
+                .get_index()
+                + 1;
+            let campaigned = new_peer.peer_mut().maybe_campaign(is_leader);
+            new_peer.set_has_ready(new_peer.has_ready() | campaigned);
 
-            // if is_leader {
-            //     new_peer.peer.approximate_size = estimated_size;
-            //     new_peer.peer.approximate_keys = estimated_keys;
-            //     *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
-            //     // The new peer is likely to become leader, send a heartbeat
-            // immediately to     // reduce client query miss.
-            //     new_peer.peer.heartbeat_pd(self.ctx);
-            // }
+            if is_leader {
+                new_peer.peer_mut().approximate_size = estimated_size;
+                new_peer.peer_mut().approximate_keys = estimated_keys;
+                *new_peer.peer_mut().txn_ext.pessimistic_locks.write() = locks;
+                // The new peer is likely to become leader, send a
+                // heartbeatimmediately to reduce client query
+                // miss. new_peer.peer.heartbeat_pd(self.ctx);
+            }
 
-            new_peer.peer().activate(self.ctx);
+            meta.tablet_caches
+                .insert(new_region_id, new_peer.peer().tablet().clone());
+            new_peer.peer().activate(self.store_ctx);
             meta.regions.insert(new_region_id, new_region.clone());
-            let _ = self
-                .store_ctx
-                .tablet_factory
-                .open_tablet(
-                    new_region_id,
-                    Some(RAFT_INIT_LOG_INDEX),
-                    OpenOptions::default().set_create(true),
-                )
-                .unwrap_or_else(|e| panic!("Fails to open tablet created by split: {:?}", e));
+            let not_exist = meta
+                .region_ranges
+                .insert(enc_end_key(&new_region), new_region_id)
+                .is_none();
+            assert!(not_exist, "[region {}] should not exist", new_region_id);
+            meta.readers
+                .insert(new_region_id, create_read_delegate(new_peer.peer()));
+            meta.region_read_progress
+                .insert(new_region_id, new_peer.peer().read_progress.clone());
+
+            if last_region_id == new_region_id {
+                // To prevent from big region, the right region needs run split
+                // check again after split.
+                // new_peer.peer().size_diff_hint =
+                // self.store_ctx.cfg.region_split_check_diff().0;
+            }
+            let mailbox =
+                BasicMailbox::new(sender, new_peer, self.store_ctx.router.state_cnt().clone());
+            self.store_ctx.router.register(new_region_id, mailbox);
+            self.store_ctx
+                .router
+                .force_send(new_region_id, PeerMsg::Start)
+                .unwrap();
+
+            if !campaigned {
+                if let Some(msg) = meta
+                    .pending_msgs
+                    .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
+                {
+                    let peer_msg = PeerMsg::RaftMessage(Box::new(msg));
+                    if let Err(e) = self.store_ctx.router.force_send(new_region_id, peer_msg) {
+                        // warn!("handle first requset failed"; "region_id" =>
+                        // region_id, "error" => ?e);
+                    }
+                }
+            }
+        }
+        drop(meta);
+        if is_leader {
+            self.on_split_region_check_tick();
         }
     }
 }
@@ -491,5 +531,5 @@ mod test {
     use super::*;
 
     #[test]
-    fn it_work() {}
+    fn test_split() {}
 }

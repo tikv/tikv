@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
+use std::{fmt::{self, Debug, Formatter}, ops::Deref};
 
 use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
@@ -79,6 +79,15 @@ impl<ER> Debug for Storage<ER> {
             self.region().get_id(),
             self.peer.get_id()
         )
+    }
+}
+
+impl<ER: RaftEngine> Deref for Storage<ER> {
+    type Target = EntryStorage<ER>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.entry_storage
     }
 }
 
