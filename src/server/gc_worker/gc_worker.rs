@@ -1542,7 +1542,7 @@ pub mod test_gc_worker {
             region_modifies: HashMap<u64, Vec<Modify>>,
         ) -> kv::Result<()> {
             for (region_id, mut modifies) in region_modifies {
-                for modify in modifies.iter_mut() {
+                for modify in &mut modifies {
                     match modify {
                         Modify::Delete(_, ref mut key) => {
                             let bytes = keys::data_key(key.as_encoded());
