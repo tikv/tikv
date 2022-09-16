@@ -2,8 +2,8 @@
 
 use std::{thread, time::Duration};
 
-use test_cloud_server::ServerCluster;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use test_cloud_server::{try_wait, ServerCluster};
+use tikv_util::config::ReadableSize;
 
 use crate::alloc_node_id;
 
@@ -38,29 +38,18 @@ fn test_split_by_key() {
     test_util::init_log_for_test();
     let node_id = alloc_node_id();
     let mut cluster = ServerCluster::new(vec![node_id], |_, conf| {
-        conf.rocksdb.writecf.write_buffer_size = ReadableSize::kb(16);
-        conf.rocksdb.writecf.target_file_size_base = ReadableSize::kb(16);
-        conf.coprocessor.region_split_size = ReadableSize::kb(64);
-        conf.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
-        conf.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(20);
-        conf.raft_store.split_region_check_tick_interval = ReadableDuration::millis(20);
+        conf.coprocessor.region_split_keys = Some(3);
     });
     let mut client = cluster.new_client();
-    client.put_kv(0..300, i_to_key, i_to_key);
-    client.put_kv(300..600, i_to_key, i_to_key);
-    client.put_kv(600..1000, i_to_key, i_to_key);
-    // The split max keys should be 64 * 3 / 2 * 1024 / 100 ~= 983
+    client.put_kv(0..5, i_to_key, i_to_key);
     let engine = cluster.get_kvengine(node_id);
-    for _ in 0..10 {
-        if engine.get_all_shard_id_vers().len() > 1 {
-            break;
-        }
-        sleep();
-    }
+    try_wait(|| engine.get_all_shard_id_vers().len() == 2, 10);
     let shard_stats = engine.get_all_shard_stats();
-    assert!(shard_stats.len() > 1, "{:?}", &shard_stats);
-    let total_size: u64 = shard_stats.iter().map(|s| s.total_size).sum();
-    assert!(total_size < 96 * 1024, "{:?}", &shard_stats);
+    assert!(shard_stats.len() == 2, "{:?}", &shard_stats);
+    client.put_kv(6..15, i_to_key, i_to_key);
+    try_wait(|| engine.get_all_shard_id_vers().len() == 5, 10);
+    let shard_stats = engine.get_all_shard_stats();
+    assert!(shard_stats.len() == 5, "{:?}", &shard_stats);
     cluster.stop();
 }
 

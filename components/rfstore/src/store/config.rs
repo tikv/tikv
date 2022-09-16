@@ -88,6 +88,8 @@ pub struct Config {
 
     pub region_split_size: ReadableSize,
 
+    pub region_split_keys: u64,
+
     pub apply_pool_size: usize,
 }
 
@@ -117,6 +119,7 @@ impl Default for Config {
             split_region_check_tick_interval: ReadableDuration::secs(3),
             switch_mem_table_check_tick_interval: ReadableDuration::minutes(1),
             region_split_size: ReadableSize::mb(256),
+            region_split_keys: 2_560_000,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             local_file_gc_timeout: ReadableDuration::minutes(30),
@@ -178,6 +181,9 @@ impl Config {
         }
 
         cfg.region_split_size = old_cop.region_split_size;
+        if let Some(split_keys) = old_cop.region_split_keys {
+            cfg.region_split_keys = split_keys;
+        }
         cfg.apply_pool_size = old.apply_batch_system.pool_size;
         cfg.local_file_gc_tick_interval = old.local_file_gc_tick_interval;
         cfg.local_file_gc_timeout = old.local_file_gc_timeout;

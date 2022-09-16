@@ -8,8 +8,9 @@ use std::{
     u64,
 };
 
+use bytes::Buf;
 use fail::fail_point;
-use kvengine::DEL_PREFIXES_KEY;
+use kvengine::{Shard, DEL_PREFIXES_KEY};
 use kvproto::{
     import_sstpb::SwitchMode,
     metapb::{self, Region, RegionEpoch},
@@ -776,6 +777,12 @@ impl<'a> PeerMsgHandler<'a> {
             if self.ctx.global.importer.get_mode() == SwitchMode::Import {
                 return;
             }
+            if self.ctx.cfg.region_split_keys < 10 {
+                // For some tests to be effective, we need to split tiny regions.
+                // But tiny region only has mem-table, get_suggest_split_key will return None.
+                // So we handle it specially.
+                return self.split_by_iterate(shard);
+            }
             let region_max_size = self.ctx.cfg.region_split_size.0 * 3 / 2;
             let region_max_entries = region_max_size / 100;
             let estimated_size = shard.get_estimated_size();
@@ -794,16 +801,42 @@ impl<'a> PeerMsgHandler<'a> {
                     estimated_entries,
                     region_max_size,
                 );
-                let task = PdTask::AskBatchSplit {
-                    region: self.region().clone(),
-                    split_keys: vec![Key::from_raw(&k).as_encoded().to_vec()],
-                    peer: self.peer.peer.clone(),
-                    right_derive: true,
-                    callback: Callback::None,
-                };
-                self.ctx.global.pd_scheduler.schedule(task).unwrap();
+                self.schedule_ask_split(vec![Key::from_raw(k.chunk()).as_encoded().to_vec()]);
             }
         }
+    }
+
+    fn schedule_ask_split(&mut self, split_keys: Vec<Vec<u8>>) {
+        let task = PdTask::AskBatchSplit {
+            region: self.region().clone(),
+            split_keys,
+            peer: self.peer.peer.clone(),
+            right_derive: true,
+            callback: Callback::None,
+        };
+        self.ctx.global.pd_scheduler.schedule(task).unwrap();
+    }
+
+    fn split_by_iterate(&mut self, shard: Arc<Shard>) {
+        let split_keys = self.ctx.cfg.region_split_keys;
+        let split_max_keys = split_keys * 3 / 2;
+        let snap = shard.new_snap_access();
+        let mut iter = snap.new_iterator(0, false, false, None, true);
+        iter.rewind();
+        let mut i = 0;
+        let mut keys = vec![];
+        while iter.valid() {
+            if i > 0 && i % split_keys == 0 {
+                keys.push(Key::from_raw(iter.key()).as_encoded().to_vec());
+            }
+            i += 1;
+            iter.next();
+        }
+        if i <= split_max_keys {
+            return;
+        }
+        info!("region {} split by iterate", self.peer.tag());
+        self.schedule_ask_split(keys);
     }
 
     // For idle regions, we need tick to trigger switch mem-table to reduce memory consumption.
