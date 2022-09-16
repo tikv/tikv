@@ -346,39 +346,39 @@ mod tests {
     #[test]
     fn test_regexp_like() {
         let cases = vec![
-            ("a", r"^$", None, Some(0)),
-            ("a", r"a", None, Some(1)),
-            ("b", r"a", None, Some(0)),
-            ("aA", r"Aa", None, Some(0)),
-            ("aaa", r".", None, Some(1)),
-            ("ab", r"^.$", None, Some(0)),
-            ("b", r"..", None, Some(0)),
-            ("aab", r".ab", None, Some(1)),
-            ("abcd", r".*", None, Some(1)),
-            ("你", r"^.$", None, Some(1)),
-            ("你好", r"你好", None, Some(1)),
-            ("你好", r"^你好$", None, Some(1)),
-            ("你好", r"^您好$", None, Some(0)),
+            ("a", "^$", None, Some(0)),
+            ("a", "a", None, Some(1)),
+            ("b", "a", None, Some(0)),
+            ("aA", "Aa", None, Some(0)),
+            ("aaa", ".", None, Some(1)),
+            ("ab", "^.$", None, Some(0)),
+            ("b", "..", None, Some(0)),
+            ("aab", ".ab", None, Some(1)),
+            ("abcd", ".*", None, Some(1)),
+            ("你", "^.$", None, Some(1)),
+            ("你好", "你好", None, Some(1)),
+            ("你好", "^你好$", None, Some(1)),
+            ("你好", "^您好$", None, Some(0)),
             // Test wrong pattern
-            ("", r"(", None, None),
-            ("", r"(*", None, None),
-            ("", r"[a", None, None),
+            ("", "(", None, None),
+            ("", "(*", None, None),
+            ("", "[a", None, None),
             // Test case-insensitive
-            ("abc", r"AbC", Some(""), Some(0)),
-            ("abc", r"AbC", Some("i"), Some(1)),
+            ("abc", "AbC", Some(""), Some(0)),
+            ("abc", "AbC", Some("i"), Some(1)),
             // Test multiple-line mode
-            ("123\n321", r"23$", Some(""), Some(0)),
-            ("123\n321", r"23$", Some("m"), Some(1)),
-            ("good\nday", r"^day", Some("m"), Some(1)),
+            ("123\n321", "23$", Some(""), Some(0)),
+            ("123\n321", "23$", Some("m"), Some(1)),
+            ("good\nday", "^day", Some("m"), Some(1)),
             // Test s flag(in mysql it's n flag)
-            ("\n", r".", Some(""), Some(0)),
-            ("\n", r".", Some("s"), Some(1)),
+            ("\n", ".", Some(""), Some(0)),
+            ("\n", ".", Some("s"), Some(1)),
             // Test rightmost rule
-            ("abc", r"aBc", Some("ic"), Some(0)),
-            ("abc", r"aBc", Some("ci"), Some(1)),
+            ("abc", "aBc", Some("ic"), Some(0)),
+            ("abc", "aBc", Some("ci"), Some(1)),
             // Test invalid match type
-            ("abc", r"abc", Some("p"), None),
-            ("abc", r"abc", Some("cpi"), None),
+            ("abc", "abc", Some("p"), None),
+            ("abc", "abc", Some("cpi"), None),
         ];
 
         for (expr, pattern, match_type, expected) in cases {
@@ -414,9 +414,9 @@ mod tests {
 
         // Test null
         let cases = vec![
-            (None, Some(r"a"), Some("i")),
+            (None, Some("a"), Some("i")),
             (Some("a"), None, Some("i")),
-            (Some("a"), Some(r"a"), None),
+            (Some("a"), Some("a"), None),
         ];
         for (expr, pattern, match_type) in cases {
             let mut ctx = EvalContext::default();
@@ -456,17 +456,17 @@ mod tests {
     #[test]
     fn test_regexp_substr() {
         let cases = vec![
-            ("abc", r"bc", None, None, None, Some("bc"), false),
-            ("你好啊", r"好", None, None, None, Some("好"), false),
-            ("abc", r"bc", Some(2), None, None, Some("bc"), false),
-            ("你好啊", r"好", Some(2), None, None, Some("好"), false),
-            ("你好啊", r"好", Some(3), None, None, None, false),
-            ("你好啊", r"好", Some(4), None, None, None, true),
-            ("你好啊", r"好", Some(-1), None, None, None, true),
-            ("", r"a", Some(1), None, None, None, false),
+            ("abc", "bc", None, None, None, Some("bc"), false),
+            ("你好啊", "好", None, None, None, Some("好"), false),
+            ("abc", "bc", Some(2), None, None, Some("bc"), false),
+            ("你好啊", "好", Some(2), None, None, Some("好"), false),
+            ("你好啊", "好", Some(3), None, None, None, false),
+            ("你好啊", "好", Some(4), None, None, None, true),
+            ("你好啊", "好", Some(-1), None, None, None, true),
+            ("", "a", Some(1), None, None, None, false),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(1),
                 None,
@@ -475,7 +475,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(0),
                 None,
@@ -484,7 +484,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(-1),
                 None,
@@ -493,7 +493,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(2),
                 None,
@@ -502,7 +502,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(3),
                 Some(1),
                 None,
@@ -511,7 +511,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(3),
                 Some(2),
                 None,
@@ -520,18 +520,18 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(6),
                 Some(1),
                 None,
                 Some("abe"),
                 false,
             ),
-            ("abc abd abe", r"ab.", Some(6), Some(100), None, None, false),
-            ("abc abd abe", r"ab.", Some(100), Some(1), None, None, true),
+            ("abc abd abe", "ab.", Some(6), Some(100), None, None, false),
+            ("abc abd abe", "ab.", Some(100), Some(1), None, None, true),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(1),
                 None,
@@ -540,7 +540,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(2),
                 None,
@@ -549,51 +549,35 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(5),
                 Some(1),
                 None,
                 Some("嗯呐"),
                 false,
             ),
-            (
-                "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
-                Some(5),
-                Some(2),
-                None,
-                None,
-                false,
-            ),
+            ("嗯嗯 嗯好 嗯呐", "嗯.", Some(5), Some(2), None, None, false),
+            ("abc", "ab.", Some(1), Some(1), Some(""), Some("abc"), false),
             (
                 "abc",
-                r"ab.",
-                Some(1),
-                Some(1),
-                Some(""),
-                Some("abc"),
-                false,
-            ),
-            (
-                "abc",
-                r"aB.",
+                "aB.",
                 Some(1),
                 Some(1),
                 Some("i"),
                 Some("abc"),
                 false,
             ),
-            ("abc", r"aB.", Some(100), Some(1), Some("i"), None, true),
+            ("abc", "aB.", Some(100), Some(1), Some("i"), None, true),
             (
                 "good\nday",
-                r"od",
+                "od",
                 Some(1),
                 Some(1),
                 Some("m"),
                 Some("od"),
                 false,
             ),
-            ("\n", r".", Some(1), Some(1), Some("s"), Some("\n"), false),
+            ("\n", ".", Some(1), Some(1), Some("s"), Some("\n"), false),
         ];
 
         for (expr, pattern, pos, occur, match_type, expected, error) in cases {
@@ -634,11 +618,11 @@ mod tests {
 
         // Test null
         let cases = vec![
-            (None, Some(r"a"), Some(1), Some(1), Some("i")),
+            (None, Some("a"), Some(1), Some(1), Some("i")),
             (Some("a"), None, Some(1), Some(1), Some("i")),
-            (Some("a"), Some(r"a"), None, Some(1), Some("i")),
-            (Some("a"), Some(r"a"), Some(1), None, Some("i")),
-            (Some("a"), Some(r"a"), Some(1), Some(1), None),
+            (Some("a"), Some("a"), None, Some(1), Some("i")),
+            (Some("a"), Some("a"), Some(1), None, Some("i")),
+            (Some("a"), Some("a"), Some(1), Some(1), None),
         ];
         for (expr, pattern, pos, occur, match_type) in cases {
             let mut ctx = EvalContext::default();
@@ -688,17 +672,17 @@ mod tests {
     #[test]
     fn test_regexp_instr() {
         let cases = vec![
-            ("abc", r"bc", None, None, None, None, Some(2), false),
-            ("你好啊", r"好", None, None, None, None, Some(2), false),
-            ("abc", r"bc", Some(2), None, None, None, Some(2), false),
-            ("你好啊", r"好", Some(2), None, None, None, Some(2), false),
-            ("你好啊", r"好", Some(3), None, None, None, Some(0), false),
-            ("你好啊", r"好", Some(4), None, None, None, Some(0), true),
-            ("你好啊", r"好", Some(-1), None, None, None, Some(0), true),
-            ("", r"a", Some(1), None, None, None, Some(0), false),
+            ("abc", "bc", None, None, None, None, Some(2), false),
+            ("你好啊", "好", None, None, None, None, Some(2), false),
+            ("abc", "bc", Some(2), None, None, None, Some(2), false),
+            ("你好啊", "好", Some(2), None, None, None, Some(2), false),
+            ("你好啊", "好", Some(3), None, None, None, Some(0), false),
+            ("你好啊", "好", Some(4), None, None, None, Some(0), true),
+            ("你好啊", "好", Some(-1), None, None, None, Some(0), true),
+            ("", "a", Some(1), None, None, None, Some(0), false),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(1),
                 None,
@@ -708,7 +692,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(0),
                 None,
@@ -718,7 +702,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(-1),
                 None,
@@ -728,7 +712,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(2),
                 None,
@@ -738,7 +722,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(3),
                 Some(1),
                 None,
@@ -748,7 +732,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(3),
                 Some(2),
                 None,
@@ -758,7 +742,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(6),
                 Some(1),
                 None,
@@ -768,7 +752,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(6),
                 Some(100),
                 None,
@@ -778,7 +762,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(1),
                 None,
@@ -788,7 +772,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(2),
                 None,
@@ -798,7 +782,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(5),
                 Some(1),
                 None,
@@ -808,7 +792,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(5),
                 Some(2),
                 None,
@@ -818,7 +802,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(100),
                 None,
@@ -828,7 +812,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -838,7 +822,7 @@ mod tests {
             ),
             (
                 "abc abd abe",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(1),
                 Some(1),
@@ -848,7 +832,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -858,7 +842,7 @@ mod tests {
             ),
             (
                 "嗯嗯 嗯好 嗯呐",
-                r"嗯.",
+                "嗯.",
                 Some(1),
                 Some(1),
                 Some(1),
@@ -866,11 +850,11 @@ mod tests {
                 Some(3),
                 false,
             ),
-            ("", r"^$", Some(1), Some(1), Some(0), None, Some(1), false),
-            ("", r"^$", Some(1), Some(1), Some(1), None, Some(1), false),
+            ("", "^$", Some(1), Some(1), Some(0), None, Some(1), false),
+            ("", "^$", Some(1), Some(1), Some(1), None, Some(1), false),
             (
                 "abc",
-                r"ab.",
+                "ab.",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -880,7 +864,7 @@ mod tests {
             ),
             (
                 "abc",
-                r"aB.",
+                "aB.",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -890,7 +874,7 @@ mod tests {
             ),
             (
                 "good\nday",
-                r"od$",
+                "od$",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -900,7 +884,7 @@ mod tests {
             ),
             (
                 "good\nday",
-                r"oD$",
+                "oD$",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -910,7 +894,7 @@ mod tests {
             ),
             (
                 "\n",
-                r".",
+                ".",
                 Some(1),
                 Some(1),
                 Some(0),
@@ -964,12 +948,12 @@ mod tests {
 
         // Test null
         let cases = vec![
-            (None, Some(r"a"), Some(1), Some(1), Some(0), Some("i")),
+            (None, Some("a"), Some(1), Some(1), Some(0), Some("i")),
             (Some("a"), None, Some(1), Some(1), Some(0), Some("i")),
-            (Some("a"), Some(r"a"), None, Some(1), Some(0), Some("i")),
-            (Some("a"), Some(r"a"), Some(1), None, Some(0), Some("i")),
-            (Some("a"), Some(r"a"), Some(1), Some(1), None, Some("i")),
-            (Some("a"), Some(r"a"), Some(1), Some(1), Some(0), None),
+            (Some("a"), Some("a"), None, Some(1), Some(0), Some("i")),
+            (Some("a"), Some("a"), Some(1), None, Some(0), Some("i")),
+            (Some("a"), Some("a"), Some(1), Some(1), None, Some("i")),
+            (Some("a"), Some("a"), Some(1), Some(1), Some(0), None),
         ];
         for (expr, pattern, pos, occur, ret_opt, match_type) in cases {
             let mut ctx = EvalContext::default();
