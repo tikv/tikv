@@ -5036,8 +5036,8 @@ where
             if self.raft_group.raft.raft_log.applied >= *target_index || force {
                 if self.is_force_leader() {
                     info!(
-                       "Unsafe recovery, finish wait apply";
-                       "region_id" => self.region().get_id(),
+                        "Unsafe recovery, finish wait apply";
+                        "region_id" => self.region().get_id(),
                         "peer_id" => self.peer_id(),
                         "target_index" => target_index,
                         "applied" =>  self.raft_group.raft.raft_log.applied,
