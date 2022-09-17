@@ -286,7 +286,7 @@ pub unsafe fn run_proxy(
                 fatal!("unknown configuration options: {}", e);
             }
         }
-        crate::config::address_proxy_config(&mut config);
+        crate::config::address_proxy_config(&mut config, &proxy_config);
         println!("config check successful");
         process::exit(0)
     }

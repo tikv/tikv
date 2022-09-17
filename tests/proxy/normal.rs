@@ -290,7 +290,7 @@ mod config {
         let mut unrecognized_keys: Vec<String> = vec![];
         let mut config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
         assert_eq!(config.raft_store.clean_stale_ranges_tick, 9999);
-        address_proxy_config(&mut config);
+        address_proxy_config(&mut config, &ProxyConfig::default());
         let clean_stale_ranges_tick =
             (10_000 / config.raft_store.region_worker_tick_interval.as_millis()) as usize;
         assert_eq!(
@@ -332,11 +332,80 @@ mod config {
     }
 
     #[test]
+    fn test_proxy_low_apply_pool_size_default() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            file,
+            "
+# empty config file
+        "
+        )
+        .unwrap();
+        let path = file.path();
+
+        let mut unrecognized_keys = Vec::new();
+        let mut tikv_config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        assert!(unrecognized_keys.is_empty());
+
+        let mut proxy_unrecognized_keys = Vec::new();
+        let proxy_config =
+            ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
+        assert!(proxy_unrecognized_keys.is_empty());
+
+        // When raftstore.apply-low-priority-pool-size is specified in the config file,
+        // the default value from proxy config will be used.
+        address_proxy_config(&mut tikv_config, &proxy_config);
+        assert_eq!(
+            ProxyConfig::default()
+                .raft_store
+                .apply_low_priority_pool_size,
+            tikv_config
+                .raft_store
+                .apply_batch_system
+                .low_priority_pool_size
+        );
+    }
+
+    #[test]
+    fn test_proxy_low_apply_pool_size_user_specified() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            file,
+            "
+[raftstore]
+apply-low-priority-pool-size = 41
+        "
+        )
+        .unwrap();
+        let path = file.path();
+
+        let mut unrecognized_keys = Vec::new();
+        let mut tikv_config = TiKvConfig::from_file(path, Some(&mut unrecognized_keys)).unwrap();
+        assert!(unrecognized_keys.is_empty());
+
+        let mut proxy_unrecognized_keys = Vec::new();
+        let proxy_config =
+            ProxyConfig::from_file(path, Some(&mut proxy_unrecognized_keys)).unwrap();
+        assert!(proxy_unrecognized_keys.is_empty());
+
+        // When raftstore.apply-low-priority-pool-size is specified, its value
+        // should be used.
+        address_proxy_config(&mut tikv_config, &proxy_config);
+        assert_eq!(
+            41,
+            tikv_config
+                .raft_store
+                .apply_batch_system
+                .low_priority_pool_size
+        );
+    }
+
+    #[test]
     fn test_store_setup() {
         let (mut cluster, pd_client) = new_mock_cluster(0, 3);
 
         // Add label to cluster
-        address_proxy_config(&mut cluster.cfg.tikv);
+        address_proxy_config(&mut cluster.cfg.tikv, &ProxyConfig::default());
 
         // Try to start this node, return after persisted some keys.
         let _ = cluster.start();

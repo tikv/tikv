@@ -521,8 +521,8 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             Self::connect_to_pd_cluster(&mut config, env.clone(), Arc::clone(&security_mgr));
 
         // Initialize and check config
-        let cfg_controller = Self::init_config(config);
         info!("using proxy config"; "config" => ?proxy_config);
+        let cfg_controller = Self::init_config(config, &proxy_config);
         let config = cfg_controller.get_current();
 
         let store_path = Path::new(&config.storage.data_dir).to_owned();
@@ -595,9 +595,9 @@ impl<ER: RaftEngine> TiKvServer<ER> {
     /// - If the config can't pass `validate()`
     /// - If the max open file descriptor limit is not high enough to support
     ///   the main database and the raft database.
-    fn init_config(mut config: TiKvConfig) -> ConfigController {
+    fn init_config(mut config: TiKvConfig, proxy_config: &ProxyConfig) -> ConfigController {
         // Add {label: {"engine": "tiflash"}} to Config
-        crate::config::address_proxy_config(&mut config);
+        crate::config::address_proxy_config(&mut config, proxy_config);
         crate::config::validate_and_persist_config(&mut config, true);
 
         ensure_dir_exist(&config.storage.data_dir).unwrap();
