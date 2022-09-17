@@ -916,15 +916,6 @@ where
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
 
-        info!(
-            "snapshot recovery started";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "target_index" => target_index,
-            "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
-
-        );
-
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
@@ -937,10 +928,15 @@ where
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
 
-            // do some sanity check
-            // if it is learner during backup and never vote before, vote is 0
-            // if peer is suppose to remove
-            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
+            // do some sanity check, for follower, leader already apply to last log,
+            // case#1 if it is learner during backup and never vote before, vote is 0
+            // case#2 if peer is suppose to remove
+            // case#3 follower voted (term+1), however, never append logs (log term does not
+            // move forward)
+            if self.fsm.peer.raft_group.raft.vote == 0
+                || self.fsm.peer.pending_remove
+                || self.fsm.peer.term() > self.fsm.peer.raft_group.raft.raft_log.last_term()
+            {
                 info!(
                     "this peer is never vote before or pending remove, it should be skip to wait apply"
                 );
@@ -1052,7 +1048,11 @@ where
             || self.fsm.peer.is_splitting();
         resp.set_has_pending_admin(pending_admin);
         if let Err(err) = ch.unbounded_send(resp) {
-            warn!("failed to send check admin response"; "err" => ?err)
+            warn!("failed to send check admin response";
+            "err" => ?err,
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+            );
         }
     }
 

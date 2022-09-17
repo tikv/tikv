@@ -5053,6 +5053,10 @@ where
         if let Some(SnapshotRecoveryState::WaitLogApplyToLast { target_index, .. }) =
             &self.snapshot_recovery_state
         {
+            if self.raft_group.raft.term != self.raft_group.raft.raft_log.last_term() {
+                return;
+            }
+
             if self.raft_group.raft.raft_log.applied >= *target_index
                 || force
                 || self.pending_remove
