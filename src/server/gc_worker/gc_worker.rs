@@ -1672,7 +1672,7 @@ pub mod test_gc_worker {
 mod tests {
 
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         sync::mpsc::{self, channel},
         thread,
         time::Duration,
@@ -2921,7 +2921,11 @@ mod tests {
     // `start_key` and `end_key` determines which regions or how how many regions or
     // which parts of regions are deleted. The data used in this method are shown in
     // the comment of `multi_gc_engine_setup`.
-    fn test_destroy_range_for_multi_rocksdb_impl(start_key: &[u8], end_key: &[u8]) {
+    fn test_destroy_range_for_multi_rocksdb_impl(
+        start_key: &[u8],
+        end_key: &[u8],
+        exected_regions: Vec<u64>,
+    ) {
         let store_id = 1;
         let put_start_ts = 100;
         let (factory, engine, ri_provider, gc_runner, _, _rx) =
@@ -2935,6 +2939,7 @@ mod tests {
             .unsafe_destroy_range(&ctx, &start_key, &end_key, ri_provider)
             .unwrap();
 
+        let mut regions = BTreeSet::new();
         for region_id in 1..=3 {
             let db = factory
                 .open_tablet(region_id, None, OpenOptions::default().set_cache_only(true))
@@ -2949,27 +2954,45 @@ mod tests {
                 let val = format!("value-{:02}", i).into_bytes();
 
                 let mut raw_k = vec![b'z'];
-                let suffix = Key::from_raw(&k).append_ts((put_start_ts + 10).into());
+                let suffix = Key::from_raw(&k).append_ts((put_start_ts + 1).into());
                 raw_k.extend_from_slice(suffix.as_encoded());
 
                 if start_key <= key && key < end_key {
+                    regions.insert(region_id);
                     assert!(db.get_cf(cf, &raw_k).unwrap().is_none());
                     must_get_none_on_region(&engine, region_id, &k, put_start_ts + 10);
                 } else {
-                    // assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
+                    assert!(db.get_cf(cf, &raw_k).unwrap().is_some());
                     must_get_on_region(&engine, region_id, &k, put_start_ts + 10, &val);
                 }
             }
         }
+
+        let regions: Vec<_> = regions.into_iter().collect();
+        assert!(regions == exected_regions);
     }
 
     #[test]
     fn test_destroy_range_for_multi_rocksdb() {
         // Cover all keys in all regions
-        // test_destroy_range_for_multi_rocksdb_impl(b"", b"k99");
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k99", vec![1, 2, 3]);
 
-        // Cover some keys in region 1, all keys in other regions
-        test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k99");
-        // test_destroy_range_for_multi_rocksdb_impl(b"k051", b"k99");
+        // Cover some keys in region 1, and all keys in the other regions
+        test_destroy_range_for_multi_rocksdb_impl(b"k051", b"k99", vec![1, 2, 3]);
+
+        // Cover some keys in region 3, and all keys in the other regions
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k25", vec![1, 2, 3]);
+        test_destroy_range_for_multi_rocksdb_impl(b"", b"k249", vec![1, 2, 3]);
+
+        // Cover some keys in region 1 and region 3, and all keys in region 2
+        test_destroy_range_for_multi_rocksdb_impl(b"k032", b"k249", vec![1, 2, 3]);
+
+        // Cover all keys in region 2, and no keys in others
+        test_destroy_range_for_multi_rocksdb_impl(b"k10", b"k20", vec![2]);
+        test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k195", vec![2]);
+
+        // Cover two regions
+        test_destroy_range_for_multi_rocksdb_impl(b"k05", b"k195", vec![1, 2]);
+        test_destroy_range_for_multi_rocksdb_impl(b"k099", b"k25", vec![2, 3]);
     }
 }
