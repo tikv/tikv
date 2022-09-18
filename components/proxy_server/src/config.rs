@@ -18,6 +18,10 @@ with_prefix!(prefix_store "store-");
 #[serde(rename_all = "kebab-case")]
 pub struct RaftstoreConfig {
     pub snap_handle_pool_size: usize,
+
+    #[doc(hidden)]
+    #[online_config(skip)]
+    pub region_worker_tick_interval: ReadableDuration,
     pub apply_low_priority_pool_size: usize,
 }
 
@@ -26,10 +30,10 @@ impl Default for RaftstoreConfig {
         let cpu_num = SysQuota::cpu_cores_quota();
 
         RaftstoreConfig {
+            region_worker_tick_interval: ReadableDuration::millis(500),
             // This pool is used when handling raft Snapshots, e.g. when
             // adding a new TiFlash replica, or scaling TiFlash instances.
             snap_handle_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
-
             // This pool is used when handling ingest SST raft messages, e.g.
             // when using BR / lightning.
             apply_low_priority_pool_size: (cpu_num * 0.3).clamp(2.0, 8.0) as usize,
@@ -140,13 +144,11 @@ pub fn make_tikv_config() -> TiKvConfig {
 }
 
 pub fn setup_default_tikv_config(default: &mut TiKvConfig) {
+    // Compact test
     default.server.addr = TIFLASH_DEFAULT_LISTENING_ADDR.to_string();
     default.server.status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
     default.server.advertise_status_addr = TIFLASH_DEFAULT_STATUS_ADDR.to_string();
-    default.raft_store.region_worker_tick_interval = ReadableDuration::millis(500);
-    let clean_stale_ranges_tick =
-        (10_000 / default.raft_store.region_worker_tick_interval.as_millis()) as usize;
-    default.raft_store.clean_stale_ranges_tick = clean_stale_ranges_tick;
+    // Do not add here, try use `address_proxy_config`
 }
 
 /// This function changes TiKV's config according to ProxyConfig.
@@ -163,6 +165,8 @@ pub fn address_proxy_config(config: &mut TiKvConfig, proxy_config: &ProxyConfig)
         .server
         .labels
         .insert(DEFAULT_ENGINE_LABEL_KEY.to_owned(), engine_name);
+    config.raft_store.region_worker_tick_interval =
+        proxy_config.raft_store.region_worker_tick_interval;
     let clean_stale_ranges_tick =
         (10_000 / config.raft_store.region_worker_tick_interval.as_millis()) as usize;
     config.raft_store.clean_stale_ranges_tick = clean_stale_ranges_tick;

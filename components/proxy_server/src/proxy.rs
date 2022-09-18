@@ -1,44 +1,73 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    ffi::CStr,
+    ffi::{CStr, OsStr},
     os::raw::{c_char, c_int},
     path::Path,
     process,
 };
 
-use clap::{App, Arg, ArgMatches};
+use clap::{App, Arg};
 use tikv::config::TiKvConfig;
 
-use crate::{config::make_tikv_config, fatal, setup::overwrite_config_with_cmd_args};
+use crate::{
+    config::{make_tikv_config, ProxyConfig},
+    fatal,
+    setup::overwrite_config_with_cmd_args,
+};
+
+pub fn gen_proxy_config(
+    config_path: &Option<&OsStr>,
+    is_config_check: bool,
+    proxy_unrecognized_keys: &mut Vec<String>,
+) -> ProxyConfig {
+    // Double read the same file for proxy-specific arguments.
+    let proxy_config = config_path.map_or_else(ProxyConfig::default, |path| {
+        let path = Path::new(path);
+        crate::config::ProxyConfig::from_file(
+            path,
+            if is_config_check {
+                Some(proxy_unrecognized_keys)
+            } else {
+                None
+            },
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                path.display(),
+                e
+            );
+        })
+    });
+    proxy_config
+}
 
 /// Generate default TiKvConfig, but with some Proxy's default values.
 pub fn gen_tikv_config(
-    matches: &ArgMatches,
+    config_path: &Option<&OsStr>,
     is_config_check: bool,
     unrecognized_keys: &mut Vec<String>,
 ) -> TiKvConfig {
-    matches
-        .value_of_os("config")
-        .map_or_else(make_tikv_config, |path| {
-            let path = Path::new(path);
-            TiKvConfig::from_file(
-                path,
-                if is_config_check {
-                    Some(unrecognized_keys)
-                } else {
-                    None
-                },
-            )
-            .unwrap_or_else(|e| {
-                error!(
-                    "invalid default auto generated configuration file {}, err {}",
-                    path.display(),
-                    e
-                );
-                std::process::exit(1);
-            })
+    config_path.map_or_else(make_tikv_config, |path| {
+        let path = Path::new(path);
+        TiKvConfig::from_file(
+            path,
+            if is_config_check {
+                Some(unrecognized_keys)
+            } else {
+                None
+            },
+        )
+        .unwrap_or_else(|e| {
+            error!(
+                "invalid default auto generated configuration file {}, err {}",
+                path.display(),
+                e
+            );
+            std::process::exit(1);
         })
+    })
 }
 
 pub unsafe fn run_proxy(
@@ -245,31 +274,12 @@ pub unsafe fn run_proxy(
     let mut unrecognized_keys = Vec::new();
     let is_config_check = matches.is_present("config-check");
 
-    let mut config = gen_tikv_config(&matches, is_config_check, &mut unrecognized_keys);
+    let cpath = matches.value_of_os("config");
+    let mut config = gen_tikv_config(&cpath, is_config_check, &mut unrecognized_keys);
 
     let mut proxy_unrecognized_keys = Vec::new();
-    // Double read the same file for proxy-specific arguments.
-    let mut proxy_config =
-        matches
-            .value_of_os("config")
-            .map_or_else(crate::config::ProxyConfig::default, |path| {
-                let path = Path::new(path);
-                crate::config::ProxyConfig::from_file(
-                    path,
-                    if is_config_check {
-                        Some(&mut proxy_unrecognized_keys)
-                    } else {
-                        None
-                    },
-                )
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "invalid auto generated configuration file {}, err {}",
-                        path.display(),
-                        e
-                    );
-                })
-            });
+    let mut proxy_config = gen_proxy_config(&cpath, is_config_check, &mut proxy_unrecognized_keys);
+
     check_engine_label(&matches);
     // Replace config from `match` from TiFlash's side.
     overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);

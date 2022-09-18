@@ -30,7 +30,7 @@ use raftstore::{
     Error, Result,
 };
 use sst_importer::SstImporter;
-use tikv_util::{box_err, debug, error, info, warn};
+use tikv_util::{debug, error, info, warn};
 use yatp::{
     pool::{Builder, ThreadPool},
     task::future::TaskCell,
@@ -40,7 +40,7 @@ use crate::{
     gen_engine_store_server_helper,
     interfaces::root::{DB as ffi_interfaces, DB::EngineStoreApplyRes},
     name_to_cf, ColumnFamilyType, EngineStoreServerHelper, RaftCmdHeader, RawCppPtr, TiFlashEngine,
-    WriteCmdType, WriteCmds, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    WriteCmdType, WriteCmds, CF_LOCK,
 };
 
 impl Into<engine_tiflash::FsStatsExt> for ffi_interfaces::StoreStats {
@@ -732,7 +732,7 @@ impl ApplySnapshotObserver for TiFlashObserver {
                         &snap_key,
                     );
                     match sender.send(res) {
-                        Err(e) => error!("pre apply snapshot err when send to receiver"),
+                        Err(_e) => error!("pre apply snapshot err when send to receiver"),
                         Ok(_) => (),
                     }
                 });
