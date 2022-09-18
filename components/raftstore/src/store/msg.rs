@@ -237,6 +237,20 @@ pub trait ErrorCallback: Send {
     fn is_none(&self) -> bool;
 }
 
+impl<C: ErrorCallback> ErrorCallback for Vec<C> {
+    #[inline]
+    fn report_error(self, err: RaftCmdResponse) {
+        for cb in self {
+            cb.report_error(err.clone());
+        }
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
+        self.iter().all(|c| c.is_none())
+    }
+}
+
 impl<S: Snapshot> ReadCallback for Callback<S> {
     type Response = ReadResponse<S>;
 
@@ -279,6 +293,45 @@ impl<S: Snapshot> WriteCallback for Callback<S> {
     #[inline]
     fn set_result(self, result: Self::Response) {
         self.invoke_with_response(result);
+    }
+}
+
+impl<C> WriteCallback for Vec<C>
+where
+    C: WriteCallback,
+    C::Response: Clone,
+{
+    type Response = C::Response;
+
+    #[inline]
+    fn notify_proposed(&mut self) {
+        for c in self {
+            c.notify_proposed();
+        }
+    }
+
+    #[inline]
+    fn notify_committed(&mut self) {
+        for c in self {
+            c.notify_committed();
+        }
+    }
+
+    #[inline]
+    fn write_trackers(&self) -> Option<&SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn write_trackers_mut(&mut self) -> Option<&mut SmallVec<[TimeTracker; 4]>> {
+        None
+    }
+
+    #[inline]
+    fn set_result(self, result: Self::Response) {
+        for c in self {
+            c.set_result(result.clone());
+        }
     }
 }
 

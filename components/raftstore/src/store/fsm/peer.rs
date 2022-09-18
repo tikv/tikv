@@ -123,6 +123,8 @@ enum DelayReason {
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 
+pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
+
 pub struct DestroyPeerJob {
     pub initialized: bool,
     pub region_id: u64,
@@ -469,7 +471,9 @@ where
         if let Some(batch_req) = self.request.as_ref() {
             // Limit the size of batch request so that it will not exceed
             // raft_entry_max_size after adding header.
-            if self.batch_req_size > (cfg.raft_entry_max_size.0 as f64 * 0.4) as u64 {
+            if self.batch_req_size
+                > (cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as u64
+            {
                 return true;
             }
             if batch_req.get_requests().len() > <E as WriteBatchExt>::WRITE_BATCH_MAX_KEYS {
@@ -896,6 +900,9 @@ where
             .unsafe_recovery_maybe_finish_wait_apply(/* force= */ self.fsm.stopped);
     }
 
+    // func be invoked firstly after assigned leader by BR, wait all leader apply to
+    // last log index func be invoked secondly wait follower apply to last
+    // index, however the second call is broadcast, it may improve in future
     fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
         if self.fsm.peer.snapshot_recovery_state.is_some() {
             warn!(
@@ -909,36 +916,40 @@ where
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
 
-        info!(
-            "snapshot recovery started";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id(),
-            "target_index" => target_index,
-            "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
-
-        );
-
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
-            // self.fsm
-            // .peer
-            // .force_forward_commit_index();
             info!(
                 "snapshot follower recovery started";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
                 "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
-                "leader_id" => self.fsm.peer.leader_id(),
                 "pending_remove" => self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
-            // if it is learner during backup and never vote before, vote is 0, return;
-            // if peer is suppose to removed, return;
-            if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
-                info!("this peer is never vote before, it should be stale");
+
+            // do some sanity check, for follower, leader already apply to last log,
+            // case#1 if it is learner during backup and never vote before, vote is 0
+            // case#2 if peer is suppose to remove
+            // case#3 follower voted (term+1), however, never append logs (log term does not
+            // move forward)
+            if self.fsm.peer.raft_group.raft.vote == 0
+                || self.fsm.peer.pending_remove
+                || self.fsm.peer.term() > self.fsm.peer.raft_group.raft.raft_log.last_term()
+            {
+                info!(
+                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                );
                 return;
             }
+        } else {
+            info!(
+                "snapshot leader wait apply started";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+            );
         }
 
         self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
@@ -1037,7 +1048,11 @@ where
             || self.fsm.peer.is_splitting();
         resp.set_has_pending_admin(pending_admin);
         if let Err(err) = ch.unbounded_send(resp) {
-            warn!("failed to send check admin response"; "err" => ?err)
+            warn!("failed to send check admin response";
+            "err" => ?err,
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+            );
         }
     }
 

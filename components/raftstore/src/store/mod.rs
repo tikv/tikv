@@ -53,7 +53,7 @@ pub use self::{
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
     peer::{
-        Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy,
+        Peer, PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
         SnapshotRecoveryWaitApplySyncer,
     },
     peer_storage::{
