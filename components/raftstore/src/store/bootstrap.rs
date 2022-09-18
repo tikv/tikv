@@ -84,6 +84,7 @@ pub fn prepare_bootstrap_cluster(
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region.get_id()), &state));
     write_initial_apply_state(&mut wb, region.get_id())?;
+    // TODO(5kbpers): move states to raftdb.
     wb.write()?;
     engines.sync_kv()?;
 
@@ -113,6 +114,7 @@ pub fn clear_prepare_bootstrap_cluster(
     // should clear raft initial state too.
     box_try!(wb.delete_cf(CF_RAFT, &keys::region_state_key(region_id)));
     box_try!(wb.delete_cf(CF_RAFT, &keys::apply_state_key(region_id)));
+    // TODO(5kbpers): move states to raftdb.
     wb.write()?;
     engines.sync_kv()?;
     Ok(())

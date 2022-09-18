@@ -1357,6 +1357,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         if !kv_wb.is_empty() {
             kv_wb.write().unwrap();
             self.engines.kv.sync_wal().unwrap();
+            self.engines.kv.flush_cfs(true).unwrap();
         }
         if !raft_wb.is_empty() {
             self.engines.raft.consume(&mut raft_wb, true).unwrap();

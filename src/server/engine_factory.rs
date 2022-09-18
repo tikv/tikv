@@ -32,6 +32,7 @@ struct FactoryInner {
     sst_recovery_sender: Option<Scheduler<String>>,
     root_db: Mutex<Option<RocksEngine>>,
     flush_listener: Option<FlushListener>,
+    disable_kv_wal: bool,
 }
 
 pub struct KvEngineFactoryBuilder {
@@ -53,6 +54,7 @@ impl KvEngineFactoryBuilder {
                 sst_recovery_sender: None,
                 root_db: Mutex::default(),
                 flush_listener: None,
+                disable_kv_wal: config.raft_store.disable_kv_wal,
             },
             compact_event_sender: None,
         }
@@ -177,6 +179,7 @@ impl KvEngineFactory {
         };
         let shared_block_cache = self.inner.block_cache.is_some();
         kv_engine.set_shared_block_cache(shared_block_cache);
+        kv_engine.set_disable_kv_wal(self.inner.disable_kv_wal);
         if let Some(listener) = &self.inner.flush_listener {
             listener.set_engine(kv_engine.clone());
             kv_engine.set_flush_listener(listener.clone());
