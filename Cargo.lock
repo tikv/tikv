@@ -5311,6 +5311,7 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
+ "tempfile",
  "thiserror",
  "tikv",
  "tikv_alloc",

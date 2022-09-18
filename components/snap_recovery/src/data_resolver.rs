@@ -37,6 +37,9 @@ pub enum Error {
 
 /// `DataResolverManager` is the manager that manages the resolve kv data
 /// process.
+/// currently, we do not support retry the data resolver, tidb-operator does not
+/// support apply a restore twice TODO: in future, BR may able to retry if some
+/// accident
 pub struct DataResolverManager {
     /// The engine we are working on
     engine: RocksEngine,
@@ -76,7 +79,6 @@ impl DataResolverManager {
     pub fn start(&self) {
         self.resolve_lock();
         self.resolve_write();
-        self.wait();
     }
 
     fn resolve_lock(&self) {
@@ -130,7 +132,7 @@ impl DataResolverManager {
     }
 
     // join and wait until the thread exit
-    fn wait(&self) {
+    pub fn wait(&self) {
         let mut last_error = None;
         for h in self.workers.lock().unwrap().drain(..) {
             info!("waiting for {}", h.thread().name().unwrap());
@@ -144,7 +146,6 @@ impl DataResolverManager {
         }
     }
 }
-
 /// `LockResolverWorker` is the worker that does the clean lock cf.
 pub struct LockResolverWorker {
     lock_iter: RocksEngineIterator,
@@ -312,6 +313,147 @@ impl WriteResolverWorker {
         Ok(has_more)
     }
 }
-
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use engine_traits::{WriteBatch, WriteBatchExt, ALL_CFS, CF_LOCK};
+    use futures::channel::mpsc;
+    use tempfile::Builder;
+    use txn_types::{Lock, LockType, WriteType};
+
+    use super::*;
+
+    #[test]
+    fn test_data_resolver() {
+        let tmp = Builder::new()
+            .prefix("test_data_resolver")
+            .tempdir()
+            .unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let fake_engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
+
+        // insert some keys, and resolved base on 100
+        // write cf will remain one key
+        let write = vec![
+            // key, start_ts, commit_ts
+            (b"k", 189, 190),
+            (b"k", 122, 123),
+            (b"k", 110, 111),
+            (b"k", 98, 99),
+        ];
+        let default = vec![
+            // key, start_ts
+            (b"k", 189),
+            (b"k", 122),
+            (b"k", 110),
+            (b"k", 98),
+        ];
+        let lock = vec![
+            // key, start_ts, for_update_ts, lock_type, short_value, check
+            (b"k", 100, 0, LockType::Put, false),
+            (b"k", 100, 0, LockType::Delete, false),
+            (b"k", 99, 0, LockType::Put, true),
+            (b"k", 98, 0, LockType::Delete, true),
+        ];
+        let mut kv = vec![];
+        for (key, start_ts, commit_ts) in write {
+            let write = Write::new(WriteType::Put, start_ts.into(), None);
+            kv.push((
+                CF_WRITE,
+                Key::from_raw(key).append_ts(commit_ts.into()),
+                write.as_ref().to_bytes(),
+            ));
+        }
+        for (key, ts) in default {
+            kv.push((
+                CF_DEFAULT,
+                Key::from_raw(key).append_ts(ts.into()),
+                b"v".to_vec(),
+            ));
+        }
+        for (key, ts, for_update_ts, tp, short_value) in lock {
+            let v = if short_value {
+                Some(b"v".to_vec())
+            } else {
+                None
+            };
+            let lock = Lock::new(
+                tp,
+                vec![],
+                ts.into(),
+                0,
+                v,
+                for_update_ts.into(),
+                0,
+                TimeStamp::zero(),
+            );
+            kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
+        }
+        let mut wb = fake_engine.write_batch();
+        for &(cf, ref k, ref v) in &kv {
+            wb.put_cf(cf, &keys::data_key(k.as_encoded()), v).unwrap();
+        }
+        wb.write().unwrap();
+
+        let (tx, _) = mpsc::unbounded();
+        let resolver = DataResolverManager::new(fake_engine.clone(), tx, 100.into());
+        resolver.start();
+        // wait to delete finished
+        resolver.wait();
+
+        // write cf will remain only one key
+        let readopts = IterOptions::new(None, None, false);
+        let mut write_iter = fake_engine
+            .iterator_opt(CF_WRITE, readopts.clone())
+            .unwrap();
+        write_iter.seek_to_first().unwrap();
+        let mut remaining_writes = vec![];
+        while write_iter.valid().unwrap() {
+            let write = WriteRef::parse(write_iter.value()).unwrap().to_owned();
+            let key = write_iter.key().to_vec();
+            write_iter.next().unwrap();
+            remaining_writes.push((key, write));
+        }
+
+        // default cf will remain only one key
+        let mut default_iter = fake_engine
+            .iterator_opt(CF_DEFAULT, readopts.clone())
+            .unwrap();
+        default_iter.seek_to_first().unwrap();
+        let mut remaining_defaults = vec![];
+        while default_iter.valid().unwrap() {
+            let key = default_iter.key().to_vec();
+            let value = default_iter.value().to_vec();
+            default_iter.next().unwrap();
+            remaining_defaults.push((key, value));
+        }
+
+        // lock cf will be clean
+        let mut lock_iter = fake_engine.iterator_opt(CF_LOCK, readopts).unwrap();
+        lock_iter.seek_to_first().unwrap();
+        let mut remaining_locks = vec![];
+        while lock_iter.valid().unwrap() {
+            let lock = Lock::parse(lock_iter.value()).unwrap().to_owned();
+            let key = lock_iter.key().to_vec();
+            lock_iter.next().unwrap();
+            remaining_locks.push((key, lock));
+        }
+
+        // Writes which start_ts >= 100 should be removed.
+        assert_eq!(remaining_writes.len(), 1);
+        let (key, _) = &remaining_writes[0];
+        // So the only write left is the one with start_ts = 99
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            99.into()
+        );
+        // Defaults corresponding to the removed writes should be removed.
+        assert_eq!(remaining_defaults.len(), 1);
+        let (key, _) = &remaining_defaults[0];
+        assert_eq!(
+            Key::from_encoded(key.clone()).decode_ts().unwrap(),
+            98.into()
+        );
+        // All locks should be removed.
+        assert!(remaining_locks.is_empty());
+    }
+}

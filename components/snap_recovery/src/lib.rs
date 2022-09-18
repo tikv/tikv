@@ -9,11 +9,4 @@ pub use init_cluster::{enter_snap_recovery_mode, start_recovery};
 pub use services::RecoveryService;
 
 mod data_resolver;
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+mod region_meta_collector;
