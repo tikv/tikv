@@ -1517,11 +1517,7 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig {
-                // TODO: remove this when raft-engine is updated.
-                enable_log_recycle: false,
-                ..Default::default()
-            },
+            config: RawRaftEngineConfig::default(),
         }
     }
 }
