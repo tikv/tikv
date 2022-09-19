@@ -38,17 +38,12 @@ pub struct LockWaitContextInner {
     #[allow(dead_code)]
     pr: ProcessResult,
     cb: StorageCallback,
-    // result_rx: std::sync::mpsc::Receiver<(
-    //     usize,
-    //     Result<PessimisticLockKeyResult, SharedError>,
-    // )>,
     #[allow(dead_code)]
     lock_wait_token: LockWaitToken,
 }
 
 pub struct LockWaitContextSharedState {
     ctx_inner: Mutex<Option<LockWaitContextInner>>,
-    // remaining_keys: AtomicUsize,
     pub finished: AtomicBool,
 }
 
@@ -61,10 +56,6 @@ impl LockWaitContextSharedState {
 #[derive(Clone)]
 pub struct LockWaitContext<L: LockManager> {
     shared_states: Arc<LockWaitContextSharedState>,
-    // tx: std::sync::mpsc::Sender<(
-    //     usize,
-    //     Result<PessimisticLockKeyResult, SharedError>,
-    // )>,
     #[allow(dead_code)]
     lock_manager: L,
     allow_lock_with_conflict: bool,
@@ -82,23 +73,18 @@ impl<L: LockManager> LockWaitContext<L> {
         for_update_ts: TimeStamp,
         first_batch_pr: ProcessResult,
         cb: StorageCallback,
-        // size: usize,
         allow_lock_with_conflict: bool,
     ) -> Self {
-        // let (tx, rx) = channel();
         let inner = LockWaitContextInner {
             pr: first_batch_pr,
             cb,
-            // result_rx: rx,
             lock_wait_token,
         };
         Self {
             shared_states: Arc::new(LockWaitContextSharedState {
                 ctx_inner: Mutex::new(Some(inner)),
-                // remaining_keys: AtomicUsize::new(size),
                 finished: AtomicBool::new(false),
             }),
-            // tx,
             lock_manager,
             allow_lock_with_conflict,
             start_ts,
@@ -162,19 +148,7 @@ impl<L: LockManager> LockWaitContext<L> {
         // self.lock_manager
         //     .remove_lock_wait(ctx_inner.lock_wait_token);
 
-        // let results_in_pr = match ctx_inner.pr {
-        //     ProcessResult::PessimisticLockRes {
-        //         res: Ok(PessimisticLockResults(ref mut v)),
-        //     } => v,
-        //     _ => unreachable!(),
-        // };
-
         if !self.allow_lock_with_conflict {
-            // assert_eq!(results_in_pr.len(), 1);
-            // assert!(matches!(
-            //     results_in_pr[0],
-            //     PessimisticLockKeyResult::Waiting(None)
-            // ));
             // The result must be an owned error.
             let err = result.unwrap_err().try_into().unwrap();
             ctx_inner.cb.execute(ProcessResult::Failed { err });
@@ -184,31 +158,6 @@ impl<L: LockManager> LockWaitContext<L> {
         // The following code is only valid after implementing the new lock-waiting
         // model.
         unreachable!();
-
-        // while let Ok((index, msg)) = ctx_inner.result_rx.try_recv() {
-        //     assert!(matches!(
-        //         results_in_pr[index],
-        //         PessimisticLockKeyResult::Waiting(None)
-        //     ));
-        //     match msg {
-        //         Ok(lock_key_res) => results_in_pr[index] = lock_key_res,
-        //         Err(e) => results_in_pr[index] =
-        // PessimisticLockKeyResult::Failed(e), // ???     }
-        // }
-        //
-        // if let Some(e) = external_error {
-        //     let e = Arc::new(e);
-        //     for r in results_in_pr {
-        //         if fail_all_on_error || matches!(r,
-        // PessimisticLockKeyResult::Waiting(_)) {             *r =
-        // PessimisticLockKeyResult::Failed(e.clone());         }
-        //     }
-        // }
-        // STORAGE_KEYWISE_PESSIMISTIC_LOCK_HANDLE_DURATION_HISTOGRAM_STATIC
-        //     .finish_request
-        //     .observe(start_time.saturating_elapsed_secs());
-        //
-        // ctx_inner.cb.execute(ctx_inner.pr);
     }
 }
 

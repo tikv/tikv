@@ -488,12 +488,6 @@ impl<L: LockManager> LockWaitQueues<L> {
         // Return the item to be woken up in resumable way.
         woken_up_resumable_entry
     }
-
-    pub fn update_current_lock(&self, _key: &Key, _current_lock: kvrpcpb::LockInfo) {
-        // Implementation of this function is required for supporting continuing
-        // acquiring lock after woken up.
-        unimplemented!()
-    }
 }
 
 #[cfg(test)]
@@ -741,11 +735,6 @@ mod tests {
 
         fn check_start_ts(&self, expected_start_ts: impl Into<TimeStamp>) -> &Self {
             assert_eq!(self.parameters.start_ts, expected_start_ts.into());
-            self
-        }
-
-        fn check_legacy_wake_up_cnt(&self, expected: usize) -> &Self {
-            assert_eq!(self.current_legacy_wakeup_cnt.unwrap(), expected);
             self
         }
     }
