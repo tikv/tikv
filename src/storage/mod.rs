@@ -3234,7 +3234,7 @@ mod tests {
     use super::{
         mvcc::tests::{must_unlocked, must_written},
         test_util::*,
-        txn::commands::FLASHBACK_BATCH_SIZE,
+        txn::FLASHBACK_BATCH_SIZE,
         *,
     };
     use crate::{
@@ -4571,7 +4571,7 @@ mod tests {
                 commands::Prewrite::with_defaults(
                     vec![Mutation::make_put(Key::from_raw(b"k"), b"v@3".to_vec())],
                     b"k".to_vec(),
-                    3.into(),
+                    *ts.incr(),
                 ),
                 expect_ok_callback(tx.clone(), 2),
             )
@@ -4623,7 +4623,7 @@ mod tests {
                     Some(Key::from_raw(b"k")),
                     Context::default(),
                 ),
-                expect_ok_callback(tx, 3),
+                expect_ok_callback(tx, 4),
             )
             .unwrap();
         rx.recv().unwrap();

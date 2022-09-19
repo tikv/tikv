@@ -40,7 +40,7 @@ pub use commit::Commit;
 pub use compare_and_swap::RawCompareAndSwap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 pub use flashback_to_version::FlashbackToVersion;
-pub use flashback_to_version_read_phase::{FlashbackToVersionReadPhase, FLASHBACK_BATCH_SIZE};
+pub use flashback_to_version_read_phase::FlashbackToVersionReadPhase;
 use kvproto::kvrpcpb::*;
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;

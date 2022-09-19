@@ -9,6 +9,7 @@ use crate::storage::{
         commands::{
             Command, CommandExt, FlashbackToVersion, ProcessResult, ReadCommand, TypedCommand,
         },
+        flashback_to_version_read_lock, flashback_to_version_read_write,
         sched_pool::tls_collect_keyread_histogram_vec,
         Error, ErrorInner, Result,
     },
@@ -41,8 +42,6 @@ impl CommandExt for FlashbackToVersionReadPhase {
     }
 }
 
-pub const FLASHBACK_BATCH_SIZE: usize = 256 + 1 /* To store the next key for multiple batches */;
-
 /// FlashbackToVersion contains two phases:
 ///   1. Read phase:
 ///     - Scan all locks to delete them all later.
@@ -60,55 +59,24 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
             }));
         }
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
-        // TODO: maybe we should resolve all locks before starting a flashback.
         // Scan the locks.
-        let mut key_locks = Vec::with_capacity(0);
-        let mut has_remain_locks = false;
-        if self.next_lock_key.is_some() {
-            let key_locks_result = reader.scan_locks(
-                self.next_lock_key.as_ref(),
-                self.end_key.as_ref(),
-                // To flashback `CF_LOCK`, we need to delete all locks.
-                |_| true,
-                FLASHBACK_BATCH_SIZE,
-            );
-            statistics.add(&reader.statistics);
-            (key_locks, has_remain_locks) = key_locks_result?;
-        }
+        let (key_locks, has_remain_locks) = flashback_to_version_read_lock(
+            &mut reader,
+            &self.next_lock_key,
+            &self.end_key,
+            statistics,
+        )?;
         // Scan the writes.
-        let mut key_old_writes = Vec::with_capacity(0);
-        let mut has_remain_writes = false;
-        // The batch is not full, we can still read.
-        if self.next_write_key.is_some() && key_locks.len() < FLASHBACK_BATCH_SIZE {
-            // To flashback the data, we need to get all the latest keys first by scanning
-            // every unique key in `CF_WRITE` and to get its corresponding old MVCC write
-            // record if exists.
-            let key_ts_old_writes;
-            (key_ts_old_writes, has_remain_writes) = reader.scan_writes(
-                self.next_write_key.as_ref(),
-                self.end_key.as_ref(),
-                Some(self.version),
-                // No need to find an old version for the key if its latest `commit_ts` is smaller
-                // than or equal to the version.
-                |key| key.decode_ts().unwrap_or(TimeStamp::zero()) > self.version,
-                FLASHBACK_BATCH_SIZE - key_locks.len(),
-            )?;
-            statistics.add(&reader.statistics);
-            // Check the latest commit ts to make sure there is no commit change during the
-            // flashback, otherwise, we need to abort the flashback.
-            for (key, commit_ts, old_write) in key_ts_old_writes {
-                if commit_ts >= self.commit_ts {
-                    return Err(Error::from(ErrorInner::InvalidTxnTso {
-                        start_ts: self.start_ts,
-                        commit_ts: self.commit_ts,
-                    }));
-                }
-                key_old_writes.push((key, old_write));
-            }
-        } else if self.next_write_key.is_some() && key_locks.len() >= FLASHBACK_BATCH_SIZE {
-            // The batch is full, we need to read the writes in the next batch later.
-            has_remain_writes = true;
-        }
+        let (mut key_old_writes, has_remain_writes) = flashback_to_version_read_write(
+            &mut reader,
+            key_locks.len(),
+            &self.next_write_key,
+            &self.end_key,
+            self.version,
+            self.start_ts,
+            self.commit_ts,
+            statistics,
+        )?;
         tls_collect_keyread_histogram_vec(
             self.tag().get_str(),
             (key_locks.len() + key_old_writes.len()) as f64,
