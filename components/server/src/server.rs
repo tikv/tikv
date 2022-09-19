@@ -1404,6 +1404,10 @@ where
             info!("disk space checker not enabled");
             return;
         }
+        let enable_raft_engine = self.config.raft_engine.enable;
+        let raft_db_path = self.config.raft_store.raftdb_path.clone();
+        let seperate_raft_db = (!enable_raft_engine) && (!raft_db_path.is_empty());
+        let raftdb_almost_full_percent = self.config.raft_store.raftdb_almost_full_percent;
 
         let almost_full_threshold = reserve_space;
         let already_full_threshold = reserve_space / 2;
@@ -1433,16 +1437,13 @@ where
                     .get_engine_size()
                     .expect("get raft engine size");
 
-                let disabled_raft_engine = self.config.raft_engine.enable;
-                let raft_db_path = self.config.raft_store.raftdb_path;
-                let seperate_raft_db = disabled_raft_engine && (raft_db_path.len() != 0);
                 let mut raftdb_disk_status = disk::DiskUsage::Normal;
                 if seperate_raft_db {
                     let raftdb_disk_stats = match fs2::statvfs(&raft_db_path) {
                         Err(e) => {
                             error!(
                                 "get disk stat for raftdb failed";
-                                "raftdb path" => raft_db_path.to_str(),
+                                "raftdb path" => raft_db_path.clone(),
                                 "err" => ?e
                             );
                             return;
@@ -1450,8 +1451,6 @@ where
                         Ok(stats) => stats,
                     };
                     let raftdb_disk_cap = raftdb_disk_stats.total_space();
-                    let raftdb_almost_full_percent =
-                        self.config.raft_store.raftdb_almost_full_percent;
                     let mut raftdb_remain =
                         raftdb_disk_cap.checked_sub(raft_size).unwrap_or_default();
                     raftdb_remain = cmp::min(raftdb_remain, raftdb_disk_stats.available_space());
@@ -1467,7 +1466,6 @@ where
                         disk::DiskUsage::Normal
                     };
                 }
-
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
@@ -1475,12 +1473,11 @@ where
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 
-                let mut used_size = 0;
-                if !seperate_raft_db {
-                    used_size = snap_size + kv_size + raft_size + placeholder_size;
+                let used_size = if !seperate_raft_db {
+                    snap_size + kv_size + raft_size + placeholder_size
                 } else {
-                    used_size = snap_size + kv_size + placeholder_size;
-                }
+                    snap_size + kv_size + placeholder_size
+                };
                 let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
                     disk_cap
                 } else {
@@ -1507,9 +1504,12 @@ where
                 };
                 if prev_disk_status != cur_disk_status {
                     warn!(
-                        "disk usage {:?}->{:?}, available={},snap={},kv={},raft={},capacity={}",
+                        "disk usage {:?}->{:?} (raftdb usage: {:?}, kvdb usage: {:?}), seperate raftdb={}, kv available={},snap={},kv={},raft={},capacity={}",
                         prev_disk_status,
                         cur_disk_status,
+                        raftdb_disk_status,
+                        cur_kv_disk_status,
+                        seperate_raft_db,
                         available,
                         snap_size,
                         kv_size,
