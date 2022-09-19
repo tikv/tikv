@@ -10,7 +10,7 @@ use file_system::{set_io_type, IoType};
 use futures::{channel::oneshot, future::TryFutureExt};
 use kvproto::kvrpcpb::CommandPri;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
-use prometheus::IntGauge;
+use prometheus::{IntCounter, IntGauge};
 use thiserror::Error;
 use tikv_util::{
     sys::{cpu_time::ProcessStat, SysQuota},
@@ -314,7 +314,7 @@ impl From<Vec<FuturePool>> for ReadPool {
 }
 
 struct ReadPoolCpuTimeTracker {
-    pool_name: String,
+    yatp_total_time_elapsed: IntCounter,
     // the total time duration of each thread busy with handling tasks. This time also includes
     // the time when the threads are off-cpu, so it might be much higher than the actual cpu time.
     prev_total_task_handling_time_us: u64,
@@ -323,13 +323,14 @@ struct ReadPoolCpuTimeTracker {
 }
 
 impl ReadPoolCpuTimeTracker {
-    fn new(pool_name: String) -> Self {
+    fn new(pool_name: &str) -> Self {
         let prev_check_time = Instant::now_coarse();
-        let prev_total_task_handling_time_us = MULTILEVEL_LEVEL_ELAPSED
-            .with_label_values(&[&pool_name, "total"])
-            .get();
+        let yatp_total_time_elapsed = MULTILEVEL_LEVEL_ELAPSED
+            .get_metric_with_label_values(&[pool_name, "total"])
+            .unwrap();
+        let prev_total_task_handling_time_us = yatp_total_time_elapsed.get();
         Self {
-            pool_name,
+            yatp_total_time_elapsed,
             prev_total_task_handling_time_us,
             prev_check_time,
             prev_cpu_per_sec: 0.0,
@@ -343,9 +344,7 @@ impl ReadPoolCpuTimeTracker {
         if duration < Duration::from_millis(100) {
             return self.prev_cpu_per_sec;
         }
-        let total_cpu_time = MULTILEVEL_LEVEL_ELAPSED
-            .with_label_values(&[&self.pool_name, "total"])
-            .get();
+        let total_cpu_time = self.yatp_total_time_elapsed.get();
         let total_cpu_per_sec = (total_cpu_time - self.prev_total_task_handling_time_us) as f64
             / duration.as_micros() as f64;
         self.prev_total_task_handling_time_us = total_cpu_time;
@@ -495,7 +494,7 @@ impl ReadPoolConfigManager {
             interval: READ_POOL_THREAD_CHECK_DURATION,
             sender,
             handle,
-            cpu_time_tracker: ReadPoolCpuTimeTracker::new(get_unified_read_pool_name()),
+            cpu_time_tracker: ReadPoolCpuTimeTracker::new(&get_unified_read_pool_name()),
             process_stats: ProcessStat::cur_proc_stat().unwrap(),
             core_thread_count: thread_count,
             cur_thread_count: thread_count,
