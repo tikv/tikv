@@ -1,6 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    error::Error as StdError,
+    result,
     sync::mpsc::{sync_channel, SyncSender},
     thread::Builder,
     time::Instant,
@@ -18,8 +20,7 @@ use futures::{
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
-    ClientStreamingSink, Error as gRPCError, RequestStream, RpcContext, ServerStreamingSink,
-    UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
 use raftstore::{
@@ -31,11 +32,28 @@ use raftstore::{
         SnapshotRecoveryWaitApplySyncer,
     },
 };
+use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
 
 use crate::{data_resolver::DataResolverManager, region_meta_collector::RegionMetaCollector};
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
+
+#[allow(dead_code)]
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument {0:?}")]
+    InvalidArgument(String),
+
+    #[error("{0:?}")]
+    Grpc(#[from] grpcio::Error),
+
+    #[error("Engine {0:?}")]
+    Engine(#[from] engine_traits::Error),
+
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+}
 /// Service handles the recovery messages from backup restore.
 #[derive(Clone)]
 pub struct RecoveryService<ER: RaftEngine> {
@@ -183,7 +201,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             sink.close().await?;
             Ok(())
         }
-        .map(|res: std::result::Result<(), gRPCError>| match res {
+        .map(|res: Result<()>| match res {
             Ok(_) => {
                 info!("collect region meta done");
             }
@@ -219,10 +237,13 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             for &region_id in &leaders {
                 if let Err(e) = raft_router.send_casual_msg(region_id, CasualMessage::Campaign) {
                     // TODO: retry may necessay
-                    warn!("region {} fails to campaign: {}", region_id, e);
+                    warn!("region fails to campaign: ";
+                    "region_id" => region_id, 
+                    "err" => ?e);
                     continue;
                 } else {
-                    info!("region {} starts to campaign", region_id);
+                    info!("region starts to campaign";
+                    "region_id" => region_id);
                 }
 
                 let (tx, rx) = sync_channel(1);
@@ -242,10 +263,18 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             // leader is campaign and be ensured as leader
             for (_rid, rx) in leaders.iter().zip(rxs) {
                 if let Some(rx) = rx {
-                    let _ = rx.recv().unwrap();
+                    match rx.recv() {
+                        Ok(_id) => {
+                            info!("leader is assigned for region");
+                        }
+                        Err(e) => {
+                            error!("check leader failed"; "error" => ?e);
+                        }
+                    }
                 }
             }
-            info!("all region state adjustments are done");
+
+            info!("all region leader assigned done");
 
             let now = Instant::now();
             // wait apply to the last log
@@ -266,18 +295,31 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 rx_apply.push(Some(rx));
             }
 
-            // leader is campaign and be ensured as leader
+            // leader apply to last log
             for (_rid, rx) in leaders.iter().zip(rx_apply) {
                 if let Some(rx) = rx {
-                    let _ = rx.recv().unwrap();
+                    match rx.recv() {
+                        Ok(region_id) => {
+                            info!("leader apply to last log"; "error" => region_id);
+                        }
+                        Err(e) => {
+                            error!("leader failed to apply to last log"; "error" => ?e);
+                        }
+                    }
                 }
             }
+
             info!(
-                "all leader region apply to last log takes {}",
-                now.elapsed().as_secs()
+                "all region leader apply to last log";
+                "spent_time" => now.elapsed().as_secs(),
             );
+
             let mut resp = RecoverRegionResponse::default();
-            resp.set_store_id(store_id.unwrap());
+            match store_id {
+                Ok(id) => resp.set_store_id(id),
+                Err(e) => error!("failed to get store id"; "error" => ?e),
+            };
+
             let _ = sink.success(resp).await;
         };
 
@@ -297,10 +339,17 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             let now = Instant::now();
             let (tx, rx) = sync_channel(1);
             RecoveryService::wait_apply_last(router, tx.clone());
-            let _ = rx.recv().unwrap();
+            match rx.recv() {
+                Ok(id) => {
+                    info!("follower apply to last log"; "error" => id);
+                }
+                Err(e) => {
+                    error!("follower failed to apply to last log"; "error" => ?e);
+                }
+            }
             info!(
-                "all region apply to last log takes {}",
-                now.elapsed().as_secs()
+                "all region apply to last log";
+                "spent_time" => now.elapsed().as_secs(),
             );
             let resp = WaitApplyResponse::default();
             let _ = sink.success(resp).await;
@@ -325,18 +374,18 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         let db = self.engines.kv.clone();
         let store_id = self.get_store_id();
         let send_task = async move {
-            let id = store_id.expect("failed to get store id");
+            let id = store_id?;
             let mut s = rx.map(|mut resp| {
                 // TODO: a metric need here
                 resp.set_store_id(id);
                 Ok((resp, WriteFlags::default()))
             });
             sink.send_all(&mut s).await?;
-            compact(db.clone()).expect("compact kvdb failure");
+            compact(db.clone())?;
             sink.close().await?;
             Ok(())
         }
-        .map(|res: std::result::Result<(), gRPCError>| match res {
+        .map(|res: Result<()>| match res {
             Ok(_) => {
                 info!("resolve kv data done");
             }

@@ -136,10 +136,10 @@ impl<ER: RaftEngine> CollectWorker<ER> {
                 continue;
             }
 
-            let _ = region_state.raft_local_state.as_ref().ok_or_else(|| {
+            region_state.raft_local_state.as_ref().ok_or_else(|| {
                 Error::Other(format!("No RaftLocalState found for region {}", region_id).into())
             })?;
-            let _ = region_state.raft_apply_state.as_ref().ok_or_else(|| {
+            region_state.raft_apply_state.as_ref().ok_or_else(|| {
                 Error::Other(format!("No RaftApplyState found for region {}", region_id).into())
             })?;
 
@@ -147,7 +147,8 @@ impl<ER: RaftEngine> CollectWorker<ER> {
             let response = region_state.to_region_meta();
 
             if let Err(e) = self.tx.unbounded_send(response) {
-                warn!("send the cleanup lock key failure {}", e);
+                warn!("send the region meta failure";
+                "err" => ?e);
                 if e.is_disconnected() {
                     warn!("channel is disconnected.");
                     return Ok(false);

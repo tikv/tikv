@@ -31,6 +31,9 @@ pub enum Error {
     #[error("Not Found {0:?}")]
     NotFound(String),
 
+    #[error("Engine {0:?}")]
+    Engine(#[from] engine_traits::Error),
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
 }
@@ -122,7 +125,10 @@ impl DataResolverManager {
                 tikv_util::thread_group::set_properties(props);
                 tikv_alloc::add_thread_memory_accessor();
 
-                worker.resolve_write(&mut wb);
+                if let Err(e) = worker.resolve_write(&mut wb) {
+                    error!("failed to resolve write cf"; 
+                    "error" => ?e);
+                }
 
                 tikv_alloc::remove_thread_memory_accessor();
             })
@@ -172,12 +178,7 @@ impl LockResolverWorker {
         info!("clean up lock cf. delete key count {}", key_count);
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        if let Err(e) = wb.write_opt(&write_opts) {
-            panic!(
-                "snapshot recovery, fail to write to disk while delete lock, the error is {:?}",
-                e,
-            );
-        }
+        box_try!(wb.write_opt(&write_opts));
         let mut response = ResolveKvDataResponse::default();
 
         response.set_resolved_key_count(key_count);
@@ -227,16 +228,16 @@ impl WriteResolverWorker {
             tx,
         }
     }
-    pub fn resolve_write(&mut self, wb: &mut RocksWriteBatchVec) {
+    pub fn resolve_write(&mut self, wb: &mut RocksWriteBatchVec) -> Result<()> {
         let now = Instant::now();
-        while self
-            .batch_resolve_write(wb)
-            .expect("resolve kv data failed when deleting in an invalid cf")
-        {}
-        info!("resolve write takes {}", now.elapsed().as_secs());
+        while self.batch_resolve_write(wb)? {}
+        info!("resolve write";
+        "spent_time" => now.elapsed().as_secs(),
+        );
+        Ok(())
     }
 
-    fn next_batch(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
+    fn next_write(&mut self) -> Result<Option<(Vec<u8>, Write)>> {
         if self.write_iter.valid().unwrap() {
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let key = self.write_iter.key().to_vec();
@@ -251,7 +252,7 @@ impl WriteResolverWorker {
         let mut has_more = true;
 
         for _ in 0..self.batch_size_limit {
-            if let Some((key, write)) = self.next_batch()? {
+            if let Some((key, write)) = self.next_write()? {
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
                 if commit_ts > self.resolved_ts {
                     writes.push((key, write));
@@ -281,22 +282,18 @@ impl WriteResolverWorker {
             box_try!(wb.delete_cf(CF_WRITE, &key));
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
 
-            if write.start_ts > max_ts {
-                max_ts = write.start_ts;
+            let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
+            if commit_ts > max_ts {
+                max_ts = commit_ts;
             }
         }
         info!(
-            "flush delete in write/default cf. delete key count {}",
-            batch.len()
+            "flush delete in write/default cf.";
+            "delete_key_count" => batch.len(),
         );
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        if let Err(e) = wb.write_opt(&write_opts) {
-            panic!(
-                "snapshot recovery, fail to write to disk while delete data, the error is {:?}",
-                e,
-            );
-        }
+        wb.write_opt(&write_opts)?;
 
         let mut response = ResolveKvDataResponse::default();
 

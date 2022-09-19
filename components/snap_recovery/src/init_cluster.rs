@@ -89,9 +89,6 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // disable resolve ts during the recovery
     config.resolved_ts.enable = false;
 
-    config.server.grpc_keepalive_timeout = ReadableDuration::secs(300);
-    config.server.grpc_keepalive_time = ReadableDuration::secs(90);
-
     // Disable region split during recovering.
     config.coprocessor.region_max_size = Some(ReadableSize::gb(MAX_REGION_SIZE));
     config.coprocessor.region_split_size = ReadableSize::gb(MAX_REGION_SIZE);
