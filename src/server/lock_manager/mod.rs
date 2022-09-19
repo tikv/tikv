@@ -91,7 +91,6 @@ impl LockManager {
             detector_scheduler: DetectorScheduler::new(detector_worker.scheduler()),
             detector_worker: Some(detector_worker),
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            // detected: detected.into(),
             token_allocator: Arc::new(AtomicU64::new(0)),
             pipelined: Arc::new(AtomicBool::new(cfg.pipelined)),
             in_memory: Arc::new(AtomicBool::new(cfg.in_memory)),
@@ -231,16 +230,6 @@ impl LockManager {
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
         }
     }
-
-    // fn add_to_detected(&self, token: LockWaitToken) {
-    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
-    //     detected.insert(token);
-    // }
-    //
-    // fn remove_from_detected(&self, token: LockWaitToken) -> bool {
-    //     let mut detected = self.detected[detected_slot_idx(token)].lock();
-    //     detected.remove(&token)
-    // }
 }
 
 impl LockManagerTrait for LockManager {
@@ -276,7 +265,6 @@ impl LockManagerTrait for LockManager {
         // If it is the first lock the transaction tries to lock, it won't cause
         // deadlock.
         if !is_first_lock {
-            // self.add_to_detected(token);
             self.detector_scheduler
                 .detect(start_ts, wait_info.clone(), diag_ctx.clone()); // TODO: Try to avoid cloning.
         }
@@ -305,12 +293,6 @@ impl LockManagerTrait for LockManager {
         if self.has_waiter() {
             self.waiter_mgr_scheduler.remove_lock_wait(token);
         }
-        // If a pessimistic transaction is committed or rolled back and it once
-        // sent requests to detect deadlock, clean up its wait-for
-        // entries in the deadlock detector.
-        // if is_pessimistic_txn && self.remove_from_detected(token) {
-        //     self.detector_scheduler.clean_up(token);
-        // }
     }
 
     fn has_waiter(&self) -> bool {
@@ -411,7 +393,7 @@ mod tests {
         );
         assert!(!lock_mgr.has_waiter());
 
-        // Wake up
+        // Removal
         let (waiter_ts, lock) = (
             10.into(),
             LockDigest {
@@ -419,7 +401,7 @@ mod tests {
                 hash: 20,
             },
         );
-        let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
+        let (waiter, _lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
         let token = lock_mgr.allocate_token();
         lock_mgr.wait_for(
             token,
@@ -434,14 +416,18 @@ mod tests {
             DiagnosticContext::default(),
         );
         assert!(lock_mgr.has_waiter());
-        // lock_mgr.wake_up(lock.ts, vec![lock.hash], 30.into(), false);
         lock_mgr.remove_lock_wait(token);
+        assert!(!lock_mgr.has_waiter());
+        // The waiter will be directly dropped.
+        // In normal cases, when `remove_lock_wait` is invoked, the request's callback
+        // must be called somewhere else.
         assert_elapsed(
-            || expect_write_conflict(block_on(f).unwrap(), waiter_ts, lock_info, 30.into()),
+            || {
+                block_on(f).unwrap_err();
+            },
             0,
             500,
         );
-        assert!(!lock_mgr.has_waiter());
 
         // Deadlock
         let (waiter1, lock_info1, f1) = new_test_waiter(10.into(), 20.into(), 20);
@@ -513,27 +499,11 @@ mod tests {
                 DiagnosticContext::default(),
             );
             assert!(lock_mgr.has_waiter());
-            // assert_eq!(lock_mgr.remove_from_detected(token), !is_first_lock);
             lock_mgr.remove_lock_wait(token);
             // block_on(f).unwrap();
             f.try_recv().unwrap_err();
         }
         assert!(!lock_mgr.has_waiter());
-
-        // // If key_hashes is empty, no wake up.
-        // let prev_wake_up = TASK_COUNTER_METRICS.wake_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        // assert_eq!(TASK_COUNTER_METRICS.wake_up.get(), prev_wake_up);
-        //
-        // // If it's non-pessimistic-txn, no clean up.
-        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), false);
-        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
-        //
-        // // If the txn doesn't wait for locks, no clean up.
-        // let prev_clean_up = TASK_COUNTER_METRICS.clean_up.get();
-        // lock_mgr.wake_up(10.into(), vec![], 10.into(), true);
-        // assert_eq!(TASK_COUNTER_METRICS.clean_up.get(), prev_clean_up);
 
         // If timeout is none, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
