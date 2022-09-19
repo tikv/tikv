@@ -822,19 +822,19 @@ where
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
             let keys = vec![start_key.clone(), end_key.clone()];
             let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
-            let count = regions.len();
 
+            let count = regions.len();
             let mut region_modifies = HashMap::default();
-            for i in 0..count {
+            for (i, region) in regions.into_iter().enumerate() {
                 let range_start = if i == 0 {
                     start_key.clone()
                 } else {
-                    Key::from_raw(regions[i].get_start_key())
+                    Key::from_raw(region.get_start_key())
                 };
                 let range_end = if i == count - 1 {
                     end_key.clone()
                 } else {
-                    Key::from_raw(regions[i].get_end_key())
+                    Key::from_raw(region.get_end_key())
                 };
 
                 let mut modifies = Vec::new();
@@ -846,7 +846,7 @@ where
                         false,
                     ));
                 }
-                region_modifies.insert(regions[i].id, modifies);
+                region_modifies.insert(region.id, modifies);
             }
 
             self.engine.modify_on_kv_engine(region_modifies)?;
