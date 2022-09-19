@@ -350,8 +350,8 @@ const APPLY_STATE_KEY: &[u8] = &[0x04];
 const SEQNO_RELATION_KEY: &[u8] = &[0x05];
 const RECOVER_FROM_RAFT_DB_KEY: &[u8] = &[0x06];
 const SNAPSHOT_APPLY_STATE_KEY: &[u8] = &[0x07];
-const FLUSHED_SEQNO_KEY: &[u8] = &[0x08];
-const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x09];
+const SNAPSHOT_REGION_STATE_KEY: &[u8] = &[0x08];
+const FLUSHED_SEQNO_KEY: &[u8] = &[0x09];
 
 fn raft_seqno_relation_key(seqno: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(SEQNO_RELATION_KEY.len() + 8);

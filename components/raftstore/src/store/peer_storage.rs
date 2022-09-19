@@ -290,6 +290,7 @@ where
         region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
         raftlog_fetch_scheduler: Scheduler<RaftlogFetchTask>,
         peer_id: u64,
+        save_states_to_raft_db: bool,
         tag: String,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
@@ -311,7 +312,7 @@ where
         )?;
 
         Ok(PeerStorage {
-            save_states_to_raft_db: engines.raft.recover_from_raft_db().unwrap().is_some(),
+            save_states_to_raft_db,
             engines,
             peer_id,
             region: region.clone(),
@@ -383,17 +384,19 @@ where
     }
 
     #[inline]
-    pub fn save_apply_state_to(
-        &self,
-        kv_wb: &mut impl Mutable,
-        raft_wb: &mut impl RaftLogBatch,
-    ) -> Result<()> {
+    pub fn save_apply_state_to(&self, kv_wb: &mut impl Mutable) -> Result<()> {
         kv_wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
             self.apply_state(),
         )?;
         info!("save apply state for snapshot"; "region_id" => self.region.get_id(), "apply_state" => ?self.apply_state());
+        Ok(())
+    }
+
+    #[inline]
+    pub fn save_apply_state_to_raft(&self, raft_wb: &mut impl RaftLogBatch) -> Result<()> {
+        info!("save apply state for snapshot to raftdb"; "region_id" => self.region.get_id(), "apply_state" => ?self.apply_state());
         raft_wb.put_apply_state(self.region.get_id(), self.apply_state())?;
         Ok(())
     }
@@ -910,10 +913,10 @@ where
                 ready.snapshot().get_metadata().get_index(),
                 write_task.extra_write.v1_mut().unwrap(),
             )?;
-            self.save_apply_state_to(
-                write_task.extra_write.v1_mut().unwrap(),
-                write_task.raft_wb.as_mut().unwrap(),
-            )?;
+            self.save_apply_state_to(write_task.extra_write.v1_mut().unwrap())?;
+            if self.save_states_to_raft_db {
+                self.save_apply_state_to_raft(write_task.raft_wb.as_mut().unwrap())?;
+            }
         }
 
         if !write_task.has_data() {
@@ -1241,6 +1244,7 @@ pub mod tests {
             region_scheduler,
             raftlog_fetch_scheduler,
             1,
+            false,
             "".to_owned(),
         )
         .unwrap()
@@ -1274,8 +1278,7 @@ pub mod tests {
         if write_task.raft_wb.is_none() {
             write_task.raft_wb = Some(store.engines.raft.log_batch(64));
         }
-        let raft_wb = write_task.raft_wb.as_mut().unwrap();
-        store.save_apply_state_to(kv_wb, raft_wb).unwrap();
+        store.save_apply_state_to(kv_wb).unwrap();
         write_task.raft_state = Some(store.raft_state().clone());
         write_to_db_for_test(&store.engines, write_task);
         store
@@ -1570,8 +1573,7 @@ pub mod tests {
             }
             if res.is_ok() {
                 let mut kv_wb = store.engines.kv.write_batch();
-                let mut raft_wb = store.engines.raft.log_batch(0);
-                store.save_apply_state_to(&mut kv_wb, &mut raft_wb).unwrap();
+                store.save_apply_state_to(&mut kv_wb).unwrap();
                 kv_wb.write().unwrap();
             }
         }
@@ -1695,14 +1697,12 @@ pub mod tests {
         if write_task.raft_wb.is_none() {
             write_task.raft_wb = Some(s.engines.raft.log_batch(64));
         }
-        let raft_wb = write_task.raft_wb.as_mut().unwrap();
-        s.save_apply_state_to(kv_wb, raft_wb).unwrap();
+        s.save_apply_state_to(kv_wb).unwrap();
         write_to_db_for_test(&s.engines, write_task);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, s.entry_storage.apply_state_mut(), 7, term).unwrap();
         let mut kv_wb = s.engines.kv.write_batch();
-        let mut raft_wb = s.engines.raft.log_batch(64);
-        s.save_apply_state_to(&mut kv_wb, &mut raft_wb).unwrap();
+        s.save_apply_state_to(&mut kv_wb).unwrap();
         kv_wb.write().unwrap();
 
         let (tx, rx) = channel();
@@ -2023,6 +2023,7 @@ pub mod tests {
                 region_sched.clone(),
                 raftlog_fetch_sched.clone(),
                 0,
+                false,
                 "".to_owned(),
             )
         };

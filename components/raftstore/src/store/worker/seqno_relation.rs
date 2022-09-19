@@ -140,7 +140,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
             if let Some(region_state) = self.handle_exec_res(
                 res.region_id,
                 seqno.number,
-                res.exec_res.iter(),
+                &res.exec_res,
                 &mut sync_relations,
             ) {
                 info!("region state changed"; "region_id" => res.region_id, "region_state" => ?region_state, "apply_state" => ?res.apply_state);
@@ -234,7 +234,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         &mut self,
         region_id: u64,
         seqno: u64,
-        exec_res: impl Iterator<Item = &'a ExecResult<EK::Snapshot>>,
+        exec_res: &[ExecResult<EK::Snapshot>],
         sync_relations: &mut HashMap<u64, RegionSequenceNumberRelation>,
     ) -> Option<RegionLocalState> {
         let mut region_state = None;

@@ -521,6 +521,7 @@ impl<ER: RaftEngine> Debugger<ER> {
                 fake_snap_worker.scheduler(),
                 fake_raftlog_fetch_worker.scheduler(),
                 peer_id,
+                false,
                 tag,
             ));
 

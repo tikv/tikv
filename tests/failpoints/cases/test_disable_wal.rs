@@ -88,7 +88,7 @@ fn test_disable_wal_recovery_basic() {
     cluster.run_node(1).unwrap();
     fail::remove(schedule_merge_fp);
     // split to trigger rollback.
-    // cluster.must_split(&cluster.get_region(b"k3"), b"k4");
+    cluster.must_split(&cluster.get_region(b"k3"), b"k4");
     cluster.must_put(b"k1", b"v1");
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();

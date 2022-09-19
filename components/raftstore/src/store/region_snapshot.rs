@@ -390,6 +390,7 @@ mod tests {
             region_sched,
             raftlog_fetch_sched,
             0,
+            false,
             "".to_owned(),
         )
         .unwrap()

@@ -944,6 +944,7 @@ where
             region_scheduler,
             raftlog_fetch_scheduler,
             peer.get_id(),
+            cfg.disable_kv_wal,
             tag.clone(),
         )?;
 
