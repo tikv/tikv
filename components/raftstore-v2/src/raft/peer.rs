@@ -5,13 +5,16 @@ use std::{collections::VecDeque, mem, sync::Arc};
 use engine_traits::{KvEngine, OpenOptions, RaftEngine, TabletFactory};
 use kvproto::{metapb, raft_serverpb::RegionLocalState};
 use raft::{RawNode, StateRole, INVALID_ID};
-use raftstore::store::{util::find_peer, Config, EntryStorage, RaftlogFetchTask, WriteRouter};
+use raftstore::store::{
+    util::find_peer, Config, EntryStorage, ProposalQueue, RaftlogFetchTask, WriteRouter,
+};
 use slog::{o, Logger};
 use tikv_util::{box_err, config::ReadableSize, worker::Scheduler};
 
 use super::storage::Storage;
 use crate::{
-    operation::{AsyncWriter, DestroyProgress},
+    operation::{AsyncWriter, DestroyProgress, SimpleWriteEncoder},
+    router::CmdResChannel,
     tablet::{self, CachedTablet},
     Result,
 };
@@ -24,9 +27,19 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// peer list, for example, an isolated peer may need to send/receive
     /// messages with unknown peers after recovery.
     peer_cache: Vec<metapb::Peer>,
-    pub(crate) async_writer: AsyncWriter<EK, ER>,
-    destroy_progress: DestroyProgress,
+
+    /// Encoder for batching proposals and encoding them in a more efficient way
+    /// than protobuf.
+    raw_write_encoder: Option<SimpleWriteEncoder>,
+    proposals: ProposalQueue<Vec<CmdResChannel>>,
+
+    /// Set to true if any side effect needs to be handled.
     has_ready: bool,
+    /// Writer for persisting side effects asynchronously.
+    pub(crate) async_writer: AsyncWriter<EK, ER>,
+
+    destroy_progress: DestroyProgress,
+
     pub(crate) logger: Logger,
 }
 
@@ -82,13 +95,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None
         };
 
+        let raft_group = RawNode::new(&raft_cfg, storage, &logger)?;
         let mut peer = Peer {
-            raft_group: RawNode::new(&raft_cfg, storage, &logger)?,
             tablet: CachedTablet::new(tablet),
             peer_cache: vec![],
+            raw_write_encoder: None,
+            proposals: ProposalQueue::new(region_id, raft_group.raft.id),
             async_writer: AsyncWriter::new(region_id, peer_id),
             has_ready: false,
             destroy_progress: DestroyProgress::None,
+            raft_group,
             logger,
         };
 
@@ -253,5 +269,25 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn destroy_progress_mut(&mut self) -> &mut DestroyProgress {
         &mut self.destroy_progress
+    }
+
+    #[inline]
+    pub fn raw_write_encoder_mut(&mut self) -> &mut Option<SimpleWriteEncoder> {
+        &mut self.raw_write_encoder
+    }
+
+    #[inline]
+    pub fn raw_write_encoder(&self) -> &Option<SimpleWriteEncoder> {
+        &self.raw_write_encoder
+    }
+
+    #[inline]
+    pub fn applied_to_current_term(&self) -> bool {
+        self.storage().entry_storage().applied_term() == self.term()
+    }
+
+    #[inline]
+    pub fn proposals_mut(&mut self) -> &mut ProposalQueue<Vec<CmdResChannel>> {
+        &mut self.proposals
     }
 }
