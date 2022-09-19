@@ -28,9 +28,9 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind, RaftEngine,
-    RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch, ALL_CFS,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
+    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
+    ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use kvproto::{
@@ -410,6 +410,17 @@ where
     apply_time: LocalHistogram,
 
     key_buffer: Vec<u8>,
+
+    // Whether to disable WAL.
+    disable_wal: bool,
+
+    /// A general apply progress for a delegate is:
+    /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
+    /// Sometimes an `ApplyRes` is created with an applied_index, but data
+    /// before the applied index is still not written to kvdb. Let's call the
+    /// `ApplyRes` uncommitted. Data will finally be written to kvdb in
+    /// `flush`.
+    uncommitted_res_count: usize,
 }
 
 impl<EK> ApplyContext<EK>
@@ -463,6 +474,8 @@ where
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
+            disable_wal: false,
+            uncommitted_res_count: 0,
         }
     }
 
@@ -491,7 +504,9 @@ where
     fn commit_opt(&mut self, delegate: &mut ApplyDelegate<EK>, persistent: bool) {
         delegate.update_metrics(self);
         if persistent {
-            self.write_to_db();
+            if let (_, Some(seqno)) = self.write_to_db() {
+                delegate.unfinished_write_seqno.push(seqno);
+            }
             self.prepare_for(delegate);
             delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
         }
@@ -501,8 +516,9 @@ where
 
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
-    pub fn write_to_db(&mut self) -> bool {
-        let need_sync = self.sync_log_hint;
+    pub fn write_to_db(&mut self) -> (bool, Option<SequenceNumber>) {
+        let need_sync = self.sync_log_hint && !self.disable_wal;
+        let mut seqno = None;
         // There may be put and delete requests after ingest request in the same fsm.
         // To guarantee the correct order, we must ingest the pending_sst first, and
         // then persist the kv write batch to engine.
@@ -522,9 +538,17 @@ where
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
-            self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
+            write_opts.set_disable_wal(self.disable_wal);
+            if self.disable_wal {
+                let sn = SequenceNumber::pre_write();
+                seqno = Some(sn);
+            }
+            let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            if let Some(seqno) = seqno.as_mut() {
+                seqno.post_write(seq)
+            }
             let trackers: Vec<_> = self
                 .applied_batch
                 .cb_batch
@@ -575,7 +599,14 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
-        need_sync
+        let res_count = self.uncommitted_res_count;
+        self.uncommitted_res_count = 0;
+        if let Some(seqno) = seqno {
+            for res in self.apply_res.iter_mut().rev().take(res_count) {
+                res.write_seqno.push(seqno);
+            }
+        }
+        (need_sync, seqno)
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -598,11 +629,17 @@ where
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
+            write_seqno: mem::take(&mut delegate.unfinished_write_seqno),
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_term: delegate.applied_term,
             bucket_stat: delegate.buckets.clone().map(Box::new),
         });
+        if !self.kv_wb().is_empty() {
+            // Pending writes not flushed, need to set seqno to following ApplyRes later
+            // after flushing
+            self.uncommitted_res_count += 1;
+        }
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -637,7 +674,7 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        let is_synced = self.write_to_db();
+        let (is_synced, _) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             fail_point!("before_nofity_apply_res");
@@ -920,6 +957,8 @@ where
     trace: ApplyMemoryTrace,
 
     buckets: Option<BucketStat>,
+
+    unfinished_write_seqno: Vec<SequenceNumber>,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -952,6 +991,7 @@ where
             raft_engine: reg.raft_engine,
             trace: ApplyMemoryTrace::default(),
             buckets: None,
+            unfinished_write_seqno: vec![],
         }
     }
 
@@ -3087,6 +3127,19 @@ pub struct Proposal<C> {
     pub must_pass_epoch_check: bool,
 }
 
+impl<C> Proposal<C> {
+    pub fn new(index: u64, term: u64, cb: C) -> Self {
+        Self {
+            index,
+            term,
+            cb,
+            propose_time: None,
+            must_pass_epoch_check: false,
+            is_conf_change: false,
+        }
+    }
+}
+
 impl<C> HeapSize for Proposal<C> {}
 
 pub struct Destroy {
@@ -3325,6 +3378,7 @@ where
     pub exec_res: VecDeque<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
+    pub write_seqno: Vec<SequenceNumber>,
 }
 
 #[derive(Debug)]
