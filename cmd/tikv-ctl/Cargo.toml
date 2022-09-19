@@ -70,7 +70,7 @@ pd_client = { path = "../../components/pd_client", default-features = false }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
+raft-engine-ctl = "0.3.0"
 raft_log_engine = { path = "../../components/raft_log_engine", default-features = false }
 raftstore = { path = "../../components/raftstore", default-features = false }
 rand = "0.8"

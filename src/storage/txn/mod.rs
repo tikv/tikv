@@ -237,7 +237,10 @@ pub mod tests {
         cleanup::tests::{
             must_cleanup_with_gc_fence, must_err as must_cleanup_err, must_succeed as must_cleanup,
         },
-        commit::tests::{must_err as must_commit_err, must_succeed as must_commit},
+        commit::tests::{
+            must_err as must_commit_err, must_succeed as must_commit,
+            must_succeed_on_region as must_commit_on_region,
+        },
         gc::tests::must_succeed as must_gc,
         prewrite::tests::{
             try_pessimistic_prewrite_check_not_exists, try_prewrite_check_not_exists,

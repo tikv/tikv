@@ -122,6 +122,24 @@ impl<'a> Serialize for JsonRef<'a> {
                 );
                 serializer.serialize_str(&str)
             }
+            JsonType::Date | JsonType::Datetime | JsonType::Timestamp => {
+                let mut time = self
+                    .get_time()
+                    .map_err(|_| SerError::custom("invalid time data"))?;
+                // Printing json datetime/duration will always keep 6 fsp
+                time.maximize_fsp();
+
+                serializer.serialize_str(&time.to_string())
+            }
+            JsonType::Time => {
+                let duration = self
+                    .get_duration()
+                    .map_err(|_| SerError::custom("invalid duration data"))?;
+                // Printing json datetime/duration will always keep 6 fsp
+                let duration = duration.maximize_fsp();
+
+                serializer.serialize_str(&duration.to_string())
+            }
         }
     }
 }

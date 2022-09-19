@@ -17,7 +17,7 @@ use kvproto::{
 use raftstore::store::util::new_peer;
 use raftstore_v2::router::{DebugInfoChannel, PeerMsg};
 
-use crate::TestRouter;
+use crate::{Cluster, TestRouter};
 
 fn assert_peer_not_exist(region_id: u64, peer_id: u64, router: &TestRouter) {
     let timer = Instant::now();
@@ -64,7 +64,8 @@ fn assert_tombstone(raft_engine: &impl RaftEngine, region_id: u64, peer: &metapb
 /// message.
 #[test]
 fn test_life_by_message() {
-    let (mut node, _transport, router) = super::setup_default_cluster();
+    let mut cluster = Cluster::default();
+    let router = cluster.router(0);
     let test_region_id = 4;
     let test_peer_id = 5;
     let test_leader_id = 6;
@@ -112,12 +113,13 @@ fn test_life_by_message() {
     assert_eq!(meta.raft_status.soft_state.leader_id, test_leader_id);
 
     // The peer should survive restart.
-    let router = node.restart();
+    cluster.restart(0);
+    let router = cluster.router(0);
     let meta = router
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();
     assert_eq!(meta.raft_status.id, test_peer_id);
-    let raft_engine = &node.running_state.as_ref().unwrap().raft_engine;
+    let raft_engine = &cluster.node(0).running_state.as_ref().unwrap().raft_engine;
     raft_engine.get_raft_state(test_region_id).unwrap().unwrap();
     raft_engine
         .get_apply_state(test_region_id)
@@ -132,15 +134,17 @@ fn test_life_by_message() {
     assert_tombstone(raft_engine, test_region_id, &new_peer(1, test_peer_id));
 
     // Restart should not recreate tombstoned peer.
-    let router = node.restart();
+    cluster.restart(0);
+    let router = cluster.router(0);
     assert_peer_not_exist(test_region_id, test_peer_id, &router);
-    let raft_engine = &node.running_state.as_ref().unwrap().raft_engine;
+    let raft_engine = &cluster.node(0).running_state.as_ref().unwrap().raft_engine;
     assert_tombstone(raft_engine, test_region_id, &new_peer(1, test_peer_id));
 }
 
 #[test]
 fn test_destroy_by_larger_id() {
-    let (mut node, _transport, router) = super::setup_default_cluster();
+    let mut cluster = Cluster::default();
+    let router = cluster.router(0);
     let test_region_id = 4;
     let test_peer_id = 6;
     let init_term = 5;
@@ -185,7 +189,8 @@ fn test_destroy_by_larger_id() {
     assert_eq!(meta.raft_status.hard_state.term, init_term + 1);
 
     // New peer should survive restart.
-    let router = node.restart();
+    cluster.restart(0);
+    let router = cluster.router(0);
     let meta = router
         .must_query_debug_info(test_region_id, timeout)
         .unwrap();

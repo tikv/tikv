@@ -117,13 +117,6 @@ impl WriteExt for ManagedWriter {
         }
     }
 
-    fn sync(&mut self) -> IoResult<()> {
-        match self.inner.as_mut() {
-            Either::Left(writer) => writer.sync(),
-            Either::Right(writer) => writer.inner_mut().sync(),
-        }
-    }
-
     fn allocate(&mut self, offset: usize, size: usize) -> IoResult<()> {
         match self.inner.as_mut() {
             Either::Left(writer) => writer.allocate(offset, size),
@@ -163,6 +156,10 @@ impl Handle for ManagedHandle {
 
     fn file_size(&self) -> IoResult<usize> {
         self.base.file_size()
+    }
+
+    fn sync(&self) -> IoResult<()> {
+        self.base.sync()
     }
 }
 

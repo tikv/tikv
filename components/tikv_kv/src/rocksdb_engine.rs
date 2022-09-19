@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use collections::HashMap;
 pub use engine_rocks::RocksSnapshot;
 use engine_rocks::{
     get_env, RocksCfOptions, RocksDbOptions, RocksEngine as BaseRocksEngine, RocksEngineIterator,
@@ -206,11 +207,12 @@ impl Engine for RocksEngine {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 
-    fn kv_engine(&self) -> BaseRocksEngine {
-        self.engines.kv.clone()
+    fn kv_engine(&self) -> Option<BaseRocksEngine> {
+        Some(self.engines.kv.clone())
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> Result<()> {
+    fn modify_on_kv_engine(&self, region_modifies: HashMap<u64, Vec<Modify>>) -> Result<()> {
+        let modifies = region_modifies.into_values().flatten().collect();
         write_modifies(&self.engines.kv, modifies)
     }
 
