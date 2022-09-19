@@ -31,9 +31,12 @@ use crate::{
 
 // the duration to check auto-scale unified-thread-pool's thread
 const READ_POOL_THREAD_CHECK_DURATION: Duration = Duration::from_secs(10);
-// consider scale up read pool size if the average thread cpu usage is higher
+// consider scale out read pool size if the average thread cpu usage is higher
 // than this threahold.
 const READ_POOL_THREAD_HIGH_THRESHOLD: f64 = 0.8;
+// consider scale in read pool size if the average thread cpu usage is lower
+// than this threahold.
+const READ_POOL_THREAD_LOW_THRESHOLD: f64 = 0.7;
 // avg running tasks per-thread that indicates read-pool is busy
 const RUNNING_TASKS_PER_THREAD_THRESHOLD: i64 = 3;
 
@@ -429,6 +432,15 @@ impl ReadPoolConfigRunner {
         };
         let cpu_quota = SysQuota::cpu_cores_quota();
 
+        // scale out the thread pool size by 1 iff:
+        // - current thread count is small than the maximum thread count
+        // - process cpu is not overloaded after scaling out one more thread
+        // - all read pool threads are busy handling tasks(thread busy time >= 80%)
+        // - there are enough tasks waiting in the scheduling queue.
+        // scale in the thread pool size by 1 iff:
+        // - current thread count is bigger than the configed thread count
+        // - the average thread usage percent is under the low water mark(70%)
+        // - the running tasks in the scheduling queue is under the threshold
         let new_thread_count = if self.cur_thread_count < self.max_thread_count
             && process_cpu * (self.cur_thread_count as f64 + 1.0) / (self.cur_thread_count as f64)
                 < cpu_quota
@@ -437,7 +449,7 @@ impl ReadPoolConfigRunner {
         {
             self.cur_thread_count + 1
         } else if self.cur_thread_count > self.core_thread_count
-            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_HIGH_THRESHOLD
+            && read_pool_cpu < (self.cur_thread_count - 1) as f64 * READ_POOL_THREAD_LOW_THRESHOLD
             && running_tasks < self.cur_thread_count as i64 * RUNNING_TASKS_PER_THREAD_THRESHOLD
         {
             self.cur_thread_count - 1
