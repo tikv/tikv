@@ -12,7 +12,7 @@ use kvproto::{
     *,
 };
 use protobuf::Message;
-use raft::{GetEntriesContext, StorageError};
+use raft::{GetEntriesContext, Ready, StorageError};
 use raft_proto::{
     eraftpb,
     eraftpb::{ConfState, HardState},
@@ -26,7 +26,7 @@ use super::{util::raft_state_key, RAFT_TRUNCATED_STATE_KEY};
 use crate::{
     errors::*,
     store::{
-        region_state_key, Engines, MsgApplyResult, PeerTag, RaftApplyState, RaftContext, RaftState,
+        region_state_key, Engines, PeerTag, RaftApplyState, RaftContext, RaftState,
         RaftTruncatedState, RegionIDVer, StoreMeta, StoreMsg, KV_ENGINE_META_KEY,
         REGION_META_KEY_PREFIX, TERM_KEY,
     },
@@ -72,7 +72,6 @@ pub struct RestoreSnapResult {
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
     pub destroyed_regions: Vec<metapb::Region>,
-    pub change_set: kvenginepb::ChangeSet,
 }
 
 pub(crate) struct PeerStorage {
@@ -90,7 +89,7 @@ pub(crate) struct PeerStorage {
 
     pub(crate) initial_flushed: bool,
     pub(crate) shard_meta: Option<kvengine::ShardMeta>,
-    pub(crate) on_persist_snapshot_apply_result: Option<MsgApplyResult>,
+    pub(crate) restored_snapshot: Option<(kvenginepb::ChangeSet, u64)>,
     pub(crate) on_apply_snapshot_msgs: Vec<RaftMessage>,
     /// !initial_flushed peer can't generate snapshot until initial_flush change set
     /// is committed. If majority followers are created by raft msg which always request
@@ -257,7 +256,7 @@ impl PeerStorage {
             snap_state: SnapState::Relax,
             initial_flushed,
             shard_meta,
-            on_persist_snapshot_apply_result: None,
+            restored_snapshot: None,
             on_apply_snapshot_msgs: vec![],
             snapshot_not_ready_peers: RefCell::default(),
         })
@@ -376,7 +375,7 @@ impl PeerStorage {
 
     #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
-        self.snap_state == SnapState::Applying || self.on_persist_snapshot_apply_result.is_some()
+        self.snap_state == SnapState::Applying
     }
 
     pub fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -415,13 +414,12 @@ impl PeerStorage {
             let meta = store_meta.take().unwrap();
             *store_meta = Some(meta);
             let prev_region = self.region().clone();
-            let change_set = self.restore_snapshot(ready.snapshot(), ctx).unwrap();
+            self.restore_snapshot(ready, ctx).unwrap();
             let region = self.region.clone();
             res = Some(RestoreSnapResult {
                 prev_region,
                 region,
                 destroyed_regions: vec![],
-                change_set,
             })
         }
         if !ready.entries().is_empty() {
@@ -453,12 +451,13 @@ impl PeerStorage {
             .set_state(meta.id, &key, &self.raft_state.marshal());
     }
 
-    fn restore_snapshot(
-        &mut self,
-        snap: &eraftpb::Snapshot,
-        ctx: &mut RaftContext,
-    ) -> Result<kvenginepb::ChangeSet> {
-        info!("peer storage restore snapshot"; "region" => self.tag());
+    fn restore_snapshot(&mut self, ready: &Ready, ctx: &mut RaftContext) -> Result<()> {
+        info!(
+            "{} peer storage restore snapshot, ready_number {}",
+            self.tag(),
+            ready.number()
+        );
+        let snap = ready.snapshot();
         let (region, change_set) = decode_snap_data(snap.get_data())?;
         if region.get_id() != self.get_region_id() {
             return Err(box_err!(
@@ -504,7 +503,8 @@ impl PeerStorage {
         self.shard_meta = Some(shard_meta);
         self.region = region;
         self.snap_state = SnapState::Applying;
-        Ok(change_set)
+        self.restored_snapshot = Some((change_set, ready.number()));
+        Ok(())
     }
 
     fn append(&mut self, entries: Vec<eraftpb::Entry>, raft_wb: &mut rfengine::WriteBatch) {

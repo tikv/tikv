@@ -36,10 +36,10 @@ use crate::{
         notify_req_region_removed,
         peer::{Peer, StaleState},
         util as _util, write_engine_meta, ApplyMetrics, ApplyMsg, CasualMessage, Config,
-        CustomBuilder, Engines, MsgApplyResult, PdTask, PeerMsg, PersistReady, RaftApplyState,
-        RaftContext, SignificantMsg, SnapState, StoreMsg, Ticker, PEER_TICK_CHECK_STALE_STATE,
-        PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC, PEER_TICK_SPLIT_CHECK,
-        PEER_TICK_SWITCH_MEM_TABLE_CHECK,
+        CustomBuilder, Engines, MsgApplyResult, MsgRegistration, PdTask, PeerMsg, PersistReady,
+        RaftApplyState, RaftContext, SignificantMsg, SnapState, StoreMsg, Ticker,
+        PEER_TICK_CHECK_STALE_STATE, PEER_TICK_PD_HEARTBEAT, PEER_TICK_RAFT, PEER_TICK_RAFT_LOG_GC,
+        PEER_TICK_SPLIT_CHECK, PEER_TICK_SWITCH_MEM_TABLE_CHECK,
     },
     DiscardReason, Error, RaftStoreRouter, Result,
 };
@@ -1070,16 +1070,11 @@ impl<'a> PeerMsgHandler<'a> {
                     apply_state,
                     metrics: ApplyMetrics::default(),
                 };
-                let persisted = self.peer.raft_group.raft.raft_log.persisted;
                 info!(
-                    "{} apply snapshot finished, persisted index {}, snapshot index {}",
-                    tag, persisted, apply_state.applied_index
+                    "{} apply snapshot finished, snapshot index {}",
+                    tag, apply_state.applied_index
                 );
-                if persisted >= apply_state.applied_index {
-                    self.fsm.peer.post_apply(self.ctx, &apply_result);
-                } else {
-                    self.peer.mut_store().on_persist_snapshot_apply_result = Some(apply_result);
-                }
+                self.fsm.peer.post_apply(self.ctx, &apply_result);
                 let on_apply_snapshot_msgs =
                     std::mem::take(&mut self.peer.mut_store().on_apply_snapshot_msgs);
                 for msg in on_apply_snapshot_msgs {
@@ -1106,17 +1101,20 @@ impl<'a> PeerMsgHandler<'a> {
             return;
         }
         self.peer.raft_group.on_persist_ready(ready.ready_number);
-        if let Some(apply_result) = self
-            .peer
-            .mut_store()
-            .on_persist_snapshot_apply_result
-            .take()
-        {
-            info!(
-                "{} handle on persist snapshot apply result",
-                self.peer.tag()
-            );
-            self.fsm.peer.post_apply(self.ctx, &apply_result);
+        let store = self.peer.mut_store();
+        let is_snapshot_ready = store
+            .restored_snapshot
+            .as_ref()
+            .map(|(_, number)| *number == ready.ready_number)
+            .unwrap_or_default();
+        if is_snapshot_ready {
+            let change_set = store.restored_snapshot.take().unwrap().0;
+            let reg = MsgRegistration::new(&self.peer);
+            self.ctx.apply_msgs.msgs.push(ApplyMsg::Registration(reg));
+            self.ctx
+                .apply_msgs
+                .msgs
+                .push(ApplyMsg::PrepareChangeSet(change_set));
         }
     }
 

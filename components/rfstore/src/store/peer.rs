@@ -1267,7 +1267,7 @@ impl Peer {
                 );
                 self.peer = peer;
             };
-            if !self.update_store_meta_for_snap(ctx, snap_res, store_meta.unwrap()) {
+            if !self.update_store_meta_for_snap(snap_res, store_meta.unwrap()) {
                 return;
             }
         }
@@ -1843,7 +1843,6 @@ impl Peer {
 
     pub(crate) fn update_store_meta_for_snap(
         &mut self,
-        ctx: &mut RaftContext,
         restore_snap_result: RestoreSnapResult,
         meta: &mut StoreMeta,
     ) -> bool {
@@ -1894,12 +1893,6 @@ impl Peer {
         }
         let prev = meta.regions.insert(region.get_id(), region);
         assert_eq!(prev, Some(prev_region));
-        ctx.apply_msgs
-            .msgs
-            .push(ApplyMsg::Registration(MsgRegistration::new(self)));
-        ctx.apply_msgs
-            .msgs
-            .push(ApplyMsg::PrepareChangeSet(restore_snap_result.change_set));
         true
     }
 
