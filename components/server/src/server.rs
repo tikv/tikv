@@ -816,9 +816,12 @@ where
             let (unified_read_pool_scale_notifier, rx) = mpsc::sync_channel(10);
             cfg_controller.register(
                 tikv::config::Module::Readpool,
-                Box::new(ReadPoolConfigManager(
+                Box::new(ReadPoolConfigManager::new(
                     unified_read_pool.as_ref().unwrap().handle(),
                     unified_read_pool_scale_notifier,
+                    &self.background_worker,
+                    self.config.readpool.unified.max_thread_count,
+                    self.config.readpool.unified.auto_adjust_pool_size,
                 )),
             );
             unified_read_pool_scale_receiver = Some(rx);
