@@ -36,6 +36,7 @@ use tikv_util::{
     worker::{Scheduler, Worker},
     Either,
 };
+use time::Timespec;
 
 use super::apply::{create_apply_batch_system, ApplyPollerBuilder, ApplyRouter, ApplySystem};
 use crate::{
@@ -52,6 +53,7 @@ pub struct StoreContext<EK: KvEngine, ER: RaftEngine, T> {
     pub logger: Logger,
     /// The transport for sending messages to peers on other stores.
     pub trans: T,
+    pub current_time: Option<Timespec>,
     pub has_ready: bool,
     pub raft_metrics: RaftMetrics,
     /// The latest configuration.
@@ -310,6 +312,7 @@ where
             store: metapb::Store::default(), // todo(SpadeA)
             logger: self.logger.clone(),
             trans: self.trans.clone(),
+            current_time: None,
             has_ready: false,
             raft_metrics: RaftMetrics::new(cfg.waterfall_metrics),
             cfg,

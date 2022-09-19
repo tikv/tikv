@@ -7,9 +7,12 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, StatusCmdType};
 use raftstore::store::util::new_peer;
 use raftstore_v2::router::{PeerMsg, PeerTick, QueryResChannel, QueryResult, RaftRequest};
 
+use crate::Cluster;
+
 #[test]
 fn test_status() {
-    let (_node, _transport, router) = super::setup_default_cluster();
+    let cluster = Cluster::default();
+    let router = cluster.router(0);
     // When there is only one peer, it should campaign immediately.
     let mut req = RaftCmdRequest::default();
     req.mut_header().set_peer(new_peer(1, 3));

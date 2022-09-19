@@ -7,6 +7,17 @@
 
 extern crate tikv_alloc as _;
 
+mod cf_options;
+mod db_options;
+mod db_vector;
+mod engine;
+mod engine_iterator;
+mod snapshot;
 mod status;
+mod util;
 
+pub use engine::*;
+pub use engine_iterator::*;
+pub use snapshot::RocksSnapshot;
 pub use status::*;
+pub use util::*;

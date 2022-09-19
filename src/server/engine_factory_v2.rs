@@ -304,6 +304,45 @@ mod tests {
     }
 
     #[test]
+    fn test_kvengine_factory_root_db_implicit_creation() {
+        let cfg = TEST_CONFIG.clone();
+        assert!(cfg.storage.block_cache.shared);
+        let cache = cfg.storage.block_cache.build_shared_cache();
+        let dir = test_util::temp_dir("test_kvengine_factory", false);
+        let env = cfg.build_shared_rocks_env(None, None).unwrap();
+
+        let mut builder = KvEngineFactoryBuilder::new(env, &cfg, dir.path());
+        if let Some(cache) = cache {
+            builder = builder.block_cache(cache);
+        }
+        let factory = builder.build();
+
+        // root_db should be created implicitly here
+        let tablet = factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create(true))
+            .unwrap();
+
+        // error is expected since root_db is created already
+        factory
+            .open_tablet(1, Some(10), OpenOptions::default().set_create_new(true))
+            .unwrap_err();
+
+        let mut count = 0;
+        factory.for_each_opened_tablet(&mut |id, suffix, _tablet| {
+            assert!(id == 0);
+            assert!(suffix == 0);
+            count += 1;
+        });
+        assert_eq!(count, 1);
+        assert!(factory.is_single_engine());
+        factory
+            .set_shared_block_cache_capacity(1024 * 1024)
+            .unwrap();
+        let opt = tablet.get_options_cf(CF_DEFAULT).unwrap();
+        assert_eq!(opt.get_block_cache_capacity(), 1024 * 1024);
+    }
+
+    #[test]
     fn test_kvengine_factory_v2() {
         let cfg = TEST_CONFIG.clone();
         assert!(cfg.storage.block_cache.shared);

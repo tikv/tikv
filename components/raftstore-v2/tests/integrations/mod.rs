@@ -44,9 +44,11 @@ use tempfile::TempDir;
 use test_pd::mocker::Service;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 
+mod test_basic_write;
 mod test_life;
 mod test_status;
 
+#[derive(Clone)]
 struct TestRouter(StoreRouter<KvTestEngine, RaftTestEngine>);
 
 impl Deref for TestRouter {
@@ -173,7 +175,6 @@ impl Drop for RunningState {
 }
 
 struct TestNode {
-    _pd_server: test_pd::Server<Service>,
     pd_client: RpcClient,
     path: TempDir,
     running_state: Option<RunningState>,
@@ -181,14 +182,12 @@ struct TestNode {
 }
 
 impl TestNode {
-    fn new() -> TestNode {
+    fn with_pd(pd_server: &test_pd::Server<Service>) -> TestNode {
         let logger = slog_global::borrow_global().new(o!());
-        let pd_server = test_pd::Server::new(1);
         let pd_client = test_pd::util::new_client(pd_server.bind_addrs(), None);
         let path = TempDir::new().unwrap();
 
         TestNode {
-            _pd_server: pd_server,
             pd_client,
             path,
             running_state: None,
@@ -287,11 +286,51 @@ fn disable_all_auto_ticks(cfg: &mut Config) {
     cfg.check_long_uncommitted_interval = ReadableDuration::ZERO;
 }
 
-fn setup_default_cluster() -> (TestNode, Receiver<RaftMessage>, TestRouter) {
-    let mut node = TestNode::new();
-    let mut cfg = v2_default_config();
-    disable_all_auto_ticks(&mut cfg);
-    let (tx, rx) = new_test_transport();
-    let router = node.start(Arc::new(VersionTrack::new(cfg)), tx);
-    (node, rx, router)
+struct Cluster {
+    pd_server: test_pd::Server<Service>,
+    nodes: Vec<TestNode>,
+    receivers: Vec<Receiver<RaftMessage>>,
+    routers: Vec<TestRouter>,
+}
+
+impl Default for Cluster {
+    fn default() -> Cluster {
+        Cluster::with_node_count(1)
+    }
+}
+
+impl Cluster {
+    fn with_node_count(count: usize) -> Self {
+        let pd_server = test_pd::Server::new(1);
+        let mut cluster = Cluster {
+            pd_server,
+            nodes: vec![],
+            receivers: vec![],
+            routers: vec![],
+        };
+        let mut cfg = v2_default_config();
+        disable_all_auto_ticks(&mut cfg);
+        for _ in 1..=count {
+            let mut node = TestNode::with_pd(&cluster.pd_server);
+            let (tx, rx) = new_test_transport();
+            let router = node.start(Arc::new(VersionTrack::new(cfg.clone())), tx);
+            cluster.nodes.push(node);
+            cluster.receivers.push(rx);
+            cluster.routers.push(router);
+        }
+        cluster
+    }
+
+    fn restart(&mut self, offset: usize) {
+        let router = self.nodes[offset].restart();
+        self.routers[offset] = router;
+    }
+
+    fn node(&self, offset: usize) -> &TestNode {
+        &self.nodes[offset]
+    }
+
+    fn router(&self, offset: usize) -> TestRouter {
+        self.routers[offset].clone()
+    }
 }

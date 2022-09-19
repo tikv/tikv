@@ -1,6 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::{self, Debug, Formatter}, ops::Deref};
+use std::{
+    fmt::{self, Debug, Formatter},
+    ops::Deref,
+};
 
 use engine_traits::{RaftEngine, RaftLogBatch};
 use kvproto::{
