@@ -196,9 +196,9 @@ pub struct KeyLockWaitState {
 }
 
 impl KeyLockWaitState {
-    fn new(current_lock: kvrpcpb::LockInfo) -> Self {
+    fn new() -> Self {
         Self {
-            current_lock,
+            current_lock: kvrpcpb::LockInfo::default(),
             legacy_wake_up_cnt: 0,
             queue: BinaryHeap::new(),
             last_conflict_start_ts: TimeStamp::zero(),
@@ -233,6 +233,9 @@ impl<L: LockManager> LockWaitQueues<L> {
         }
     }
 
+    /// Enqueues a lock wait entry. The key is indicated by the `key` field of
+    /// the `lock_wait_entry`. The caller also need to provide the
+    /// information of the current-holding lock.
     pub fn push_lock_wait(
         &self,
         mut lock_wait_entry: Box<LockWaitEntry>,
@@ -242,7 +245,9 @@ impl<L: LockManager> LockWaitQueues<L> {
             .inner
             .queue_map
             .entry(lock_wait_entry.key.clone())
-            .or_insert_with(|| KeyLockWaitState::new(current_lock));
+            .or_insert_with(|| KeyLockWaitState::new());
+        entry.current_lock = current_lock;
+
         if lock_wait_entry.current_legacy_wakeup_cnt.is_none() {
             lock_wait_entry.current_legacy_wakeup_cnt = Some(entry.value().legacy_wake_up_cnt);
         }
@@ -325,6 +330,11 @@ impl<L: LockManager> LockWaitQueues<L> {
         result
     }
 
+    /// Schedule delayed waking up on the specified key.
+    ///
+    /// Returns a future if it's needed to spawn a new async task to do the
+    /// delayed waking up. The caller should be responsible for executing
+    /// it.
     fn handle_delayed_wake_up(
         &self,
         key_lock_wait_state: &mut KeyLockWaitState,
@@ -334,18 +344,24 @@ impl<L: LockManager> LockWaitQueues<L> {
         if let Some((_, start_time, delay_duration)) =
             &mut key_lock_wait_state.delayed_notify_all_state
         {
+            // There's already an async task spawned for handling delayed waking up on this
+            // key. Update its state to extend its delaying duration (until now
+            // + wake_up_delay_duration).
             let new_delay_duration =
                 (start_time.saturating_elapsed().as_millis() as u64) + wake_up_delay_duration_ms;
             delay_duration.store(new_delay_duration, Ordering::Release);
             None
         } else {
+            // It's needed to spawn a new async task for performing delayed waking up on
+            // this key. Return a future to let the caller execute it in a
+            // proper thread pool.
             let notify_id = self.allocate_internal_id();
             let start_time = Instant::now();
             let delay_ms = Arc::new(AtomicU64::new(wake_up_delay_duration_ms));
 
             key_lock_wait_state.delayed_notify_all_state =
                 Some((notify_id, start_time, delay_ms.clone()));
-            Some(Box::pin(self.clone().async_notify_all(
+            Some(Box::pin(self.clone().async_delayed_notify_all(
                 key.clone(),
                 start_time,
                 delay_ms,
@@ -358,7 +374,7 @@ impl<L: LockManager> LockWaitQueues<L> {
         self.inner.id_allocated.fetch_add(1, Ordering::SeqCst)
     }
 
-    async fn async_notify_all(
+    async fn async_delayed_notify_all(
         self,
         key: Key,
         start_time: Instant,
