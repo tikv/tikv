@@ -636,7 +636,7 @@ mod tests {
 
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::{CfName, IterOptions, ReadOptions};
-    use kvproto::kvrpcpb::{AssertionLevel, Context};
+    use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
     use tikv_kv::DummySnapshotExt;
 
     use super::*;
@@ -708,7 +708,7 @@ mod tests {
                         },
                         Mutation::make_put(Key::from_raw(key), key.to_vec()),
                         &None,
-                        false,
+                        SkipPessimisticCheck,
                     )
                     .unwrap();
                 }
@@ -809,21 +809,27 @@ mod tests {
         fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn get_cf_opt(&self, _: ReadOptions, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
             Ok(None)
         }
+
         fn iter(&self, _: CfName, _: IterOptions) -> EngineResult<Self::Iter> {
             Ok(MockRangeSnapshotIter::default())
         }
+
         fn lower_bound(&self) -> Option<&[u8]> {
             Some(self.start.as_slice())
         }
+
         fn upper_bound(&self) -> Option<&[u8]> {
             Some(self.end.as_slice())
         }
+
         fn ext(&self) -> DummySnapshotExt {
             DummySnapshotExt
         }

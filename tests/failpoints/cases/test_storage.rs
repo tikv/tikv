@@ -19,7 +19,7 @@ use grpcio::*;
 use kvproto::{
     kvrpcpb::{
         self, AssertionLevel, BatchRollbackRequest, CommandPri, CommitRequest, Context, GetRequest,
-        Op, PrewriteRequest, RawPutRequest,
+        Op, PrewriteRequest, PrewriteRequestPessimisticAction::*, RawPutRequest,
     },
     tikvpb::TikvClient,
 };
@@ -253,7 +253,7 @@ fn test_scale_scheduler_pool() {
         .unwrap();
 
     let cfg = new_tikv_config(1);
-    let kv_engine = storage.get_engine().kv_engine();
+    let kv_engine = storage.get_engine().kv_engine().unwrap();
     let (_tx, rx) = std::sync::mpsc::channel();
     let flow_controller = Arc::new(FlowController::Singleton(EngineFlowController::new(
         &cfg.storage.flow_control,
@@ -398,7 +398,10 @@ fn test_pipelined_pessimistic_lock() {
     storage
         .sched_txn_command(
             commands::PrewritePessimistic::new(
-                vec![(Mutation::make_put(key.clone(), val.clone()), true)],
+                vec![(
+                    Mutation::make_put(key.clone(), val.clone()),
+                    DoPessimisticCheck,
+                )],
                 key.to_raw().unwrap(),
                 10.into(),
                 3000,
@@ -571,7 +574,7 @@ fn test_async_commit_prewrite_with_stale_max_ts() {
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
-                        true,
+                        DoPessimisticCheck,
                     )],
                     b"k1".to_vec(),
                     10.into(),
@@ -664,6 +667,7 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                     0.into(),
                     OldValues::default(),
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -705,7 +709,11 @@ fn test_async_apply_prewrite_impl<E: Engine, F: KvFormat>(
                 commands::PrewritePessimistic::new(
                     vec![(
                         Mutation::make_put(Key::from_raw(key), value.to_vec()),
-                        need_lock,
+                        if need_lock {
+                            DoPessimisticCheck
+                        } else {
+                            SkipPessimisticCheck
+                        },
                     )],
                     key.to_vec(),
                     start_ts,
@@ -998,6 +1006,7 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
                     0.into(),
                     OldValues::default(),
                     false,
+                    false,
                     ctx.clone(),
                 ),
                 Box::new(move |r| tx.send(r).unwrap()),
@@ -1036,7 +1045,10 @@ fn test_async_apply_prewrite_1pc_impl<E: Engine, F: KvFormat>(
         storage
             .sched_txn_command(
                 commands::PrewritePessimistic::new(
-                    vec![(Mutation::make_put(Key::from_raw(key), value.to_vec()), true)],
+                    vec![(
+                        Mutation::make_put(Key::from_raw(key), value.to_vec()),
+                        DoPessimisticCheck,
+                    )],
                     key.to_vec(),
                     start_ts,
                     0,
@@ -1424,4 +1436,37 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
         get_resp
     );
     assert_eq!(get_resp.value, v);
+}
+
+#[test]
+fn test_raw_put_deadline() {
+    let deadline_fp = "deadline_check_fail";
+    let mut cluster = new_server_cluster(0, 1);
+    cluster.run();
+    let region = cluster.get_region(b"");
+    let leader = region.get_peers()[0].clone();
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader);
+
+    let mut put_req = RawPutRequest::default();
+    put_req.set_context(ctx);
+    put_req.key = b"k3".to_vec();
+    put_req.value = b"v3".to_vec();
+    fail::cfg(deadline_fp, "return()").unwrap();
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_none(&cluster.get_engine(1), b"k3");
+
+    fail::remove(deadline_fp);
+    let put_resp = client.raw_put(&put_req).unwrap();
+    assert!(!put_resp.has_region_error(), "{:?}", put_resp);
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }

@@ -248,11 +248,15 @@
 //! - "Plain old data" types in `engine` can be moved directly into
 //!   `engine_traits` and reexported from `engine` to ease the transition.
 //!   Likewise `engine_rocks` can temporarily call code from inside `engine`.
+#![cfg_attr(test, feature(test))]
 #![feature(min_specialization)]
 #![feature(assert_matches)]
+#![feature(generic_associated_types)]
 
 #[macro_use(fail_point)]
 extern crate fail;
+#[cfg(test)]
+extern crate test;
 
 // These modules contain traits that need to be implemented by engines, either
 // they are required by KvEngine or are an associated type of KvEngine. It is

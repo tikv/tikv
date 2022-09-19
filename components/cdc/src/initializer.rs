@@ -144,7 +144,7 @@ impl<E: KvEngine> Initializer<E> {
             SignificantMsg::CaptureChange {
                 cmd: change_cmd,
                 region_epoch,
-                callback: Callback::Read(Box::new(move |resp| {
+                callback: Callback::read(Box::new(move |resp| {
                     if let Err(e) = sched.schedule(Task::InitDownstream {
                         region_id,
                         downstream_id,
@@ -626,6 +626,7 @@ mod tests {
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
+                    .unwrap()
             }),
             sched: receiver_worker.scheduler(),
             sink,
@@ -683,7 +684,7 @@ mod tests {
         let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
             total_bytes,
             buffer,
-            Some(engine.kv_engine()),
+            engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
         );
         let check_result = || loop {
@@ -775,7 +776,7 @@ mod tests {
                 let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
                     usize::MAX,
                     1000,
-                    Some(engine.kv_engine()),
+                    engine.kv_engine(),
                     ChangeDataRequestKvApi::TiDb,
                 );
                 initializer.checkpoint_ts = checkpoint_ts.into();
@@ -813,13 +814,21 @@ mod tests {
         must_commit(&engine, b"zkey", 100, 110);
         must_prewrite_put(&engine, b"zzzz", &v_suffix(150), b"zzzz", 150);
         must_commit(&engine, b"zzzz", 150, 160);
-        engine.kv_engine().flush_cf(CF_WRITE, true).unwrap();
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, true)
+            .unwrap();
         must_prewrite_delete(&engine, b"zkey", b"zkey", 200);
         check_handling_old_value_seek_write(); // For TxnEntry::Prewrite.
 
         // CF_WRITE L0: |zkey_110, zkey1_160|, |zkey_210|
         must_commit(&engine, b"zkey", 200, 210);
-        engine.kv_engine().flush_cf(CF_WRITE, false).unwrap();
+        engine
+            .kv_engine()
+            .unwrap()
+            .flush_cf(CF_WRITE, false)
+            .unwrap();
         check_handling_old_value_seek_write(); // For TxnEntry::Commit.
     }
 

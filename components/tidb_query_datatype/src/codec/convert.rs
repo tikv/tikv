@@ -510,14 +510,14 @@ impl<'a> ToInt for JsonRef<'a> {
         // TiDB:  5
         // MySQL: 4
         let val = match self.get_type() {
-            JsonType::Object | JsonType::Array => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
-                .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as i64)),
             JsonType::I64 => Ok(self.get_i64()),
             JsonType::U64 => Ok(self.get_u64() as i64),
             JsonType::Double => self.get_double().to_int(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_int(ctx, tp),
+            _ => Ok(ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .map(|_| 0)?),
         }?;
         val.to_int(ctx, tp)
     }
@@ -526,14 +526,14 @@ impl<'a> ToInt for JsonRef<'a> {
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         let val = match self.get_type() {
-            JsonType::Object | JsonType::Array => Ok(ctx
-                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
-                .map(|_| 0)?),
             JsonType::Literal => Ok(self.get_literal().map_or(0, |x| x as u64)),
             JsonType::I64 => Ok(self.get_i64() as u64),
             JsonType::U64 => Ok(self.get_u64()),
             JsonType::Double => self.get_double().to_uint(ctx, tp),
             JsonType::String => self.get_str_bytes()?.to_uint(ctx, tp),
+            _ => Ok(ctx
+                .handle_truncate_err(Error::truncated_wrong_val("Integer", self.to_string()))
+                .map(|_| 0)?),
         }?;
         val.to_uint(ctx, tp)
     }

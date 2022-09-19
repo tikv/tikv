@@ -314,7 +314,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
                 conflict_commit_ts,
                 key,
                 primary,
-                ..
+                reason,
             },
         ))))) => {
             let mut write_conflict = kvrpcpb::WriteConflict::default();
@@ -323,6 +323,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
+            write_conflict.set_reason(reason.to_owned());
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
@@ -457,6 +458,8 @@ pub fn extract_key_errors(res: Result<Vec<Result<()>>>) -> Vec<kvrpcpb::KeyError
 
 #[cfg(test)]
 mod test {
+    use kvproto::kvrpcpb::WriteConflictReason;
+
     use super::*;
 
     #[test]
@@ -473,6 +476,7 @@ mod test {
                 conflict_commit_ts,
                 key: key.clone(),
                 primary: primary.clone(),
+                reason: WriteConflictReason::LazyUniquenessCheck,
             },
         )));
         let mut expect = kvrpcpb::KeyError::default();
@@ -482,6 +486,7 @@ mod test {
         write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
+        write_conflict.set_reason(WriteConflictReason::LazyUniquenessCheck);
         expect.set_conflict(write_conflict);
         expect.set_retryable(format!("{:?}", case));
 

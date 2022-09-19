@@ -20,7 +20,7 @@ impl WriteBatchExt for PanicEngine {
 pub struct PanicWriteBatch;
 
 impl WriteBatch for PanicWriteBatch {
-    fn write_opt(&self, _: &WriteOptions) -> Result<()> {
+    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         panic!()
     }
 

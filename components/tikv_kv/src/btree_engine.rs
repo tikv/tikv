@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use collections::HashMap;
 use engine_panic::PanicEngine;
 use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
@@ -77,15 +78,11 @@ impl Engine for BTreeEngine {
     type Snap = BTreeEngineSnapshot;
     type Local = PanicEngine;
 
-    fn kv_engine(&self) -> PanicEngine {
+    fn kv_engine(&self) -> Option<PanicEngine> {
         unimplemented!();
     }
 
-    fn snapshot_on_kv_engine(&self, _: &[u8], _: &[u8]) -> EngineResult<Self::Snap> {
-        unimplemented!();
-    }
-
-    fn modify_on_kv_engine(&self, _: Vec<Modify>) -> EngineResult<()> {
+    fn modify_on_kv_engine(&self, _: HashMap<u64, Vec<Modify>>) -> EngineResult<()> {
         unimplemented!();
     }
 
@@ -237,6 +234,7 @@ impl Snapshot for BTreeEngineSnapshot {
     fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
     }
+
     fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
@@ -246,14 +244,17 @@ impl Snapshot for BTreeEngineSnapshot {
             Some(v) => Ok(Some(v.clone())),
         }
     }
+
     fn get_cf_opt(&self, _: ReadOptions, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
         self.get_cf(cf, key)
     }
+
     #[inline]
     fn iter(&self, cf: CfName, iter_opt: IterOptions) -> EngineResult<Self::Iter> {
         let tree = self.inner_engine.get_cf(cf);
         Ok(BTreeEngineIterator::new(tree, iter_opt))
     }
+
     fn ext(&self) -> DummySnapshotExt {
         DummySnapshotExt
     }

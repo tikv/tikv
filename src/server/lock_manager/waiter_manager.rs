@@ -18,14 +18,15 @@ use futures::{
     future::Future,
     task::{Context, Poll},
 };
-use kvproto::deadlock::WaitForEntry;
-use prometheus::HistogramTimer;
+use kvproto::{deadlock::WaitForEntry, kvrpcpb::WriteConflictReason};
 use tikv_util::{
     config::ReadableDuration,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::{FutureRunnable, FutureScheduler, Stopped},
 };
 use tokio::task::spawn_local;
+use tracker::GLOBAL_TRACKERS;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -110,6 +111,7 @@ pub enum Task {
         lock: Lock,
         timeout: WaitTimeout,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     },
     WakeUp {
         // lock info
@@ -181,7 +183,7 @@ pub(crate) struct Waiter {
     pub(crate) lock: Lock,
     pub diag_ctx: DiagnosticContext,
     delay: Delay,
-    _lifetime_timer: HistogramTimer,
+    start_waiting_time: Instant,
 }
 
 impl Waiter {
@@ -192,6 +194,7 @@ impl Waiter {
         lock: Lock,
         deadline: Instant,
         diag_ctx: DiagnosticContext,
+        start_waiting_time: Instant,
     ) -> Self {
         Self {
             start_ts,
@@ -200,7 +203,7 @@ impl Waiter {
             lock,
             delay: Delay::new(deadline),
             diag_ctx,
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time,
         }
     }
 
@@ -224,6 +227,11 @@ impl Waiter {
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
     /// going on.
     fn notify(self) {
+        let elapsed = self.start_waiting_time.saturating_elapsed();
+        GLOBAL_TRACKERS.with_tracker(self.diag_ctx.tracker, |tracker| {
+            tracker.metrics.pessimistic_lock_wait_nanos = elapsed.as_nanos() as u64;
+        });
+        WAITER_LIFETIME_HISTOGRAM.observe(duration_to_sec(elapsed));
         // Cancel the delay timer to prevent removing the same `Waiter` earlier.
         self.delay.cancel();
         self.cb.execute(self.pr);
@@ -239,6 +247,7 @@ impl Waiter {
             conflict_commit_ts: commit_ts,
             key,
             primary,
+            reason: WriteConflictReason::PessimisticRetry,
         });
         self.pr = ProcessResult::Failed {
             err: StorageError::from(TxnError::from(mvcc_err)),
@@ -424,6 +433,7 @@ impl Scheduler {
             lock,
             timeout,
             diag_ctx,
+            start_waiting_time: Instant::now(),
         });
     }
 
@@ -597,6 +607,7 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock,
                 timeout,
                 diag_ctx,
+                start_waiting_time,
             } => {
                 let waiter = Waiter::new(
                     start_ts,
@@ -605,6 +616,7 @@ impl FutureRunnable<Task> for WaiterManager {
                     lock,
                     self.normalize_deadline(timeout),
                     diag_ctx,
+                    start_waiting_time,
                 );
                 self.handle_wait_for(waiter);
                 TASK_COUNTER_METRICS.wait_for.inc();
@@ -662,7 +674,7 @@ pub mod tests {
             lock: Lock { ts: lock_ts, hash },
             diag_ctx: DiagnosticContext::default(),
             delay: Delay::new(Instant::now()),
-            _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
+            start_waiting_time: Instant::now(),
         }
     }
 
@@ -764,6 +776,7 @@ pub mod tests {
             lock,
             Instant::now() + Duration::from_millis(3000),
             DiagnosticContext::default(),
+            Instant::now(),
         );
         (waiter, info, f)
     }
@@ -810,6 +823,7 @@ pub mod tests {
                     conflict_commit_ts,
                     key,
                     primary,
+                    ..
                 }),
             ))))) => {
                 assert_eq!(start_ts, waiter_ts);
@@ -977,7 +991,7 @@ pub mod tests {
                 .remove_waiter(
                     Lock {
                         ts: TimeStamp::zero(),
-                        hash: 0
+                        hash: 0,
                     },
                     TimeStamp::zero(),
                 )

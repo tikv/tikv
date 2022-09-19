@@ -1242,7 +1242,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     if let Err(e) = raft_router_clone.significant_send(
                         region_id,
-                        SignificantMsg::LeaderCallback(Callback::Read(Box::new(move |resp| {
+                        SignificantMsg::LeaderCallback(Callback::read(Box::new(move |resp| {
                             let resp = if resp.response.get_header().has_error() {
                                 None
                             } else {
@@ -1433,7 +1433,8 @@ mod tests {
         errors::{DiscardReason, Error as RaftStoreError},
         store::{msg::CasualMessage, PeerMsg, ReadDelegate},
     };
-    use test_raftstore::{MockRaftStoreRouter, TestPdClient};
+    use test_pd_client::TestPdClient;
+    use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         server::DEFAULT_CLUSTER_ID,
         storage::{kv::Engine, TestEngineBuilder},
@@ -1528,6 +1529,7 @@ mod tests {
                     .build_without_cache()
                     .unwrap()
                     .kv_engine()
+                    .unwrap()
             }),
             CdcObserver::new(task_sched, api_version),
             Arc::new(StdMutex::new(StoreMeta::new(0))),

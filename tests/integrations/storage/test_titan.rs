@@ -7,9 +7,9 @@ use std::{
 };
 
 use engine_rocks::{
-    raw::IngestExternalFileOptions, util::new_temp_engine, RocksEngine, RocksSnapshot,
-    RocksSstWriterBuilder,
+    raw::IngestExternalFileOptions, RocksEngine, RocksSnapshot, RocksSstWriterBuilder,
 };
+use engine_test::new_temp_engine;
 use engine_traits::{
     CfOptionsExt, CompactExt, DeleteStrategy, Engines, KvEngine, MiscExt, Range, SstWriter,
     SstWriterBuilder, SyncMutable, CF_DEFAULT, CF_WRITE,
@@ -211,7 +211,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
 
     // Flush and compact the kvs into L6.
-    engines.kv.flush(true).unwrap();
+    engines.kv.flush_cfs(true).unwrap();
     engines.kv.compact_files_in_range(None, None, None).unwrap();
     let db = engines.kv.as_inner();
     let value = db.get_property_int("rocksdb.num-files-at-level0").unwrap();
@@ -254,9 +254,9 @@ fn test_delete_files_in_range_for_titan() {
     // Used to trigger titan gc
     let engine = &engines.kv;
     engine.put(b"1", b"1").unwrap();
-    engine.flush(true).unwrap();
+    engine.flush_cfs(true).unwrap();
     engine.put(b"2", b"2").unwrap();
-    engine.flush(true).unwrap();
+    engine.flush_cfs(true).unwrap();
     engine
         .compact_files_in_range(Some(b"0"), Some(b"3"), Some(1))
         .unwrap();
@@ -298,11 +298,11 @@ fn test_delete_files_in_range_for_titan() {
     // blob4: (b_7, b_value)
 
     // `delete_files_in_range` may expose some old keys.
-    // For Titan it may encounter `missing blob file` in `delete_all_in_range`,
+    // For Titan it may encounter `missing blob file` in `delete_ranges_cfs`,
     // so we set key_only for Titan.
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteFiles,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -312,7 +312,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteByKey,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),
@@ -322,7 +322,7 @@ fn test_delete_files_in_range_for_titan() {
         .unwrap();
     engines
         .kv
-        .delete_all_in_range(
+        .delete_ranges_cfs(
             DeleteStrategy::DeleteBlobs,
             &[Range::new(
                 &data_key(Key::from_raw(b"a").as_encoded()),

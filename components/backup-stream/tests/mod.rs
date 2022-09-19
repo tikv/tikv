@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
     errors::Result,
     metadata::{
@@ -19,14 +20,15 @@ use backup_stream::{
     router::Router,
     Endpoint, Task,
 };
-use futures::{executor::block_on, Future};
+use futures::{executor::block_on, AsyncWriteExt, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{
-    brpb::{Local, StorageBackend},
+    brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
     tikvpb::*,
 };
 use pd_client::PdClient;
+use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
@@ -44,8 +46,12 @@ use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
 fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
+    mutation_op(k, v, Op::Put)
+}
+
+fn mutation_op(k: Vec<u8>, v: Vec<u8>, op: Op) -> Mutation {
     let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
+    mutation.set_op(op);
     mutation.key = k;
     mutation.value = v;
     mutation
@@ -158,7 +164,6 @@ impl SuiteBuilder {
         for id in 1..=(n as u64) {
             suite.start_endpoint(id, use_v3);
         }
-        // TODO: The current mock metastore (slash_etc) doesn't supports multi-version.
         // We must wait until the endpoints get ready to watching the metastore, or some
         // modifies may be lost. Either make Endpoint::with_client wait until watch did
         // start or make slash_etc support multi-version, then we can get rid of this
@@ -228,6 +233,7 @@ impl Suite {
         storage.set_local(local);
         task.info.set_storage(storage);
         task.info.set_table_filter(vec!["*.*".to_owned()].into());
+        task.info.set_compression_type(CompressionType::Zstd);
         task
     }
 
@@ -318,6 +324,19 @@ impl Suite {
         inserted
     }
 
+    fn commit_keys(&mut self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+        let mut region_keys = HashMap::<u64, Vec<Vec<u8>>>::new();
+        for k in keys {
+            let enc_key = Key::from_raw(&k).into_encoded();
+            let region = self.cluster.get_region_id(&enc_key);
+            region_keys.entry(region).or_default().push(k);
+        }
+
+        for (region, keys) in region_keys {
+            self.must_kv_commit(region, keys, start_ts, commit_ts);
+        }
+    }
+
     fn just_commit_a_key(&mut self, key: Vec<u8>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let enc_key = Key::from_raw(&key).into_encoded();
         let region = self.cluster.get_region_id(&enc_key);
@@ -345,7 +364,42 @@ impl Suite {
         }
     }
 
-    fn check_for_write_records<'a>(
+    fn load_metadata_for_write_records(&self, path: &Path) -> HashMap<String, Vec<(usize, usize)>> {
+        let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        for entry in WalkDir::new(path) {
+            let entry = entry.unwrap();
+            if entry.file_type().is_file()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map_or(false, |s| s.ends_with(".meta"))
+            {
+                let content = std::fs::read(entry.path()).unwrap();
+                let meta = parse_from_bytes::<Metadata>(content.as_ref()).unwrap();
+                for g in meta.file_groups.into_iter() {
+                    let path = g.path.split('/').last().unwrap();
+                    for f in g.data_files_info.into_iter() {
+                        let file_info = meta_map.get_mut(path);
+                        if let Some(v) = file_info {
+                            v.push((
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            ));
+                        } else {
+                            let v = vec![(
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            )];
+                            meta_map.insert(String::from(path), v);
+                        }
+                    }
+                }
+            }
+        }
+        meta_map
+    }
+
+    async fn check_for_write_records<'a>(
         &self,
         path: &Path,
         key_set: impl std::iter::Iterator<Item = &'a [u8]>,
@@ -354,6 +408,7 @@ impl Suite {
         let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
+        let meta_map = self.load_metadata_for_write_records(path);
         for entry in WalkDir::new(path) {
             let entry = entry.unwrap();
             println!("checking: {:?}", entry);
@@ -363,21 +418,31 @@ impl Suite {
                     .to_str()
                     .map_or(false, |s| s.ends_with(".log"))
             {
-                let content = std::fs::read(entry.path()).unwrap();
-                let mut iter = EventIterator::new(content);
-                loop {
-                    if !iter.valid() {
-                        break;
-                    }
-                    iter.next().unwrap();
-                    if !remain_keys.remove(iter.key()) {
-                        extra_key += 1;
-                        extra_len += iter.key().len() + iter.value().len();
-                    }
+                let buf = std::fs::read(entry.path()).unwrap();
+                let file_infos = meta_map.get(entry.file_name().to_str().unwrap()).unwrap();
+                for &file_info in file_infos {
+                    let mut decoder = ZstdDecoder::new(Vec::new());
+                    let pbuf: &[u8] = &buf[file_info.0..file_info.1];
+                    decoder.write_all(pbuf).await.unwrap();
+                    decoder.flush().await.unwrap();
+                    decoder.close().await.unwrap();
+                    let content = decoder.into_inner();
 
-                    let value = iter.value();
-                    let wf = WriteRef::parse(value).unwrap();
-                    assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    let mut iter = EventIterator::new(content);
+                    loop {
+                        if !iter.valid() {
+                            break;
+                        }
+                        iter.next().unwrap();
+                        if !remain_keys.remove(iter.key()) {
+                            extra_key += 1;
+                            extra_len += iter.key().len() + iter.value().len();
+                        }
+
+                        let value = iter.value();
+                        let wf = WriteRef::parse(value).unwrap();
+                        assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    }
                 }
             }
         }
@@ -407,6 +472,36 @@ impl Suite {
 
 // Copy & Paste from cdc::tests::TestSuite, maybe make it a mixin?
 impl Suite {
+    pub fn tso(&self) -> TimeStamp {
+        run_async_test(self.cluster.pd_client.get_tso()).unwrap()
+    }
+
+    pub fn must_kv_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        keys: Vec<Vec<u8>>,
+        ts: TimeStamp,
+        pk: Vec<u8>,
+    ) {
+        let mut lock_req = PessimisticLockRequest::new();
+        lock_req.set_context(self.get_context(region_id));
+        let mut mutations = vec![];
+        for key in keys {
+            mutations.push(mutation_op(key, vec![], Op::PessimisticLock));
+        }
+        lock_req.set_mutations(mutations.into());
+        lock_req.primary_lock = pk;
+        lock_req.start_version = ts.into_inner();
+        lock_req.lock_ttl = ts.into_inner() + 1;
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_lock(&lock_req)
+            .unwrap();
+
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_prewrite(
         &mut self,
         region_id: u64,
@@ -604,10 +699,13 @@ mod test {
         errors::Error, metadata::MetadataClient, router::TaskSelector, GetCheckpointResult,
         RegionCheckpointOperation, RegionSet, Task,
     };
+    use pd_client::PdClient;
     use tikv_util::{box_err, defer, info, HandyRwLock};
-    use txn_types::TimeStamp;
+    use txn_types::{Key, TimeStamp};
 
-    use crate::{make_record_key, make_split_key_at_record, run_async_test, SuiteBuilder};
+    use crate::{
+        make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
+    };
 
     #[test]
     fn basic() {
@@ -622,10 +720,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -642,10 +742,66 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
+        });
+        suite.cluster.shutdown();
+    }
+
+    /// This test tests whether we can handle some weird transactions and their
+    /// race with initial scanning.
+    /// Generally, those transactions:
+    /// - Has N mutations, which's values are all short enough to be inlined in
+    ///   the `Write` CF. (N > 1024)
+    /// - Commit the mutation set M first. (for all m in M: Nth-Of-Key(m) >
+    ///   1024)
+    /// ```text
+    /// |--...-----^------*---*-*--*-*-*-> (The line is the Key Space - from "" to inf)
+    ///            +The 1024th key  (* = committed mutation)
+    /// ```
+    /// - Before committing remaining mutations, PiTR triggered initial
+    ///   scanning.
+    /// - The remaining mutations are committed before the instant when initial
+    ///   scanning get the snapshot.
+    #[test]
+    fn with_split_txn() {
+        let mut suite = super::SuiteBuilder::new_named("split_txn").use_v3().build();
+        run_async_test(async {
+            let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
+            suite.must_kv_prewrite(
+                1,
+                keys.clone()
+                    .into_iter()
+                    .map(|k| mutation(k, b"hello, world".to_vec()))
+                    .collect(),
+                make_record_key(1, 1913),
+                start_ts,
             );
+            let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
+            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
+            suite.must_register_task(1, "test_split_txn");
+            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
+            suite.force_flush_files("test_split_txn");
+            suite.wait_for_flush();
+            let keys_encoded = keys
+                .iter()
+                .map(|v| {
+                    Key::from_raw(v.as_slice())
+                        .append_ts(commit_ts)
+                        .into_encoded()
+                })
+                .collect::<Vec<_>>();
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    keys_encoded.iter().map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -664,10 +820,10 @@ mod test {
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
-        );
+        ));
         suite.cluster.shutdown();
     }
 
@@ -843,10 +999,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("region_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -868,10 +1024,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("initial_scan_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -928,10 +1084,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("fail_to_refresh_region");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
         let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
         let (tx, rx) = std::sync::mpsc::channel();
         suite.endpoints[&leader]
@@ -951,6 +1107,43 @@ mod test {
             }),
             "{:?}",
             regions
+        );
+    }
+
+    /// This test case tests whether we correctly handle the pessimistic locks.
+    #[test]
+    fn pessimistic_lock() {
+        let mut suite = SuiteBuilder::new_named("pessimistic_lock").nodes(3).build();
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 42)],
+            suite.tso(),
+            make_record_key(1, 42),
+        );
+        suite.must_register_task(1, "pessimistic_lock");
+        suite.must_kv_pessimistic_lock(
+            1,
+            vec![make_record_key(1, 43)],
+            suite.tso(),
+            make_record_key(1, 43),
+        );
+        let expected_tso = suite.tso().into_inner();
+        suite.force_flush_files("pessimistic_lock");
+        suite.wait_for_flush();
+        std::thread::sleep(Duration::from_secs(1));
+        let checkpoint = run_async_test(
+            suite
+                .get_meta_cli()
+                .global_progress_of_task("pessimistic_lock"),
+        )
+        .unwrap();
+        // The checkpoint should be advanced: because PiTR is "Read" operation,
+        // which shouldn't be blocked by pessimistic locks.
+        assert!(
+            checkpoint > expected_tso,
+            "expected = {}; checkpoint = {}",
+            expected_tso,
+            checkpoint
         );
     }
 }

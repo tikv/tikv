@@ -180,8 +180,8 @@ impl ImportModeDbOptions {
 }
 
 struct ImportModeCfOptions {
-    level0_stop_writes_trigger: u32,
-    level0_slowdown_writes_trigger: u32,
+    level0_stop_writes_trigger: i32,
+    level0_slowdown_writes_trigger: i32,
     soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
 }

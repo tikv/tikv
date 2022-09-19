@@ -470,7 +470,7 @@ impl BackupRange {
             while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
                 let key = cursor.key(cfstatistics);
                 let value = cursor.value(cfstatistics);
-                let is_valid = self.codec.is_valid_raw_value(key, value, current_ts)?;
+                let (is_valid, expired) = self.codec.is_valid_raw_value(key, value, current_ts)?;
                 if is_valid {
                     batch.push(Ok((
                         self.codec
@@ -478,6 +478,8 @@ impl BackupRange {
                             .into_encoded(),
                         self.codec.convert_encoded_value_to_dst_version(value)?,
                     )));
+                } else if expired {
+                    cfstatistics.raw_value_tombstone += 1;
                 };
                 debug!("backup raw key";
                     "key" => &log_wrappers::Value::key(&self.codec.convert_encoded_key_to_dst_version(key)?.into_encoded()),
@@ -849,8 +851,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
         self.pool.borrow_mut().spawn(async move {
             loop {
-                // when get the guard, release it until we finish scanning a batch, 
-                // because if we were suspended during scanning, 
+                // when get the guard, release it until we finish scanning a batch,
+                // because if we were suspended during scanning,
                 // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
                 let guard = limit.guard().await;
                 if let Err(e) = guard {
@@ -943,6 +945,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             }
                         }
                         Ok(stat) => {
+                            BACKUP_RAW_EXPIRED_COUNT.inc_by(stat.data.raw_value_tombstone as u64);
                             // TODO: maybe add the stat to metrics?
                             debug!("backup region finish";
                             "region" => ?brange.region,
@@ -1174,11 +1177,12 @@ pub mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        sync::Mutex,
+        sync::{Mutex, RwLock},
         time::Duration,
     };
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
+    use collections::HashSet;
     use engine_traits::MiscExt;
     use external_storage_export::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
@@ -1213,7 +1217,9 @@ pub mod tests {
     impl MockRegionInfoProvider {
         pub fn new(encode_key: bool) -> Self {
             MockRegionInfoProvider {
-                regions: Arc::new(Mutex::new(RegionCollector::new())),
+                regions: Arc::new(Mutex::new(RegionCollector::new(Arc::new(RwLock::new(
+                    HashSet::default(),
+                ))))),
                 cancel: None,
                 need_encode_key: encode_key,
             }
@@ -1620,10 +1626,10 @@ pub mod tests {
         })
     }
 
-    fn generate_engine_test_value(user_value: String, api_ver: ApiVersion) -> Vec<u8> {
+    fn generate_engine_test_value(user_value: String, api_ver: ApiVersion, ttl: u64) -> Vec<u8> {
         let raw_value = RawValue {
             user_value: user_value.into_bytes(),
-            expire_ts: Some(u64::MAX),
+            expire_ts: Some(ttl),
             is_delete: false,
         };
         dispatch_api_version!(api_ver, {
@@ -1646,7 +1652,11 @@ pub mod tests {
         Key::from_encoded(raw_key.into_bytes())
     }
 
-    fn test_handle_backup_raw_task_impl(cur_api_ver: ApiVersion, dst_api_ver: ApiVersion) -> bool {
+    fn test_handle_backup_raw_task_impl(
+        cur_api_ver: ApiVersion,
+        dst_api_ver: ApiVersion,
+        test_ttl: bool,
+    ) -> bool {
         let limiter = Arc::new(IoRateLimiter::new_for_test());
         let stats = limiter.statistics().unwrap();
         let (tmp, endpoint) = new_endpoint_with_limiter(Some(limiter), cur_api_ver, true, None);
@@ -1654,6 +1664,7 @@ pub mod tests {
 
         let start_key_idx: u64 = 100;
         let end_key_idx: u64 = 110;
+        let ttl_expire_cnt = 2;
         endpoint.region_info.set_regions(vec![(
             vec![], // generate_test_raw_key(start_key_idx).into_bytes(),
             vec![], // generate_test_raw_key(end_key_idx).into_bytes(),
@@ -1666,16 +1677,23 @@ pub mod tests {
         while i < end_key_idx {
             let key_str = generate_test_raw_key(i, cur_api_ver);
             let value_str = generate_test_raw_value(i, cur_api_ver);
+            let ttl = if test_ttl && i >= end_key_idx - ttl_expire_cnt {
+                1 // let last `ttl_expire_cnt` value expired when backup
+            } else {
+                u64::MAX
+            };
             let key = generate_engine_test_key(key_str.clone(), None, cur_api_ver);
-            let value = generate_engine_test_value(value_str.clone(), cur_api_ver);
+            let value = generate_engine_test_value(value_str.clone(), cur_api_ver, ttl);
             let dst_user_key = convert_test_backup_user_key(key_str, cur_api_ver, dst_api_ver);
             let dst_value = value_str.as_bytes();
-            checksum = checksum_crc64_xor(
-                checksum,
-                digest.clone(),
-                dst_user_key.as_encoded(),
-                dst_value,
-            );
+            if ttl != 1 {
+                checksum = checksum_crc64_xor(
+                    checksum,
+                    digest.clone(),
+                    dst_user_key.as_encoded(),
+                    dst_value,
+                );
+            }
             engine.put(&ctx, key, value).unwrap();
             i += 1;
         }
@@ -1708,6 +1726,10 @@ pub mod tests {
         } else {
             vec![]
         };
+        if test_ttl {
+            std::thread::sleep(Duration::from_secs(2)); // wait for ttl expired
+        }
+        let original_expire_cnt = BACKUP_RAW_EXPIRED_COUNT.get();
         req.set_start_key(backup_start.clone());
         req.set_end_key(backup_end.clone());
         req.set_is_raw_kv(true);
@@ -1727,14 +1749,26 @@ pub mod tests {
             assert!(resp.has_error());
             return false;
         }
+
+        let current_expire_cnt = BACKUP_RAW_EXPIRED_COUNT.get();
+        let expect_expire_cnt = if test_ttl {
+            original_expire_cnt + ttl_expire_cnt
+        } else {
+            original_expire_cnt
+        };
+        assert_eq!(expect_expire_cnt, current_expire_cnt);
         assert!(!resp.has_error(), "{:?}", resp);
         assert_eq!(resp.get_start_key(), backup_start);
         assert_eq!(resp.get_end_key(), backup_end);
         let file_len = 1;
         let files = resp.get_files();
         info!("{:?}", files);
+        let mut expect_cnt = end_key_idx - start_key_idx;
+        if test_ttl {
+            expect_cnt -= 2;
+        }
         assert_eq!(files.len(), file_len /* default cf */, "{:?}", resp);
-        assert_eq!(files[0].total_kvs, end_key_idx - start_key_idx);
+        assert_eq!(files[0].total_kvs, expect_cnt);
         assert_eq!(files[0].crc64xor, checksum);
         assert_eq!(files[0].get_start_key(), file_start);
         assert_eq!(files[0].get_end_key(), file_end);
@@ -1754,7 +1788,7 @@ pub mod tests {
         } as u64;
         assert_eq!(
             files[0].total_bytes,
-            (end_key_idx - start_key_idx - 1) * kv_backup_size + first_kv_backup_size
+            (expect_cnt - 1) * kv_backup_size + first_kv_backup_size
         );
         let (none, _rx) = block_on(rx.into_future());
         assert!(none.is_none(), "{:?}", none);
@@ -1765,22 +1799,25 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_raw() {
-        // (src_api_version, dst_api_version, result)
+        // (src_api_version, dst_api_version, test_ttl, result)
         let test_backup_cases = vec![
-            (ApiVersion::V1, ApiVersion::V1, true),
-            (ApiVersion::V1ttl, ApiVersion::V1ttl, true),
-            (ApiVersion::V2, ApiVersion::V2, true),
-            (ApiVersion::V1, ApiVersion::V2, true),
-            (ApiVersion::V1ttl, ApiVersion::V2, true),
-            (ApiVersion::V1, ApiVersion::V1ttl, false),
-            (ApiVersion::V2, ApiVersion::V1, false),
-            (ApiVersion::V2, ApiVersion::V1ttl, false),
-            (ApiVersion::V1ttl, ApiVersion::V1, false),
+            (ApiVersion::V1, ApiVersion::V1, false, true),
+            (ApiVersion::V1ttl, ApiVersion::V1ttl, true, true),
+            (ApiVersion::V2, ApiVersion::V2, true, true),
+            (ApiVersion::V1, ApiVersion::V2, false, true),
+            (ApiVersion::V1ttl, ApiVersion::V2, false, true),
+            (ApiVersion::V1, ApiVersion::V1ttl, false, false),
+            (ApiVersion::V2, ApiVersion::V1, false, false),
+            (ApiVersion::V2, ApiVersion::V1ttl, false, false),
+            (ApiVersion::V1ttl, ApiVersion::V1, false, false),
         ];
-        for test_case in test_backup_cases {
+        for (idx, (src_api, dst_api, test_ttl, result)) in test_backup_cases.into_iter().enumerate()
+        {
             assert_eq!(
-                test_handle_backup_raw_task_impl(test_case.0, test_case.1),
-                test_case.2
+                test_handle_backup_raw_task_impl(src_api, dst_api, test_ttl),
+                result,
+                "case {}",
+                idx,
             );
         }
     }

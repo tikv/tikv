@@ -9,11 +9,7 @@ use crate::{db_vector::PanicDbVector, engine::PanicEngine};
 #[derive(Clone, Debug)]
 pub struct PanicSnapshot;
 
-impl Snapshot for PanicSnapshot {
-    fn cf_names(&self) -> Vec<&str> {
-        panic!()
-    }
-}
+impl Snapshot for PanicSnapshot {}
 
 impl Peekable for PanicSnapshot {
     type DbVector = PanicDbVector;
@@ -21,6 +17,7 @@ impl Peekable for PanicSnapshot {
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         panic!()
     }
+
     fn get_value_cf_opt(
         &self,
         opts: &ReadOptions,
