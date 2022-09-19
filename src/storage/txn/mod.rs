@@ -23,6 +23,10 @@ pub use self::{
         acquire_pessimistic_lock::acquire_pessimistic_lock,
         cleanup::cleanup,
         commit::commit,
+        flashback_to_version::{
+            flashback_to_version, flashback_to_version_read_lock, flashback_to_version_read_write,
+            FLASHBACK_BATCH_SIZE,
+        },
         gc::gc,
         prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties},
     },
