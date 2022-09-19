@@ -237,6 +237,10 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         exec_res: &[ExecResult<EK::Snapshot>],
         sync_relations: &mut HashMap<u64, RegionSequenceNumberRelation>,
     ) -> Option<RegionLocalState> {
+        if exec_res.is_empty() {
+            return None;
+        }
+        info!("handle exec res"; "exec_res" => ?exec_res, "region_id" => region_id);
         let mut region_state = None;
         for res in exec_res {
             match res {
@@ -248,6 +252,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                     if cp.remove_self {
                         info!("handle region self destroy"; "region_id" => region_id);
                         self.handle_destroy_region(cp.region.clone());
+                        region_state = None;
                     } else {
                         let mut state = RegionLocalState::default();
                         state.set_region(cp.region.clone());
