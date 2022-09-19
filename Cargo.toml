@@ -260,6 +260,7 @@ members = [
   "components/resource_metering",
   "components/server",
   "components/server",
+  "components/snap_recovery",
   "components/sst_importer",
   "components/test_backup",
   "components/test_coprocessor",
