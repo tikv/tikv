@@ -18,14 +18,17 @@ pub use azure::{AzureStorage, Config as AzureConfig};
 use cloud::blob::BlobConfig;
 use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
-use engine_traits::FileEncryptionInfo;
 #[cfg(feature = "cloud-storage-dylib")]
 use external_storage::dylib_client;
 #[cfg(feature = "cloud-storage-grpc")]
 use external_storage::grpc_client;
-use external_storage::{encrypt_wrap_reader, record_storage_create, BackendConfig, HdfsStorage};
+use external_storage::{
+    compression_reader_dispatcher, encrypt_wrap_reader, record_storage_create, BackendConfig,
+    HdfsStorage,
+};
 pub use external_storage::{
-    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, UnpinReader,
+    read_external_storage_into_file, ExternalStorage, LocalStorage, NoopStorage, RestoreConfig,
+    UnpinReader,
 };
 use futures_io::AsyncRead;
 #[cfg(feature = "cloud-gcp")]
@@ -324,16 +327,33 @@ impl ExternalStorage for EncryptedExternalStorage {
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         self.storage.read(name)
     }
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        self.storage.read_part(name, off, len)
+    }
     fn restore(
         &self,
         storage_name: &str,
         restore_name: std::path::PathBuf,
         expected_length: u64,
-        expected_sha256: Option<Vec<u8>>,
         speed_limiter: &Limiter,
-        file_crypter: Option<FileEncryptionInfo>,
+        restore_config: RestoreConfig,
     ) -> io::Result<()> {
-        let reader = self.read(storage_name);
+        let RestoreConfig {
+            range,
+            compression_type,
+            expected_sha256,
+            file_crypter,
+        } = restore_config;
+
+        let reader = {
+            let inner = if let Some((off, len)) = range {
+                self.read_part(storage_name, off, len)
+            } else {
+                self.read(storage_name)
+            };
+
+            compression_reader_dispatcher(compression_type, inner)?
+        };
         let file_writer: &mut dyn Write =
             &mut self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
@@ -366,5 +386,9 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
 
     fn read(&self, name: &str) -> Box<dyn AsyncRead + Unpin + '_> {
         (**self).get(name)
+    }
+
+    fn read_part(&self, name: &str, off: u64, len: u64) -> Box<dyn AsyncRead + Unpin + '_> {
+        (**self).get_part(name, off, len)
     }
 }

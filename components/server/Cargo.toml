@@ -73,6 +73,7 @@ security = { path = "../security", default-features = false, features = ["tonic"
 serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+snap_recovery = { path = "../snap_recovery", default-features = false }
 tempfile = "3.0"
 tikv = { path = "../..", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }

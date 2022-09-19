@@ -52,7 +52,10 @@ pub use self::{
         PeerTick, RaftCmdExtraOpts, RaftCommand, ReadCallback, ReadResponse, SignificantMsg,
         StoreMsg, StoreTick, WriteCallback, WriteResponse,
     },
-    peer::{Peer, PeerStat, ProposalContext, RequestInspector, RequestPolicy},
+    peer::{
+        Peer, PeerStat, ProposalContext, ProposalQueue, RequestInspector, RequestPolicy,
+        SnapshotRecoveryWaitApplySyncer,
+    },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
         write_peer_state, PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
