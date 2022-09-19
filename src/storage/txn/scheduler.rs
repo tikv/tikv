@@ -52,7 +52,6 @@ use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
-use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,
@@ -67,7 +66,7 @@ use crate::{
             self,
             lock_wait_context::LockWaitContext,
             lock_waiting_queue::{DelayedNotifyAllFuture, LockWaitEntry, LockWaitQueues},
-            DiagnosticContext, LockDigest, LockManager, LockWaitToken, WaitTimeout,
+            DiagnosticContext, LockDigest, LockManager, LockWaitToken,
         },
         metrics::*,
         mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, ReleasedLock},
@@ -1431,12 +1430,12 @@ mod tests {
     use kvproto::kvrpcpb::{BatchRollbackRequest, CheckTxnStatusRequest, Context};
     use raftstore::store::{ReadStats, WriteStats};
     use tikv_util::{config::ReadableSize, future::paired_future_callback};
-    use txn_types::{Key, OldValues};
+    use txn_types::{Key, OldValues, TimeStamp};
 
     use super::*;
     use crate::storage::{
         kv::{Error as KvError, ErrorInner as KvErrorInner},
-        lock_manager::DummyLockManager,
+        lock_manager::{DummyLockManager, WaitTimeout},
         mvcc::{self, Mutation},
         test_util::latest_feature_gate,
         txn::{

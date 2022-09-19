@@ -247,6 +247,7 @@ impl Waiter {
         }
     }
 
+    #[allow(dead_code)]
     fn reset_timeout(&self, deadline: Instant) {
         self.delay.reset(deadline);
     }
