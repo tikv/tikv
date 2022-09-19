@@ -83,8 +83,13 @@ fn test_disable_wal_recovery_basic() {
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
     cluster.must_try_merge(cluster.get_region_id(b"k1"), cluster.get_region_id(b"k3"));
-    println!("try merge");
     cluster.get_engine(1).flush_cfs(true).unwrap();
+    cluster.stop_node(1);
+    cluster.run_node(1).unwrap();
+    fail::remove(schedule_merge_fp);
+    // split to trigger rollback.
+    // cluster.must_split(&cluster.get_region(b"k3"), b"k4");
+    cluster.must_put(b"k1", b"v1");
     cluster.stop_node(1);
     cluster.run_node(1).unwrap();
 }

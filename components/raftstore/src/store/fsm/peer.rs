@@ -5,10 +5,7 @@ use std::{
     borrow::Cow,
     cell::Cell,
     cmp,
-    collections::{
-        Bound::{Excluded, Unbounded},
-        VecDeque,
-    },
+    collections::Bound::{Excluded, Unbounded},
     iter::{FromIterator, Iterator},
     mem,
     sync::{Arc, Mutex},
@@ -2143,14 +2140,14 @@ where
     fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
         fail_point!("on_apply_res", |_| {});
         match res {
-            ApplyTaskRes::Apply(mut res) => {
+            ApplyTaskRes::Apply(res) => {
                 debug!(
                     "async apply finish";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "res" => ?res,
                 );
-                self.on_ready_result(&mut res.exec_res, &res.metrics);
+                self.on_ready_result(res.exec_res, &res.metrics);
                 if self.fsm.stopped {
                     return;
                 }
@@ -4631,11 +4628,11 @@ where
 
     fn on_ready_result(
         &mut self,
-        exec_results: &mut VecDeque<ExecResult<EK::Snapshot>>,
+        exec_results: Vec<ExecResult<EK::Snapshot>>,
         metrics: &ApplyMetrics,
     ) {
         // handle executing committed log results
-        while let Some(result) = exec_results.pop_front() {
+        for result in exec_results {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
                 ExecResult::CompactLog { first_index, state } => {

@@ -614,7 +614,7 @@ where
     pub fn finish_for(
         &mut self,
         delegate: &mut ApplyDelegate<EK>,
-        results: VecDeque<ExecResult<EK::Snapshot>>,
+        results: Vec<ExecResult<EK::Snapshot>>,
     ) {
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb_mut());
@@ -1021,7 +1021,7 @@ where
         // correctly, others will be saved as a normal entry with no data, so we
         // must re-propose these commands again.
         apply_ctx.committed_count += committed_entries_drainer.len();
-        let mut results = VecDeque::new();
+        let mut results = Vec::new();
         while let Some(entry) = committed_entries_drainer.next() {
             if self.pending_remove {
                 // This peer is about to be destroyed, skip everything.
@@ -1055,7 +1055,7 @@ where
 
             match res {
                 ApplyResult::None => {}
-                ApplyResult::Res(res) => results.push_back(res),
+                ApplyResult::Res(res) => results.push(res),
                 ApplyResult::Yield | ApplyResult::WaitMergeSource(_) => {
                     // Both cancel and merge will yield current processing.
                     apply_ctx.committed_count -= committed_entries_drainer.len() + 1;
@@ -3406,7 +3406,7 @@ where
     pub region_id: u64,
     pub apply_state: RaftApplyState,
     pub applied_term: u64,
-    pub exec_res: VecDeque<ExecResult<S>>,
+    pub exec_res: Vec<ExecResult<S>>,
     pub metrics: ApplyMetrics,
     pub bucket_stat: Option<Box<BucketStat>>,
     // write_senqo should be a vector because there may be multiple `commit` before a ApplyRes
@@ -3610,7 +3610,7 @@ where
         // correctly, others will be saved as a normal entry with no data, so we
         // must re-propose these commands again.
         apply_ctx.committed_count += entries.len();
-        let mut results = VecDeque::new();
+        let mut results = Vec::new();
         let mut entries_drainer = entries.drain(..);
         for entry in entries_drainer.by_ref() {
             if self.delegate.pending_remove {
@@ -3641,7 +3641,7 @@ where
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => {
-                    results.push_back(res);
+                    results.push(res);
                     let new_version = self.delegate.region.get_region_epoch().get_version();
                     if prev_version != new_version {
                         break;
@@ -6070,7 +6070,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
-        } = apply_res.exec_res.front().unwrap()
+        } = apply_res.exec_res.get(0).unwrap()
         {
             let r8 = regions.get(0).unwrap();
             let r1 = regions.get(1).unwrap();
