@@ -78,10 +78,7 @@ use tikv_util::{time::InstantExt, timer::GLOBAL_TIMER_HANDLE};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
-    lock_manager::{
-        lock_wait_context::{LockWaitContext, LockWaitContextSharedState},
-        LockManager, LockWaitToken,
-    },
+    lock_manager::{lock_wait_context::LockWaitContextSharedState, LockManager, LockWaitToken},
     mvcc::{Error as MvccError, ErrorInner as MvccErrorInner},
     txn::Error as TxnError,
     types::{PessimisticLockParameters, PessimisticLockRes},
@@ -499,7 +496,7 @@ mod tests {
 
     use super::*;
     use crate::storage::{
-        lock_manager::{DummyLockManager, WaitTimeout},
+        lock_manager::{lock_wait_context::LockWaitContext, DummyLockManager, WaitTimeout},
         txn::ErrorInner as TxnErrorInner,
         ProcessResult, StorageCallback,
     };
