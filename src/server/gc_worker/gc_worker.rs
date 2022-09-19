@@ -237,8 +237,12 @@ impl MvccRaw {
     }
 }
 
-// Return regions that keys are related to.
-fn get_regions_for_gc(
+// There are two cases:
+// 1. If `keys` has more than two keys, return the regions covered by the range
+// [keys.first(), keys.last()]
+// 2. If there's only one key (we must have at lease one key), return the region
+// this key belongs to.
+fn get_regions_for_range_of_keys(
     store_id: u64,
     keys: &[Key],
     region_provider: Arc<dyn RegionInfoProvider>,
@@ -446,7 +450,9 @@ where
         let (mut handled_keys, mut wasted_keys) = (0, 0);
         let regions = match region_or_provider {
             Either::Left(region) => vec![region],
-            Either::Right(region_provider) => get_regions_for_gc(store_id, &keys, region_provider)?,
+            Either::Right(region_provider) => {
+                get_regions_for_range_of_keys(store_id, &keys, region_provider)?
+            }
         };
 
         // First item is fetched to initialize the reader and kv_engine
@@ -562,7 +568,7 @@ where
         };
 
         let (mut handled_keys, mut wasted_keys) = (0, 0);
-        let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
+        let regions = get_regions_for_range_of_keys(self.store_id, &keys, regions_provider)?;
 
         if regions.is_empty() {
             return Ok((handled_keys, wasted_keys));
@@ -821,7 +827,7 @@ where
         } else {
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
             let keys = vec![start_key.clone(), end_key.clone()];
-            let regions = get_regions_for_gc(self.store_id, &keys, regions_provider)?;
+            let regions = get_regions_for_range_of_keys(self.store_id, &keys, regions_provider)?;
 
             let count = regions.len();
             let mut region_modifies = HashMap::default();
@@ -1761,7 +1767,7 @@ mod tests {
         ]));
 
         let keys = vec![Key::from_encoded(b"k05".to_vec())];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider.clone()).unwrap();
         // store id not match
         assert!(regions.is_empty());
 
@@ -1770,7 +1776,7 @@ mod tests {
             Key::from_encoded(b"k10".to_vec()),
             Key::from_encoded(b"k25".to_vec()),
         ];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider.clone()).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider.clone()).unwrap();
         let rs = vec![r2.clone()];
         assert_eq!(regions, rs);
 
@@ -1780,7 +1786,7 @@ mod tests {
             Key::from_encoded(b"k25".to_vec()),
             Key::from_encoded(b"k35".to_vec()),
         ];
-        let regions = get_regions_for_gc(store_id, &keys, ri_provider).unwrap();
+        let regions = get_regions_for_range_of_keys(store_id, &keys, ri_provider).unwrap();
         let rs = vec![r2, r3];
         assert_eq!(regions, rs);
     }
