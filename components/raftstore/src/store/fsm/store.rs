@@ -1716,7 +1716,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
         if let Some(seqno_worker) = workers.seqno_worker.as_mut() {
             let seqno_runner = SeqnoRelationRunner::new(
-                store_meta.clone(),
                 self.router.clone(),
                 engines.clone(),
                 raftlog_gc_scheduler.clone(),

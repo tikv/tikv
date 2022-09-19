@@ -1,9 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    cmp, fmt,
-    sync::{atomic::Ordering, Arc, Mutex},
-};
+use std::{cmp, fmt, sync::atomic::Ordering};
 
 use collections::{HashMap, HashMapEntry};
 use engine_traits::{
@@ -24,7 +21,7 @@ use tikv_util::{
 use super::metrics::*;
 use crate::store::{
     async_io::write::{RAFT_WB_DEFAULT_SIZE, RAFT_WB_SHRINK_SIZE},
-    fsm::{ApplyRes, ApplyTaskRes, ExecResult, StoreMeta},
+    fsm::{ApplyRes, ApplyTaskRes, ExecResult},
     peer_storage::write_initial_apply_state_raft,
     util::gc_seqno_relations,
     worker::RaftlogGcTask,
@@ -81,8 +78,6 @@ impl<S: Snapshot> fmt::Display for Task<S> {
 }
 
 pub struct Runner<EK: KvEngine, ER: RaftEngine> {
-    store_id: Option<u64>,
-    store_meta: Arc<Mutex<StoreMeta>>,
     router: RaftRouter<EK, ER>,
     engines: Engines<EK, ER>,
     raft_wb: ER::LogBatch,
@@ -96,14 +91,11 @@ pub struct Runner<EK: KvEngine, ER: RaftEngine> {
 
 impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
     pub fn new(
-        store_meta: Arc<Mutex<StoreMeta>>,
         router: RaftRouter<EK, ER>,
         engines: Engines<EK, ER>,
         raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     ) -> Self {
         Runner {
-            store_id: None,
-            store_meta,
             router,
             raft_wb: engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
             flushed_seqno: FlushedSeqno::new(DATA_CFS, engines.kv.get_latest_sequence_number()),
@@ -253,18 +245,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
                         // Apply failed, skip.
                         continue;
                     }
-                    let mut remove_self = true;
-                    for peer in cp.region.get_peers() {
-                        if peer.store_id == self.store_id().unwrap() {
-                            remove_self = false;
-                        }
-                    }
-                    let mut state = RegionLocalState::default();
-                    state.set_region(cp.region.clone());
-                    if remove_self {
-                        state.set_state(PeerState::Tombstone);
+                    if cp.remove_self {
+                        info!("handle region self destroy"; "region_id" => region_id);
                         self.handle_destroy_region(cp.region.clone());
                     } else {
+                        let mut state = RegionLocalState::default();
+                        state.set_region(cp.region.clone());
                         state.set_state(PeerState::Normal);
                         region_state = Some(state);
                     };
@@ -345,14 +331,6 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         region_state
     }
 
-    fn store_id(&mut self) -> Option<u64> {
-        self.store_id.or_else(|| {
-            let meta = self.store_meta.lock().unwrap();
-            self.store_id = meta.store_id;
-            meta.store_id
-        })
-    }
-
     fn handle_destroy_region(&mut self, region: Region) {
         // Cleanup all stale relations.
         let raft_engine = self.engines.raft.clone();
@@ -372,7 +350,7 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         self.raft_wb
             .put_region_state(region_id, &region_state)
             .unwrap();
-        info!("handle destroy region"; "region_id" => region_id);
+        info!("handle destroy region"; "region_id" => region_id, "region_state" => ?region_state);
     }
 }
 

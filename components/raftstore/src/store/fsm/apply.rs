@@ -202,6 +202,7 @@ pub struct ChangePeer {
     // one element
     pub changes: Vec<ChangePeerRequest>,
     pub region: Region,
+    pub remove_self: bool,
 }
 
 pub struct Range {
@@ -2070,6 +2071,7 @@ where
                 conf_change: Default::default(),
                 changes: vec![request.clone()],
                 region,
+                remove_self: self.pending_remove,
             })),
         ))
     }
@@ -2114,6 +2116,7 @@ where
                 conf_change: Default::default(),
                 changes,
                 region,
+                remove_self: self.pending_remove,
             })),
         ))
     }
