@@ -71,6 +71,7 @@ use std::{
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
+use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use futures::prelude::*;
@@ -2787,12 +2788,15 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
     type Snap = TxnTestSnapshot<E::Snap>;
     type Local = E::Local;
 
-    fn kv_engine(&self) -> Self::Local {
+    fn kv_engine(&self) -> Option<Self::Local> {
         self.engine.kv_engine()
     }
 
-    fn modify_on_kv_engine(&self, modifies: Vec<Modify>) -> tikv_kv::Result<()> {
-        self.engine.modify_on_kv_engine(modifies)
+    fn modify_on_kv_engine(
+        &self,
+        region_modifies: HashMap<u64, Vec<Modify>>,
+    ) -> tikv_kv::Result<()> {
+        self.engine.modify_on_kv_engine(region_modifies)
     }
 
     fn async_snapshot(

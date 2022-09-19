@@ -46,6 +46,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use tikv::server::Result as ServerResult;
 use tikv_util::{
     thread_group::GroupProperties,

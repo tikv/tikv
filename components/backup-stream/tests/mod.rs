@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use async_compression::futures::write::ZstdDecoder;
 use backup_stream::{
     errors::Result,
     metadata::{
@@ -19,14 +20,15 @@ use backup_stream::{
     router::Router,
     Endpoint, Task,
 };
-use futures::{executor::block_on, Future};
+use futures::{executor::block_on, AsyncWriteExt, Future};
 use grpcio::ChannelBuilder;
 use kvproto::{
-    brpb::{Local, StorageBackend},
+    brpb::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
     tikvpb::*,
 };
 use pd_client::PdClient;
+use protobuf::parse_from_bytes;
 use tempdir::TempDir;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
@@ -231,6 +233,7 @@ impl Suite {
         storage.set_local(local);
         task.info.set_storage(storage);
         task.info.set_table_filter(vec!["*.*".to_owned()].into());
+        task.info.set_compression_type(CompressionType::Zstd);
         task
     }
 
@@ -361,7 +364,42 @@ impl Suite {
         }
     }
 
-    fn check_for_write_records<'a>(
+    fn load_metadata_for_write_records(&self, path: &Path) -> HashMap<String, Vec<(usize, usize)>> {
+        let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        for entry in WalkDir::new(path) {
+            let entry = entry.unwrap();
+            if entry.file_type().is_file()
+                && entry
+                    .file_name()
+                    .to_str()
+                    .map_or(false, |s| s.ends_with(".meta"))
+            {
+                let content = std::fs::read(entry.path()).unwrap();
+                let meta = parse_from_bytes::<Metadata>(content.as_ref()).unwrap();
+                for g in meta.file_groups.into_iter() {
+                    let path = g.path.split('/').last().unwrap();
+                    for f in g.data_files_info.into_iter() {
+                        let file_info = meta_map.get_mut(path);
+                        if let Some(v) = file_info {
+                            v.push((
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            ));
+                        } else {
+                            let v = vec![(
+                                f.range_offset as usize,
+                                (f.range_offset + f.range_length) as usize,
+                            )];
+                            meta_map.insert(String::from(path), v);
+                        }
+                    }
+                }
+            }
+        }
+        meta_map
+    }
+
+    async fn check_for_write_records<'a>(
         &self,
         path: &Path,
         key_set: impl std::iter::Iterator<Item = &'a [u8]>,
@@ -370,6 +408,7 @@ impl Suite {
         let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
+        let meta_map = self.load_metadata_for_write_records(path);
         for entry in WalkDir::new(path) {
             let entry = entry.unwrap();
             println!("checking: {:?}", entry);
@@ -379,21 +418,31 @@ impl Suite {
                     .to_str()
                     .map_or(false, |s| s.ends_with(".log"))
             {
-                let content = std::fs::read(entry.path()).unwrap();
-                let mut iter = EventIterator::new(content);
-                loop {
-                    if !iter.valid() {
-                        break;
-                    }
-                    iter.next().unwrap();
-                    if !remain_keys.remove(iter.key()) {
-                        extra_key += 1;
-                        extra_len += iter.key().len() + iter.value().len();
-                    }
+                let buf = std::fs::read(entry.path()).unwrap();
+                let file_infos = meta_map.get(entry.file_name().to_str().unwrap()).unwrap();
+                for &file_info in file_infos {
+                    let mut decoder = ZstdDecoder::new(Vec::new());
+                    let pbuf: &[u8] = &buf[file_info.0..file_info.1];
+                    decoder.write_all(pbuf).await.unwrap();
+                    decoder.flush().await.unwrap();
+                    decoder.close().await.unwrap();
+                    let content = decoder.into_inner();
 
-                    let value = iter.value();
-                    let wf = WriteRef::parse(value).unwrap();
-                    assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    let mut iter = EventIterator::new(content);
+                    loop {
+                        if !iter.valid() {
+                            break;
+                        }
+                        iter.next().unwrap();
+                        if !remain_keys.remove(iter.key()) {
+                            extra_key += 1;
+                            extra_len += iter.key().len() + iter.value().len();
+                        }
+
+                        let value = iter.value();
+                        let wf = WriteRef::parse(value).unwrap();
+                        assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                    }
                 }
             }
         }
@@ -671,10 +720,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_basic");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -691,10 +742,12 @@ mod test {
             let round2 = suite.write_records(256, 128, 1).await;
             suite.force_flush_files("test_with_split");
             suite.wait_for_flush();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                round1.union(&round2).map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    round1.union(&round2).map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -743,10 +796,12 @@ mod test {
                         .into_encoded()
                 })
                 .collect::<Vec<_>>();
-            suite.check_for_write_records(
-                suite.flushed_files.path(),
-                keys_encoded.iter().map(Vec::as_slice),
-            );
+            suite
+                .check_for_write_records(
+                    suite.flushed_files.path(),
+                    keys_encoded.iter().map(Vec::as_slice),
+                )
+                .await;
         });
         suite.cluster.shutdown();
     }
@@ -765,10 +820,10 @@ mod test {
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
-        );
+        ));
         suite.cluster.shutdown();
     }
 
@@ -944,10 +999,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("region_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -969,10 +1024,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("initial_scan_failure");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
     }
 
     #[test]
@@ -1029,10 +1084,10 @@ mod test {
         let keys2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("fail_to_refresh_region");
         suite.wait_for_flush();
-        suite.check_for_write_records(
+        run_async_test(suite.check_for_write_records(
             suite.flushed_files.path(),
             keys.union(&keys2).map(|s| s.as_slice()),
-        );
+        ));
         let leader = suite.cluster.leader_of_region(1).unwrap().store_id;
         let (tx, rx) = std::sync::mpsc::channel();
         suite.endpoints[&leader]
