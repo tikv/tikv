@@ -271,7 +271,7 @@ impl Default for Config {
             // Go tikv client uses 4 as well.
             forward_max_connections_per_address: 4,
             simplify_metrics: false,
-            track_request: false,
+            track_request: true,
         }
     }
 }
