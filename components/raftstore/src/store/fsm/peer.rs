@@ -1008,15 +1008,14 @@ where
             .unwrap();
             return;
         }
-        // Check if the flashback version is greater than the region safe ts, i.e, the
-        // resolved ts.
+        // Check if the flashback version is greater than the region resolved ts.
         let meta = self.ctx.store_meta.lock().unwrap();
-        if let Some(safe_ts) = meta.region_read_progress.get_safe_ts(&region_id) {
-            if version > safe_ts {
+        if let Some(resolved_ts) = meta.region_read_progress.get_resolved_ts(&region_id) {
+            if version > resolved_ts {
                 ch.send(Err(Error::Other(
                     format!(
-                        "region {} safe ts {} is smaller than the flashback version {}",
-                        region_id, safe_ts, version
+                        "region {} resolved ts {} is smaller than the flashback version {}",
+                        region_id, resolved_ts, version
                     )
                     .into(),
                 )))
