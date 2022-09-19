@@ -1430,20 +1430,22 @@ async fn future_handle_empty(
     Ok(res)
 }
 
+macro_rules! init_tracker {
+    ($configs:expr, $req:expr, $tp:expr, $ts:expr) => {{
+        if $configs.get_track_request() {
+            GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new($req.get_context(), $tp, $ts)))
+        } else {
+            INVALID_TRACKER_TOKEN
+        }
+    }};
+}
+
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
     configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    let tracker = if configs.get_track_request() {
-        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvGet,
-            req.get_version(),
-        )))
-    } else {
-        INVALID_TRACKER_TOKEN
-    };
+    let tracker = init_tracker!(configs, &req, RequestType::KvGet, req.get_version());
     set_tls_tracker_token(tracker);
     let start = Instant::now();
     let v = storage.get(
@@ -1489,15 +1491,7 @@ fn future_scan<E: Engine, L: LockManager, F: KvFormat>(
     mut req: ScanRequest,
     configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<ScanResponse>> {
-    let tracker = if configs.get_track_request() {
-        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvScan,
-            req.get_version(),
-        )))
-    } else {
-        INVALID_TRACKER_TOKEN
-    };
+    let tracker = init_tracker!(configs, &req, RequestType::KvScan, req.get_version());
     set_tls_tracker_token(tracker);
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
 
@@ -1542,15 +1536,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
     mut req: BatchGetRequest,
     configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<BatchGetResponse>> {
-    let tracker = if configs.get_track_request() {
-        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvBatchGet,
-            req.get_version(),
-        )))
-    } else {
-        INVALID_TRACKER_TOKEN
-    };
+    let tracker = init_tracker!(configs, &req, RequestType::KvBatchGet, req.get_version());
     set_tls_tracker_token(tracker);
     let start = Instant::now();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
@@ -1598,15 +1584,12 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     mut req: ScanLockRequest,
     configs: &AtomicConfigs,
 ) -> impl Future<Output = ServerResult<ScanLockResponse>> {
-    let tracker = if configs.get_track_request() {
-        GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
-            req.get_context(),
-            RequestType::KvScanLock,
-            req.get_max_version(),
-        )))
-    } else {
-        INVALID_TRACKER_TOKEN
-    };
+    let tracker = init_tracker!(
+        configs,
+        &req,
+        RequestType::KvScanLock,
+        req.get_max_version()
+    );
     set_tls_tracker_token(tracker);
     let start_key = Key::from_raw_maybe_unbounded(req.get_start_key());
     let end_key = Key::from_raw_maybe_unbounded(req.get_end_key());
