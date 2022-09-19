@@ -24,4 +24,8 @@ impl<EK: KvEngine> Apply<EK> {
     pub fn tablet(&mut self) -> Option<&EK> {
         self.tablet.latest()
     }
+
+    pub fn logger(&self) -> &Logger {
+        &self.logger
+    }
 }

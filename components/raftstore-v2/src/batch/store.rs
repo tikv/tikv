@@ -414,7 +414,7 @@ impl<EK: KvEngine, ER: RaftEngine> StoreSystem<EK, ER> {
         }
         router.send_control(StoreMsg::Start).unwrap();
 
-        let apply_poller_builder = ApplyPollerBuilder::new(cfg, raft_engine);
+        let apply_poller_builder = ApplyPollerBuilder::new(cfg, store_id, raft_engine);
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
         Ok(())

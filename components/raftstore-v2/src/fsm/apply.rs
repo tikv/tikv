@@ -63,6 +63,7 @@ pub struct ApplyFsmDelegate<'a, EK: KvEngine, ER: RaftEngine> {
 
     // todo(SpadeA): tmp use.
     pub(crate) region: Region,
+    pub(crate) tag: String,
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
@@ -71,6 +72,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine> ApplyFsmDelegate<'a, EK, ER> {
             fsm,
             apply_ctx,
             region: Region::default(),
+            tag: String::new(),
         }
     }
 

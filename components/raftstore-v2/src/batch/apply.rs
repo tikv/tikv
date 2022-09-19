@@ -57,9 +57,9 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    pub fn new(cfg: Config, raft_engine: ER) -> Self {
+    pub fn new(cfg: Config, store_id: u64, raft_engine: ER) -> Self {
         ApplyContext {
-            store_id: 0, // todo(SpadeA)
+            store_id,
             cfg,
             pending_create_peers: Arc::default(),
             raft_engine,
@@ -160,12 +160,17 @@ where
 pub struct ApplyPollerBuilder<ER> {
     cfg: Arc<VersionTrack<Config>>,
 
+    store_id: u64,
     raft_engine: ER,
 }
 
 impl<ER: RaftEngine> ApplyPollerBuilder<ER> {
-    pub fn new(cfg: Arc<VersionTrack<Config>>, raft_engine: ER) -> Self {
-        Self { cfg, raft_engine }
+    pub fn new(cfg: Arc<VersionTrack<Config>>, store_id: u64, raft_engine: ER) -> Self {
+        Self {
+            cfg,
+            store_id,
+            raft_engine,
+        }
     }
 }
 
@@ -175,7 +180,11 @@ impl<EK: KvEngine, ER: RaftEngine> HandlerBuilder<ApplyFsm<EK>, ControlFsm>
     type Handler = ApplyPoller<EK, ER>;
 
     fn build(&mut self, priority: batch_system::Priority) -> Self::Handler {
-        let apply_ctx = ApplyContext::new(self.cfg.value().clone(), self.raft_engine.clone());
+        let apply_ctx = ApplyContext::new(
+            self.cfg.value().clone(),
+            self.store_id,
+            self.raft_engine.clone(),
+        );
         let cfg_tracker = self.cfg.clone().tracker("apply".to_string());
         ApplyPoller::new(apply_ctx, cfg_tracker)
     }
