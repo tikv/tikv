@@ -1094,8 +1094,8 @@
 ## Only available for `format-version` >= 2. This option is only
 ## available when TiKV >= 6.3.x.
 ##
-## Default: true.
-# enable-log-recycle = true
+## Default: false.
+# enable-log-recycle = false
 
 [security]
 ## The path for TLS certificates. Empty string means disabling secure connections.
